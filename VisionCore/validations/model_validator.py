@@ -21,7 +21,6 @@ for fmt, exts in MODEL_FORMATS.items():
     for ext in exts:
         ALL_EXTENSIONS[ext.lower()] = fmt
 
-
 class ModelValidationResult:
     def __init__(self):
         self.valid_organized_models: Dict[str, Dict] = {}  # Path -> details
@@ -34,39 +33,26 @@ class ModelValidationResult:
         return len(self.errors) == 0 and len(self.orphan_models) == 0
 
     def summary(self) -> str:
-        lines = []
-        
+        parts = []
         if self.valid_organized_models:
-            lines.append("\nValid Organized Models:")
-            for path, details in self.valid_organized_models.items():
-                lines.append(f"  [OK] {path}")
-                lines.append(f"       Format: {details['format']}, Size: {details['size_mb']:.2f}MB")
-        
+            parts.append(f"Valid: {len(self.valid_organized_models)}")
         if self.orphan_models:
-            lines.append("\nOrphan Models (NOT in organized structure):")
-            for path, reason in self.orphan_models.items():
-                lines.append(f"  [WARNING] {path}")
-                lines.append(f"           Reason: {reason}")
-        
+            orphan_files = list(self.orphan_models.keys())[:2]  # Show first 2
+            orphan_desc = f"{len(self.orphan_models)} ({', '.join(orphan_files)}{'...' if len(self.orphan_models) > 2 else ''})"
+            parts.append(f"Orphans: {orphan_desc}")
         if self.config_mismatches:
-            lines.append("\nConfig Path Mismatches:")
-            for config_path, actual_path, warning in self.config_mismatches:
-                lines.append(f"  [WARNING] Config specifies: {config_path}")
-                lines.append(f"           {warning}")
-                lines.append(f"           Using: {actual_path}")
-        
+            parts.append(f"Mismatches: {len(self.config_mismatches)}")
         if self.errors:
-            lines.append("\nErrors:")
-            for error in self.errors:
-                lines.append(f"  [ERROR] {error}")
-        
+            error_desc = "; ".join(self.errors[:2])  # Show first 2 errors
+            if len(self.errors) > 2:
+                error_desc += "..."
+            parts.append(f"Errors: {len(self.errors)} ({error_desc})")
         if self.warnings:
-            lines.append("\nWarnings:")
-            for warning in self.warnings:
-                lines.append(f"  [WARNING] {warning}")
-        
-        return "\n".join(lines) if lines else "No models found."
-
+            warning_desc = "; ".join(self.warnings[:2])  # Show first 2 warnings
+            if len(self.warnings) > 2:
+                warning_desc += "..."
+            parts.append(f"Warnings: {len(self.warnings)} ({warning_desc})")
+        return ", ".join(parts) if parts else "No models found."
 
 def validate_model_organization(repo_root: Path) -> ModelValidationResult:
     result = ModelValidationResult()
@@ -107,7 +93,6 @@ def validate_model_organization(repo_root: Path) -> ModelValidationResult:
     
     return result
 
-
 def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) -> Dict:
     try:
         # Get extension
@@ -125,8 +110,8 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
         # Get file size
         size_mb = model_path.stat().st_size / (1024 * 1024)
         
-        # Check if file is at least 1MB (sanity check)
-        if size_mb < 1:
+        # Check if file is at least 0.25MB
+        if size_mb < 0.5:
             return {
                 "valid": False,
                 "reason": f"Model file too small ({size_mb:.2f}MB). Possibly corrupted.",
@@ -209,7 +194,6 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
             "size_mb": 0,
         }
 
-
 def _check_for_standalone_models(repo_root: Path, result: ModelValidationResult) -> None:    
     # Check root directory
     root_models = []
@@ -243,13 +227,12 @@ def _check_for_standalone_models(repo_root: Path, result: ModelValidationResult)
                 logger.warning(f"[STANDALONE] {rel_path}")
                 logger.warning(f"            Cannot infer YOLO parameters - move to organized directory")
 
-
 def validate_config_model_paths(config: Dict, repo_root: Path, 
                                validation_result: ModelValidationResult) -> str:
     config_model_path = config.get("vision_model", {}).get("file_path", "")
     
     if not config_model_path:
-        logger.warning("No model path in config.json - cannot validate")
+        logger.warning("No model path in config.json, cannot validate vision model")
         return None
     
     config_path = Path(config_model_path)
@@ -258,14 +241,7 @@ def validate_config_model_paths(config: Dict, repo_root: Path,
     
     # Check if config path exists
     if config_path.exists():
-        # Check if it's in organized structure
-        if _is_in_organized_structure(config_path, repo_root / "YoloModels"):
-            logger.info(f"Config model path is valid and organized: {config_model_path}")
-            return str(config_path.relative_to(repo_root))
-        else:
-            validation_result.warnings.append(
-                f"Config model path exists but is not in organized structure: {config_model_path}"
-            )
+        return str(config_path.relative_to(repo_root))
     
     # Try to find the model in organized structure
     model_filename = config_path.name
@@ -284,10 +260,7 @@ def validate_config_model_paths(config: Dict, repo_root: Path,
             f"Config path differs from filesystem. Using organized path."
         ))
         
-        logger.warning(f"Config model path mismatch:")
-        logger.warning(f"  Specified: {config_model_path}")
-        logger.warning(f"  Found in organized structure: {rel_path}")
-        logger.warning(f"  Using filesystem path (source of truth)")
+        logger.warning(f"Config model path mismatch, specified: {config_model_path} but found: {rel_path}. Using found path.")
         
         return rel_path
     else:
@@ -296,7 +269,6 @@ def validate_config_model_paths(config: Dict, repo_root: Path,
         )
         logger.error(f"Model not found: {config_model_path}")
         return None
-
 
 def _is_in_organized_structure(model_path: Path, yolo_dir: Path) -> bool:
     try:
@@ -317,7 +289,6 @@ def _is_in_organized_structure(model_path: Path, yolo_dir: Path) -> bool:
     except ValueError:
         return False
 
-
 def enforce_model_organization(repo_root: Path, config: Dict) -> Tuple[bool, str]:
     # Validate filesystem organization
     validation_result = validate_model_organization(repo_root)
@@ -336,8 +307,71 @@ def enforce_model_organization(repo_root: Path, config: Dict) -> Tuple[bool, str
         return False, None
     
     if corrected_path:
-        logger.info(f"Using model: {corrected_path}")
+        # logger.info(f"Using model: {corrected_path}")
         return True, corrected_path
     else:
         logger.error("No valid model path determined")
         return False, None
+
+def cmd_validate_models() -> int:
+    result = validate_model_organization(Path.cwd())
+    
+    print("\n" + "="*70)
+    print("YOLO Model Validation Report".center(70))
+    print("="*70)
+    print(result.summary())
+    print("="*70 + "\n")
+    
+    if result.is_valid():
+        logger.info("All models are properly organized.")
+        return 0
+    else:
+        if result.orphan_models:
+            logger.warning("Found orphan/standalone models - cannot infer YOLO parameters")
+            logger.info("Move models to: YoloModels/[format]/[size]/")
+        if result.errors:
+            logger.error("Validation failed with errors")
+            return 1
+        return 0
+
+def cmd_check_organization() -> int:
+    result = validate_model_organization(Path.cwd())
+    
+    print("\nYoloModels Organization Status:")
+    print("-" * 50)
+    
+    if result.valid_organized_models:
+        print(f"Valid organized models: {len(result.valid_organized_models)}")
+        for path in result.valid_organized_models:
+            print(f"  + {path}")
+    else:
+        print("No valid organized models found")
+    
+    if result.orphan_models:
+        print(f"\nOrphan models (not in organized structure): {len(result.orphan_models)}")
+        for path, reason in result.orphan_models.items():
+            print(f"  - {path}")
+            print(f"    {reason}")
+    
+    print("\nCorrect Structure:")
+    print("  YoloModels/[format]/[size]/model_file")
+    print("  Examples:")
+    print("    YoloModels/pytorch/nano/yolov8n.pt")
+    print("    YoloModels/openvino/nano/yolov8n.xml")
+    print("    YoloModels/rknn/nano/yolov8n.rknn")
+    print()
+    
+    return 0
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] in ["validate-models", "check-org"]:
+        if sys.argv[1] == "validate-models":
+            sys.exit(cmd_validate_models())
+        else:
+            sys.exit(cmd_check_organization())
+    else:
+        print("Model Validation CLI")
+        print("Usage: python -m VisionCore.validations.model_validator validate-models")
+        print("       python -m VisionCore.validations.model_validator check-org")

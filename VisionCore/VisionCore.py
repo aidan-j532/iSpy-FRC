@@ -1,4 +1,5 @@
 import importlib.metadata
+from pathlib import Path
 from VisionCore.utilities.MultipleCameraHandler import MultipleCameraHandler
 import time
 from VisionCore.web.CameraApp import CameraApp
@@ -12,6 +13,10 @@ from VisionCore.config.VisionCoreConfig import VisionCoreConfig
 import signal
 from VisionCore.vision.ObjectDetectionCamera import ObjectDetectionCamera
 from VisionCore.trackers.Fuel import Fuel
+from VisionCore.validations.model_validator import (
+    enforce_model_organization,
+    validate_model_organization,
+)
 
 try:
     from rknnlite.api import RKNNLite
@@ -24,8 +29,6 @@ class VisionCore:
         self.cameras = cameras
         self.config  = config
         self.shutdown_event = threading.Event()
-
-        print("Min confidence set to", config.get("min_conf", 0.5))
 
         os.makedirs("Outputs", exist_ok=True)
         logging.basicConfig(
@@ -93,9 +96,31 @@ class VisionCore:
             if self.network_handler and self.health:
                 self.health.set_network_handler(self.network_handler)
 
-
     def get_default_config(self):
         return self.config.get_default_config()
+
+    def validate_vision_model(self, repo_root: Path | None = None) -> tuple[bool, str | None]:
+        if repo_root is None:
+            repo_root = Path(__file__).resolve().parents[1]
+
+        vision_model = self.config.config.get("vision_model", {})
+        configured_path = vision_model.get("file_path", "")
+
+        validation_result = validate_model_organization(repo_root)
+        if validation_result.orphan_models:
+            self.logger.warning("Found orphan vision model files not in organized structure:")
+            for orphan_path, orphan_reason in validation_result.orphan_models.items():
+                self.logger.warning("  %s: %s", orphan_path, orphan_reason)
+
+        is_valid, corrected_model_path = enforce_model_organization(repo_root, self.config.config)
+        
+        if not is_valid:
+            self.logger.warning(
+                "Vision model validation failed. Relying on user-provided settings."
+            )
+            self.logger.warning("configured: %s", configured_path)
+
+        return is_valid, corrected_model_path
 
     def _record_metrics(self, **kwargs):
         if self.metrics:
