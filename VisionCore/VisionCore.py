@@ -34,8 +34,8 @@ class VisionCore:
         os.makedirs("Outputs", exist_ok=True)
         self.logger = logging.getLogger(__name__)
 
-        signal.signal(signal.SIGINT,  lambda *_: self.shutdown_event.set())
-        signal.signal(signal.SIGTERM, lambda *_: self.shutdown_event.set())
+        signal.signal(signal.SIGINT,  lambda *_: self._handle_shutdown())
+        signal.signal(signal.SIGTERM, lambda *_: self._handle_shutdown())
 
         self.metrics = Metrics() if config["metrics"] else None
 
@@ -43,21 +43,20 @@ class VisionCore:
         self.health     = HealthReporter(self.camera_app.app, config) if config["app_mode"] else None
 
         if len(cameras) == 0:
-            self.logger.warning("No cameras provided — vision will not run.")
+            self.logger.warning("No cameras provided - vision will not run.")
             self.camera_handler = None
         elif len(cameras) == 1:
             self.logger.info("Single camera mode.")
             self.camera_handler = None
         else:
-            self.logger.info("%d cameras — multi mode.", len(cameras))
+            self.logger.info("%d cameras - multi mode.", len(cameras))
             self.camera_handler = MultipleCameraHandler(cameras)
 
         self.trackers = {}
 
         # Load trackers
         tracker_entries = importlib.metadata.entry_points(group='visioncore_trackers')
-        ep_map = {ep.name: ep for ep in tracker_entries} # build once
-        tracker_entries = {"fuel", "pathplanner"}
+        ep_map = {ep.name: ep for ep in tracker_entries}
         for tracker_name in config.get('trackers', []):
             if tracker_name in ep_map:
                 self.trackers[tracker_name] = ep_map[tracker_name].load()(config)
@@ -95,6 +94,29 @@ class VisionCore:
             if self.network_handler and self.health:
                 self.health.set_network_handler(self.network_handler)
 
+    def _handle_shutdown(self):
+        if self.shutdown_event.is_set():
+            return  # already shutting down - ignore duplicate signals
+        self.logger.info("Shutdown signal received - stopping all plugins...")
+        self.shutdown_event.set()
+
+    def _stop_all_plugins(self):
+        plugins: dict[str, object] = {}
+        plugins.update(self.trackers)
+        plugins.update({k: v for k, v in self.utilities.items() if v is not None})
+
+        for name, plugin in plugins.items():
+            if plugin is None:
+                continue
+            if hasattr(plugin, "stop") and callable(plugin.stop):
+                try:
+                    self.logger.info("Stopping plugin: %s", name)
+                    plugin.stop()
+                except Exception:
+                    self.logger.exception("Error while stopping plugin '%s'", name)
+            else:
+                self.logger.debug("Plugin '%s' has no .stop() method - skipping", name)
+
     def get_default_config(self):
         return self.config.get_default_config()
 
@@ -112,11 +134,9 @@ class VisionCore:
                 self.logger.warning("  %s: %s", orphan_path, orphan_reason)
 
         is_valid, corrected_model_path = enforce_model_organization(repo_root, self.config.config)
-        
+
         if not is_valid:
-            self.logger.warning(
-                "Vision model validation failed. Relying on user-provided settings."
-            )
+            self.logger.warning("Vision model validation failed. Relying on user-provided settings.")
             self.logger.warning("configured: %s", configured_path)
 
         return is_valid, corrected_model_path
@@ -160,8 +180,8 @@ class VisionCore:
         if duration_s is not None:
             def _stop():
                 time.sleep(duration_s)
-                self.logger.info("Duration %.1fs reached — stopping.", duration_s)
-                self.shutdown_event.set()
+                self.logger.info("Duration %.1fs reached - stopping.", duration_s)
+                self._handle_shutdown()
             threading.Thread(target=_stop, daemon=True).start()
 
         if len(self.cameras) == 1:
@@ -175,7 +195,7 @@ class VisionCore:
             if self.recorder:
                 self.recorder.start(camera.input_size[0], camera.input_size[1])
 
-            self.logger.info("Solo mode — warming up...")
+            self.logger.info("Solo mode - warming up...")
             self.run_solo_vision(camera)
             self.logger.info("Warm-up complete.")
 
@@ -221,7 +241,7 @@ class VisionCore:
 
                 # Process with custom trackers
                 for tracker_name, tracker in self.trackers.items():
-                    if hasattr(tracker, 'poseprocess_detections'):
+                    if hasattr(tracker, 'process_detections'):
                         try:
                             tracker.process_detections(fuel_list)
                         except Exception as e:
@@ -230,12 +250,12 @@ class VisionCore:
                         try:
                             _, fuel_list = tracker.update_object_positions(fuel_list)
                         except Exception as e:
-                            self.logger.exception(f"Error in tracker: {tracker_name}: {e}")
+                            self.logger.exception(f"Error in tracker {tracker_name}: {e}")
                     elif hasattr(tracker, 'update_robot_position'):
                         try:
                             _, fuel_list = tracker.update_robot_position(fuel_list)
                         except Exception as e:
-                            self.logger.exception(f"Error in tracker: {tracker_name}: {e}")
+                            self.logger.exception(f"Error in tracker {tracker_name}: {e}")
 
                 network_s = None
                 if self.network_handler:
@@ -267,6 +287,8 @@ class VisionCore:
                 print(f"\rFPS: {1/loop_s:.1f}   ", end="")
 
         finally:
+            print()  # newline after the \r FPS line
+            self._stop_all_plugins()
             camera.destroy()
             self._destroy_metrics()
 
@@ -280,7 +302,7 @@ class VisionCore:
                 h, w = handler.cameras[0].input_size[1], handler.cameras[0].input_size[0]
                 self.recorder.start(w, h)
 
-            self.logger.info("Multi mode. warming up…")
+            self.logger.info("Multi mode - warming up...")
             self.run_multi_vision(handler)
             self.logger.info("Warm-up complete.")
 
@@ -305,10 +327,7 @@ class VisionCore:
                 flask_s = None
                 if self.camera_app and combined_frame is not None:
                     t_f = time.perf_counter()
-                    # Set the combined frame (default feed) …
                     self.camera_app.set_frame(combined_frame)
-                    # and set per-camera frames from the already-computed cache
-                    # (MultipleCameraHandler stores the last frame per camera).
                     for i, cam in enumerate(handler.cameras):
                         cam_name = (cam.config.get("name", f"Camera {i+1}")
                                     if hasattr(cam, "config") else f"Camera {i+1}")
@@ -366,6 +385,9 @@ class VisionCore:
                 self._tick_metrics()
                 self.logger.debug("FPS: %.1f", 1 / loop_s)
                 print(f"\rFPS: {1/loop_s:.1f}   ", end="")
+
         finally:
+            print()  # newline after the \r FPS line
+            self._stop_all_plugins()
             handler.destroy()
             self._destroy_metrics()
