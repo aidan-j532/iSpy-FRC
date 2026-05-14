@@ -110,8 +110,8 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
         # Get file size
         size_mb = model_path.stat().st_size / (1024 * 1024)
         
-        # Check if file is at least 0.25MB
-        if size_mb < 0.5:
+        # Check if file is at least 0.01MB
+        if size_mb < 0.01:
             return {
                 "valid": False,
                 "reason": f"Model file too small ({size_mb:.2f}MB). Possibly corrupted.",

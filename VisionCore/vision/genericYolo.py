@@ -35,51 +35,6 @@ class Results:
             s += f"  Box {i}: xyxy={box.xyxy}, conf={box.conf:.3f}\n"
         return s
 
-
-def _convert_model(model_file: str, target_format: str, input_size: tuple) -> str:
-    stem = Path(model_file).stem
-    parent = Path(model_file).parent
-
-    ext_map = {
-        "rknn":     f"{stem}.rknn",
-        "onnx":     f"{stem}.onnx",
-        "tflite":   f"{stem}_saved_model/{stem}_full_integer_quant.tflite",
-        "openvino": f"{stem}_openvino_model",
-        "coreml":   f"{stem}.mlpackage",
-    }
-
-    if target_format not in ext_map:
-        return model_file
-
-    out_path = str(parent / ext_map[target_format])
-
-    import os
-    if os.path.exists(out_path):
-        logging.getLogger(__name__).info(f"Cached {target_format} model found: {out_path}")
-        return out_path
-
-    logging.getLogger(__name__).info(f"Converting {model_file} → {target_format} ...")
-
-    model = YOLO(model_file)
-
-    if target_format == "rknn":
-        model.export(format="rknn", imgsz=input_size)
-    elif target_format == "onnx":
-        model.export(format="onnx", imgsz=input_size, simplify=True, opset=12)
-    elif target_format == "tflite":
-        model.export(format="tflite", imgsz=input_size, int8=True)
-    elif target_format == "openvino":
-        model.export(format="openvino", imgsz=input_size, half=True)
-    elif target_format == "coreml":
-        model.export(format="coreml", imgsz=input_size, nms=True)
-
-    if os.path.exists(out_path):
-        return out_path
-
-    logging.getLogger(__name__).warning(f"Conversion to {target_format} failed, falling back to .pt")
-    return model_file
-
-
 class GenericYolo:
     def __init__(self, model_file: str, core_mask, input_size=(640, 640), quantized: bool = False, min_conf: float = 0.5):
         self.model_file = model_file
@@ -94,11 +49,9 @@ class GenericYolo:
         self.quantized = quantized
         self.min_conf = min_conf
 
-        # If a .pt is passed and auto_opt is on, convert to the best format
         if model_file.endswith(".pt"):
-            target = recommend_format()
-            self.logger.info(f"Auto-detected best format: {target}")
-            model_file = _convert_model(model_file, target, input_size)
+            self.logger.info(".pt model provided at runtime; skipping automatic conversion. Ensure boot-time conversion was performed if needed.")
+            # keep model_file as-is; ultralytics backend can still load .pt directly
             self.model_file = model_file
 
         if model_file.endswith(".rknn"):
@@ -262,7 +215,10 @@ class GenericYolo:
                 # discard result[0].orig_img — it's been drawn on
                 result[0].orig_img = None
                 results_list.append(self._convert_ultralytics_to_results(result[0], frame))
-                return results_list if is_list else results_list[0]
+
+            return results_list if is_list else results_list[0]
+        # For RKNN and TFLite backends we built results_list above; return it
+        return results_list if is_list else results_list[0]
 
     def _convert_rknn_outputs(self, frame_output: np.ndarray, orig_shape) -> Results:
         if frame_output.ndim == 3:

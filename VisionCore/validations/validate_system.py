@@ -8,13 +8,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 _MODEL_PATTERN = re.compile(
-    r"^YoloModels/"
-    r"v\d+/"
-    r"(nano|medium|large)/"
-    r"(color|gray)-\d+\.\d+.*"
-    r"\.(pt|onnx|tflite|rknn)$"
-)
-
+r"^YoloModels/" # starts with YoloModels/
+r"(?:(?:pytorch|onnx|tflite|rknn|openvino|coreml)/)?" # optional format folder
+r"(?:nano|small|medium|large|xlarge|2xlarge)/" # size folder
+r"[a-zA-Z0-9_\-]+.*\.(pt|onnx|tflite|rknn|bin|xml|yaml)$")
 
 def is_valid_model_path(path: str) -> bool:
     return bool(_MODEL_PATTERN.match(path.replace("\\", "/")))
@@ -34,9 +31,9 @@ def validate_model_files() -> None:
     logger.info("All model file paths are valid.")
 
 def validate_config_files() -> None:
-    config_dir = Path("config")
+    config_dir = Path("Config")
     if not config_dir.exists():
-        logger.warning("config directory not found — skipping config file validation.")
+        logger.warning("Config directory not found - skipping Config file validation.")
         return
 
     for root, _, files in os.walk(config_dir):
@@ -66,7 +63,7 @@ def run_unit_tests() -> None:
 
     logger.info("All unit tests passed.")
 
-def validate_config_required_fields(config_path: str = "VisionCore/example_config.json") -> None:
+def validate_config_required_fields(config_path: str = "VisionCore/examples/example_config.json") -> None:
     import json
     from pathlib import Path
 

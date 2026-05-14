@@ -31,12 +31,6 @@ class VisionCore:
         self.shutdown_event = threading.Event()
 
         os.makedirs("Outputs", exist_ok=True)
-        logging.basicConfig(
-            level=getattr(logging, config.get("log_level") or "INFO", logging.INFO),
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            filemode="w",
-            filename=config.get("log_file") or "Outputs/log.txt",
-        )
         self.logger = logging.getLogger(__name__)
 
         signal.signal(signal.SIGINT,  lambda *_: self.shutdown_event.set())

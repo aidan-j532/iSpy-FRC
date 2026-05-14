@@ -1,0 +1,83 @@
+{
+    "unit": "meter",
+    "dbscan": {
+        "elipson": 0,
+        "min_samples": 0
+    },
+    "distance_threshold": 0.5,
+    "network_tables_ip": "10.22.7.2",
+    "use_network_tables": true,
+    "app_mode": true,
+    "debug_mode": false,
+    "record_mode": true,
+    "stale_threshold": 1.0,
+    "log_level": "INFO",
+    "auto_opt": true,
+    "log_file": "Outputs/log.txt",
+    "metrics": false,
+    "camera_matrix": [
+        [
+            0,
+            0,
+            0
+        ],
+        [
+            0,
+            0,
+            0
+        ],
+        [
+            0,
+            0,
+            0
+        ]
+    ],
+    "dist_coeffs": [
+        0,
+        0,
+        0,
+        0,
+        0
+    ],
+    "camera_configs": {
+        "default": {
+            "name": "default",
+            "x": 0,
+            "y": 0,
+            "height": 0,
+            "pitch": 0,
+            "yaw": 0,
+            "grayscale": false,
+            "fps_cap": -1,
+            "calibration": {
+                "size": 0,
+                "distance": 0,
+                "game_piece_size": 0,
+                "fov": 0
+            },
+            "source": 0,
+            "subsystem": "field",
+            "pipeline": "object_detection"
+        }
+    },
+    "vision_model": {
+        "quantized": false,
+        "file_path": "C:\\Users\\RoboticsTeam\\Desktop\\VisionCore\\VisionCore-Deploy\\YoloModels\\pytorch\\nano\\dummy_openvino_model",
+        "input_size": [
+            640,
+            640
+        ],
+        "min_conf": 0.7
+    },
+    "vision_modules": [
+        "object_detection"
+    ],
+    "trackers": [
+        "fuel",
+        "path_planner"
+    ],
+    "utilities": [
+        "network_table",
+        "video_recorder"
+    ]
+}

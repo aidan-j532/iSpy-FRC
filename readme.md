@@ -123,13 +123,13 @@ Example configuration:
   "unit": "meter",
   "use_network_tables": false,
   "app_mode": true,
-  "debug_mode": false,
+  "debug_mode": true,
   "record_mode": false,
   "auto_opt": true,
   "vision_model": {
-    "file_path": "YoloModels/pytorch/nano/yolov8n.pt",
+    "file_path": "yolov8n.pt",
     "input_size": [640, 640],
-    "min_conf": 0.6
+    "min_conf": 1
   },
   "camera_configs": {
     "Webcam": {
@@ -138,6 +138,10 @@ Example configuration:
       "fps_cap": 30,
       "subsystem": "field",
       "grayscale": false,
+      "x": 0, "y": 0, "height": 0, "pitch": 0, "yaw": 0,
+      "calibration": {
+        "size": 0, "distance": 0, "game_piece_size": 0, "fov": 70
+      },
       "pipeline": "object_detection"
     }
   }
@@ -150,6 +154,8 @@ Key Settings:
 - camera_configs: List of connected cameras
 - debug_mode: Enable verbose logging
 - record_mode: Enable video recording
+- log_level: Optional. One of DEBUG, INFO, WARNING, ERROR. Controls console and file logging.
+- log_file: Optional. Path to write logs (relative to repo root). If omitted, logs go to console only.
 
 For complete configuration options, see config/README.md or VisionCore/examples/example_config.json
 
@@ -187,6 +193,15 @@ With "auto_opt": true in config.json, VisionCore will automatically:
 3. Load that model for optimal performance
 
 Priority order: RKNN > OpenVINO > ONNX > PyTorch > TFLite
+
+Model Conversion Behaviour:
+
+When a PyTorch (.pt) model is provided and `auto_opt` is enabled, VisionCore will
+attempt to convert the model to the best format for the host (for example OpenVINO
+on Intel CPUs). Converted artifacts are placed under the organized `YoloModels/`
+tree following the pattern: `YoloModels/<format>/<size>/`. If an exported file already
+exists it will be reused (cached). If conversion fails, VisionCore will fall back to
+using the original .pt model.
 
 
 Usage

@@ -1,5 +1,13 @@
 import json
 import logging
+import subprocess
+from pathlib import Path
+
+_BOOT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _BOOT_DIR.parents[1] # two levels up
+
+# Minimal basic config to ensure early logs appear; real level/handlers configured from config file
+logging.basicConfig(level=logging.WARNING)
 
 class VisionCoreConfig:
     def __init__(self, file_path: str = None):
@@ -9,8 +17,6 @@ class VisionCoreConfig:
             "unit": "meter",
             "dbscan": {"elipson": 0, "min_samples": 0},
             "distance_threshold": 0.5,
-            "vision_model_input_size": [640, 640],
-            "vision_model_file_path": "model.pt",
             "network_tables_ip": "10.22.7.2",
             "use_network_tables": True,
             "app_mode": True,
@@ -18,6 +24,7 @@ class VisionCoreConfig:
             "record_mode": True,
             "stale_threshold": 1.0,
             "log_level": "INFO",
+            "auto_opt": True,
             "log_file": "Outputs/log.txt",
             "metrics": False,
             "camera_matrix": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
@@ -36,7 +43,7 @@ class VisionCoreConfig:
             },
             "vision_model": {
                 "quantized": False,
-                "file_path": "model.pt",
+                "file_path": "YoloModels/pytorch/nano/dummy.pt",
                 "input_size": [640, 640],
                 "min_conf": 0.7
             },
@@ -45,6 +52,7 @@ class VisionCoreConfig:
             "utilities": ["network_table", "video_recorder"],
         }
         self.config = json.loads(json.dumps(self.default_config))  # deep copy
+        self.file_path = file_path
 
         if file_path:
             self.load_from_file(file_path)
@@ -55,6 +63,25 @@ class VisionCoreConfig:
         }
 
         self._check_config()
+        # Apply logging configuration after config is loaded
+        try:
+            self._configure_logging()
+        except Exception:
+            # Never let logging configuration break initialization
+            self.logger.exception("Failed to configure logging from config")
+    
+    def search_for_config(self) -> str:
+        config_dir = _REPO_ROOT / "Config"
+        if not config_dir.exists():
+            raise FileNotFoundError(f"Config directory not found at {config_dir}")
+
+        config_files = list(config_dir.rglob("*.json"))
+        if not config_files:
+            raise FileNotFoundError("No .json config files found in Config/")
+
+        chosen = str(config_files[0])
+        self.logger.info("Found config files: %s  ->  using %s", config_files, chosen)
+        return chosen
 
     def _check_config(self):
         if self.config == self.default_config:
@@ -83,8 +110,35 @@ class VisionCoreConfig:
                 data = json.load(f)
             self._update_config(data)
         except Exception as e:
-            self.logger.warning("Failed to load config from %s: %s", file_path, e)
-            self.logger.info("Using default configuration.")
+            self.logger.warning("Failed to load config from %s: %s, searching for config", file_path, e)
+            config_file = self.search_for_config()
+
+            try:
+                with open(config_file, "r") as f:
+                    data = json.load(f)
+                self._update_config(data)
+            except Exception as e:
+                self.logger.warning("Failed to find and load config from %s: %s", config_file, e)
+                self.logger.info("Using default configuration file: config.json")
+        finally:
+            # Reconfigure logging in case log settings changed from the file
+            try:
+                self._configure_logging()
+            except Exception:
+                self.logger.exception("Failed to apply logging configuration after loading file")
+
+    def save(self):
+        # Overwrite json file with current config
+        if not self.file_path:
+            self.logger.warning("No config file path set; saving to Config/config.json")
+            self.file_path = str(_REPO_ROOT / "Config" / "config.json")
+        
+        try:
+            with open(self.file_path, "w") as f:
+                json.dump(self.config, f, indent=4)
+            self.logger.info("Config saved to %s", self.file_path)
+        except Exception as e:
+            self.logger.error("Failed to save config to %s: %s", self.file_path, e)
 
     def get(self, key, default=None):
         return self.config.get(key, default)
@@ -123,6 +177,49 @@ class VisionCoreConfig:
                 self._update_config(value, current_dict[key])
             else:
                 current_dict[key] = value
+
+    def _configure_logging(self):
+        """Configure root logging according to the loaded config.
+
+        - Honor `log_level` (string like INFO, DEBUG)
+        - Optionally add a file handler for `log_file` (path relative to repo root)
+        """
+        # Map level string to logging level
+        level_str = self.config.get("log_level", "INFO")
+        try:
+            level = getattr(logging, str(level_str).upper(), logging.INFO)
+        except Exception:
+            level = logging.INFO
+
+        root = logging.getLogger()
+        # Remove existing handlers to avoid duplicate logs when reconfiguring
+        for h in list(root.handlers):
+            root.removeHandler(h)
+
+        root.setLevel(level)
+
+        fmt = logging.Formatter("%(asctime)s %(levelname)s:%(name)s:%(message)s")
+
+        # Stream handler
+        sh = logging.StreamHandler()
+        sh.setLevel(level)
+        sh.setFormatter(fmt)
+        root.addHandler(sh)
+
+        log_file = self.config.get("log_file")
+        if log_file:
+            log_path = Path(log_file)
+            if not log_path.is_absolute():
+                log_path = _REPO_ROOT / log_path
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                fh = logging.FileHandler(log_path, mode="a")
+                fh.setLevel(level)
+                fh.setFormatter(fmt)
+                root.addHandler(fh)
+            except Exception:
+                # If file handler can't be created, fall back to console only
+                self.logger.exception("Unable to create log file handler at %s", log_path)
 
     def __getitem__(self, args):
         if isinstance(args, tuple):

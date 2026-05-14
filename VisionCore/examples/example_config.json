@@ -12,6 +12,8 @@
     "record_mode": true,
     "stale_threshold": 1,
     "auto_opt": true,
+    "log_level": "INFO",
+    "log_file": "Outputs/log.txt",
     "vision_modules": ["object_detection"],
     "trackers": ["fuel", "path_planner", "example_custom"],
     "utilities": ["network_table", "video_recorder"],
