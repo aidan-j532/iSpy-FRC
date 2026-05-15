@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 _MODEL_PATTERN = re.compile(
 r"^YoloModels/" # starts with YoloModels/
 r"(?:(?:pytorch|onnx|tflite|rknn|openvino|coreml)/)?" # optional format folder
-r"(?:nano|small|medium|large|xlarge|2xlarge)/" # size folder
 r"[a-zA-Z0-9_\-]+.*\.(pt|onnx|tflite|rknn|bin|xml|yaml)$")
 
 def is_valid_model_path(path: str) -> bool:

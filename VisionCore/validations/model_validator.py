@@ -127,10 +127,10 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
         # Check structure: YoloModels/[format]/[size]/...
         parts = model_path.relative_to(yolo_dir).parts
 
-        if len(parts) < 3:
+        if len(parts) < 2:
             return {
                 "valid": False,
-                "reason": "Model not in YoloModels/[format]/[size]/ structure",
+                "reason": "Model not in YoloModels/[format]/ structure",
                 "format": fmt,
                 "size_mb": size_mb,
             }
@@ -293,7 +293,7 @@ def _is_in_organized_structure(model_path: Path, yolo_dir: Path) -> bool:
         rel = model_path.relative_to(yolo_dir)
         parts = rel.parts
 
-        if len(parts) < 3:
+        if len(parts) < 2:
             return False
 
         fmt = parts[0]
