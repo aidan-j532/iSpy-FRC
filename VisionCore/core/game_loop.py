@@ -1,21 +1,19 @@
 from pathlib import Path
 import logging
-
 from VisionCore.VisionCore import VisionCore
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
 from VisionCore.validations.ez import unit_tests
 from VisionCore.validations.model_validator import enforce_model_organization
 from VisionCore.plugins._loader import load_plugins
 from VisionCore.plugins.bases import VisionBase
+import VisionCore.plugins as _plugins_pkg
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 def main():
-    repo_root = Path.cwd()
-
-    plugin_root = repo_root / "VisionCore" / "plugins"
+    plugin_root = Path(_plugins_pkg.__file__).resolve().parent
 
     vision_classes = load_plugins(plugin_root / "vision", VisionBase)
 
