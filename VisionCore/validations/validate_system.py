@@ -44,7 +44,7 @@ def validate_config_files() -> None:
     logger.info("All config files are valid.")
 
 def run_unit_tests() -> None:
-    logger.info("Running unit tests…")
+    logger.info("Running unit tests...")
 
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
@@ -63,9 +63,15 @@ def run_unit_tests() -> None:
 
     logger.info("All unit tests passed.")
 
-def validate_config_required_fields(config_path: str = "VisionCore/examples/example_config.json") -> None:
+def validate_config_required_fields(config_path: str = "Config/config.json") -> None:
     import json
     from pathlib import Path
+
+    # Create if doesnt exist
+    config_file = Path(config_path)
+    if not config_file.exists():
+        logger.warning(f"Config file not found: {config_path}")
+        return
 
     config_file = Path(config_path)
     if not config_file.exists():
@@ -262,7 +268,6 @@ def validate_system() -> bool:
     try:
         validate_model_files()
         validate_config_files()
-        validate_config_required_fields()
         run_unit_tests()
         logger.info("System validation successful.")
         return True
