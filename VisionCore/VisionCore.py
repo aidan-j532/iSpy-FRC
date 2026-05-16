@@ -102,6 +102,13 @@ class VisionCore:
         if config["app_mode"]:
             threading.Thread(target=self.camera_app.run, daemon=True).start()
 
+        self._silence_external_loggers()
+
+    def _silence_external_loggers(self):
+        for name in logging.root.manager.loggerDict:
+            if not name.startswith("VisionCore"):
+                logging.getLogger(name).setLevel(logging.WARNING)
+
     def _handle_shutdown(self):
         if self.shutdown_event.is_set():
             return

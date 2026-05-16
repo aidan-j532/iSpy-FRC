@@ -136,7 +136,6 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
             }
 
         structure_format = parts[0]
-        structure_size = parts[1]
 
         # Validate format level
         valid_formats = set(MODEL_FORMATS.keys())
@@ -145,17 +144,6 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
                 "valid": False,
                 "reason": f"Invalid format directory: {structure_format}. "
                 f"Must be one of: {', '.join(valid_formats)}",
-                "format": fmt,
-                "size_mb": size_mb,
-            }
-
-        # Validate size level (nano, small, medium, large, etc.)
-        valid_sizes = {"nano", "small", "medium", "large", "xlarge", "2xlarge"}
-        if structure_size not in valid_sizes:
-            return {
-                "valid": False,
-                "reason": f"Invalid size directory: {structure_size}. "
-                f"Must be one of: {', '.join(valid_sizes)}",
                 "format": fmt,
                 "size_mb": size_mb,
             }
@@ -300,9 +288,8 @@ def _is_in_organized_structure(model_path: Path, yolo_dir: Path) -> bool:
         size = parts[1]
 
         valid_formats = set(MODEL_FORMATS.keys())
-        valid_sizes = {"nano", "small", "medium", "large", "xlarge", "2xlarge"}
 
-        return fmt in valid_formats and size in valid_sizes
+        return fmt in valid_formats
 
     except ValueError:
         return False

@@ -2,9 +2,6 @@ import platform
 import subprocess
 import os
 from functools import lru_cache
-import logging
-
-logging.basicConfig(level=logging.INFO)
 
 SUPPORTED_FORMATS = {"tflite", "openvino", "coreml", "onnx", "rknn"}
 

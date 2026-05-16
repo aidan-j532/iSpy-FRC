@@ -2,9 +2,6 @@ from ultralytics import YOLO
 import logging
 import os
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 EXPORT_CONFIGS = {
     "onnx": {
         "detect":   {"simplify": True, "opset": 17, "dynamic": False, "half": False},

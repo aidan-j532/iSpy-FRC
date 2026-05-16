@@ -5,7 +5,8 @@ import shutil
 import ultralytics
 
 _BOOT_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = Path.cwd()
+_REPO_ROOT = _BOOT_DIR.parents[1] # VisionCore/boot/ -> repo root
+_ASSETS_DIR = _BOOT_DIR.parent / "assets" # VisionCore/assets/
 
 if str(_REPO_ROOT) not in sys.path:
     sys.path.append(str(_REPO_ROOT))
@@ -15,37 +16,50 @@ from VisionCore.validations.validate_system import validate_system
 from VisionCore.validations.model_validator import enforce_model_organization
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
 import logging
-import ultralytics
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [VisionCore] %(levelname)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+for name in logging.root.manager.loggerDict:
+    logging.getLogger(name).setLevel(logging.NOTSET)
 logger = logging.getLogger(__name__)
 
-FORMAT_EXTENSIONS = {
-    "onnx": ".onnx",
-    "openvino": ".xml",
-    "rknn": ".rknn",
-    "tflite": ".tflite",
-    "coreml": ".mlpackage",
+for name in logging.root.manager.loggerDict:
+    if not name.startswith("VisionCore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+FORMAT_MATCHERS = {
+    "onnx": lambda p: p.suffix == ".onnx",
+    "rknn": lambda p: p.suffix == ".rknn",
+    "tflite": lambda p: p.suffix == ".tflite",
+    "coreml": lambda p: p.suffix == ".mlpackage",
+    "openvino": lambda p: p.is_dir() and p.name.endswith("_openvino_model"),
 }
 
+def search_for_config():
+    config_dir = _REPO_ROOT / "Config"
 
-def search_for_config() -> str:
-    config_dir = _REPO_ROOT / "config"
     if not config_dir.exists():
-        raise FileNotFoundError(f"config directory not found at {config_dir}")
+        return None
 
-    config_files = list(config_dir.rglob("*.json"))
+    config_files = sorted(config_dir.rglob("*.json"))
+
     if not config_files:
         return None
-        # raise FileNotFoundError("No .json config files found in config/")
 
-    chosen = str(config_files[0])
-    logger.info("Found config files: %s -> using %s", len(config_files), chosen)
-    return chosen
+    non_default = [
+        f for f in config_files
+        if f.name != "config.json"
+    ]
 
+    chosen = non_default[0] if non_default else config_files[0]
+
+    logger.info("Found config: %s -> using %s", len(config_files), chosen)
+    return str(chosen)
 
 def convert_model(model_file, target_format, input_size):
-    # Check if file exists
     if not os.path.exists(model_file):
         logger.warning(
             f"Model file {model_file} is missing or empty. Skipping conversion."
@@ -58,25 +72,32 @@ def convert_model(model_file, target_format, input_size):
         )
         return model_file
 
-    stem = Path(model_file).stem
-    parent = Path(model_file).parent
+    model_path = Path(model_file)
+    stem = model_path.stem
+    parent = model_path.parent
 
-    ext_map = {
-        "rknn": f"{stem}.rknn",
-        "onnx": f"{stem}.onnx",
-        "tflite": f"{stem}_saved_model/{stem}_full_integer_quant.tflite",
-        "openvino": f"{stem}_openvino_model",
-        "coreml": f"{stem}.mlpackage",
+    expected_outputs = {
+        "rknn": parent / f"{stem}.rknn",
+        "onnx": parent / f"{stem}.onnx",
+        "openvino": parent / f"{stem}_openvino_model",
+        "coreml": parent / f"{stem}.mlpackage",
     }
 
-    if target_format not in ext_map:
-        return model_file
+    # TFLite is inconsistent across Ultralytics versions
+    if target_format == "tflite":
+        saved_model_dir = parent / f"{stem}_saved_model"
 
-    out_path = parent / ext_map[target_format]
+        if saved_model_dir.exists():
+            tflites = list(saved_model_dir.rglob("*.tflite"))
+            if tflites:
+                logger.info(f"Cached tflite model found: {tflites[0]}")
+                return str(tflites[0])
+    else:
+        out_path = expected_outputs.get(target_format)
 
-    if out_path.exists():
-        logger.info(f"Cached {target_format} model found: {out_path}")
-        return str(out_path)
+        if out_path and out_path.exists():
+            logger.info(f"Cached {target_format} model found: {out_path}")
+            return str(out_path)
 
     logger.info(f"Converting {model_file} -> {target_format}")
 
@@ -85,145 +106,142 @@ def convert_model(model_file, target_format, input_size):
 
         if target_format == "rknn":
             model.export(format="rknn", imgsz=input_size)
+
         elif target_format == "onnx":
-            model.export(format="onnx", imgsz=input_size, simplify=True, opset=12)
+            model.export(
+                format="onnx",
+                imgsz=input_size,
+                simplify=True,
+                opset=12
+            )
+
         elif target_format == "tflite":
-            model.export(format="tflite", imgsz=input_size, int8=True)
+            model.export(
+                format="tflite",
+                imgsz=input_size,
+                int8=True
+            )
+
         elif target_format == "openvino":
-            model.export(format="openvino", imgsz=input_size, half=True)
+            model.export(
+                format="openvino",
+                imgsz=input_size,
+                half=True
+            )
+
         elif target_format == "coreml":
-            model.export(format="coreml", imgsz=input_size, nms=True)
+            model.export(
+                format="coreml",
+                imgsz=input_size,
+                nms=True
+            )
+
     except Exception as e:
         logger.error(
-            f"Conversion to {target_format} raised an exception: {e}", exc_info=True
+            f"Conversion to {target_format} raised an exception: {e}",
+            exc_info=True
         )
         return model_file
 
-    if out_path.exists():
-        return str(out_path)
+    # Post-export verification
 
-    logger.warning(f"Conversion to {target_format} failed, falling back to .pt")
+    if target_format == "tflite":
+        saved_model_dir = parent / f"{stem}_saved_model"
+
+        if saved_model_dir.exists():
+            tflites = list(saved_model_dir.rglob("*.tflite"))
+
+            if tflites:
+                logger.info(f"TFLite export successful: {tflites[0]}")
+                return str(tflites[0])
+
+    else:
+        out_path = expected_outputs.get(target_format)
+
+        if out_path and out_path.exists():
+            logger.info(f"{target_format} export successful: {out_path}")
+            return str(out_path)
+
+    logger.warning(
+        f"Conversion to {target_format} failed, falling back to .pt"
+    )
+
     return model_file
 
-
 def setup_files():
-    # This download a ultralytics model and sets up the YoloModels thingie
-    # Also setups Config/config.json with VisionCore defualt config
-
-    # Ensure YoloModels directory exists
     yolo_dir = _REPO_ROOT / "YoloModels"
-    yolo_dir.mkdir(exist_ok=True)
+    config_dir = _REPO_ROOT / "Config"
+    outputs_dir = _REPO_ROOT / "Outputs"
 
-    # Create all sub dirs for formats and sizes
-    formats = ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml"]
-    for fmt in formats:
+    yolo_dir.mkdir(exist_ok=True)
+    config_dir.mkdir(exist_ok=True)
+    outputs_dir.mkdir(exist_ok=True)
+
+    for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
 
-    # Download nano model if not already present
-    nano_pt = yolo_dir / "pytorch" / "nano" / "dummy.pt"
-
+    nano_pt = yolo_dir / "pytorch" / "default.pt"
     if not nano_pt.exists():
-        logger.info("Downloading default nano model...")
+        bundled = _ASSETS_DIR / "default.pt"
+        if bundled.exists():
+            shutil.copy(bundled, nano_pt)
 
-        try:
-            # This downloads yolov8n.pt
-            model = ultralytics.YOLO("yolov8n.pt")
+def on_boot(install_service: bool = False):
+    setup_files()
 
-            # Find where Ultralytics stored it
-            downloaded_path = Path(model.ckpt_path)
+    config_path = search_for_config()
 
-            # Move it instead of copying
-            nano_pt.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(downloaded_path), str(nano_pt))
-
-            logger.info(f"Moved default model to {nano_pt}")
-
-        except Exception as e:
-            logger.error(f"Failed to download/save default model: {e}", exc_info=True)
-
-    # Ensure config directory and default config exist
-    config_dir = _REPO_ROOT / "Config"
-    config_dir.mkdir(exist_ok=True)
-    config_file = config_dir / "config.json"
-    if not config_file.exists():
-        default_config = VisionCoreConfig(str(config_file))
-        default_config.save()
-
-    return config_file
-
-def on_boot():
-    logger.info("Starting VisionCore boot sequence...")
-    config_path = setup_files()
+    if not config_path:
+        logger.info("No config found. Creating default config...")
+        config_path = _REPO_ROOT / "Config" / "config.json"
+        VisionCoreConfig(str(config_path)).save()
+    else:
+        logger.info(f"Using existing config: {config_path}")
     
     if not validate_system():
         raise RuntimeError("System validation failed. Aborting boot.")
 
     config = VisionCoreConfig(str(config_path))
 
-    # 3. Enforce YOLO model organization, actually not doing this because this is boot
-    # is_valid, corrected_model_path = enforce_model_organization(_REPO_ROOT, config.config)
-
-    # if not is_valid:
-    #     raise RuntimeError(
-    #         "YOLO model organization validation failed. "
-    #         "Ensure models are in YoloModels/[format]/[size]/ structure."
-    #     )
-
-    # if corrected_model_path:
-    #     config.config["vision_model"]["file_path"] = corrected_model_path
-    #     logger.info("Using model from filesystem: %s", corrected_model_path)
-
-    # 4. Auto-optimization (if enabled)
     if config.get("auto_opt"):
         best_format = recommend_format()
         logger.info("Auto-opt enabled. Recommended format: %s", best_format)
 
-        extension = FORMAT_EXTENSIONS.get(best_format)
-        if not extension:
-            raise ValueError(f"No extension mapping for format: {best_format}")
+        matcher = FORMAT_MATCHERS.get(best_format)
+        if not matcher:
+            raise ValueError(f"No matcher for format: {best_format}")
 
         model_dir = _REPO_ROOT / "YoloModels"
-        optimized = list(model_dir.rglob(f"*{extension}"))
+        optimized = [p for p in model_dir.rglob("*") if matcher(p)]
 
         if optimized:
-            chosen = str(optimized[0])
-            # logger.info("Found optimised model(s): %s  ->  using %s",
-            # [str(m) for m in optimized], chosen)
-            logger.info("Found optimised model.")
-            config.set("vision_model", "file_path", chosen)
+            logger.info(
+                "Found cached optimised model: %s",
+                optimized[0]
+            )
+            config.set("vision_model", "file_path", str(optimized[0]))
         else:
             logger.info(
-                "No %s models found in YoloModels/. Attempting conversion...",
-                best_format,
+                f"No cached {best_format} model found. Attempting conversion..."
             )
-            pt_path = config.get("vision_model", {}).get("file_path")
+            pt_path = config.get("vision_model", {}).get("source_pt")
             if pt_path:
-                pt_full = (
-                    str(_REPO_ROOT / pt_path) if not os.path.isabs(pt_path) else pt_path
-                )
+                pt_full = str(_REPO_ROOT / pt_path) if not os.path.isabs(pt_path) else pt_path
                 input_size = config.get("input_size") or [640, 640]
                 converted = convert_model(pt_full, best_format, input_size)
                 if converted != pt_full:
                     logger.info("Conversion successful: %s", converted)
                     config.set("vision_model", "file_path", converted)
                 else:
-                    logger.warning(
-                        "Conversion to %s failed or was skipped. Using .pt model.",
-                        best_format,
-                    )
+                    logger.warning("Conversion to %s failed or was skipped. Using .pt model.", best_format)
             else:
-                logger.warning(
-                    "No source .pt model found to convert. Using configured model."
-                )
+                logger.warning("No source .pt model found to convert. Using configured model.")
     else:
         logger.info("Auto-opt disabled.")
 
-    # 5. Final model validation
     model_path = config.get("vision_model", {}).get("file_path")
     if not model_path:
-        raise FileNotFoundError(
-            "No model path specified in config or found by auto-opt"
-        )
+        raise FileNotFoundError("No model path specified in config or found by auto-opt")
 
     model_full_path = Path(model_path)
     if not model_full_path.is_absolute():
@@ -232,23 +250,29 @@ def on_boot():
     if not model_full_path.exists():
         raise FileNotFoundError(f"Model file not found: {model_full_path}")
 
-    logger.info(
-        "Boot sequence complete. Final model path: %s",
-        config.get("vision_model", {}).get("file_path"),
-    )
-
+    logger.info("Boot sequence complete. Final model path: %s", config.get("vision_model", {}).get("file_path"))
     config.save()
 
-    # 6. Install service using the same Python interpreter that launched boot.py
-    install_script = str(_BOOT_DIR / "install.py")
-    try:
-        subprocess.run(
-            [sys.executable, install_script], check=True, cwd=str(_REPO_ROOT)
-        )
-    except subprocess.CalledProcessError as e:
-        logger.error("Failed to run install.py: %s", e)
-        raise RuntimeError("Boot failed during service installation.")
+    if install_service:
+        install_script = str(_BOOT_DIR / "install.py")
+        try:
+            subprocess.run([sys.executable, install_script], check=True, cwd=str(_REPO_ROOT))
+        except subprocess.CalledProcessError as e:
+            logger.error("Failed to run install.py: %s", e)
+            raise RuntimeError("Boot failed during service installation.")
+    else:
+        logger.info("Skipping service installation. Run with -s to install.")
 
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="VisionCore boot sequence")
+    parser.add_argument(
+        "-s", "--service",
+        action="store_true",
+        help="Install and start the watchdog service so VisionCore runs on boot"
+    )
+    args = parser.parse_args()
+    on_boot(install_service=args.service)
 
 if __name__ == "__main__":
-    on_boot()
+    main()

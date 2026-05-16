@@ -1,14 +1,15 @@
 from pathlib import Path
 import logging
-
 from VisionCore.VisionCore import VisionCore
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
 from VisionCore.validations.ez import unit_tests
 from VisionCore.validations.model_validator import enforce_model_organization
 from VisionCore.plugins._loader import load_plugins
 from VisionCore.plugins.bases import VisionBase
+import sys
 
-logging.basicConfig(level=logging.INFO)
+for name in logging.root.manager.loggerDict:
+    logging.getLogger(name).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 def main():

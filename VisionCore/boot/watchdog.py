@@ -3,7 +3,6 @@ import time
 import logging
 import sys
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 if len(sys.argv) < 2:

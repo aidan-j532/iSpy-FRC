@@ -7,10 +7,11 @@ from VisionCore.validations.model_validator import enforce_model_organization
 from VisionCore.plugins._loader import load_plugins
 from VisionCore.plugins.bases import VisionBase
 import VisionCore.plugins as _plugins_pkg
+import sys
 
-logging.basicConfig(level=logging.INFO)
+for name in logging.root.manager.loggerDict:
+    logging.getLogger(name).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
-
 
 def main():
     repo_root = Path.cwd()

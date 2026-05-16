@@ -4,11 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visioncore-frc"
-version = "2.3.8.8"
-description = "FRC vision pipeline for custom, hardware accelerated object detection"
+version = "2.4.8.9"
+description = "FRC vision pipeline for custom, hardware accelerated object detection."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0"
+
+authors = [
+    { name = "VisionCore Robotics Team", email = "aidanrjensen@gmail.com" }
+]
+
+maintainers = [
+    { name = "VisionCore Maintainer", email = "aidanrjensen@gmail.com" }
+]
+
+urls = {
+    "Homepage" = "https://https://github.com/aidan-j532/VisionCore-Deploy",
+    "Repository" = "https://https://github.com/aidan-j532/VisionCore-Deploy",
+    "Bug Tracker" = "https://github.com/aidan-j532/VisionCore-Deploy/issues"
+}
 
 # Base deps — always installed.
 # rknn wheels are not listed here because they are not on PyPI.
