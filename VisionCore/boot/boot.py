@@ -10,7 +10,7 @@ _PROJECT_ROOT = Path(
     or Path.home() / "VisionCore"
 ).resolve()
 _PACKAGE_ROOT = Path(__file__).resolve().parent
-ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
+_ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
 
 import subprocess
 from VisionCore.config.AutoOpt import recommend_format
