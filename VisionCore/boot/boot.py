@@ -191,26 +191,24 @@ def setup_files():
 
 
 def on_boot(install_service: bool = False, first_boot: bool = False):
-    if first_boot:
-        reset_workspace()
-        setup_files()
+    os.chdir(_PROJECT_ROOT)
 
+    if first_boot:
+        logger.warning("First boot mode enabled. Resetting workspace...")
+        reset_workspace()
+    setup_files()
+
+    config_path = search_for_config()
+
+    if not config_path:
+        logger.info("No config found. Creating default config...")
         config_path = _PROJECT_ROOT / "Config" / "config.json"
         VisionCoreConfig(str(config_path)).save()
-
-        config = VisionCoreConfig(str(config_path))
-
-        validate_system(first_boot=True)
-
     else:
-        setup_files()
-        config_path = search_for_config()
+        logger.info(f"Using existing config: {config_path}")
 
-        if not config_path:
-            config_path = _PROJECT_ROOT / "Config" / "config.json"
-            VisionCoreConfig(str(config_path)).save()
-
-        validate_system(first_boot=False)
+    if not validate_system():
+        raise RuntimeError("System validation failed. Aborting boot.")
 
     config = VisionCoreConfig(str(config_path))
 
@@ -256,7 +254,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                 converted = Path(convert_model(str(pt_full), best_format, input_size))
                 if converted != pt_full:
                     logger.info("Conversion successful: %s", converted)
-                    config.set("vision_model", "file_path", str(converted))
+                    config.set("vision_model", "file_path", converted)
                 else:
                     logger.warning(
                         "Conversion to %s failed or was skipped. Using .pt model.",
