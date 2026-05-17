@@ -5,11 +5,15 @@ import shutil
 import ultralytics
 
 _BOOT_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _BOOT_DIR.parents[1] # VisionCore/boot/ -> repo root
-_ASSETS_DIR = _BOOT_DIR.parent / "assets" # VisionCore/assets/
+_PROJECT_ROOT = Path(os.environ.get(
+    "VISIONCORE_ROOT",
+    Path.cwd()
+)).resolve()
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+_ASSETS_DIR = Path(sys.prefix) / "VisionCore" / "assets"
 
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.append(str(_REPO_ROOT))
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(_PROJECT_ROOT))
 import subprocess
 from VisionCore.config.AutoOpt import recommend_format
 from VisionCore.validations.validate_system import validate_system
@@ -39,7 +43,7 @@ FORMAT_MATCHERS = {
 }
 
 def search_for_config():
-    config_dir = _REPO_ROOT / "Config"
+    config_dir = _PROJECT_ROOT / "Config"
 
     if not config_dir.exists():
         return None
@@ -169,9 +173,9 @@ def convert_model(model_file, target_format, input_size):
     return model_file
 
 def setup_files():
-    yolo_dir = _REPO_ROOT / "YoloModels"
-    config_dir = _REPO_ROOT / "Config"
-    outputs_dir = _REPO_ROOT / "Outputs"
+    yolo_dir = _PROJECT_ROOT / "YoloModels"
+    config_dir = _PROJECT_ROOT / "Config"
+    outputs_dir = _PROJECT_ROOT / "Outputs"
 
     yolo_dir.mkdir(exist_ok=True)
     config_dir.mkdir(exist_ok=True)
@@ -180,9 +184,9 @@ def setup_files():
     for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
 
-    nano_pt = yolo_dir / "pytorch" / "default.pt"
+    nano_pt = yolo_dir / "pytorch" / "_default.pt"
     if not nano_pt.exists():
-        bundled = _ASSETS_DIR / "default.pt"
+        bundled = _ASSETS_DIR / "_default.pt"
         if bundled.exists():
             shutil.copy(bundled, nano_pt)
 
@@ -193,7 +197,7 @@ def on_boot(install_service: bool = False):
 
     if not config_path:
         logger.info("No config found. Creating default config...")
-        config_path = _REPO_ROOT / "Config" / "config.json"
+        config_path = _PROJECT_ROOT / "Config" / "config.json"
         VisionCoreConfig(str(config_path)).save()
     else:
         logger.info(f"Using existing config: {config_path}")
@@ -211,7 +215,7 @@ def on_boot(install_service: bool = False):
         if not matcher:
             raise ValueError(f"No matcher for format: {best_format}")
 
-        model_dir = _REPO_ROOT / "YoloModels"
+        model_dir = _PROJECT_ROOT / "YoloModels"
         optimized = [p for p in model_dir.rglob("*") if matcher(p)]
 
         if optimized:
@@ -225,10 +229,25 @@ def on_boot(install_service: bool = False):
                 f"No cached {best_format} model found. Attempting conversion..."
             )
             pt_path = config.get("vision_model", {}).get("source_pt")
+
             if pt_path:
-                pt_full = str(_REPO_ROOT / pt_path) if not os.path.isabs(pt_path) else pt_path
+                pt_full = Path(pt_path)
+
+                if not pt_full.is_absolute():
+                    pt_full = _PROJECT_ROOT / pt_path
+
+                if not pt_full.exists():
+                    logger.warning("Model missing in workspace, copying bundled default.pt")
+
+                    bundled = _ASSETS_DIR / "default.pt"
+                    target = _PROJECT_ROOT / "YoloModels/pytorch/default.pt"
+
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy(bundled, target)
+
+                    pt_full = target
                 input_size = config.get("input_size") or [640, 640]
-                converted = convert_model(pt_full, best_format, input_size)
+                converted = Path(convert_model(str(pt_full), best_format, input_size))
                 if converted != pt_full:
                     logger.info("Conversion successful: %s", converted)
                     config.set("vision_model", "file_path", converted)
@@ -245,7 +264,7 @@ def on_boot(install_service: bool = False):
 
     model_full_path = Path(model_path)
     if not model_full_path.is_absolute():
-        model_full_path = _REPO_ROOT / model_full_path
+        model_full_path = _PROJECT_ROOT / model_full_path
 
     if not model_full_path.exists():
         raise FileNotFoundError(f"Model file not found: {model_full_path}")
@@ -256,7 +275,7 @@ def on_boot(install_service: bool = False):
     if install_service:
         install_script = str(_BOOT_DIR / "install.py")
         try:
-            subprocess.run([sys.executable, install_script], check=True, cwd=str(_REPO_ROOT))
+            subprocess.run([sys.executable, install_script], check=True, cwd=str(_PROJECT_ROOT))
         except subprocess.CalledProcessError as e:
             logger.error("Failed to run install.py: %s", e)
             raise RuntimeError("Boot failed during service installation.")
