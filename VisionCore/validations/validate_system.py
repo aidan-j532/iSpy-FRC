@@ -264,13 +264,16 @@ def get_recommendations(config_path: str = "VisionCore/example_config.json") -> 
 
     return output
 
-def validate_system() -> bool:
+def validate_system(first_boot: bool = False) -> bool:
     try:
-        validate_model_files()
-        validate_config_files()
+        if not first_boot:
+            validate_model_files()
+            validate_config_files()
+
         run_unit_tests()
         logger.info("System validation successful.")
         return True
+
     except Exception as e:
         logger.error("System validation failed: %s", e)
         return False
