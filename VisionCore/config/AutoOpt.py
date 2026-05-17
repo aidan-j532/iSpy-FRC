@@ -4,10 +4,8 @@ import os
 from functools import lru_cache
 
 SUPPORTED_FORMATS = {"tflite", "openvino", "coreml", "onnx", "rknn"}
-
 @lru_cache(maxsize=16)
 def run(cmd: str) -> str:
-    """Run a shell command string. Must be a str so lru_cache can hash the argument."""
     try:
         return subprocess.run(
             cmd,
@@ -70,40 +68,33 @@ def has_hailo_npu():
 def recommend_format() -> str:
     scores = {fmt: 0 for fmt in SUPPORTED_FORMATS}
 
-    # Edge TPU (Coral) -> TFLite is the only option
-    if has_edge_tpu():
-        scores["tflite"] += 100
-
-    # Rockchip NPU -> RKNN
     if has_rockchip_npu():
-        scores["rknn"] += 100
+        scores["rknn"] += 1000
 
-    # Intel Movidius VPU -> OpenVINO
-    if has_intel_vpu():
-        scores["openvino"] += 90
+    if has_edge_tpu():
+        scores["tflite"] += 1000
 
-    # Apple Silicon -> CoreML
     if has_apple_silicon():
-        scores["coreml"] += 100
+        scores["coreml"] += 1000
 
-    # NVIDIA GPU -> ONNX (TensorRT backend or direct)
+    if has_intel_vpu():
+        scores["openvino"] += 900
+
     if has_nvidia():
-        scores["onnx"] += 80
+        scores["onnx"] += 800
 
-    # AMD GPU -> ONNX (best cross-runtime support)
+    if has_intel_gpu():
+        scores["openvino"] += 700
+
     if has_amd_gpu():
-        scores["onnx"] += 70
+        scores["onnx"] += 650
 
-    # Intel GPU/CPU -> OpenVINO
-    if has_intel_gpu():                  # FIX: was has_intel() — NameError at runtime
-        scores["openvino"] += 70
+    if has_intel_gpu() and not has_nvidia() and not has_amd_gpu():
+        scores["openvino"] += 400
 
-    # ARM CPU (Raspberry Pi, Jetson, etc) -> TFLite
     if has_arm():
-        scores["tflite"] += 60
+        scores["tflite"] += 350
 
-    # Fallback: ONNX is the most portable format
-    scores["onnx"] += 10
+    scores["onnx"] += 100
 
-    best = max(scores, key=scores.get)
-    return best
+    return max(scores, key=scores.get)

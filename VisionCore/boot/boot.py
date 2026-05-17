@@ -6,8 +6,7 @@ import ultralytics
 
 _BOOT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = Path(
-    os.environ.get("VISIONCORE_ROOT")
-    or Path.home() / "VisionCore"
+    os.environ.get("VISIONCORE_ROOT") or Path.home() / "VisionCore"
 ).resolve()
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
@@ -22,7 +21,7 @@ import logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [VisionCore] %(levelname)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 for name in logging.root.manager.loggerDict:
     logging.getLogger(name).setLevel(logging.NOTSET)
@@ -40,6 +39,7 @@ FORMAT_MATCHERS = {
     "openvino": lambda p: p.is_dir() and p.name.endswith("_openvino_model"),
 }
 
+
 def reset_workspace():
     targets = [
         _PROJECT_ROOT / "YoloModels",
@@ -48,11 +48,19 @@ def reset_workspace():
     ]
 
     for target in targets:
-        if target.exists():
-            logger.warning("Removing existing directory: %s", target)
-            shutil.rmtree(target, ignore_errors=True)
+        try:
+            if target.exists():
+                logger.warning("Resetting: %s", target)
+                shutil.rmtree(target, ignore_errors=False)
+        except Exception as e:
+            logger.warning("Failed to fully remove %s: %s", target, e)
 
-    logger.info("Workspace reset complete.")
+    # recreate clean structure immediately
+    for target in targets:
+        target.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Workspace fully reset and reinitialized.")
+
 
 def search_for_config():
     config_dir = _PROJECT_ROOT / "Config"
@@ -65,15 +73,13 @@ def search_for_config():
     if not config_files:
         return None
 
-    non_default = [
-        f for f in config_files
-        if f.name != "config.json"
-    ]
+    non_default = [f for f in config_files if f.name != "config.json"]
 
     chosen = non_default[0] if non_default else config_files[0]
 
     logger.info("Found config: %s -> using %s", len(config_files), chosen)
     return str(chosen)
+
 
 def convert_model(model_file, target_format, input_size):
     if not os.path.exists(model_file):
@@ -124,38 +130,20 @@ def convert_model(model_file, target_format, input_size):
             model.export(format="rknn", imgsz=input_size)
 
         elif target_format == "onnx":
-            model.export(
-                format="onnx",
-                imgsz=input_size,
-                simplify=True,
-                opset=12
-            )
+            model.export(format="onnx", imgsz=input_size, simplify=True, opset=12)
 
         elif target_format == "tflite":
-            model.export(
-                format="tflite",
-                imgsz=input_size,
-                int8=True
-            )
+            model.export(format="tflite", imgsz=input_size, int8=True)
 
         elif target_format == "openvino":
-            model.export(
-                format="openvino",
-                imgsz=input_size,
-                half=True
-            )
+            model.export(format="openvino", imgsz=input_size, half=True)
 
         elif target_format == "coreml":
-            model.export(
-                format="coreml",
-                imgsz=input_size,
-                nms=True
-            )
+            model.export(format="coreml", imgsz=input_size, nms=True)
 
     except Exception as e:
         logger.error(
-            f"Conversion to {target_format} raised an exception: {e}",
-            exc_info=True
+            f"Conversion to {target_format} raised an exception: {e}", exc_info=True
         )
         return model_file
 
@@ -178,11 +166,10 @@ def convert_model(model_file, target_format, input_size):
             logger.info(f"{target_format} export successful: {out_path}")
             return str(out_path)
 
-    logger.warning(
-        f"Conversion to {target_format} failed, falling back to .pt"
-    )
+    logger.warning(f"Conversion to {target_format} failed, falling back to .pt")
 
     return model_file
+
 
 def setup_files():
     yolo_dir = _PROJECT_ROOT / "YoloModels"
@@ -202,26 +189,28 @@ def setup_files():
         if bundled.exists():
             shutil.copy(bundled, nano_pt)
 
-def on_boot(
-    install_service: bool = False,
-    first_boot: bool = False
-):
+
+def on_boot(install_service: bool = False, first_boot: bool = False):
     if first_boot:
-        logger.warning("First boot mode enabled. Resetting workspace...")
         reset_workspace()
-    setup_files()
+        setup_files()
 
-    config_path = search_for_config()
-
-    if not config_path:
-        logger.info("No config found. Creating default config...")
         config_path = _PROJECT_ROOT / "Config" / "config.json"
         VisionCoreConfig(str(config_path)).save()
+
+        config = VisionCoreConfig(str(config_path))
+
+        validate_system(first_boot=True)
+
     else:
-        logger.info(f"Using existing config: {config_path}")
-    
-    if not validate_system():
-        raise RuntimeError("System validation failed. Aborting boot.")
+        setup_files()
+        config_path = search_for_config()
+
+        if not config_path:
+            config_path = _PROJECT_ROOT / "Config" / "config.json"
+            VisionCoreConfig(str(config_path)).save()
+
+        validate_system(first_boot=False)
 
     config = VisionCoreConfig(str(config_path))
 
@@ -237,10 +226,7 @@ def on_boot(
         optimized = [p for p in model_dir.rglob("*") if matcher(p)]
 
         if optimized:
-            logger.info(
-                "Found cached optimised model: %s",
-                optimized[0]
-            )
+            logger.info("Found cached optimised model: %s", optimized[0])
             config.set("vision_model", "file_path", str(optimized[0]))
         else:
             logger.info(
@@ -255,7 +241,9 @@ def on_boot(
                     pt_full = _PROJECT_ROOT / pt_path
 
                 if not pt_full.exists():
-                    logger.warning("Model missing in workspace, copying bundled _default.pt")
+                    logger.warning(
+                        "Model missing in workspace, copying bundled _default.pt"
+                    )
 
                     bundled = _ASSETS_DIR / "_default.pt"
                     target = _PROJECT_ROOT / "YoloModels/pytorch/_default.pt"
@@ -268,17 +256,24 @@ def on_boot(
                 converted = Path(convert_model(str(pt_full), best_format, input_size))
                 if converted != pt_full:
                     logger.info("Conversion successful: %s", converted)
-                    config.set("vision_model", "file_path", converted)
+                    config.set("vision_model", "file_path", str(converted))
                 else:
-                    logger.warning("Conversion to %s failed or was skipped. Using .pt model.", best_format)
+                    logger.warning(
+                        "Conversion to %s failed or was skipped. Using .pt model.",
+                        best_format,
+                    )
             else:
-                logger.warning("No source .pt model found to convert. Using configured model.")
+                logger.warning(
+                    "No source .pt model found to convert. Using configured model."
+                )
     else:
         logger.info("Auto-opt disabled.")
 
     model_path = config.get("vision_model", {}).get("file_path")
     if not model_path:
-        raise FileNotFoundError("No model path specified in config or found by auto-opt")
+        raise FileNotFoundError(
+            "No model path specified in config or found by auto-opt"
+        )
 
     model_full_path = Path(model_path)
     if not model_full_path.is_absolute():
@@ -287,35 +282,45 @@ def on_boot(
     if not model_full_path.exists():
         raise FileNotFoundError(f"Model file not found: {model_full_path}")
 
-    logger.info("Boot sequence complete. Final model path: %s", config.get("vision_model", {}).get("file_path"))
+    logger.info(
+        "Boot sequence complete. Final model path: %s",
+        config.get("vision_model", {}).get("file_path"),
+    )
     config.save()
 
     if install_service:
         install_script = str(_BOOT_DIR / "install.py")
         try:
-            subprocess.run([sys.executable, install_script], check=True, cwd=str(_PROJECT_ROOT))
+            subprocess.run(
+                [sys.executable, install_script], check=True, cwd=str(_PROJECT_ROOT)
+            )
         except subprocess.CalledProcessError as e:
             logger.error("Failed to run install.py: %s", e)
             raise RuntimeError("Boot failed during service installation.")
     else:
         logger.info("Skipping service installation. Run with -s to install.")
 
+
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="VisionCore boot sequence")
     parser.add_argument(
-        "-s", "--service",
+        "-s",
+        "--service",
         action="store_true",
-        help="Install and start the watchdog service so VisionCore runs on boot"
+        help="Install and start the watchdog service so VisionCore runs on boot",
     )
 
     parser.add_argument(
-        "-first", "--first-boot",
+        "-first",
+        "--first-boot",
         action="store_true",
-        help="Delete Config, Outputs, and YoloModels before booting"
+        help="Delete Config, Outputs, and YoloModels before booting",
     )
     args = parser.parse_args()
     on_boot(install_service=args.service, first_boot=args.first_boot)
+
 
 if __name__ == "__main__":
     main()
