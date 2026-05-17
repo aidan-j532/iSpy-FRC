@@ -9,12 +9,17 @@ import platform
 
 class Camera:
 
-    def __init__(self, camera_config: VisionCoreCameraConfig, fps_cap: int, input_size: tuple, grayscale: bool):
+    def __init__(
+        self,
+        camera_config: VisionCoreCameraConfig,
+        fps_cap: int,
+        input_size: tuple,
+        grayscale: bool,
+    ):
         self.logger = logging.getLogger(__name__)
 
-        # These three attrributess are the only ones the base class needs at init time.
         self.fps_cap = fps_cap
-        self.input_size = input_size # (w, h)
+        self.input_size = input_size  # (w, h)
         self.grayscale = grayscale
 
         self.source = camera_config["source"]
@@ -31,11 +36,32 @@ class Camera:
             self.is_image = True
             self.image = cv2.imread(self.source)
             if self.image is None:
-                raise ValueError(f"Failed to read image: {self.source}")
+                self.logger.warning(
+                    "Camera source image not found: %s — using placeholder.",
+                    self.source,
+                )
+                # Load image
+                self.image = cv2.imread("assets/camera_not_found.png")
         else:
             self.is_image = False
-            self._open_camera()
-            threading.Thread(target=self._reader, daemon=True, name=f"CamReader-{self.source}").start()
+            try:
+                self._open_camera()
+            except Exception as exc:
+                self.logger.warning(
+                    "Camera source '%s' could not be opened (%s) — "
+                    "using 'Camera Not Found' placeholder.",
+                    self.source,
+                    exc,
+                )
+                self.is_image = True
+                self.image = cv2.imread("assets/camera_not_found.png")
+
+            if not self.is_image:
+                threading.Thread(
+                    target=self._reader,
+                    daemon=True,
+                    name=f"CamReader-{self.source}",
+                ).start()
 
     def _open_camera(self):
         is_windows = platform.system() == "Windows"
@@ -54,10 +80,19 @@ class Camera:
 
         # v4l2-ctl is Linux only
         if not is_windows:
-            device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
+            device = (
+                self.source
+                if isinstance(self.source, str)
+                else f"/dev/video{self.source}"
+            )
             subprocess.run(
-                ["v4l2-ctl", "-d", device,
-                f"--set-fmt-video=width={self.input_size[0]},height={self.input_size[1]},pixelformat=MJPG"],
+                [
+                    "v4l2-ctl",
+                    "-d",
+                    device,
+                    f"--set-fmt-video=width={self.input_size[0]},"
+                    f"height={self.input_size[1]},pixelformat=MJPG",
+                ],
                 capture_output=True,
             )
             time.sleep(0.15)
@@ -77,7 +112,7 @@ class Camera:
         while not self.stopped:
             ret, frame = self.cap.read()
             if not ret:
-                self.logger.warning(f"Frame read failed on {self.source}, retrying…")
+                self.logger.warning("Frame read failed on %s, retrying…", self.source)
                 time.sleep(0.05)
                 continue
 
@@ -91,6 +126,9 @@ class Camera:
             self._frame_event.set()
 
     def get_frame_age(self) -> float:
+        if self.is_image:
+            # Placeholder / still images are always "fresh"
+            return 0.0
         with self.frame_lock:
             ts = self.frame_timestamp
         return 0.0 if ts is None else time.perf_counter() - ts
