@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visioncore-frc"
-version = "2.5.8.15"
+version = "2.5.8.16"
 description = "FRC vision pipeline for custom, hardware accelerated object detection."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -66,3 +66,6 @@ Bug-Tracker = "https://github.com/aidan-j532/VisionCore-Deploy/issues"
 
 [tool.setuptools.packages.find]
 include = ["VisionCore", "VisionCore.*"]
+
+[tool.setuptools.package-data]
+"VisionCore" = ["assets/*"]
