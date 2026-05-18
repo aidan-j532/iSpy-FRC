@@ -2,7 +2,7 @@ import logging
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from VisionCore.config.ModelInspector import fill_missing_config
+from VisionCore.vision.ModelInspector import fill_missing_config
 
 try:
     from rknnlite.api import RKNNLite
