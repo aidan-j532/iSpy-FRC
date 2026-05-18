@@ -233,30 +233,28 @@ class GenericYolo:
         )
         self._onnx_inp_name = self.model.get_inputs()[0].name
         self._onnx_out_names = [o.name for o in self.model.get_outputs()]
-    
-        ort_type: str = self.model.get_inputs()[0].type  # e.g. "tensor(float)"
+
+        inp_meta = self.model.get_inputs()[0]
 
         ORT_TO_DTYPE = {
-            "tensor(float)":  "float32",
+            "tensor(float)":   "float32",
             "tensor(float32)": "float32",
-            "tensor(double)": "float32",   # treat as float32 for our purposes
-            "tensor(uint8)":  "uint8",
-            "tensor(int8)":   "uint8",     # treat signed byte the same way
+            "tensor(double)":  "float32",
+            "tensor(uint8)":   "uint8",
+            "tensor(int8)":    "uint8",
         }
+        ort_type = inp_meta.type
         expected_dtype = ORT_TO_DTYPE.get(ort_type)
 
         if expected_dtype and self.input.get("dtype") != expected_dtype:
             self.logger.warning(
-                "ONNX model input type is '%s' but config.input.dtype is '%s'. "
-                "Auto-correcting to '%s'.",
-                ort_type,
-                self.input.get("dtype"),
-                expected_dtype,
+                "ONNX model input type '%s' does not match config.input.dtype '%s'. "
+                "Auto-correcting to '%s'. Update your config to silence this warning.",
+                ort_type, self.input.get("dtype"), expected_dtype,
             )
             self.input["dtype"] = expected_dtype
 
             if expected_dtype == "float32":
-                # Most Ultralytics ONNX exports expect pixels in [0, 1].
                 if not self.input.get("normalize"):
                     self.input["normalize"] = True
                     self.input.setdefault("scale", 255.0)
@@ -265,8 +263,25 @@ class GenericYolo:
                         "Set these explicitly in your config to silence this warning."
                     )
             else:
-                # uint8 model — disable normalization so we don't accidentally divide.
                 self.input["normalize"] = False
+
+        shape = inp_meta.shape  # [1, 3, 640, 640] or [1, 640, 640, 3]
+        detected_layout = None
+        if len(shape) == 4:
+            c1 = shape[1]
+            c3 = shape[3]
+            if isinstance(c1, int) and c1 > 0 and c1 <= 4:
+                detected_layout = "nchw"
+            elif isinstance(c3, int) and c3 > 0 and c3 <= 4:
+                detected_layout = "nhwc"
+
+        if detected_layout and self.input.get("layout") != detected_layout:
+            self.logger.warning(
+                "ONNX model input shape %s implies layout '%s' but config.input.layout "
+                "is '%s'. Auto-correcting. Update your config to silence this warning.",
+                shape, detected_layout, self.input.get("layout"),
+            )
+            self.input["layout"] = detected_layout
 
     def _load_tflite(self, model_file: str):
         try:
