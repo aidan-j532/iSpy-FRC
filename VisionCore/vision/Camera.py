@@ -7,6 +7,10 @@ import subprocess
 from VisionCore.config.VisionCoreConfig import VisionCoreCameraConfig
 import platform
 
+from pathlib import Path
+
+ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
+
 class Camera:
     def __init__(
         self,
@@ -40,7 +44,7 @@ class Camera:
                     self.source,
                 )
                 # Load image
-                self.image = cv2.imread("assets/camera_not_found.png")
+            self.image = cv2.imread(str(ASSETS_DIR / "camera_not_found.png"))
         else:
             self.is_image = False
             try:
@@ -53,8 +57,7 @@ class Camera:
                     exc,
                 )
                 self.is_image = True
-                self.image = cv2.imread("assets/camera_not_found.png")
-
+                self.image = cv2.imread(str(ASSETS_DIR / "camera_not_found.png"))
             if not self.is_image:
                 threading.Thread(
                     target=self._reader,

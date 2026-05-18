@@ -252,7 +252,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                 converted = Path(convert_model(str(pt_full), best_format, input_size))
                 if converted != pt_full:
                     logger.info("Conversion successful: %s", converted)
-                    config.set("vision_model", "file_path", converted)
+                    config.set("vision_model", "file_path", str(converted))
                 else:
                     logger.warning(
                         "Conversion to %s failed or was skipped. Using .pt model.",
