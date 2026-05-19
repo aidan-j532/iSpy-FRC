@@ -7,7 +7,7 @@ _REPO_ROOT = Path.cwd()
 
 
 class VisionCoreConfig:
-    def __init__(self, file_path: str = None, create: bool=True):
+    def __init__(self, file_path: str = None, create: bool = True):
         self.logger = logging.getLogger(__name__)
 
         self.default_config = {
@@ -103,7 +103,11 @@ class VisionCoreConfig:
         self.config = json.loads(json.dumps(self.default_config))
         self.file_path = file_path
 
-        if create and file_path is not None:
+        # Only auto-save defaults when `create=True` AND the file doesn't exist yet.
+        # If the file already exists we're loading it, not creating it — saving here
+        # would write defaults over the user's config AND produce a duplicate log line
+        # when the caller also calls .save() explicitly (e.g. boot.py).
+        if create and file_path is not None and not Path(file_path).exists():
             self.save()
 
         if file_path:
@@ -132,11 +136,6 @@ class VisionCoreConfig:
         return chosen
 
     def _check_config(self):
-        # if (self.config == self.default_config) and (self.file_path is not None): # Otherwise its boot
-        #     self.logger.warning(
-        #         "Using default configuration. Load a config file for proper operation."
-        #     )
-        # else:
         if self.config.get("vision_model") and self.config.get("april_tag"):
             self.logger.warning(
                 "Both vision_model and april_tag configs present — ensure this is intentional."

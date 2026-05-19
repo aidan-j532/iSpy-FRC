@@ -204,7 +204,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
     if not config_path:
         logger.info("No config found. Creating default config...")
         config_path = _PROJECT_ROOT / "Config" / "config.json"
-        config = VisionCoreConfig(str(config_path), create=True).save()
+        config = VisionCoreConfig(str(config_path), create=True)
     else:
         logger.info(f"Using existing config: {config_path}")
 

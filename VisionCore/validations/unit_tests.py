@@ -95,13 +95,11 @@ if __name__ == "__main__":
 # # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 # def make_frame(w=320, h=320):
-#     """BGR frame filled with a gradient so it's not solid black."""
 #     frame = np.zeros((h, w, 3), dtype=np.uint8)
 #     frame[:, :, 1] = np.linspace(0, 255, w, dtype=np.uint8)  # green gradient
 #     return frame
 
 # def make_rknn_no_nms_output(n_boxes=3, input_size=(320, 320)):
-#     """Fake RKNN no-NMS output: (1, N, 5) with xywh + conf in letterboxed space."""
 #     tw, th = input_size
 #     data = np.zeros((1, n_boxes, 5), dtype=np.float32)
 #     for i in range(n_boxes):
@@ -109,7 +107,6 @@ if __name__ == "__main__":
 #     return data
 
 # def make_rknn_end2end_output(n_boxes=3, input_size=(320, 320)):
-#     """Fake RKNN end2end output: (1, N, 6) with xyxy + conf + cls."""
 #     tw, th = input_size
 #     data = np.zeros((1, n_boxes, 6), dtype=np.float32)
 #     for i in range(n_boxes):
@@ -118,7 +115,6 @@ if __name__ == "__main__":
 #     return data
 
 # def make_rknn_transposed_output(n_boxes=8400, input_size=(320, 320)):
-#     """Fake RKNN no-NMS transposed output: (1, 5, N)."""
 #     tw, th = input_size
 #     data = np.zeros((1, 5, n_boxes), dtype=np.float32)
 #     # Put 3 real detections in

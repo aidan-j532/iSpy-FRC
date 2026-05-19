@@ -72,7 +72,6 @@ class CameraApp:
         )
 
     def _api_cameras(self):
-        """Returns list of available cameras"""
         camera_list = []
         for i, camera in enumerate(self.cameras):
             try:
@@ -88,7 +87,6 @@ class CameraApp:
         return jsonify(cameras=camera_list)
 
     def _api_get_settings(self, camera_name):
-        """Returns settings for a specific camera"""
         try:
             for i, camera in enumerate(self.cameras):
                 cam_name = camera.config.get("name", f"Camera {i+1}") if hasattr(camera, 'config') else f"Camera {i+1}"
@@ -103,7 +101,6 @@ class CameraApp:
             return jsonify(error=str(e)), 500
 
     def _api_update_settings(self, camera_name):
-        """Updates settings for a specific camera"""
         try:
             data = request.get_json()
             if not data:
@@ -129,7 +126,6 @@ class CameraApp:
             return jsonify(error=str(e)), 500
 
     def _api_camera_feed(self, camera_name):
-        """Streams video feed for a specific camera"""
         try:
             camera_index = None
             for i, camera in enumerate(self.cameras):
@@ -150,7 +146,6 @@ class CameraApp:
             return str(e), 500
 
     def _generate_camera_feed(self, camera_name):
-        """Generate frames for a specific camera"""
         import time
         while True:
             with self.lock:

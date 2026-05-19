@@ -427,6 +427,23 @@ def _ort_type_to_quantization(ort_type: str) -> str:
     return "none"
 
 
+def _get_dotpath(d: dict, dotpath: str):
+    val = d
+    for key in dotpath.split("."):
+        if not isinstance(val, dict) or key not in val:
+            return None
+        val = val[key]
+    return val
+
+
+def _set_dotpath(d: dict, dotpath: str, value) -> None:
+    keys = dotpath.split(".")
+    for key in keys[:-1]:
+        if key not in d or not isinstance(d[key], dict):
+            d[key] = {}
+        d = d[key]
+    d[keys[-1]] = value
+
 def fill_missing_config(model_config: dict) -> dict:
     model_path = model_config.get("file_path", "")
     if not model_path or not os.path.exists(model_path):
@@ -440,21 +457,39 @@ def fill_missing_config(model_config: dict) -> dict:
         logger.warning("ModelInspector could not inspect %s: %s", model_path, e)
         return model_config
 
-    # Remove inspector metadata
-    detected.pop("_detected_fields", None)
+    detected_fields = set(detected.pop("_detected_fields", []))
     detected.pop("_manual_fields", None)
     detected.pop("_warnings", None)
 
     merged = _deep_merge_missing(detected, model_config)
 
-    # Log what was auto-filled
-    for key in ("input", "output"):
-        if key in detected and key in model_config:
-            for subkey, val in detected[key].items():
-                if subkey not in model_config.get(key, {}):
-                    logger.info(
-                        "ModelInspector auto-filled %s.%s = %r", key, subkey, val
-                    )
+    corrections = []
+    for field_path in detected_fields:
+        detected_val = _get_dotpath(detected, field_path)
+        user_val     = _get_dotpath(model_config, field_path)
+
+        if detected_val is None:
+            continue
+
+        if user_val is not None and user_val != detected_val:
+            corrections.append((field_path, user_val, detected_val))
+            _set_dotpath(merged, field_path, detected_val)
+        elif user_val is None:
+            logger.info(
+                "ModelInspector auto-filled  %-35s = %r", field_path, detected_val
+            )
+            _set_dotpath(merged, field_path, detected_val)
+
+    if corrections:
+        logger.warning(
+            "ModelInspector corrected %d config field(s) that did not match the model:",
+            len(corrections),
+        )
+        for field_path, user_val, detected_val in corrections:
+            logger.warning(
+                "  %-38s  config=%r  ->  model says %r",
+                field_path, user_val, detected_val,
+            )
 
     return merged
 
@@ -473,7 +508,7 @@ def _print_dict(d: dict, indent: int, detected_fields: list, prefix: str = ""):
     for k, v in d.items():
         full_key = f"{prefix}.{k}" if prefix else k
         pad = "  " * indent
-        tag = " ✓" if full_key in detected_fields else ""
+        tag = " [OK]" if full_key in detected_fields else ""
         if isinstance(v, dict):
             print(f"{pad}{k}:")
             _print_dict(v, indent + 1, detected_fields, full_key)

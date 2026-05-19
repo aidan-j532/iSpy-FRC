@@ -63,7 +63,6 @@ WantedBy=multi-user.target
 
 
 def _is_admin_windows():
-    """Return True if the current process has administrator privileges."""
     try:
         import ctypes
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
@@ -72,11 +71,6 @@ def _is_admin_windows():
 
 
 def _relaunch_as_admin_windows(cmd):
-    """Run a command elevated via UAC using PowerShell Start-Process -Verb RunAs.
-
-    Passes the exact schtasks command directly so there is no path/argv ambiguity.
-    Returns True if the elevation request was accepted.
-    """
     try:
         # Write the exact schtasks command to a .bat file so there are no
         # quoting/escaping issues passing arguments through Start-Process.
@@ -204,10 +198,6 @@ def setup_macos(script_path):
 
 
 def setup(script_path: str):
-    """Public entrypoint expected by install.py — choose platform-specific installer.
-
-    script_path may be a single script path or a command string (it will be used verbatim
-    when composing the platform-specific service/task definition)."""
     detected = get_platform()
     print(f"Detected platform: {detected}")
     if detected == "linux_systemd":
