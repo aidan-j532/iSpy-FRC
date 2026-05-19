@@ -23,11 +23,11 @@ class VisionCoreConfig:
                     # "raw" = decode + optional software NMS; "hardware_nms" = baked NMS.
                     "format": "raw",
                     # "anchors_first" (N×D) or "features_first" (D×N, transposed export).
-                    "layout": "anchors_first",
+                    "layout": "features_first",
                     # Box encoding in raw tensor: "cxcywh" or "xyxy".
                     "box_format": "cxcywh",
                     # "multi_class" (per-class scores) or "objectness" (1 score, num_classes=1).
-                    "score_mode": "objectness",
+                    "score_mode": "multi_class",
                     # If true, apply sigmoid to score columns before threshold/NMS.
                     "scores_are_logits": False,
                     # Software NMS when format is "raw" (ignored for hardware_nms).
@@ -42,15 +42,15 @@ class VisionCoreConfig:
                 },
                 "input": {
                     # "nhwc" (RKNN/TFLite) or "nchw" (typical ONNX export).
-                    "layout": "nhwc",
+                    "layout": "nchw",
                     # "uint8" or "float32".
-                    "dtype": "uint8",
+                    "dtype": "float32",
                     # Letterbox to input_size with pad_value (RKNN-style).
                     "letterbox": True,
                     "pad_value": 114,
                     # Divide by scale when true (common for float32 ONNX).
-                    "normalize": False,
-                    # "scale": 255.0,  # required when normalize is true
+                    "normalize": True,
+                    "scale": 255.0,  # required when normalize is true
                 },
                 # Optional PnP for pose (translation stored on Box; rotation not stored):
                 # "pnp": {
