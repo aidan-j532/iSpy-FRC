@@ -2,6 +2,9 @@ import platform
 import subprocess
 import os
 from functools import lru_cache
+import logging
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_FORMATS = {"tflite", "openvino", "coreml", "onnx", "rknn"}
 
@@ -40,7 +43,7 @@ def has_nvidia() -> bool:
         if torch.cuda.is_available():
             return True
     except ImportError:
-        pass
+        logger.warning("PyTorch not installed, skipping CUDA check for NVIDIA GPU.")
     if os.name == "nt" and "nvidia" in _run("wmic path win32_videocontroller get name"):
         return True
     return False
@@ -97,4 +100,5 @@ def recommend_format() -> str:
     if has_arm():
         return "tflite"
         
+    logger.info("No specialized hardware detected, defaulting to ONNX Runtime with CPU execution.")
     return "onnx"
