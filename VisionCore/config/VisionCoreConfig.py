@@ -65,14 +65,14 @@ class VisionCoreConfig:
             "dbscan": {"elipson": 0.3, "min_samples": 3},
             "distance_threshold": 0.5,
             "stale_threshold": 1.0,
-            "record_mode": False,
+            "record_mode": True,
             "record_dir": "VideoRecordings",
             "auto_opt": True,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
             "use_network_tables": False,
             "network_tables_ip": "10.0.0.2",
-            "metrics": False,
+            "metrics": True,
             "app_mode": True,
             "camera_configs": {
                 "default_cam": {

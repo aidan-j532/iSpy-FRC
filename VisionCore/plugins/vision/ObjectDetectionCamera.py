@@ -63,12 +63,16 @@ class ObjectDetectionCamera(Camera, VisionBase):
         }
 
         try:
-            self.focal_length_pixels = (
-                self.known_calibration_pixel_height * self.known_calibration_distance
-            ) / self.ball_d_inches
+            if self.known_calibration_pixel_height <= 0 or self.known_calibration_distance <= 0:
+                logger.info("Calibration values must be positive, defaulting focal length to 1")
+                self.focal_length_pixels = 1.0
+            else:
+                self.focal_length_pixels = (
+                    self.known_calibration_pixel_height * self.known_calibration_distance
+                ) / self.ball_d_inches
         except ZeroDivisionError:
             self.logger.warning(
-                "Calibration game_piece_size is zero, defaulting focal length to 1"
+                "Calibration game_piece_size is 0, defaulting focal length to 1"
             )
             self.focal_length_pixels = 1.0
 
