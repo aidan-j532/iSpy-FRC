@@ -9,6 +9,8 @@ from VisionCore.plugins.bases import VisionBase
 import VisionCore.plugins as _plugins_pkg
 import sys
 
+from VisionCore.vision.ObjectDetectionCamera import ObjectDetectionCamera
+
 for name in logging.root.manager.loggerDict:
     logging.getLogger(name).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -37,8 +39,12 @@ def main():
         cam_config = config.camera_config(cam_name)
         pipeline = cam_config.get("pipeline", "object_detection")
 
-        if pipeline in vision_classes:
+        if pipeline == "object_detection":
+            cameras.append(ObjectDetectionCamera(cam_config, config))
+        elif pipeline in vision_classes:
             cameras.append(vision_classes[pipeline](cam_config, config))
+        else:
+            logger.warning("Unknown pipeline '%s' for camera '%s'", pipeline, cam_name)
 
     vision = VisionCore(cameras, config)
     vision.run()

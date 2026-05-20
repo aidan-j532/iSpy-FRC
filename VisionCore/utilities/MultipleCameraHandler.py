@@ -1,8 +1,10 @@
-from VisionCore.plugins.vision.ObjectDetectionCamera import ObjectDetectionCamera
+from VisionCore.vision.ObjectDetectionCamera import ObjectDetectionCamera
+from VisionCore.vision.Object import Object
 import cv2
 import numpy as np
 import logging
 import threading
+
 
 class MultipleCameraHandler:
     def __init__(self, cameras: list[ObjectDetectionCamera]):
@@ -10,7 +12,7 @@ class MultipleCameraHandler:
         self.logger = logging.getLogger(__name__)
         self._stopped = False
 
-        self._positions = [np.empty((0, 2))] * len(cameras)
+        self._objects: list[list[Object]] = [[] for _ in cameras]
         self._frames = [None] * len(cameras)
         self._locks = [threading.Lock() for _ in cameras]
         self._fresh = [threading.Event() for _ in cameras]
@@ -23,30 +25,25 @@ class MultipleCameraHandler:
     def _camera_loop(self, i: int, camera: ObjectDetectionCamera):
         while not self._stopped:
             try:
-                positions, frame = camera.run()
+                objects, frame = camera.run()
                 with self._locks[i]:
-                    self._positions[i] = (
-                        positions if positions is not None else np.empty((0, 2))
-                    )
+                    self._objects[i] = objects if objects is not None else []
                     self._frames[i] = frame
-                self._fresh[i].set()  # signal: this camera has new data
+                self._fresh[i].set()
             except Exception as e:
                 self.logger.warning(f"Camera {camera.source} error: {e}")
 
-    def predict(self) -> np.ndarray:
+    def predict(self) -> list[Object]:
         for event in self._fresh:
             if not event.wait(timeout=0.2):
                 self.logger.debug("Camera timed out waiting for fresh frame")
             event.clear()
 
-        all_positions = []
+        all_objects: list[Object] = []
         for i in range(len(self.cameras)):
             with self._locks[i]:
-                pos = self._positions[i].copy()
-            if len(pos) > 0:
-                all_positions.append(pos)
-
-        return np.vstack(all_positions) if all_positions else np.empty((0, 2))
+                all_objects.extend(self._objects[i])
+        return all_objects
 
     def get_combined_frame(self, display_width=640):
         frames = []
@@ -63,7 +60,6 @@ class MultipleCameraHandler:
         if len(frames) == 1:
             f = frames[0]
         else:
-            # Normalize heights
             target_h = min(f.shape[0] for f in frames)
             resized = []
             for f in frames:
@@ -74,7 +70,6 @@ class MultipleCameraHandler:
                 resized.append(f)
             f = np.hstack(resized)
 
-        # Downscale for display no need to stream full resolution to Flask
         h, w = f.shape[:2]
         if w > display_width:
             scale = display_width / w

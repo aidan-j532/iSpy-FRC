@@ -7,14 +7,20 @@ from wpimath.geometry import Pose2d
 from VisionCore.plugins.bases import UtilityBase
 from VisionCore.vision.Object import Object
 
+
 @wpiutil.wpistruct.make_wpistruct(name="Fuel")
 @dataclasses.dataclass
 class FuelStruct:
     x: float
     y: float
+    roll: float = 0.0
+    pitch: float = 0.0
+    yaw: float = 0.0
+
 
 class NetworkTableHandler(UtilityBase):
     plugin_name = "network_table_handler"
+
     def __init__(self, context: dict):
         config = context["config"]
         self.logger = logging.getLogger(__name__)
@@ -91,6 +97,9 @@ class NetworkTableHandler(UtilityBase):
                 FuelStruct(
                     x=float(f.get_position_normally()[0]),
                     y=float(f.get_position_normally()[1]),
+                    roll=f.roll,
+                    pitch=f.pitch,
+                    yaw=f.yaw,
                 )
                 for f in fuels
             ]

@@ -1,3 +1,4 @@
+from VisionCore.vision.Object import Object
 import cv2
 import math
 import numpy as np
@@ -9,7 +10,7 @@ from VisionCore.vision.Camera import Camera
 from VisionCore.plugins.bases import VisionBase
 from VisionCore.vision.genericYolo import Box, Results, GenericYolo
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig, VisionCoreCameraConfig
-
+import logging
 
 class ObjectDetectionCamera(Camera, VisionBase):
     plugin_name = "object_detection"
@@ -64,7 +65,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         try:
             if self.known_calibration_pixel_height <= 0 or self.known_calibration_distance <= 0:
-                logger.info("Calibration values must be positive, defaulting focal length to 1")
+                self.logger.info("Calibration values must be positive, defaulting focal length to 1")
                 self.focal_length_pixels = 1.0
             else:
                 self.focal_length_pixels = (
@@ -285,35 +286,41 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         return results, annotated_frame
 
+    def _box_to_object(self, box: Box, img_w: int, img_h: int) -> Object|None:
+        pt = self._box_to_robot_point(box, img_w, img_h)
+        if pt is None:
+            return None
+        roll, pitch, yaw = 0.0, 0.0, 0.0
+        if box.rotation is not None:
+            roll, pitch, yaw = box.rotation
+        return Object(float(pt[0]), float(pt[1]), roll=roll, pitch=pitch, yaw=yaw)
+
     def run(self):
         data, frame = self.get_yolo_data()
         if data is None or frame is None:
-            return np.empty((0, 2)), None
-
+            return [], None
+ 
         img_h, img_w = frame.shape[:2]
-        map_points = []
-        passed_boxes = []  # was missing
-
+        objects: list[Object] = []
         for box in data.boxes:
             if not self._filter_box(box, img_w, img_h):
                 continue
-            pt = self._box_to_robot_point(box, img_w, img_h)
-            if pt is not None:
-                map_points.append(pt)
-                passed_boxes.append(box)
-
-        return (np.array(map_points) if map_points else np.empty((0, 2))), frame
-
-    def run_with_supplied_data(self, data: Results) -> np.ndarray:
+            obj = self._box_to_object(box, img_w, img_h)
+            if obj is not None:
+                objects.append(obj)
+        return objects, frame
+ 
+    def run_with_supplied_data(self, data: Results) -> list[Object]:
         img_h, img_w = data.orig_shape[:2]
-        map_points = []
+        objects: list[Object] = []
         for box in data.boxes:
             if not self._filter_box(box, img_w, img_h):
                 continue
-            pt = self._box_to_robot_point(box, img_w, img_h)
-            if pt is not None:
-                map_points.append(pt)
-        return np.array(map_points) if map_points else np.empty((0, 2))
+            obj = self._box_to_object(box, img_w, img_h)
+            if obj is not None:
+                objects.append(obj)
+        return objects
+ 
 
     def get_data_for_subsystem(self, target: str):
         if self.subsystem != target:

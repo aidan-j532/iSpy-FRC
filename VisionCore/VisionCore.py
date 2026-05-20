@@ -9,7 +9,7 @@ import numpy as np
 from VisionCore.web.Metrics import Metrics
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
 import signal
-from VisionCore.plugins.vision.ObjectDetectionCamera import ObjectDetectionCamera
+from VisionCore.vision.ObjectDetectionCamera import ObjectDetectionCamera
 from VisionCore.vision.Object import Object
 from VisionCore.validations.model_validator import (
     enforce_model_organization,
@@ -176,21 +176,18 @@ class VisionCore:
                 if cached is not None:
                     self.camera_app.set_frame(cached.copy(), camera_name=cam_name)
 
-    def numpy_to_fuel_list(self, positions: np.ndarray) -> list[Object]:
-        return [Object(float(p[0]), float(p[1])) for p in positions]
-
-    def run_multi_vision(self, handler: MultipleCameraHandler):
+    def run_multi_vision(self, handler):
         try:
-            raw = handler.predict()
-            return self.numpy_to_fuel_list(raw), handler.get_combined_frame()
+            objects = handler.predict()
+            return objects, handler.get_combined_frame()
         except Exception:
             self.logger.exception("Multi-vision exception")
             return [], None
 
-    def run_solo_vision(self, camera: ObjectDetectionCamera):
+    def run_solo_vision(self, camera):
         try:
-            raw, frame = camera.run()
-            return self.numpy_to_fuel_list(raw), frame
+            objects, frame = camera.run()
+            return objects, frame
         except Exception:
             self.logger.exception("Solo-vision exception")
             return [], None

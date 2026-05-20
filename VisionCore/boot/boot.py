@@ -33,11 +33,12 @@ for name in logging.root.manager.loggerDict:
         logging.getLogger(name).setLevel(logging.WARNING)
 
 FORMAT_MATCHERS = {
-    "onnx": lambda p: p.suffix == ".onnx",
-    "rknn": lambda p: p.suffix == ".rknn",
-    "tflite": lambda p: p.suffix == ".tflite",
-    "coreml": lambda p: p.suffix == ".mlpackage",
+    "onnx":     lambda p: p.suffix == ".onnx",
+    "rknn":     lambda p: p.suffix == ".rknn",
+    "tflite":   lambda p: p.suffix == ".tflite",
+    "coreml":   lambda p: p.suffix == ".mlpackage",
     "openvino": lambda p: p.is_dir() and p.name.endswith("_openvino_model"),
+    "engine":   lambda p: p.suffix == ".engine",
 }
 
 
@@ -104,6 +105,7 @@ def convert_model(model_file, target_format, input_size):
         "onnx": parent / f"{stem}.onnx",
         "openvino": parent / f"{stem}_openvino_model",
         "coreml": parent / f"{stem}.mlpackage",
+        "engine": parent / f"{stem}.engine",
     }
 
     # TFLite is inconsistent across Ultralytics versions
@@ -142,6 +144,9 @@ def convert_model(model_file, target_format, input_size):
         elif target_format == "coreml":
             model.export(format="coreml", imgsz=input_size, nms=True)
 
+        elif target_format == "engine":
+            model.export(format="engine", imgsz=input_size, half=True, device=0)
+    
     except Exception as e:
         logger.error(
             f"Conversion to {target_format} raised an exception: {e}", exc_info=True
