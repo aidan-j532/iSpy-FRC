@@ -3,7 +3,7 @@ import logging
 
 from VisionCore.plugins.bases import TrackerBase
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
-from VisionCore.vision.Fuel import Fuel
+from VisionCore.vision.Object import Object
 
 _EMA_ALPHA = 0.3
 
@@ -13,7 +13,7 @@ class ObjectTracker(TrackerBase):
     def __init__(self, config: VisionCoreConfig):
         self.logger = logging.getLogger(__name__)
 
-        self.fuel_list: list[Fuel] = []
+        self.fuel_list: list[Object] = []
 
         raw_threshold = config.get("distance_threshold", 0.5)
         if raw_threshold is None or raw_threshold < 0:
@@ -28,11 +28,11 @@ class ObjectTracker(TrackerBase):
 
     def update(
         self,
-        new_fuel_list: list[Fuel],
+        new_fuel_list: list[Object],
         robot_x: float,
         robot_y: float,
         robot_yaw: float,
-    ) -> list[Fuel]:
+    ) -> list[Object]:
 
         # age + cleanup
         for fuel in self.fuel_list:
@@ -49,13 +49,13 @@ class ObjectTracker(TrackerBase):
 
         return self.fuel_list
     
-    def _merge(self, fuels: list[Fuel]):
+    def _merge(self, fuels: list[Object]):
         for fuel in fuels:
             if not self._exists_and_update(fuel):
                 fuel.alive_time = self.stale_threshold
                 self.fuel_list.append(fuel)
 
-    def _exists_and_update(self, new_fuel: Fuel) -> bool:
+    def _exists_and_update(self, new_fuel: Object) -> bool:
         if not self.fuel_list:
             return False
 
@@ -77,7 +77,7 @@ class ObjectTracker(TrackerBase):
 
         return False
 
-    def get_fuel_list(self) -> list[Fuel]:
+    def get_fuel_list(self) -> list[Object]:
         return self.fuel_list
 
     def run(self):

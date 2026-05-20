@@ -10,7 +10,7 @@ from VisionCore.web.Metrics import Metrics
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
 import signal
 from VisionCore.plugins.vision.ObjectDetectionCamera import ObjectDetectionCamera
-from VisionCore.vision.Fuel import Fuel
+from VisionCore.vision.Object import Object
 from VisionCore.validations.model_validator import (
     enforce_model_organization,
     validate_model_organization,
@@ -176,8 +176,8 @@ class VisionCore:
                 if cached is not None:
                     self.camera_app.set_frame(cached.copy(), camera_name=cam_name)
 
-    def numpy_to_fuel_list(self, positions: np.ndarray) -> list[Fuel]:
-        return [Fuel(float(p[0]), float(p[1])) for p in positions]
+    def numpy_to_fuel_list(self, positions: np.ndarray) -> list[Object]:
+        return [Object(float(p[0]), float(p[1])) for p in positions]
 
     def run_multi_vision(self, handler: MultipleCameraHandler):
         try:

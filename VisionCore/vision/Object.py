@@ -2,7 +2,7 @@ import numpy as np
 import math
 import time
 
-class Fuel:
+class Object:
     def __init__(self, x: int, y: int, id: int=-1, alive_time: float = 0.4):
         self.x = x
         self.y = y
@@ -12,7 +12,7 @@ class Fuel:
 
         self.destroyed = False
         self.alive_time = alive_time
-
+        
     def relative_to(self, robot_x, robot_y, robot_yaw_rad):
         cos_yaw = math.cos(robot_yaw_rad)
         sin_yaw = math.sin(robot_yaw_rad)

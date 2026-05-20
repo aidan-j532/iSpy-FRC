@@ -5,7 +5,7 @@ import time
 import wpiutil.wpistruct
 from wpimath.geometry import Pose2d
 from VisionCore.plugins.bases import UtilityBase
-from VisionCore.vision.Fuel import Fuel
+from VisionCore.vision.Object import Object
 
 @wpiutil.wpistruct.make_wpistruct(name="Fuel")
 @dataclasses.dataclass
