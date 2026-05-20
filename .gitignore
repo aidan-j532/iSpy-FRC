@@ -25,4 +25,5 @@ build/
 image/*.img
 .env
 .venv/
-/Config/
+visioncore_frc-*/
+/Config/visioncore_frc-*
