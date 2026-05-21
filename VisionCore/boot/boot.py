@@ -19,18 +19,18 @@ from VisionCore.validations.model_validator import enforce_model_organization
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
 import logging
 
+class _VisionCoreFilter(logging.Filter):
+    def filter(self, record):
+        return record.name.startswith("VisionCore")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [VisionCore] %(levelname)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-for name in logging.root.manager.loggerDict:
-    logging.getLogger(name).setLevel(logging.NOTSET)
+for h in logging.getLogger().handlers:
+    h.addFilter(_VisionCoreFilter())
 logger = logging.getLogger(__name__)
-
-for name in logging.root.manager.loggerDict:
-    if not name.startswith("VisionCore"):
-        logging.getLogger(name).setLevel(logging.WARNING)
 
 FORMAT_MATCHERS = {
     "onnx":     lambda p: p.suffix == ".onnx",

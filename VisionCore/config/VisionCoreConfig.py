@@ -258,9 +258,14 @@ class VisionCoreConfig:
             "%(asctime)s [VisionCore] %(levelname)s:%(name)s: %(message)s"
         )
 
+        class _VisionCoreFilter(logging.Filter):
+            def filter(self, record):
+                return record.name.startswith("VisionCore")
+
         sh = logging.StreamHandler()
         sh.setLevel(logging.NOTSET)
         sh.setFormatter(fmt)
+        sh.addFilter(_VisionCoreFilter())
         root.addHandler(sh)
 
         log_file = self.config.get("log_file")
@@ -273,13 +278,8 @@ class VisionCoreConfig:
             fh = logging.FileHandler(log_path, mode="a")
             fh.setLevel(logging.NOTSET)
             fh.setFormatter(fmt)
+            fh.addFilter(_VisionCoreFilter())
             root.addHandler(fh)
-
-        for name in logging.root.manager.loggerDict:
-            if name.startswith("VisionCore"):
-                logging.getLogger(name).setLevel(level)
-            else:
-                logging.getLogger(name).setLevel(logging.WARNING)
 
     def __getitem__(self, args):
         if isinstance(args, tuple):

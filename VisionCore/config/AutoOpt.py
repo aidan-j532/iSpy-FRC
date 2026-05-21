@@ -113,7 +113,32 @@ def has_edge_tpu() -> bool:
 
 @lru_cache()
 def has_rockchip_npu() -> bool:
-    return os.path.exists("/dev/rknpu") or os.path.exists("/dev/rknpu0")
+    import glob
+
+    if glob.glob("/dev/rknpu*"):
+        return True
+    if _cmd_ok("lsmod 2>/dev/null | grep -q rknpu"):
+        return True
+
+    rockchip_indicators = ("rk3588", "rk3576", "rk3399", "rk3568", "rk3566", "rk3528", "rv1103", "rv1106")
+    try:
+        cpuinfo = open("/proc/cpuinfo").read().lower()
+        if any(s in cpuinfo for s in rockchip_indicators):
+            return True
+    except Exception:
+        pass
+
+    for path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
+        try:
+            model = open(path).read().lower()
+            if any(s in model for s in rockchip_indicators):
+                return True
+            if "orange pi" in model or "rockchip" in model:
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 def recommend_format() -> str:
