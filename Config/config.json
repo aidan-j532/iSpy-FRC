@@ -1,6 +1,6 @@
 {
     "vision_model": {
-        "file_path": "YoloModels\\pytorch\\_default_pose_openvino_model",
+        "file_path": "C:\\Users\\RoboticsTeam\\Desktop\\VisionCore\\VisionCore-Deploy\\YoloModels\\pytorch\\_default_pose_openvino_model",
         "task": "detect",
         "num_classes": 1,
         "input_size": [
@@ -27,8 +27,7 @@
             "scale": 255.0
         },
         "source_pt": "YoloModels/pytorch/_default_pose.pt",
-        "margin": 10,
-        "quantized": false
+        "margin": 10
     },
     "unit": "meter",
     "debug_mode": true,
@@ -38,14 +37,14 @@
     },
     "distance_threshold": 0.5,
     "stale_threshold": 1.0,
-    "record_mode": false,
+    "record_mode": true,
     "record_dir": "VideoRecordings",
     "auto_opt": true,
     "log_level": "INFO",
     "log_file": "Outputs/log.txt",
     "use_network_tables": false,
     "network_tables_ip": "10.0.0.2",
-    "metrics": false,
+    "metrics": true,
     "app_mode": true,
     "camera_configs": {
         "default_cam": {

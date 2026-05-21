@@ -4,8 +4,8 @@ import sys
 import logging
 from pathlib import Path
 
-for name in logging.root.manager.loggerDict:
-    logging.getLogger(name).setLevel(logging.WARNING)
+# for name in logging.root.manager.loggerDict:
+#     logging.getLogger(name).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 _MODEL_PATTERN = re.compile(
