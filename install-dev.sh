@@ -1,5 +1,5 @@
 #!/bin/bash
-# install-dev.sh — sets up a VisionCore dev environment
+# install-dev.sh - sets up a VisionCore dev environment
 # Run from the repo root: ./install-dev.sh
 set -e
 

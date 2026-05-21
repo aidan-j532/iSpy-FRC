@@ -19,7 +19,7 @@ def is_valid_model_path(path: str) -> bool:
 def validate_model_files() -> None:
     model_dir = Path("YoloModels")
     if not model_dir.exists():
-        logger.warning("YoloModels directory not found — skipping model path validation.")
+        logger.warning("YoloModels directory not found - skipping model path validation.")
         return
 
     for root, _, files in os.walk(model_dir):

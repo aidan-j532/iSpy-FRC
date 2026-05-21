@@ -139,7 +139,7 @@ def setup_windows(script_path):
                 print("UAC elevation was declined or the task creation failed.")
 
         # Either we ARE admin and schtasks still failed, or elevation was
-        # declined — fall back to a per-user startup entry.
+        # declined - fall back to a per-user startup entry.
         try:
             appdata = os.environ.get("APPDATA")
             if not appdata:

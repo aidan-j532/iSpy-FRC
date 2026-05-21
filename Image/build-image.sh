@@ -1,12 +1,12 @@
 #!/bin/bash
-# build-image.sh — builds a custom Orange Pi image with VisionCore first-boot
+# build-image.sh - builds a custom Orange Pi image with VisionCore first-boot
 # Run on an x86 Linux machine (Ubuntu/Debian recommended)
 # Requirements: debootstrap, qemu-user-static, qemu-system-arm, parted, kpartx
 set -e
 
 IMAGE_NAME="orangepi.img"
 IMAGE_SIZE="4G"
-UBUNTU_RELEASE="jammy" # Ubuntu 22.04 — matches Orange Pi OS base
+UBUNTU_RELEASE="jammy" # Ubuntu 22.04 - matches Orange Pi OS base
 REPO_RAW="https://raw.githubusercontent.com/aidan-j532/VisionCore-Deploy/main/Image"
 
 echo "=== VisionCore Image Builder ==="
@@ -75,7 +75,7 @@ chroot "$MOUNT" systemctl enable first-boot.service
 cat > "$MOUNT/etc/issue" <<EOF
 
   |-----------------------------------------------|
-  |        VisionCore FRC — First Boot            |
+  |        VisionCore FRC - First Boot            |
   |                                               |
   |  Connect ethernet, then power on.             |
   |  Setup runs automatically.                    |

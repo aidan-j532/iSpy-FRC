@@ -265,7 +265,7 @@ class GenericYolo:
                 delegates = [load_delegate("libedgetpu.so.1")]
                 self.logger.info("Coral Edge TPU delegate loaded.")
             except Exception:
-                self.logger.info("No Edge TPU delegate — running TFLite on CPU.")
+                self.logger.info("No Edge TPU delegate - running TFLite on CPU.")
             self.model = Interpreter(
                 model_path=model_file, experimental_delegates=delegates
             )

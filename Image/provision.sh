@@ -1,5 +1,5 @@
 #!/bin/bash
-# provision.sh — run once on a fresh Orange Pi to set up VisionCore
+# provision.sh - run once on a fresh Orange Pi to set up VisionCore
 # This is the automated version of install-deploy.sh used for imaging.
 set -e
 
@@ -39,7 +39,7 @@ mkdir -p /etc/visioncore
 CONFIG_DEST="/etc/visioncore/config.json"
 if [ ! -f "$CONFIG_DEST" ]; then
     cp "$INSTALL_DIR/VisionCore/core/config.json" "$CONFIG_DEST"
-    echo "Config copied to $CONFIG_DEST — edit this to configure your cameras."
+    echo "Config copied to $CONFIG_DEST - edit this to configure your cameras."
 fi
 
 cat > /etc/systemd/system/visioncore.service <<EOF

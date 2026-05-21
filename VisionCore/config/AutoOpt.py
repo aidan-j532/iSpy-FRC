@@ -156,11 +156,11 @@ def recommend_format() -> str:
     if has_nvidia():
         if has_tensorrt():
             logger.info(
-                "NVIDIA GPU + TensorRT detected — using .engine format for maximum FPS."
+                "NVIDIA GPU + TensorRT detected - using .engine format for maximum FPS."
             )
             return "engine"
         logger.info(
-            "NVIDIA GPU detected but TensorRT not found — falling back to ONNX "
+            "NVIDIA GPU detected but TensorRT not found - falling back to ONNX "
             "(install tensorrt for a significant FPS boost)."
         )
         return "onnx"
@@ -177,5 +177,5 @@ def recommend_format() -> str:
     if has_arm():
         return "tflite"
 
-    logger.info("No specialised hardware detected — defaulting to ONNX (CPU).")
+    logger.info("No specialised hardware detected - defaulting to ONNX (CPU).")
     return "onnx"

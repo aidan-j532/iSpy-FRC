@@ -109,7 +109,7 @@ class HealthReporter(UtilityBase):
         if flask_app and FLASK_AVAILABLE:
             flask_app.add_url_rule("/health", "health", self._health_route)
         elif not FLASK_AVAILABLE:
-            self.logger.warning("Flask not available — /health endpoint disabled.")
+            self.logger.warning("Flask not available - /health endpoint disabled.")
 
     def set_network_handler(self, handler):
         self._network_handler = handler

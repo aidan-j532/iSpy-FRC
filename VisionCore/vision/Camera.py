@@ -36,7 +36,7 @@ class Camera:
             self.image = cv2.imread(self.source)
             if self.image is None:
                 self.logger.warning(
-                    "Could not read image '%s' — using synthetic placeholder frame.",
+                    "Could not read image '%s' - using synthetic placeholder frame.",
                     self.source,
                 )
                 self.image = self._make_placeholder_frame()
@@ -46,7 +46,7 @@ class Camera:
                 self._open_camera()
             except ValueError as exc:
                 self.logger.warning(
-                    "Camera source '%s' could not be opened (%s) — using synthetic placeholder frame.",
+                    "Camera source '%s' could not be opened (%s) - using synthetic placeholder frame.",
                     self.source,
                     exc,
                 )

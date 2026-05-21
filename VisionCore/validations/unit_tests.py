@@ -218,7 +218,7 @@ if __name__ == "__main__":
 #         self.assertNotEqual(out[10, 10, 1], frame[10, 10, 1])
 
 
-# # ─── YoloWrapper — ultralytics backend ──────────────────────────────────────
+# # ─── YoloWrapper - ultralytics backend ──────────────────────────────────────
 
 # class TestYoloWrapperUltralytics(unittest.TestCase):
 
@@ -281,7 +281,7 @@ if __name__ == "__main__":
 #         self.assertAlmostEqual(r.boxes[0].conf, 0.75)
 
 
-# # ─── YoloWrapper — RKNN backend ──────────────────────────────────────────────
+# # ─── YoloWrapper - RKNN backend ──────────────────────────────────────────────
 
 # class TestYoloWrapperRKNN(unittest.TestCase):
 
@@ -365,7 +365,7 @@ if __name__ == "__main__":
 #         w = self._make_rknn_wrapper()
 #         output = make_rknn_transposed_output(input_size=(320, 320))
 #         orig_shape = (240, 320, 3)
-#         # (1, 5, 8400) — should transpose internally
+#         # (1, 5, 8400) - should transpose internally
 #         r = w._convert_rknn_outputs(output[0], orig_shape)
 #         self.assertIsInstance(r, Results)
 

@@ -134,7 +134,7 @@ class VisionCoreConfig:
     def _check_config(self):
         if self.config.get("vision_model") and self.config.get("april_tag"):
             self.logger.warning(
-                "Both vision_model and april_tag configs present — ensure this is intentional."
+                "Both vision_model and april_tag configs present - ensure this is intentional."
             )
 
         self.config.setdefault("plugins", {})

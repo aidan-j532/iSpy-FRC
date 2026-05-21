@@ -1,12 +1,12 @@
 # VisionCore
 
-> FRC vision pipeline for object detection and field mapping — runs on Orange Pi with Rockchip NPU, supports RKNN, ONNX, OpenVINO, TFLite, and CoreML backends.
+> FRC vision pipeline for object detection and field mapping - runs on Orange Pi with Rockchip NPU, supports RKNN, ONNX, OpenVINO, TFLite, and CoreML backends.
 
 ---
 
 ## What It Does
 
-VisionCore is a plug-and-play computer vision system for FRC robots. You point a camera at the field, it detects game pieces, converts pixel positions into field-relative coordinates, and sends them to your robot over NetworkTables — all automatically.
+VisionCore is a plug-and-play computer vision system for FRC robots. You point a camera at the field, it detects game pieces, converts pixel positions into field-relative coordinates, and sends them to your robot over NetworkTables - all automatically.
 
 - Detects objects with a YOLO model (any size, any format)
 - Converts detections to real-world field coordinates using camera calibration
@@ -23,14 +23,14 @@ VisionCore is a plug-and-play computer vision system for FRC robots. You point a
 **Recommended deploy target:** Orange Pi 5 / 5 Pro (RK3588 NPU)
 
 Also runs on:
-- Any aarch64 Linux board (Raspberry Pi, Jetson) — uses TFLite
-- x86 Linux — uses ONNX or OpenVINO
-- macOS (Apple Silicon) — uses CoreML
-- Windows — uses ONNX
+- Any aarch64 Linux board (Raspberry Pi, Jetson) - uses TFLite
+- x86 Linux - uses ONNX or OpenVINO
+- macOS (Apple Silicon) - uses CoreML
+- Windows - uses ONNX
 
 ---
 
-## Quick Start — Flash and Go
+## Quick Start - Flash and Go
 
 This is the zero-config path. Flash the pre-built image, plug in ethernet, power on.
 
@@ -164,7 +164,7 @@ The config file lives at `Config/config.json` (or `/etc/visioncore/config.json` 
 |-----|-------------|
 | `auto_opt` | Automatically converts your `.pt` model to the fastest format for the current hardware |
 | `unit` | Output coordinate unit: `meter`, `inch`, `foot`, `centimeter` |
-| `network_tables_ip` | Robot IP — typically `10.TE.AM.2` where TEAM is your 4-digit team number |
+| `network_tables_ip` | Robot IP - typically `10.TE.AM.2` where TEAM is your 4-digit team number |
 | `stale_threshold` | Seconds before a detection is considered stale (default `1.0`) |
 | `distance_threshold` | Merge radius for the object tracker in your chosen unit (default `0.5`) |
 | `debug_mode` | Draws bounding boxes and FPS on the video feed |
@@ -322,4 +322,4 @@ The main loop runs at whatever FPS the camera and model allow. On an Orange Pi 5
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE).
+GPL-3.0 - see [LICENSE](LICENSE).

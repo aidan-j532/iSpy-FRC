@@ -82,7 +82,7 @@ class Metrics:
         self._log_final_summary()
         if not PLOTLY_AVAILABLE:
             self.logger.warning(
-                "plotly not installed — skipping metrics export. "
+                "plotly not installed - skipping metrics export. "
                 "Run: pip install plotly --break-system-packages"
             )
             return
@@ -115,7 +115,7 @@ class Metrics:
                     y=ys,
                     mode="lines",
                     name=f"{label} ({unit})",
-                    hovertemplate=f"%{{x:.2f}}s — %{{y:.2f}}{unit}<extra>{label}</extra>",
+                    hovertemplate=f"%{{x:.2f}}s - %{{y:.2f}}{unit}<extra>{label}</extra>",
                 )
             )
 
@@ -132,7 +132,7 @@ class Metrics:
                     name="FPS",
                     yaxis="y2",
                     line=dict(dash="dot"),
-                    hovertemplate="%{x:.2f}s — %{y:.1f} fps<extra>FPS</extra>",
+                    hovertemplate="%{x:.2f}s - %{y:.1f} fps<extra>FPS</extra>",
                 )
             )
 
