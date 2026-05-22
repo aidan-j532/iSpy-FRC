@@ -166,7 +166,15 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 def _inspect_rknn(model_path: str, task: str) -> dict:
     warnings = []
     manual = []
-    detected_fields = []
+    detected_fields = [
+        "input.layout",
+        "input.dtype",
+        "input.normalize",
+        "output.format",
+        "output.layout",
+        "output.box_format",
+        "output.quantization",
+    ]
 
     result: dict[str, Any] = {
         "file_path": model_path,
