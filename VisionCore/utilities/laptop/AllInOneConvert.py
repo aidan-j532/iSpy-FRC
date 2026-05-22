@@ -1,6 +1,7 @@
 from ultralytics import YOLO
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,50 @@ def _export_rknn(onnx_file: str, task: str, dataset_txt: str, output_path: str =
     return output_path
 
 
+def _export_rknn_metadata(pt_file: str, rknn_output_path: str) -> None:
+    try:
+        from ultralytics import YOLO
+        from ruamel.yaml import YAML
+
+        model = YOLO(pt_file, verbose=False)
+
+        meta = {}
+
+        model_task = getattr(model, "task", "detect") or "detect"
+        meta["task"] = model_task
+
+        try:
+            nc = int(model.model.model[-1].nc)
+            meta["nc"] = nc
+        except Exception:
+            pass
+
+        try:
+            names = getattr(model, "names", None)
+            if names is not None and isinstance(names, dict):
+                meta["names"] = names
+        except Exception:
+            pass
+
+        if model_task == "pose":
+            try:
+                kpt_shape = model.model.model[-1].kpt_shape
+                if kpt_shape is not None and len(kpt_shape) == 2:
+                    meta["kpt_shape"] = [int(kpt_shape[0]), int(kpt_shape[1])]
+            except Exception:
+                pass
+
+        meta_path = Path(rknn_output_path).parent / "metadata.yaml"
+        yaml = YAML()
+        yaml.default_flow_style = False
+        with open(meta_path, "w") as f:
+            yaml.dump(meta, f)
+
+        logger.info(f"Exported RKNN metadata -> {meta_path}")
+    except Exception as e:
+        logger.warning(f"Failed to export RKNN metadata: {e}")
+
+
 def convert_model(
     file: str,
     format: str,
@@ -109,11 +154,13 @@ def convert_model(
         logger.info("RKNN target -- exporting to ONNX first...")
         onnx_path = _export_ultralytics(file, "onnx", task)
         logger.info(f"Intermediate ONNX saved -> {onnx_path}")
-        return _export_rknn(
+        rknn_path = _export_rknn(
             onnx_file=onnx_path,
             task=task,
             dataset_txt=rknn_dataset_txt,
             output_path=rknn_output_path,
         )
+        _export_rknn_metadata(file, rknn_path)
+        return rknn_path
 
     return _export_ultralytics(file, format, task)

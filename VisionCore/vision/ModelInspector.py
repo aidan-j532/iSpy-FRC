@@ -176,7 +176,7 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
         "min_conf": 0.5,
         "output": {
             "format": "raw",
-            "layout": "anchors_first",
+            "layout": "features_first",
             "box_format": "cxcywh",
             "score_mode": "objectness",
             "scores_are_logits": False,
@@ -226,9 +226,14 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                 names = meta.get("names")
                 if isinstance(names, dict):
                     num_names = len(names)
+                    result["num_classes"] = num_names
+                    detected_fields.append("num_classes")
                     if num_names > 1:
-                        result["num_classes"] = num_names
-                        detected_fields.append("num_classes")
+                        result["output"]["score_mode"] = "multi_class"
+                        detected_fields.append("output.score_mode")
+                    else:
+                        result["output"]["score_mode"] = "objectness"
+                        detected_fields.append("output.score_mode")
         except Exception as e:
             warnings.append(f"Failed to parse metadata.yaml: {e}")
 
@@ -237,7 +242,7 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
             "input_size           (verify against your training config)",
             "num_classes          (check your model output)",
             "output.format        (hardware_nms if end2end export, raw otherwise)",
-            "output.layout        (anchors_first for standard RKNN exports)",
+            "output.layout        (features_first for Ultralytics exports)",
             "output.score_mode    (objectness for 1-class, multi_class otherwise)",
         ]
         if not warnings:

@@ -242,8 +242,51 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
     return model.export(**kwargs)
 
 
+def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
+    try:
+        import ultralytics
+        from ruamel.yaml import YAML
+
+        model = ultralytics.YOLO(pt_file, verbose=False)
+
+        meta = {}
+
+        model_task = getattr(model, "task", "detect") or "detect"
+        meta["task"] = model_task
+
+        try:
+            nc = int(model.model.model[-1].nc)
+            meta["nc"] = nc
+        except Exception:
+            pass
+
+        try:
+            names = getattr(model, "names", None)
+            if names is not None and isinstance(names, dict):
+                meta["names"] = names
+        except Exception:
+            pass
+
+        if model_task == "pose":
+            try:
+                kpt_shape = model.model.model[-1].kpt_shape
+                if kpt_shape is not None and len(kpt_shape) == 2:
+                    meta["kpt_shape"] = [int(kpt_shape[0]), int(kpt_shape[1])]
+            except Exception:
+                pass
+
+        meta_path = rknn_output.parent / "metadata.yaml"
+        yaml = YAML()
+        yaml.default_flow_style = False
+        with open(meta_path, "w") as f:
+            yaml.dump(meta, f)
+
+        logger.info("Exported RKNN metadata: %s", meta_path)
+    except Exception as e:
+        logger.warning("Failed to export RKNN metadata: %s", e)
+
+
 def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
-    """.pt -> ONNX (Ultralytics) -> RKNN (rknn-toolkit2) with dataset quantization."""
     pt_path = Path(pt_file)
     stem = pt_path.stem
     parent = pt_path.parent
@@ -293,6 +336,9 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
         rknn.release()
 
     logger.info("RKNN conversion successful: %s", rknn_output)
+
+    _export_rknn_metadata(pt_file, rknn_output)
+
     return str(rknn_output)
 
 
@@ -381,14 +427,14 @@ def setup_files():
     yolo_dir = _PROJECT_ROOT / "YoloModels"
     config_dir = _PROJECT_ROOT / "Config"
     outputs_dir = _PROJECT_ROOT / "Outputs"
-    dataset_dir = _PROJECT_ROOT / "dataset"
+    dataset_dir = _PROJECT_ROOT / "QuantizeDataset"
     yolo_dir.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
     outputs_dir.mkdir(parents=True, exist_ok=True)
     dataset_dir.mkdir(parents=True, exist_ok=True)
     for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
-    prepare_quantization_dataset(str(dataset_dir))
+    prepare_quantization_dataset(str(dataset_dir), boot=True)
     nano_pt = yolo_dir / "pytorch" / "_default_pose.pt"
     if not nano_pt.exists():
         bundled = _ASSETS_DIR / "_default_pose.pt"

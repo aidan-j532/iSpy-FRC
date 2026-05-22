@@ -9,8 +9,9 @@ _CALIB_COUNT = 20
 _IMGSZ = 640
 
 
-def _generate_calibration_images(folder: Path, count: int = _CALIB_COUNT, imgsz: int = _IMGSZ):
-    logger.warning("Generating SYNTHETIC calibration images, expect poor quantization results! Add real images to %s to improve accuracy.", folder / "images")
+def _generate_calibration_images(folder: Path, count: int = _CALIB_COUNT, imgsz: int = _IMGSZ, boot: bool = False):
+    if not boot:
+        logger.warning("Generating SYNTHETIC calibration images, expect poor quantization results! Add real images to %s to improve accuracy.", folder / "images")
     import numpy as np
     try:
         from PIL import Image
@@ -65,7 +66,7 @@ def _rebuild_dataset_txt(ds: Path):
     return False
 
 
-def prepare_quantization_dataset(dataset_path: str = "dataset", imgsz: int = _IMGSZ) -> Path:
+def prepare_quantization_dataset(dataset_path: str = "dataset", imgsz: int = _IMGSZ, boot: bool = False) -> Path:
     ds = Path(dataset_path)
     for sub in _REQUIRED_DIRS:
         (ds / sub).mkdir(parents=True, exist_ok=True)
@@ -81,7 +82,7 @@ def prepare_quantization_dataset(dataset_path: str = "dataset", imgsz: int = _IM
         logger.info("Created %s", data_yaml)
 
     if not _find_images(ds):
-        _generate_calibration_images(ds, imgsz=imgsz)
+        _generate_calibration_images(ds, imgsz=imgsz, boot=boot)
 
     _rebuild_dataset_txt(ds)
 

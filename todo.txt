@@ -1,1 +1,4 @@
-1. Calibration of camera
+Calibration of camera
+Stop ALL logging except mine, and use progress bars :)
+Web stuff :(
+Make vision models actually follow folder structure
