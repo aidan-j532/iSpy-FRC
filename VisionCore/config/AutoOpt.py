@@ -144,12 +144,15 @@ def has_rockchip_npu() -> bool:
 def recommend_format() -> str:
     # 1. Dedicated embedded NPUs / TPUs
     if has_rockchip_npu():
+        logger.info("Rockchip NPU detected - using RKNN format for hardware acceleration.")
         return "rknn"
     if has_edge_tpu():
+        logger.info("Edge TPU detected - using TFLite format for hardware acceleration.")
         return "tflite"
 
     # 2. Apple ecosystem
     if has_apple_silicon():
+        logger.info("Apple Silicon detected - using Core ML format for hardware acceleration.")
         return "coreml"
 
     # 3. NVIDIA - prefer TensorRT engine over raw ONNX for max FPS     ─
@@ -167,14 +170,18 @@ def recommend_format() -> str:
 
     # 4. Other desktop hardware                       ─
     if os.name != "nt" and has_intel_vpu():
+        logger.info("Intel VPU detected - using OpenVINO format for hardware acceleration.")
         return "openvino"
     if has_intel_gpu():
+        logger.info("Intel GPU detected - using OpenVINO format for hardware acceleration.")
         return "openvino"
     if has_amd_gpu():
+        logger.info("AMD GPU detected - using ONNX format for hardware acceleration.")
         return "onnx"  # ROCm / DirectML execution providers
 
     # 5. ARM edge (Jetson, RPi, etc.)
     if has_arm():
+        logger.info("ARM edge device detected - using TFLite format for hardware acceleration.")
         return "tflite"
 
     logger.info("No specialised hardware detected - defaulting to ONNX (CPU).")

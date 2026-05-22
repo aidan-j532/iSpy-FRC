@@ -16,7 +16,7 @@ import os
 import shutil
 import subprocess
 import ultralytics
-
+import importlib.util
 from VisionCore.vision.ModelInspector import fill_missing_config
 from VisionCore.config.AutoOpt import recommend_format
 from VisionCore.validations.validate_system import validate_system
@@ -39,6 +39,74 @@ FORMAT_MATCHERS = {
     "openvino": lambda p: p.is_dir() and p.name.endswith("_openvino_model"),
     "engine": lambda p: p.suffix == ".engine",
 }
+
+
+BACKEND_DEPENDENCIES = {
+    "onnx": [],  # already assumed installed
+    "engine": ["tensorrt"],
+    "openvino": ["openvino"],
+    "coreml": ["coremltools"],
+    "tflite": ["tflite-runtime"],
+    "rknn": ["rknn-toolkit2"],  # often NOT pip-friendly, may override below
+}
+
+# Prob same
+def _pip_install(package: str) -> bool:
+    try:
+        logger.info(f"Installing dependency: {package}")
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", package],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to install {package}.")
+        return False
+    
+def _is_installed(pkg: str) -> bool:
+    return importlib.util.find_spec(pkg.replace("-", "_")) is not None
+
+def install_special_dependencies(auto_install: bool = False):
+    backend = recommend_format()
+    logger.info(f"Recommended backend: {backend}")
+
+    if backend not in BACKEND_DEPENDENCIES:
+        logger.warning(f"No dependency mapping for backend: {backend}")
+        return
+
+    packages = BACKEND_DEPENDENCIES[backend]
+
+    if not packages:
+        logger.info(f"No extra dependencies required for {backend}")
+        return
+
+    missing = []
+    for pkg in packages:
+        if not _is_installed(pkg):
+            missing.append(pkg)
+
+    if not missing:
+        logger.info(f"All dependencies already installed for {backend}")
+        return
+
+    logger.warning(f"Missing dependencies for {backend}: {missing}")
+
+    if not auto_install:
+        logger.info("auto_install=False → skipping installation")
+        return
+
+    # special warning for heavy/vendor stacks
+    if backend in {"rknn", "engine"}:
+        logger.warning(
+            f"{backend} is a hardware/vendor backend. "
+            "Installation may fail or require system-level setup."
+        )
+
+    for pkg in missing:
+        _pip_install(pkg)
+
+    logger.info(f"Dependency installation complete for {backend}")
 
 def reset_workspace():
     targets = [
@@ -109,7 +177,7 @@ def convert_model(model_file, target_format, input_size):
             logger.info(f"Cached {target_format} model found: {out_path}")
             return str(out_path)
 
-    logger.info(f"Converting {model_file} -> {target_format}")
+    logger.info(f"Converting {model_file} -> {target_format}. Note: If this is RKNN, TensorRT, or MlCore, it may take quite a few minutes. Please be patient :)")
     try:
         model = ultralytics.YOLO(model_file)
         if target_format == "rknn":
@@ -184,6 +252,8 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
         config = VisionCoreConfig(str(config_path))
 
     if config.get("auto_opt"):
+        install_special_dependencies(auto_install=True)
+
         best_format = recommend_format()
         logger.info("Auto-opt enabled. Recommended format: %s", best_format)
         matcher = FORMAT_MATCHERS.get(best_format)
