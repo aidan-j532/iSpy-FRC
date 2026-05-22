@@ -243,21 +243,28 @@ def convert_model(model_file, target_format, input_size):
     )
     try:
         model = ultralytics.YOLO(model_file)
-        if target_format == "rknn":
-            model.export(format="rknn", imgsz=input_size)
-        elif target_format == "onnx":
-            model.export(format="onnx", imgsz=input_size, simplify=True, opset=12)
-        elif target_format == "tflite":
-            model.export(format="tflite", imgsz=input_size, int8=True)
-        elif target_format == "openvino":
-            model.export(format="openvino", imgsz=input_size, half=True)
-        elif target_format == "coreml":
-            model.export(format="coreml", imgsz=input_size, nms=True)
-        elif target_format == "engine":
-            model.export(format="engine", imgsz=input_size, half=True, device=0)
+        export_kwargs = {
+            "rknn": dict(format="rknn", imgsz=input_size),
+            "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=12),
+            "tflite": dict(format="tflite", imgsz=input_size, int8=True),
+            "openvino": dict(format="openvino", imgsz=input_size, half=True),
+            "coreml": dict(format="coreml", imgsz=input_size, nms=True),
+            "engine": dict(format="engine", imgsz=input_size, half=True, device=0),
+        }
+        kwargs = export_kwargs.get(target_format)
+        if not kwargs:
+            logger.warning("Unknown format: %s. Skipping conversion.", target_format)
+            return model_file
+        result = model.export(**kwargs)
     except Exception as e:
         logger.error("Conversion to %s failed: %s", target_format, e, exc_info=True)
         return model_file
+
+    if result is not None:
+        result_path = Path(result)
+        if result_path.exists():
+            logger.info("%s export successful: %s", target_format, result_path)
+            return str(result_path)
 
     if target_format == "tflite":
         saved_model_dir = parent / f"{stem}_saved_model"
