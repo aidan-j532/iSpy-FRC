@@ -164,6 +164,36 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 
 
 def _inspect_rknn(model_path: str, task: str) -> dict:
+    warnings = []
+    manual = []
+    detected_fields = []
+
+    result: dict[str, Any] = {
+        "file_path": model_path,
+        "task": task,
+        "num_classes": 1,
+        "input_size": [640, 640],
+        "min_conf": 0.5,
+        "output": {
+            "format": "raw",
+            "layout": "anchors_first",
+            "box_format": "cxcywh",
+            "score_mode": "objectness",
+            "scores_are_logits": False,
+            "apply_software_nms": True,
+            "nms_iou": 0.45,
+            "quantization": "int8",
+            "quant_scale": 255.0,
+        },
+        "input": {
+            "layout": "nhwc",
+            "dtype": "uint8",
+            "letterbox": True,
+            "pad_value": 114,
+            "normalize": False,
+        },
+    }
+
     meta_path = Path(model_path).parent / "metadata.yaml"
     if meta_path.exists():
         try:
