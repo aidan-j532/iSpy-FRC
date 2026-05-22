@@ -211,10 +211,12 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                         out = result["output"]
                         out["num_keypoints"] = int(n_kpts)
                         out["keypoint_dims"] = int(kpt_dims)
+                        out["keypoint_scores_are_logits"] = False
                         out["score_mode"] = "objectness"
                         detected_fields += [
                             "output.num_keypoints",
                             "output.keypoint_dims",
+                            "output.keypoint_scores_are_logits",
                             "output.score_mode",
                         ]
                         warnings.append(
