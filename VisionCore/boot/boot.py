@@ -263,6 +263,12 @@ def convert_model(model_file, target_format, input_size):
     if result is not None:
         result_path = Path(result)
         if result_path.exists():
+            if result_path.is_dir() and target_format == "rknn":
+                rknn_files = list(result_path.rglob("*.rknn"))
+                if rknn_files:
+                    result_path = rknn_files[0]
+                else:
+                    logger.warning("RKNN directory found but no .rknn file inside: %s", result_path)
             logger.info("%s export successful: %s", target_format, result_path)
             return str(result_path)
 
