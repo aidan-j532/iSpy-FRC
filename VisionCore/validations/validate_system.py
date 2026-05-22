@@ -3,6 +3,7 @@ import re
 import sys
 import logging
 from pathlib import Path
+from VisionCore.dataset.dataset import validate_quantization_dataset
 
 # for name in logging.root.manager.loggerDict:
 #     logging.getLogger(name).setLevel(logging.WARNING)
@@ -264,11 +265,29 @@ def get_recommendations(config_path: str = "VisionCore/example_config.json") -> 
 
     return output
 
+def validate_quantization_dataset_wrapper(dataset_path: str = "dataset") -> bool:
+    result = validate_quantization_dataset(dataset_path)
+    if result["valid"]:
+        logger.info(
+            "Quantization dataset valid: %d images, rknn=%s, ultralytics=%s",
+            result["image_count"],
+            result["rknn_ready"],
+            result["ultralytics_ready"],
+        )
+    else:
+        logger.warning("Quantization dataset issues (%s):", dataset_path)
+        for issue in result["issues"]:
+            logger.warning("  - %s", issue)
+    return result["valid"]
+
+
 def validate_system(first_boot: bool = False) -> bool:
     try:
         if not first_boot:
             validate_model_files()
             validate_config_files()
+
+        validate_quantization_dataset_wrapper()
 
         run_unit_tests()
         logger.info("System validation successful.")

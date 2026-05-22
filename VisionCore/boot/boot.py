@@ -23,6 +23,10 @@ from VisionCore.config.AutoOpt import recommend_format
 from VisionCore.validations.validate_system import validate_system
 from VisionCore.validations.model_validator import enforce_model_organization
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
+from VisionCore.dataset.dataset import (
+    prepare_quantization_dataset,
+    validate_quantization_dataset,
+)
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -50,10 +54,22 @@ _RKNN_WHEELS_BASE = os.environ.get(
 ).rstrip("/")
 
 _KNOWN_RKNN_WHEELS: dict[tuple[str, str], str] = {
-    ("aarch64", "cp311"): "rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    ("aarch64", "cp312"): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    ("x86_64", "cp310"): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    ("x86_64", "cp312"): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    (
+        "aarch64",
+        "cp311",
+    ): "rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    (
+        "aarch64",
+        "cp312",
+    ): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    (
+        "x86_64",
+        "cp310",
+    ): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    (
+        "x86_64",
+        "cp312",
+    ): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
 }
 
 
@@ -61,12 +77,12 @@ def _rknn_wheel_url() -> str | None:
     key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
     filename = _KNOWN_RKNN_WHEELS.get(key)
     if not filename:
-        supported = sorted(
-            f"{a} {v}" for (a, v) in _KNOWN_RKNN_WHEELS if a == key[0]
-        )
+        supported = sorted(f"{a} {v}" for (a, v) in _KNOWN_RKNN_WHEELS if a == key[0])
         logger.error(
             "No RKNN wheel for %s (Python %s). Supported: %s",
-            key[0], _PY_TAG, ", ".join(supported),
+            key[0],
+            _PY_TAG,
+            ", ".join(supported),
         )
         return None
     return f"{_RKNN_WHEELS_BASE}/{filename}"
@@ -201,7 +217,86 @@ def search_for_config():
     return str(chosen)
 
 
-def convert_model(model_file, target_format, input_size):
+def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
+    model = ultralytics.YOLO(model_file)
+
+    native_kwargs = {
+        "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=12),
+        "tflite": dict(format="tflite", imgsz=input_size, int8=True),
+        "openvino": dict(format="openvino", imgsz=input_size, half=True),
+        "coreml": dict(format="coreml", imgsz=input_size, nms=True),
+        "engine": dict(format="engine", imgsz=input_size, half=True, device=0),
+    }
+
+    kwargs = native_kwargs.get(target_format)
+    if not kwargs:
+        raise ValueError(f"Unsupported native format: {target_format}")
+
+    if data_yaml and target_format in ("tflite", "openvino"):
+        kwargs = dict(format=target_format, imgsz=input_size, int8=True, data=data_yaml)
+        logger.info(
+            "Dataset-aware %s quantization enabled (data=%s)", target_format, data_yaml
+        )
+
+    logger.info("Exporting %s -> %s with kwargs: %s", model_file, target_format, kwargs)
+    return model.export(**kwargs)
+
+
+def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
+    """.pt -> ONNX (Ultralytics) -> RKNN (rknn-toolkit2) with dataset quantization."""
+    pt_path = Path(pt_file)
+    stem = pt_path.stem
+    parent = pt_path.parent
+
+    # step 1: .pt -> ONNX via Ultralytics
+    onnx_path = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
+    if not onnx_path.exists():
+        raise RuntimeError(f"Intermediate ONNX export failed: {onnx_path}")
+
+    # step 2: ONNX -> RKNN via rknn-toolkit2
+    try:
+        from rknn.api import RKNN
+    except ImportError:
+        raise ImportError(
+            "RKNN Toolkit not found. Install it to convert to RKNN format."
+        )
+
+    dataset_txt = Path(dataset_path) / "dataset.txt"
+    if not dataset_txt.exists():
+        raise FileNotFoundError(f"RKNN calibration dataset not found: {dataset_txt}")
+    if not dataset_txt.read_text().strip():
+        raise ValueError(f"RKNN calibration dataset is empty: {dataset_txt}")
+
+    rknn_output = parent / f"{stem}.rknn"
+    logger.info("Converting ONNX -> RKNN with dataset=%s", dataset_txt)
+
+    rknn = RKNN()
+    try:
+        rknn.config(
+            mean_values=[[0, 0, 0]],
+            std_values=[[255, 255, 255]],
+            target_platform="rk3588",
+            quantized_algorithm="kl_divergence",
+            quantized_dtype="w8a8",
+            quantized_hybrid_level=3,
+        )
+        ret = rknn.load_onnx(model=str(onnx_path))
+        if ret != 0:
+            raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
+        ret = rknn.build(do_quantization=True, dataset=str(dataset_txt))
+        if ret != 0:
+            raise RuntimeError(f"RKNN build failed with code {ret}")
+        ret = rknn.export_rknn(str(rknn_output))
+        if ret != 0:
+            raise RuntimeError(f"RKNN export failed with code {ret}")
+    finally:
+        rknn.release()
+
+    logger.info("RKNN conversion successful: %s", rknn_output)
+    return str(rknn_output)
+
+
+def convert_model(model_file, target_format, input_size, quantize=False):
     if not os.path.exists(model_file):
         logger.warning("Model file %s is missing. Skipping conversion.", model_file)
         return model_file
@@ -211,51 +306,50 @@ def convert_model(model_file, target_format, input_size):
         )
         return model_file
 
-    model_path = Path(model_file)
-    stem = model_path.stem
-    parent = model_path.parent
-    expected_outputs = {
-        "rknn": parent / f"{stem}.rknn",
+    pt_path = Path(model_file)
+    stem = pt_path.stem
+    parent = pt_path.parent
+
+    if target_format == "rknn":
+        return _convert_rknn(
+            pt_file=model_file,
+            input_size=input_size,
+            dataset_path=str(_PROJECT_ROOT / "dataset"),
+        )
+
+    expected = {
         "onnx": parent / f"{stem}.onnx",
         "openvino": parent / f"{stem}_openvino_model",
         "coreml": parent / f"{stem}.mlpackage",
         "engine": parent / f"{stem}.engine",
     }
-
     if target_format == "tflite":
-        saved_model_dir = parent / f"{stem}_saved_model"
-        if saved_model_dir.exists():
-            tflites = list(saved_model_dir.rglob("*.tflite"))
+        saved = parent / f"{stem}_saved_model"
+        if saved.exists():
+            tflites = list(saved.rglob("*.tflite"))
             if tflites:
                 logger.info("Cached tflite model found: %s", tflites[0])
                 return str(tflites[0])
     else:
-        out_path = expected_outputs.get(target_format)
-        if out_path and out_path.exists():
-            logger.info("Cached %s model found: %s", target_format, out_path)
-            return str(out_path)
+        out = expected.get(target_format)
+        if out and out.exists():
+            logger.info("Cached %s model found: %s", target_format, out)
+            return str(out)
 
-    logger.info(
-        "Converting %s -> %s. "
-        "Note: RKNN, TensorRT, and CoreML may take several minutes.",
-        model_file,
-        target_format,
-    )
+    data_yaml = None
+    if quantize:
+        result = validate_quantization_dataset(str(_PROJECT_ROOT / "dataset"))
+        if result["valid"]:
+            data_yaml = str(_PROJECT_ROOT / "dataset" / "data.yaml")
+        else:
+            logger.warning(
+                "Quantization dataset invalid — skipping dataset-aware quantize"
+            )
+            for issue in result["issues"]:
+                logger.warning("  dataset issue: %s", issue)
+
     try:
-        model = ultralytics.YOLO(model_file)
-        export_kwargs = {
-            "rknn": dict(format="rknn", imgsz=input_size),
-            "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=12),
-            "tflite": dict(format="tflite", imgsz=input_size, int8=True),
-            "openvino": dict(format="openvino", imgsz=input_size, half=True),
-            "coreml": dict(format="coreml", imgsz=input_size, nms=True),
-            "engine": dict(format="engine", imgsz=input_size, half=True, device=0),
-        }
-        kwargs = export_kwargs.get(target_format)
-        if not kwargs:
-            logger.warning("Unknown format: %s. Skipping conversion.", target_format)
-            return model_file
-        result = model.export(**kwargs)
+        result = _export_ultralytics(model_file, target_format, input_size, data_yaml)
     except Exception as e:
         logger.error("Conversion to %s failed: %s", target_format, e, exc_info=True)
         return model_file
@@ -263,27 +357,21 @@ def convert_model(model_file, target_format, input_size):
     if result is not None:
         result_path = Path(result)
         if result_path.exists():
-            if result_path.is_dir() and target_format == "rknn":
-                rknn_files = list(result_path.rglob("*.rknn"))
-                if rknn_files:
-                    result_path = rknn_files[0]
-                else:
-                    logger.warning("RKNN directory found but no .rknn file inside: %s", result_path)
             logger.info("%s export successful: %s", target_format, result_path)
             return str(result_path)
 
     if target_format == "tflite":
-        saved_model_dir = parent / f"{stem}_saved_model"
-        if saved_model_dir.exists():
-            tflites = list(saved_model_dir.rglob("*.tflite"))
+        saved = parent / f"{stem}_saved_model"
+        if saved.exists():
+            tflites = list(saved.rglob("*.tflite"))
             if tflites:
                 logger.info("TFLite export successful: %s", tflites[0])
                 return str(tflites[0])
     else:
-        out_path = expected_outputs.get(target_format)
-        if out_path and out_path.exists():
-            logger.info("%s export successful: %s", target_format, out_path)
-            return str(out_path)
+        out = expected.get(target_format)
+        if out and out.exists():
+            logger.info("%s export successful: %s", target_format, out)
+            return str(out)
 
     logger.warning("Conversion to %s failed, falling back to .pt", target_format)
     return model_file
@@ -293,11 +381,14 @@ def setup_files():
     yolo_dir = _PROJECT_ROOT / "YoloModels"
     config_dir = _PROJECT_ROOT / "Config"
     outputs_dir = _PROJECT_ROOT / "Outputs"
+    dataset_dir = _PROJECT_ROOT / "dataset"
     yolo_dir.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
     outputs_dir.mkdir(parents=True, exist_ok=True)
+    dataset_dir.mkdir(parents=True, exist_ok=True)
     for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
+    prepare_quantization_dataset(str(dataset_dir))
     nano_pt = yolo_dir / "pytorch" / "_default_pose.pt"
     if not nano_pt.exists():
         bundled = _ASSETS_DIR / "_default_pose.pt"
@@ -355,7 +446,14 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                     shutil.copy(bundled, target)
                     pt_full = target
                 input_size = config.get("input_size") or [640, 640]
-                converted = Path(convert_model(str(pt_full), best_format, input_size))
+                converted = Path(
+                    convert_model(
+                        str(pt_full),
+                        best_format,
+                        input_size,
+                        quantize=config.get("quantize", False),
+                    )
+                )
                 if converted != pt_full:
                     logger.info("Conversion successful: %s", converted)
                     config.set("vision_model", "file_path", str(converted))
