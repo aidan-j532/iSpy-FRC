@@ -164,51 +164,60 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 
 
 def _inspect_rknn(model_path: str, task: str) -> dict:
-    warnings = [
-        "RKNN models carry limited metadata. "
-        "Input layout/size are inferred from RKNN conventions (NHWC uint8).",
-    ]
-    manual = [
-        "input_size           (verify against your training config)",
-        "num_classes          (check your model output)",
-        "output.format        (hardware_nms if end2end export, raw otherwise)",
-        "output.layout        (anchors_first for standard RKNN exports)",
-        "output.score_mode    (objectness for 1-class, multi_class otherwise)",
-    ]
+    meta_path = Path(model_path).parent / "metadata.yaml"
+    if meta_path.exists():
+        try:
+            from ruamel.yaml import YAML
 
-    return {
-        "file_path": model_path,
-        "task": task,
-        "num_classes": 1,
-        "input_size": [640, 640],
-        "min_conf": 0.5,
-        "output": {
-            "format": "raw",
-            "layout": "anchors_first",
-            "box_format": "cxcywh",
-            "score_mode": "objectness",
-            "scores_are_logits": False,
-            "apply_software_nms": True,
-            "nms_iou": 0.45,
-            "quantization": "int8",
-            "quant_scale": 255.0,
-        },
-        "input": {
-            "layout": "nhwc",
-            "dtype": "uint8",
-            "letterbox": True,
-            "pad_value": 114,
-            "normalize": False,
-        },
-        "_detected_fields": [
-            "input.layout",
-            "input.dtype",
-            "input.normalize",
-            "output.quantization",
-        ],
-        "_manual_fields": manual,
-        "_warnings": warnings,
-    }
+            meta = YAML(typ="safe").load(meta_path)
+            if isinstance(meta, dict):
+                rknn_task = meta.get("task", "")
+                if rknn_task == "pose":
+                    result["task"] = "pose"
+                    detected_fields.append("task")
+                    kpt_shape = meta.get("kpt_shape")
+                    if kpt_shape and len(kpt_shape) == 2:
+                        n_kpts, kpt_dims = kpt_shape
+                        out = result["output"]
+                        out["num_keypoints"] = int(n_kpts)
+                        out["keypoint_dims"] = int(kpt_dims)
+                        out["score_mode"] = "objectness"
+                        detected_fields += [
+                            "output.num_keypoints",
+                            "output.keypoint_dims",
+                            "output.score_mode",
+                        ]
+                        warnings.append(
+                            "Pose model detected from metadata.yaml. "
+                            "Verify keypoint ordering in your config."
+                        )
+                names = meta.get("names")
+                if isinstance(names, dict):
+                    num_names = len(names)
+                    if num_names > 1:
+                        result["num_classes"] = num_names
+                        detected_fields.append("num_classes")
+        except Exception as e:
+            warnings.append(f"Failed to parse metadata.yaml: {e}")
+
+    if not result.get("output", {}).get("num_keypoints"):
+        manual += [
+            "input_size           (verify against your training config)",
+            "num_classes          (check your model output)",
+            "output.format        (hardware_nms if end2end export, raw otherwise)",
+            "output.layout        (anchors_first for standard RKNN exports)",
+            "output.score_mode    (objectness for 1-class, multi_class otherwise)",
+        ]
+        if not warnings:
+            warnings.append(
+                "RKNN models carry limited metadata. "
+                "Input layout/size are inferred from RKNN conventions (NHWC uint8).",
+            )
+
+    result["_detected_fields"] = detected_fields
+    result["_manual_fields"] = manual
+    result["_warnings"] = warnings
+    return result
 
 
 def _inspect_tflite(model_path: str, task: str) -> dict:
