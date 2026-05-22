@@ -662,10 +662,19 @@ class GenericYolo:
     def _convert_ultralytics_to_results(self, ultralytics_result) -> Results:
         boxes = []
         for b in ultralytics_result.boxes:
-            xyxy = np.asarray(b.xyxy)
+            xyxy = b.xyxy
+            if hasattr(xyxy, "cpu"):
+                xyxy = xyxy.cpu().numpy()
+            xyxy = np.asarray(xyxy)
             xyxy = xyxy[0] if xyxy.ndim > 1 else xyxy
-            conf = float(np.asarray(b.conf).item())
-            cls_id = int(np.asarray(b.cls).item()) if hasattr(b, "cls") else 0
+            conf = b.conf
+            if hasattr(conf, "cpu"):
+                conf = conf.cpu().numpy()
+            conf = float(np.asarray(conf).item())
+            cls_id = b.cls if hasattr(b, "cls") else 0
+            if hasattr(cls_id, "cpu"):
+                cls_id = cls_id.cpu().numpy()
+            cls_id = int(np.asarray(cls_id).item())
             boxes.append(Box(xyxy.tolist(), conf, cls_id))
 
         keypoints_list = []

@@ -6,24 +6,24 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
-    force=True,  # Crucial: overrides any setups hidden inside imports
+    force=True,
 )
 
 logger = logging.getLogger(__name__)
 import os
+
 os.environ["YOLO_VERBOSE"] = "False"
-import os
 import shutil
 import subprocess
-import ultralytics
+import platform
 import importlib.util
+import ultralytics
 from VisionCore.vision.ModelInspector import fill_missing_config
 from VisionCore.config.AutoOpt import recommend_format
 from VisionCore.validations.validate_system import validate_system
 from VisionCore.validations.model_validator import enforce_model_organization
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
 
-# Ensure root log levels didn't get overridden by imports
 logging.getLogger().setLevel(logging.INFO)
 
 _BOOT_DIR = Path(__file__).resolve().parent
@@ -40,73 +40,135 @@ FORMAT_MATCHERS = {
     "engine": lambda p: p.suffix == ".engine",
 }
 
+_ARCH = platform.machine().lower()
+_IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
+_PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
-BACKEND_DEPENDENCIES = {
-    "onnx": [],  # already assumed installed
-    "engine": ["tensorrt"],
-    "openvino": ["openvino"],
-    "coreml": ["coremltools"],
-    "tflite": ["tflite-runtime"],
-    "rknn": ["rknn-toolkit2"],  # often NOT pip-friendly, may override below
+_RKNN_WHEELS_BASE = os.environ.get(
+    "VISIONCORE_RKNN_WHEELS_URL",
+    "https://raw.githubusercontent.com/aidan-j532/VisionCore-Deploy/main/RknnWheels",
+).rstrip("/")
+
+_KNOWN_RKNN_WHEELS: dict[tuple[str, str], str] = {
+    ("aarch64", "cp311"): "rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    ("aarch64", "cp312"): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    ("x86_64", "cp310"): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    ("x86_64", "cp312"): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
 }
 
-# Prob same
-def _pip_install(package: str) -> bool:
-    try:
-        logger.info(f"Installing dependency: {package}")
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", package],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
+
+def _rknn_wheel_url() -> str | None:
+    key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
+    filename = _KNOWN_RKNN_WHEELS.get(key)
+    if not filename:
+        supported = sorted(
+            f"{a} {v}" for (a, v) in _KNOWN_RKNN_WHEELS if a == key[0]
         )
+        logger.error(
+            "No RKNN wheel for %s (Python %s). Supported: %s",
+            key[0], _PY_TAG, ", ".join(supported),
+        )
+        return None
+    return f"{_RKNN_WHEELS_BASE}/{filename}"
+
+
+def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
+    deps: dict[str, list[tuple[str, str]]] = {
+        "onnx": [("onnxruntime", "onnxruntime")],
+        "engine": [("tensorrt", "tensorrt")],
+        "openvino": [("openvino", "openvino")],
+        "coreml": [("coremltools", "coremltools")],
+        "tflite": [("tflite_runtime", "tflite-runtime")],
+    }
+    rknn_url = _rknn_wheel_url()
+    if rknn_url:
+        mod = "rknnlite" if _IS_AARCH64 else "rknn"
+        deps["rknn"] = [(mod, rknn_url)]
+    return deps
+
+
+BACKEND_DEPENDENCIES = _backend_dependencies()
+
+
+def _in_virtualenv() -> bool:
+    return (
+        hasattr(sys, "real_prefix")
+        or (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
+        or os.environ.get("VIRTUAL_ENV") is not None
+        or os.environ.get("CONDA_DEFAULT_ENV") is not None
+    )
+
+
+def _is_installed(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def _pip_install(install_target: str) -> bool:
+    cmd = [sys.executable, "-m", "pip", "install", install_target]
+    if not _in_virtualenv():
+        cmd.append("--break-system-packages")
+    try:
+        logger.info("Installing: %s", install_target)
+        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
         return True
-    except Exception as e:
-        logger.warning(f"Failed to install {package}.")
+    except subprocess.CalledProcessError:
+        logger.warning("pip install failed for: %s", install_target)
         return False
-    
-def _is_installed(pkg: str) -> bool:
-    return importlib.util.find_spec(pkg.replace("-", "_")) is not None
+
 
 def install_special_dependencies(auto_install: bool = False):
     backend = recommend_format()
-    logger.info(f"Recommended backend: {backend}")
+    logger.info("Recommended backend: %s", backend)
 
-    if backend not in BACKEND_DEPENDENCIES:
-        logger.warning(f"No dependency mapping for backend: {backend}")
+    deps = BACKEND_DEPENDENCIES.get(backend)
+    if not deps:
+        logger.info("No extra dependencies required for %s", backend)
         return
 
-    packages = BACKEND_DEPENDENCIES[backend]
-
-    if not packages:
-        logger.info(f"No extra dependencies required for {backend}")
-        return
-
-    missing = []
-    for pkg in packages:
-        if not _is_installed(pkg):
-            missing.append(pkg)
+    missing = [(mod, target) for mod, target in deps if not _is_installed(mod)]
 
     if not missing:
-        logger.info(f"All dependencies already installed for {backend}")
+        logger.info("All dependencies already installed for %s", backend)
         return
 
-    logger.warning(f"Missing dependencies for {backend}: {missing}")
+    logger.warning(
+        "Missing dependencies for %s: %s",
+        backend,
+        [target for _, target in missing],
+    )
 
     if not auto_install:
-        logger.info("auto_install=False → skipping installation")
+        logger.info("auto_install=False — skipping installation")
         return
 
-    # special warning for heavy/vendor stacks
+    if backend == "rknn":
+        arch = platform.machine()
+        if not (_IS_AARCH64 or "x86_64" in arch or "amd64" in arch):
+            logger.error(
+                "RKNN wheels are only available for aarch64 and x86_64. "
+                "Your architecture (%s) is not supported.",
+                arch,
+            )
+            return
+
     if backend in {"rknn", "engine"}:
         logger.warning(
-            f"{backend} is a hardware/vendor backend. "
-            "Installation may fail or require system-level setup."
+            "%s is a hardware/vendor backend — installation may require "
+            "system-level setup and can take a few minutes.",
+            backend,
         )
 
-    for pkg in missing:
-        _pip_install(pkg)
+    for mod, target in missing:
+        if _pip_install(target):
+            logger.info("Installed %s successfully.", target)
+        else:
+            logger.error(
+                "Failed to install %s. You may need to install it manually.",
+                target,
+            )
 
-    logger.info(f"Dependency installation complete for {backend}")
+    logger.info("Dependency installation complete for %s", backend)
+
 
 def reset_workspace():
     targets = [
@@ -121,8 +183,6 @@ def reset_workspace():
                 shutil.rmtree(target, ignore_errors=False)
         except Exception as e:
             logger.warning("Failed to fully remove %s: %s", target, e)
-
-    # recreate clean structure immediately
     for target in targets:
         target.mkdir(parents=True, exist_ok=True)
     logger.info("Workspace fully reset and reinitialized.")
@@ -143,13 +203,11 @@ def search_for_config():
 
 def convert_model(model_file, target_format, input_size):
     if not os.path.exists(model_file):
-        logger.warning(
-            f"Model file {model_file} is missing or empty. Skipping conversion."
-        )
+        logger.warning("Model file %s is missing. Skipping conversion.", model_file)
         return model_file
     if Path(model_file).suffix.lower() != ".pt":
         logger.warning(
-            f"Model file {model_file} is not a valid .pt file. Skipping conversion."
+            "Model file %s is not a .pt file. Skipping conversion.", model_file
         )
         return model_file
 
@@ -169,15 +227,20 @@ def convert_model(model_file, target_format, input_size):
         if saved_model_dir.exists():
             tflites = list(saved_model_dir.rglob("*.tflite"))
             if tflites:
-                logger.info(f"Cached tflite model found: {tflites[0]}")
+                logger.info("Cached tflite model found: %s", tflites[0])
                 return str(tflites[0])
     else:
         out_path = expected_outputs.get(target_format)
         if out_path and out_path.exists():
-            logger.info(f"Cached {target_format} model found: {out_path}")
+            logger.info("Cached %s model found: %s", target_format, out_path)
             return str(out_path)
 
-    logger.info(f"Converting {model_file} -> {target_format}. Note: If this is RKNN, TensorRT, or MlCore, it may take quite a few minutes. Please be patient :)")
+    logger.info(
+        "Converting %s -> %s. "
+        "Note: RKNN, TensorRT, and CoreML may take several minutes.",
+        model_file,
+        target_format,
+    )
     try:
         model = ultralytics.YOLO(model_file)
         if target_format == "rknn":
@@ -193,9 +256,7 @@ def convert_model(model_file, target_format, input_size):
         elif target_format == "engine":
             model.export(format="engine", imgsz=input_size, half=True, device=0)
     except Exception as e:
-        logger.error(
-            f"Conversion to {target_format} raised an exception: {e}", exc_info=True
-        )
+        logger.error("Conversion to %s failed: %s", target_format, e, exc_info=True)
         return model_file
 
     if target_format == "tflite":
@@ -203,15 +264,15 @@ def convert_model(model_file, target_format, input_size):
         if saved_model_dir.exists():
             tflites = list(saved_model_dir.rglob("*.tflite"))
             if tflites:
-                logger.info(f"TFLite export successful: {tflites[0]}")
+                logger.info("TFLite export successful: %s", tflites[0])
                 return str(tflites[0])
     else:
         out_path = expected_outputs.get(target_format)
         if out_path and out_path.exists():
-            logger.info(f"{target_format} export successful: {out_path}")
+            logger.info("%s export successful: %s", target_format, out_path)
             return str(out_path)
 
-    logger.warning(f"Conversion to {target_format} failed, falling back to .pt")
+    logger.warning("Conversion to %s failed, falling back to .pt", target_format)
     return model_file
 
 
@@ -243,7 +304,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
         config_path = _PROJECT_ROOT / "Config" / "config.json"
         config = VisionCoreConfig(str(config_path), create=True)
     else:
-        logger.info(f"Using existing config: {config_path}")
+        logger.info("Using existing config: %s", config_path)
 
     if not validate_system():
         raise RuntimeError("System validation failed. Aborting boot.")
@@ -266,7 +327,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
             config.set("vision_model", "file_path", str(optimized[0]))
         else:
             logger.info(
-                f"No cached {best_format} model found. Attempting conversion..."
+                "No cached %s model found. Attempting conversion...", best_format
             )
             pt_path = config.get("vision_model", {}).get("source_pt")
             if pt_path:
@@ -274,9 +335,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                 if not pt_full.is_absolute():
                     pt_full = _PROJECT_ROOT / pt_path
                 if not pt_full.exists():
-                    logger.warning(
-                        "Model missing in workspace, copying bundled _default_pose.pt"
-                    )
+                    logger.warning("Model missing, copying bundled _default_pose.pt")
                     bundled = _ASSETS_DIR / "_default_pose.pt"
                     target = _PROJECT_ROOT / "YoloModels/pytorch/_default_pose.pt"
                     target.parent.mkdir(parents=True, exist_ok=True)
