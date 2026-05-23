@@ -5,6 +5,9 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 from VisionCore.vision.ModelInspector import fill_missing_config
+import threading
+import queue
+import torch
 
 try:
     from rknnlite.api import RKNNLite
@@ -13,6 +16,73 @@ try:
 except ImportError:
     RKNN_FOUND = False
 
+class _GPUInferencePool:
+    def __init__(self, model_file: str, task: str, devices: list[int], input_size: tuple, min_conf: float):
+        # Removed maxsize to prevent deadlocks when submitting batches larger than the queue size
+        self._in_q  = queue.Queue()
+        self._out_q = queue.Queue()
+        self._input_size = (input_size[1], input_size[0])  # ultralytics wants (h, w)
+        self._min_conf = min_conf
+        self._n = len(devices)
+
+        self.logger = logging.getLogger(__name__)
+
+        for device in devices:
+            model = YOLO(model_file, task=task, verbose=False)
+            model.to(f"cuda:{device}")
+            threading.Thread(
+                target=self._worker,
+                args=(model, device),
+                daemon=True,
+                name=f"GPU{device}-Infer",
+            ).start()
+
+        self.logger.info("Multi-GPU inference pool: %d device(s) %s", len(devices), devices)
+
+    def _worker(self, model, device):
+        # 1. Prime the model directly in the worker thread to guarantee this GPU warms up
+        dummy_frame = np.zeros((self._input_size[1], self._input_size[0], 3), dtype=np.uint8)
+        model(dummy_frame, verbose=False, show=False, imgsz=self._input_size, device=device)
+
+        # 2. Main execution loop
+        while True:
+            item = self._in_q.get()
+            if item is None:
+                break
+            
+            idx, frame = item  # Unpack the index and the frame
+            
+            result = model(
+                frame,
+                verbose=False,
+                show=False,
+                imgsz=self._input_size,
+                conf=self._min_conf,
+                device=device,
+            )
+            result[0].orig_img = None
+            
+            # Put the index back with the result so we can sort them later
+            self._out_q.put((idx, result[0]))
+
+    def infer_batch(self, frames: list[np.ndarray]):
+        num_frames = len(frames)
+        
+        # 1. Push all frames into the queue with their original index
+        for idx, frame in enumerate(frames):
+            self._in_q.put((idx, frame))
+
+        # 2. Collect all results (they will likely come in out-of-order)
+        results = [None] * num_frames
+        for _ in range(num_frames):
+            idx, res = self._out_q.get()
+            results[idx] = res  # Slot it into the correct position
+
+        return results
+
+    def stop(self):
+        for _ in range(self._n):
+            self._in_q.put(None)
 
 def normalize_model_config(model_config: dict) -> dict:
     cfg = dict(model_config)
@@ -206,6 +276,33 @@ class GenericYolo:
             self.model_type = "yolo"
             self.model = YOLO(self.model_file, task=self.task, verbose=False)
             self.model.to(f"cuda:{self.device}")
+
+            # after self.model_type = "yolo" and self.model = YOLO(...)
+            self._pool: _GPUInferencePool | None = None
+
+            num_gpus = cfg.get("num_gpus", 1)
+            if num_gpus == "auto":
+                try:
+                    import torch
+                    num_gpus = torch.cuda.device_count()
+                except Exception:
+                    num_gpus = 1
+
+            if self.model_type == "yolo" and num_gpus > 1:
+                try:
+                    import torch
+                    available = torch.cuda.device_count()
+                    devices = list(range(min(num_gpus, available)))
+                    if len(devices) > 1:
+                        self._pool = _GPUInferencePool(
+                            model_file=self.model_file,
+                            task=self.task,
+                            devices=devices,
+                            input_size=self.input_size,
+                            min_conf=self.min_conf,
+                        )
+                except Exception as e:
+                    self.logger.warning("Multi-GPU pool failed, falling back to single GPU: %s", e)
         else:
             raise ValueError(f"Unsupported model file type: {self.model_file}")
 
@@ -344,30 +441,34 @@ class GenericYolo:
     def predict(self, frame_or_frames, orig_shape=None) -> "Results | list[Results]":
         is_list = isinstance(frame_or_frames, list)
         frames = frame_or_frames if is_list else [frame_or_frames]
-        results_list = []
+        
+        if self.model_type == "yolo" and self._pool is not None:
+            raw_results = self._pool.infer_batch(frames)
+            results_list = [self._convert_ultralytics_to_results(raw) for raw in raw_results]
+            return results_list if is_list else results_list[0]
 
+        results_list = []
         for frame in frames:
             target_shape = orig_shape if orig_shape is not None else frame.shape
             if self.model_type == "rknn":
-                results_list.append(
-                    self._run_rknn(self._preprocess_frame(frame), target_shape)
-                )
+                results_list.append(self._run_rknn(self._preprocess_frame(frame), target_shape))
             elif self.model_type == "onnx":
                 results_list.append(self._run_onnx(frame, target_shape))
             elif self.model_type == "tflite":
                 results_list.append(self._run_tflite(frame, target_shape))
             else:
+                # Single GPU fallback
                 result = self.model(
                     frame,
                     verbose=False,
                     show=False,
                     imgsz=(self.input_size[1], self.input_size[0]),
                     conf=self.min_conf,
-                    device=self.device,
                 )
                 result[0].orig_img = None
-                results_list.append(self._convert_ultralytics_to_results(result[0]))
-
+                result = self._convert_ultralytics_to_results(result[0])
+                results_list.append(result)
+                
         return results_list if is_list else results_list[0]
 
     def _dequantize_tensor(self, tensor: np.ndarray) -> np.ndarray:
@@ -704,3 +805,5 @@ class GenericYolo:
     def release(self):
         if self.model_type == "rknn":
             self.model.release()
+        if self._pool is not None:
+            self._pool.stop()

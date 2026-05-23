@@ -60,6 +60,7 @@ class VisionCoreConfig:
                 #     "min_keypoint_conf": 0.5,
                 # },
             },
+            "num_gpus": "auto",
             "device": 0,
             "unit": "meter",
             "debug_mode": True,
