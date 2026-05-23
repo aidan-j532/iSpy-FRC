@@ -60,6 +60,7 @@ class VisionCoreConfig:
                 #     "min_keypoint_conf": 0.5,
                 # },
             },
+            "device": 0,
             "unit": "meter",
             "debug_mode": True,
             "dbscan": {"elipson": 0.3, "min_samples": 3},

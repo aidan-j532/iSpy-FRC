@@ -159,6 +159,7 @@ class GenericYolo:
             visioncore_config.save(quiet=True)
 
         cfg = normalize_model_config(model_config)
+        self.device = cfg.get("device", 0)
 
         self.model_file = cfg["file_path"]
         self.task = cfg["task"]
@@ -204,7 +205,7 @@ class GenericYolo:
         ):
             self.model_type = "yolo"
             self.model = YOLO(self.model_file, task=self.task, verbose=False)
-
+            self.model.to(f"cuda:{self.device}")
         else:
             raise ValueError(f"Unsupported model file type: {self.model_file}")
 
@@ -362,6 +363,7 @@ class GenericYolo:
                     show=False,
                     imgsz=(self.input_size[1], self.input_size[0]),
                     conf=self.min_conf,
+                    device=self.device,
                 )
                 result[0].orig_img = None
                 results_list.append(self._convert_ultralytics_to_results(result[0]))

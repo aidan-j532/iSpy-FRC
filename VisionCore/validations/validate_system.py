@@ -265,7 +265,7 @@ def get_recommendations(config_path: str = "VisionCore/example_config.json") -> 
 
     return output
 
-def validate_quantization_dataset_wrapper(dataset_path: str = "dataset") -> bool:
+def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset") -> bool:
     result = validate_quantization_dataset(dataset_path)
     if result["valid"]:
         logger.info(

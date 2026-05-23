@@ -17,15 +17,14 @@ def inspect_model(model_path: str, task: str = "detect") -> dict:
         return _inspect_rknn(model_path, task)
     elif ext == ".tflite":
         return _inspect_tflite(model_path, task)
-    elif ext == ".pt" or "openvino_model" in suffix or ext == ".mlpackage":
+    elif ext == ".pt" or "openvino_model" in suffix or ext == ".mlpackage" or ext == ".engine":
         return _inspect_ultralytics(model_path, task)
     else:
         raise ValueError(f"Unsupported model extension: {ext}")
 
 
 def print_detected_config(result: dict) -> None:
-    import json
-
+    certain = result.pop("_certain_fields", [])
     detected = result.pop("_detected_fields", [])
     manual = result.pop("_manual_fields", [])
     warnings = result.pop("_warnings", [])
@@ -34,17 +33,17 @@ def print_detected_config(result: dict) -> None:
     print("  ModelInspector - Detected Config")
     print("=" * 65)
 
-    _print_dict(result, indent=0, detected_fields=detected)
+    _print_dict(result, indent=0, certain_fields=certain, detected_fields=detected)
 
     if warnings:
         print("\n Assumptions made:")
         for w in warnings:
-            print(f"   • {w}")
+            print(f"   - {w}")
 
     if manual:
         print("\n Fields to verify / set manually:")
         for f in manual:
-            print(f"   • {f}")
+            print(f"   - {f}")
 
     print("\n  Copy the block above into your config under 'vision_model'.")
     print("=" * 65 + "\n")
@@ -63,52 +62,56 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
     inp_meta = sess.get_inputs()[0]
     out_metas = sess.get_outputs()
 
-    detected, manual, warnings = [], [], []
+    certain, detected, manual, warnings = [], [], [], []
 
     inp_shape = inp_meta.shape
     inp_type = inp_meta.type
 
     layout, h, w, c = _parse_input_shape(inp_shape)
-    detected += ["input.layout", "input_size"]
+    certain += ["input.layout", "input_size"]
 
     ORT_DTYPE_MAP = {
-        "tensor(float)": "float32",
+        "tensor(float)":   "float32",
         "tensor(float32)": "float32",
-        "tensor(double)": "float32",
-        "tensor(uint8)": "uint8",
-        "tensor(int8)": "uint8",
+        "tensor(double)":  "float32",
+        "tensor(uint8)":   "uint8",
+        "tensor(int8)":    "uint8",
     }
     dtype = ORT_DTYPE_MAP.get(inp_type, "float32")
-    detected.append("input.dtype")
+    certain.append("input.dtype")
 
     normalize = dtype == "float32"
-    detected.append("input.normalize")
+    certain.append("input.normalize")
     if normalize:
-        warnings.append(
-            "input.dtype is float32 -> normalize=true, scale=255.0 assumed."
-        )
+        warnings.append("input.dtype is float32 -> normalize=true, scale=255.0 assumed.")
 
     out_meta = out_metas[0]
     out_shape = out_meta.shape
     out_type = out_meta.type
 
     quant = _ort_type_to_quantization(out_type)
-    detected.append("output.quantization")
+    certain.append("output.quantization")
 
     out_layout, n_anchors, feat_width = _parse_output_shape(out_shape)
-    detected.append("output.layout")
+    certain.append("output.layout")
 
     fmt, num_classes, score_mode, box_format, box_fmt_source = _detect_output_format(
         feat_width, task, warnings
     )
-    detected += ["output.format", "output.box_format", "output.score_mode"]
+
+    # hardware_nms detection from col count is reliable; raw format inference is not
+    if fmt == "hardware_nms":
+        certain.append("output.format")
+    else:
+        detected.append("output.format")
+
+    detected += ["output.box_format", "output.score_mode"]
+
     if num_classes is not None:
         detected.append("num_classes")
     else:
-        manual.append(
-            "num_classes  (could not be inferred - check your model's output width)"
-        )
-        num_classes = 1  # safe default
+        manual.append("num_classes  (could not be inferred - check your model's output width)")
+        num_classes = 1
 
     scores_are_logits = False
     warnings.append(
@@ -125,7 +128,7 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
         "task": task,
         "num_classes": num_classes,
         "input_size": [w, h],
-        "min_conf": 0.5,  # user preference - safe default
+        "min_conf": 0.5,
         "output": {
             "format": fmt,
             "layout": out_layout,
@@ -145,16 +148,15 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
             "normalize": normalize,
             **({"scale": 255.0} if normalize else {}),
         },
+        "_certain_fields": certain,
         "_detected_fields": detected,
-        "_manual_fields": manual
-        + [
+        "_manual_fields": manual + [
             "min_conf              (default 0.5 - adjust for your use-case)",
             "output.nms_iou        (default 0.45 - standard YOLO value)",
         ],
         "_warnings": warnings,
     }
 
-    # Quant scale is required if quantized
     if quant != "none" and "quant_scale" not in cfg["output"]:
         manual.append(
             "output.quant_scale  (required for int8/uint8 - check your quantization params)"
@@ -166,15 +168,17 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 def _inspect_rknn(model_path: str, task: str) -> dict:
     warnings = []
     manual = []
-    detected_fields = [
-        "input.layout",
-        "input.dtype",
-        "input.normalize",
-        "output.format",
-        "output.layout",
-        "output.box_format",
-        "output.quantization",
+
+    # These are RKNN hardware guarantees, not guesses
+    certain_fields = [
+        "input.layout",    # RKNN runtime always expects NHWC
+        "input.dtype",     # RKNN runtime always expects uint8
+        "input.normalize", # always false for uint8 input
     ]
+
+    # These are reasonable defaults but the inspector can't actually
+    # read RKNN output shapes without running inference
+    detected_fields = []
 
     result: dict[str, Any] = {
         "file_path": model_path,
@@ -206,13 +210,12 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
     if meta_path.exists():
         try:
             from ruamel.yaml import YAML
-
             meta = YAML(typ="safe").load(meta_path)
             if isinstance(meta, dict):
                 rknn_task = meta.get("task", "")
                 if rknn_task == "pose":
                     result["task"] = "pose"
-                    detected_fields.append("task")
+                    certain_fields.append("task")
                     kpt_shape = meta.get("kpt_shape")
                     if kpt_shape and len(kpt_shape) == 2:
                         n_kpts, kpt_dims = kpt_shape
@@ -221,7 +224,7 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                         out["keypoint_dims"] = int(kpt_dims)
                         out["keypoint_scores_are_logits"] = False
                         out["score_mode"] = "objectness"
-                        detected_fields += [
+                        certain_fields += [
                             "output.num_keypoints",
                             "output.keypoint_dims",
                             "output.keypoint_scores_are_logits",
@@ -231,34 +234,35 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                             "Pose model detected from metadata.yaml. "
                             "Verify keypoint ordering in your config."
                         )
+
                 names = meta.get("names")
                 if isinstance(names, dict):
                     num_names = len(names)
                     result["num_classes"] = num_names
-                    detected_fields.append("num_classes")
-                    if num_names > 1:
-                        result["output"]["score_mode"] = "multi_class"
-                        detected_fields.append("output.score_mode")
-                    else:
-                        result["output"]["score_mode"] = "objectness"
-                        detected_fields.append("output.score_mode")
+                    certain_fields.append("num_classes")
+                    score_mode = "objectness" if num_names == 1 else "multi_class"
+                    result["output"]["score_mode"] = score_mode
+                    certain_fields.append("output.score_mode")
+
         except Exception as e:
             warnings.append(f"Failed to parse metadata.yaml: {e}")
 
     if not result.get("output", {}).get("num_keypoints"):
         manual += [
             "input_size           (verify against your training config)",
-            "num_classes          (check your model output)",
             "output.format        (hardware_nms if end2end export, raw otherwise)",
             "output.layout        (features_first for Ultralytics exports)",
             "output.score_mode    (objectness for 1-class, multi_class otherwise)",
+            "output.quantization  (int8 default - check your rknn build config)",
         ]
         if not warnings:
             warnings.append(
                 "RKNN models carry limited metadata. "
-                "Input layout/size are inferred from RKNN conventions (NHWC uint8).",
+                "Input layout/size are inferred from RKNN conventions (NHWC uint8). "
+                "Output fields are defaults only - your config values will be kept."
             )
 
+    result["_certain_fields"] = certain_fields
     result["_detected_fields"] = detected_fields
     result["_manual_fields"] = manual
     result["_warnings"] = warnings
@@ -266,7 +270,7 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
 
 
 def _inspect_tflite(model_path: str, task: str) -> dict:
-    detected, manual, warnings = [], [], []
+    certain, detected, manual, warnings = [], [], [], []
 
     try:
         try:
@@ -279,36 +283,42 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
         inp_det = interp.get_input_details()[0]
         out_det = interp.get_output_details()[0]
 
-        inp_shape = inp_det["shape"]  # [1, H, W, C]  always NHWC for TFLite
+        inp_shape = inp_det["shape"]  # always [1, H, W, C] for TFLite
         out_shape = out_det["shape"]
 
         _, h, w, _ = inp_shape
-        detected += ["input.layout", "input_size"]
+        certain += ["input.layout", "input_size"]  # TFLite is always NHWC
 
         import numpy as np
-
         dtype = "float32" if inp_det["dtype"] == np.float32 else "uint8"
-        detected.append("input.dtype")
+        certain.append("input.dtype")
 
         normalize = dtype == "float32"
-        detected.append("input.normalize")
+        certain.append("input.normalize")
 
         quant_params = out_det.get("quantization_parameters", {})
         has_quant = bool(quant_params.get("scales", []))
         quant = (
-            "int8"
-            if out_det["dtype"] == np.int8
-            else "uint8" if out_det["dtype"] == np.uint8 else "none"
+            "int8"  if out_det["dtype"] == np.int8  else
+            "uint8" if out_det["dtype"] == np.uint8 else
+            "none"
         )
-        detected.append("output.quantization")
+        certain.append("output.quantization")
+        certain.append("output.layout")  # read from actual tensor shape
 
         out_layout, n_anchors, feat_width = _parse_output_shape(list(out_shape))
-        detected.append("output.layout")
 
         fmt, num_classes, score_mode, box_format, _ = _detect_output_format(
             feat_width, task, warnings
         )
-        detected += ["output.format", "output.box_format", "output.score_mode"]
+
+        if fmt == "hardware_nms":
+            certain.append("output.format")
+        else:
+            detected.append("output.format")
+
+        detected += ["output.box_format", "output.score_mode"]
+
         if num_classes is not None:
             detected.append("num_classes")
         else:
@@ -318,16 +328,10 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
         quant_scale = float(quant_params["scales"][0]) if has_quant else 255.0
 
     except Exception as e:
-        warnings.append(
-            f"Could not fully inspect TFLite model ({e}). Using safe defaults."
-        )
+        warnings.append(f"Could not fully inspect TFLite model ({e}). Using safe defaults.")
         w, h, dtype, normalize = 640, 640, "uint8", False
         out_layout, fmt, num_classes, score_mode, box_format = (
-            "anchors_first",
-            "raw",
-            1,
-            "objectness",
-            "cxcywh",
+            "anchors_first", "raw", 1, "objectness", "cxcywh",
         )
         quant, quant_scale = "none", 255.0
         manual += ["input_size", "num_classes", "output.format", "output.score_mode"]
@@ -350,20 +354,16 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
             **({"quant_scale": quant_scale} if quant != "none" else {}),
         },
         "input": {
-            "layout": "nhwc",  # TFLite is always NHWC
+            "layout": "nhwc",
             "dtype": dtype,
             "letterbox": True,
             "pad_value": 114,
             "normalize": normalize,
             **({"scale": 255.0} if normalize else {}),
         },
+        "_certain_fields": certain,
         "_detected_fields": detected,
-        "_manual_fields": manual
-        + [
-            "min_conf",
-            "output.nms_iou",
-            "output.scores_are_logits",
-        ],
+        "_manual_fields": manual + ["min_conf", "output.nms_iou", "output.scores_are_logits"],
         "_warnings": warnings,
     }
 
@@ -371,7 +371,6 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
 def _inspect_ultralytics(model_path: str, task: str) -> dict:
     try:
         from ultralytics import YOLO
-
         model = YOLO(model_path, task=task, verbose=False)
         model_task = getattr(model, "task", task) or task
         try:
@@ -403,8 +402,11 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
         num_keypoints, keypoint_dims = None, None
         input_size = [640, 640]
 
-    detected = [
+    # Ultralytics handles its own inference - all of these are reliable
+    certain = [
         "task",
+        "num_classes",
+        "input_size",
         "input.layout",
         "input.dtype",
         "input.normalize",
@@ -444,16 +446,16 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
         base["output"]["num_keypoints"] = num_keypoints
         base["output"]["keypoint_dims"] = keypoint_dims
         base["output"]["keypoint_scores_are_logits"] = False
-        detected += ["num_keypoints", "keypoint_dims"]
+        certain += ["output.num_keypoints", "output.keypoint_dims"]
 
-    base["_detected_fields"] = detected
+    base["_certain_fields"] = certain
+    base["_detected_fields"] = []
     base["_manual_fields"] = []
     base["_warnings"] = [
         ".pt / OpenVINO / CoreML models are handled by Ultralytics directly - "
         "input/output config fields are informational only and not used at runtime."
     ]
     return base
-
 
 def _parse_input_shape(shape) -> tuple[str, int, int, int]:
     def _to_int(v, fallback=640):
@@ -550,6 +552,7 @@ def _set_dotpath(d: dict, dotpath: str, value) -> None:
         d = d[key]
     d[keys[-1]] = value
 
+
 def fill_missing_config(model_config: dict) -> dict:
     model_path = model_config.get("file_path", "")
     if not model_path or not os.path.exists(model_path):
@@ -563,40 +566,39 @@ def fill_missing_config(model_config: dict) -> dict:
         logger.warning("ModelInspector could not inspect %s: %s", model_path, e)
         return model_config
 
+    certain_fields  = set(detected.pop("_certain_fields", []))
     detected_fields = set(detected.pop("_detected_fields", []))
     detected.pop("_manual_fields", None)
     detected.pop("_warnings", None)
 
     merged = _deep_merge_missing(detected, model_config)
 
-    corrections = []
-    for field_path in detected_fields:
+    for field_path in certain_fields | detected_fields:
         detected_val = _get_dotpath(detected, field_path)
         user_val     = _get_dotpath(model_config, field_path)
 
         if detected_val is None:
             continue
 
-        if user_val is not None and user_val != detected_val:
-            corrections.append((field_path, user_val, detected_val))
+        if user_val is None:
+            # Field is missing entirely — always fill it in
             _set_dotpath(merged, field_path, detected_val)
-        elif user_val is None:
-            logger.info(
-                "ModelInspector auto-filled  %-35s = %r", field_path, detected_val
-            )
-            _set_dotpath(merged, field_path, detected_val)
+            logger.info("Auto-filled  %-35s = %r", field_path, detected_val)
 
-    if corrections:
-        logger.warning(
-            "ModelInspector corrected %d config field(s) that did not match the model:",
-            len(corrections),
-        )
-        # for field_path, user_val, detected_val in corrections:
-        #     msg = "  %-38s  config=%r  ->  model says %r" % (
-        #         field_path, user_val, detected_val,
-        #     )
-        #     logger.warning(msg)
-        #     print(f"[ModelInspector]{msg}", file=sys.stderr)
+        elif user_val != detected_val:
+            if field_path in certain_fields:
+                # Inspector is certain — overwrite and warn loudly
+                _set_dotpath(merged, field_path, detected_val)
+                logger.warning(
+                    "Corrected    %-35s  your value=%r  model says=%r",
+                    field_path, user_val, detected_val,
+                )
+            else:
+                # Inspector is guessing — trust the user, just log at debug
+                logger.debug(
+                    "Keeping user %-35s = %r  (inspector guessed %r)",
+                    field_path, user_val, detected_val,
+                )
 
     return merged
 
@@ -611,13 +613,18 @@ def _deep_merge_missing(base: dict, override: dict) -> dict:
     return result
 
 
-def _print_dict(d: dict, indent: int, detected_fields: list, prefix: str = ""):
+def _print_dict(d: dict, indent: int, certain_fields: list, detected_fields: list, prefix: str = ""):
     for k, v in d.items():
         full_key = f"{prefix}.{k}" if prefix else k
         pad = "  " * indent
-        tag = " [OK]" if full_key in detected_fields else ""
+        if full_key in certain_fields:
+            tag = " [CERTAIN]"
+        elif full_key in detected_fields:
+            tag = " [GUESSED]"
+        else:
+            tag = ""
         if isinstance(v, dict):
             print(f"{pad}{k}:")
-            _print_dict(v, indent + 1, detected_fields, full_key)
+            _print_dict(v, indent + 1, certain_fields, detected_fields, full_key)
         else:
             print(f"{pad}{k}: {v!r}{tag}")

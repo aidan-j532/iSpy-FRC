@@ -1,16 +1,18 @@
 {
     "vision_model": {
-        "file_path": "C:\\Users\\RoboticsTeam\\Desktop\\VisionCore\\VisionCore-Deploy\\YoloModels\\pytorch\\nano\\dummy_openvino_model",
+        "file_path": "C:\\Users\\RoboticsTeam\\Desktop\\VisionCore\\VisionCore-Deploy\\YoloModels\\pytorch\\_default_pose_openvino_model",
         "task": "detect",
-        "num_classes": 80,
-        "input_size": [640, 640],
+        "num_classes": 1,
+        "input_size": [
+            640,
+            640
+        ],
         "min_conf": 0.5,
-        "margin": 10,
         "output": {
-            "format": "raw",
+            "format": "hardware_nms",
             "layout": "anchors_first",
-            "box_format": "cxcywh",
-            "score_mode": "multi_class",
+            "box_format": "xyxy",
+            "score_mode": "objectness",
             "scores_are_logits": false,
             "apply_software_nms": true,
             "nms_iou": 0.45,
@@ -21,8 +23,11 @@
             "dtype": "uint8",
             "letterbox": true,
             "pad_value": 114,
-            "normalize": false
-        }
+            "normalize": false,
+            "scale": 255.0
+        },
+        "source_pt": "YoloModels/pytorch/_default_pose.pt",
+        "margin": 10
     },
     "unit": "meter",
     "debug_mode": true,
@@ -37,8 +42,13 @@
     "auto_opt": true,
     "log_level": "INFO",
     "log_file": "Outputs/log.txt",
+    "use_network_tables": false,
+    "network_tables_ip": "10.0.0.2",
+    "metrics": true,
+    "app_mode": true,
     "camera_configs": {
-        "defualt_cam": {
+        "default_cam": {
+            "name": "default_cam",
             "source": 0,
             "pipeline": "object_detection",
             "fps_cap": 30,
@@ -47,6 +57,8 @@
             "height": 1.0,
             "x": 0,
             "y": 0,
+            "grayscale": false,
+            "subsystem": "field",
             "calibration": {
                 "distance": 0.0,
                 "game_piece_size": 0.0,
@@ -58,11 +70,11 @@
     "plugins": {
         "trackers": [
             "object_tracker",
-            "fuel",
             "path_planner"
         ],
         "utilities": [
-            "video_recorder"
+            "video_recorder",
+            "health_reporter"
         ]
     }
 }

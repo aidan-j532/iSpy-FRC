@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visioncore-frc"
-version = "2.10.17.32"
+version = "2.10.18.32"
 description = "FRC vision pipeline for custom, hardware accelerated object detection."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,7 +37,6 @@ dependencies = [
     "robotpy>=2024.0.0",
     "plotly>=5.0",
     "onnxruntime>=1.16.0",  # CPU ONNX fallback — works everywhere, used until boot picks a better backend
-    "tensorrt>=10.0.0"
 ]
 
 [project.optional-dependencies]
@@ -55,6 +54,10 @@ dev = [
     "snakeviz",
     "jupyter",
     "tensorboard",
+    "tensorrt>=10.0.0"
+]
+
+tensorrt = [
     "tensorrt>=10.0.0"
 ]
 

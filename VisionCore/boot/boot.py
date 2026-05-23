@@ -384,7 +384,7 @@ def convert_model(model_file, target_format, input_size, quantize=False):
 
     data_yaml = None
     if quantize:
-        result = validate_quantization_dataset(str(_PROJECT_ROOT / "dataset"))
+        result = validate_quantization_dataset(str(_PROJECT_ROOT / "QuantizeDataset"))
         if result["valid"]:
             data_yaml = str(_PROJECT_ROOT / "dataset" / "data.yaml")
         else:

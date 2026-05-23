@@ -241,7 +241,7 @@ class VisionCore:
         self._update_camera_app(frame, camera=camera)
 
         if self._detection_cleanup and fuel_list:
-            _, fuel_list = self._detection_cleanup.update_fuel_positions(fuel_list)
+            _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
 
         loop_s = time.perf_counter() - t0
 
@@ -277,7 +277,7 @@ class VisionCore:
         self._update_camera_app(frame, handler=handler)
 
         if self._detection_cleanup and fuel_list:
-            _, fuel_list = self._detection_cleanup.update_fuel_positions(fuel_list)
+            _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
 
         loop_s = time.perf_counter() - t0
 

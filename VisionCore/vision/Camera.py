@@ -6,7 +6,11 @@ import threading
 import subprocess
 from VisionCore.config.VisionCoreConfig import VisionCoreCameraConfig
 import platform
+from pathlib import Path
 
+
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+_ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
 
 class Camera:
 
@@ -66,6 +70,14 @@ class Camera:
         self, width: int = _PLACEHOLDER_W,
         height: int = _PLACEHOLDER_H,
     ) -> np.ndarray:
+        # Try to load the image first from assets/image.png
+        try:
+            placeholder = cv2.imread(str(_ASSETS_DIR / "camera_not_found.png"))
+            if placeholder is not None:
+                return cv2.resize(placeholder, (width, height))
+        except Exception as exc:
+            self.logger.debug(f"Could not load placeholder image: {exc}")
+        
         frame = np.full((height, width, 3), 40, dtype=np.uint8)
         text = "Camera Not Found"
         font = cv2.FONT_HERSHEY_SIMPLEX
