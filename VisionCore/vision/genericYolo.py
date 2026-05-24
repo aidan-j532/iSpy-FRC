@@ -222,6 +222,7 @@ class Results:
 class GenericYolo:
     def __init__(self, model_config: dict, core_mask=None, visioncore_config=None):
         self.logger = logging.getLogger(__name__)
+        self._visioncore_config = visioncore_config
         model_config = fill_missing_config(model_config)
 
         if visioncore_config is not None:
@@ -275,7 +276,8 @@ class GenericYolo:
         ):
             self.model_type = "yolo"
             self.model = YOLO(self.model_file, task=self.task, verbose=False)
-            self.model.to(f"cuda:{self.device}")
+            if self.model_file.endswith(".pt"):
+                self.model.to(f"cuda:{self.device}")
 
             # after self.model_type = "yolo" and self.model = YOLO(...)
             self._pool: _GPUInferencePool | None = None
@@ -464,6 +466,7 @@ class GenericYolo:
                     show=False,
                     imgsz=(self.input_size[1], self.input_size[0]),
                     conf=self.min_conf,
+                    device=self.device,
                 )
                 result[0].orig_img = None
                 result = self._convert_ultralytics_to_results(result[0])
@@ -482,7 +485,27 @@ class GenericYolo:
         raw_outputs = self.model.inference(inputs=[preprocessed])
         if raw_outputs is None:
             return Results([], orig_shape)
+
         tensor = self._dequantize_tensor(raw_outputs[0])
+
+        if not hasattr(self, '_rknn_fmt_verified'):
+            self._rknn_fmt_verified = True
+            t = tensor[0] if tensor.ndim == 3 else tensor
+            actual_fmt = "hardware_nms" if t.shape[-1] == 6 or t.shape[0] == 6 else "raw"
+
+            if actual_fmt != self.output["format"]:
+                self.logger.warning(
+                    "RKNN output shape %s says format should be %r but config has %r "
+                    "— correcting and saving to config.",
+                    tensor.shape, actual_fmt, self.output["format"],
+                )
+                self.output["format"] = actual_fmt
+                self.has_hardware_nms = actual_fmt == "hardware_nms"
+
+                if self._visioncore_config is not None:
+                    self._visioncore_config.set("vision_model", "output", "format", actual_fmt)
+                    self._visioncore_config.save(quiet=True)
+
         return self.postprocess([tensor], orig_shape)
 
     def _run_onnx(self, frame: np.ndarray, orig_shape) -> Results:

@@ -178,7 +178,13 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
 
     # These are reasonable defaults but the inspector can't actually
     # read RKNN output shapes without running inference
-    detected_fields = []
+    detected_fields = [
+        "output.format",      # hardware_nms is correct for all Ultralytics exports
+        "output.layout",
+        "output.box_format",
+        "output.score_mode",
+        "output.quantization",
+    ]
 
     result: dict[str, Any] = {
         "file_path": model_path,
@@ -187,12 +193,12 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
         "input_size": [640, 640],
         "min_conf": 0.5,
         "output": {
-            "format": "raw",
-            "layout": "features_first",
-            "box_format": "cxcywh",
+            "format": "hardware_nms",  # Ultralytics RKNN exports are always end2end NMS
+            "layout": "anchors_first",
+            "box_format": "xyxy",
             "score_mode": "objectness",
             "scores_are_logits": False,
-            "apply_software_nms": True,
+            "apply_software_nms": False,
             "nms_iou": 0.45,
             "quantization": "int8",
             "quant_scale": 255.0,
