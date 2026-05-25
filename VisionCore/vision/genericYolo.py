@@ -277,7 +277,7 @@ class GenericYolo:
             self.model = RKNNLite()
             if self.model.load_rknn(self.model_file) != 0:
                 raise ValueError(f"Failed to load RKNN model: {self.model_file}")
-            if self.model.init_runtime(core_mask=(core_mask if core_mask is not None else 0)) != 0:
+            if self.model.init_runtime(core_mask=(core_mask if core_mask is not None else 7)) != 0:
                 raise ValueError(f"Failed to init RKNN runtime: {self.model_file}")
 
         elif self.model_file.endswith(".onnx"):
