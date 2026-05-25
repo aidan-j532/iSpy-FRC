@@ -268,9 +268,9 @@ def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
                 pass
 
         # Output format — known because WE did the conversion
-        # Standard ONNX → RKNN (no end2end NMS), RKNN compiler transposes to anchors_first
+        # ONNX output is (feat, anchors), RKNN compiler preserves this layout
         meta["output_format"] = "raw"
-        meta["output_layout"] = "anchors_first"
+        meta["output_layout"] = "features_first"
         meta["box_format"] = "cxcywh"
         meta["quantization"] = "int8"
         meta["quant_scale"] = 255.0
