@@ -120,7 +120,7 @@ def _is_installed(module_name: str) -> bool:
 
 
 def _pip_install(install_target: str) -> bool:
-    cmd = [sys.executable, "-m", "pip", "install", install_target]
+    cmd = [sys.executable, "-m", "pip", "install", "--no-deps", install_target]
     if not _in_virtualenv():
         cmd.append("--break-system-packages")
     try:
@@ -133,7 +133,7 @@ def _pip_install(install_target: str) -> bool:
 
 
 def install_special_dependencies(auto_install: bool = False):
-    backend = recommend_format()
+    backend = recommend_format(ignore_dependencies=True)
     logger.info("Recommended backend: %s", backend)
 
     deps = BACKEND_DEPENDENCIES.get(backend)
@@ -248,43 +248,81 @@ def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
         from ruamel.yaml import YAML
 
         model = ultralytics.YOLO(pt_file, verbose=False)
-
         meta = {}
-
         model_task = getattr(model, "task", "detect") or "detect"
         meta["task"] = model_task
-
         try:
             nc = int(model.model.model[-1].nc)
             meta["nc"] = nc
-        except Exception:
-            pass
-
-        try:
             names = getattr(model, "names", None)
-            if names is not None and isinstance(names, dict):
+            if names and isinstance(names, dict):
                 meta["names"] = names
         except Exception:
             pass
-
         if model_task == "pose":
             try:
                 kpt_shape = model.model.model[-1].kpt_shape
-                if kpt_shape is not None and len(kpt_shape) == 2:
+                if kpt_shape and len(kpt_shape) == 2:
                     meta["kpt_shape"] = [int(kpt_shape[0]), int(kpt_shape[1])]
             except Exception:
                 pass
+
+        # Output format — known because WE did the conversion
+        # Standard ONNX → RKNN (no end2end NMS), RKNN compiler transposes to anchors_first
+        meta["output_format"] = "raw"
+        meta["output_layout"] = "anchors_first"
+        meta["box_format"] = "cxcywh"
+        meta["quantization"] = "int8"
+        meta["quant_scale"] = 255.0
 
         meta_path = rknn_output.parent / "metadata.yaml"
         yaml = YAML()
         yaml.default_flow_style = False
         with open(meta_path, "w") as f:
             yaml.dump(meta, f)
-
         logger.info("Exported RKNN metadata: %s", meta_path)
     except Exception as e:
         logger.warning("Failed to export RKNN metadata: %s", e)
 
+def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
+    try:
+        import ultralytics
+        from ruamel.yaml import YAML
+
+        model = ultralytics.YOLO(pt_file, verbose=False)
+        meta = {}
+        model_task = getattr(model, "task", "detect") or "detect"
+        meta["task"] = model_task
+        try:
+            nc = int(model.model.model[-1].nc)
+            meta["nc"] = nc
+            names = getattr(model, "names", None)
+            if names and isinstance(names, dict):
+                meta["names"] = names
+        except Exception:
+            pass
+        if model_task == "pose":
+            try:
+                kpt_shape = model.model.model[-1].kpt_shape
+                if kpt_shape and len(kpt_shape) == 2:
+                    meta["kpt_shape"] = [int(kpt_shape[0]), int(kpt_shape[1])]
+            except Exception:
+                pass
+
+        # Standard Ultralytics ONNX export output format
+        meta["output_format"] = "raw"
+        meta["output_layout"] = "features_first"
+        meta["box_format"] = "cxcywh"
+        meta["quantization"] = "none"
+
+        meta_path = onnx_output.parent / "metadata.yaml"
+        yaml = YAML()
+        yaml.default_flow_style = False
+        with open(meta_path, "w") as f:
+            yaml.dump(meta, f)
+        logger.info("Exported ONNX metadata: %s", meta_path)
+    except Exception as e:
+        logger.warning("Failed to export ONNX metadata: %s", e)
 
 def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
     pt_path = Path(pt_file)
@@ -404,6 +442,8 @@ def convert_model(model_file, target_format, input_size, quantize=False):
         result_path = Path(result)
         if result_path.exists():
             logger.info("%s export successful: %s", target_format, result_path)
+            if target_format == "onnx":
+                _export_onnx_metadata(model_file, result_path)
             return str(result_path)
 
     if target_format == "tflite":

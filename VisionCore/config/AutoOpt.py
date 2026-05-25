@@ -141,7 +141,7 @@ def has_rockchip_npu() -> bool:
     return False
 
 
-def recommend_format() -> str:
+def recommend_format(ignore_dependencies: bool = False) -> str:
     # 1. Dedicated embedded NPUs / TPUs
     if has_rockchip_npu():
         logger.info("Rockchip NPU detected - using RKNN format for hardware acceleration.")
@@ -157,9 +157,9 @@ def recommend_format() -> str:
 
     # 3. NVIDIA - prefer TensorRT engine over raw ONNX for max FPS     ─
     if has_nvidia():
-        if has_tensorrt():
+        if has_tensorrt() or ignore_dependencies:
             logger.info(
-                "NVIDIA GPU + TensorRT detected - using .engine format for maximum FPS."
+                "NVIDIA GPU detected - using .engine format for maximum FPS."
             )
             return "engine"
         logger.info(

@@ -123,6 +123,13 @@ def _export_rknn_metadata(pt_file: str, rknn_output_path: str) -> None:
             except Exception:
                 pass
 
+        # Output format — known because WE did the conversion
+        meta["output_format"] = "raw"
+        meta["output_layout"] = "anchors_first"
+        meta["box_format"] = "cxcywh"
+        meta["quantization"] = "int8"
+        meta["quant_scale"] = 255.0
+
         meta_path = Path(rknn_output_path).parent / "metadata.yaml"
         yaml = YAML()
         yaml.default_flow_style = False

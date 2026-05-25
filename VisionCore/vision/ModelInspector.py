@@ -64,6 +64,31 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 
     certain, detected, manual, warnings = [], [], [], []
 
+    # Check for metadata.yaml saved by VisionCore during conversion
+    meta_path = Path(model_path).parent / "metadata.yaml"
+    meta_task = task
+    meta_nc = None
+    meta_kpt_shape = None
+    meta_output_format = None
+    meta_output_layout = None
+    meta_box_format = None
+    meta_quantization = None
+
+    if meta_path.exists():
+        try:
+            from ruamel.yaml import YAML
+            meta = YAML(typ="safe").load(meta_path)
+            if isinstance(meta, dict):
+                meta_task = meta.get("task", task)
+                meta_nc = meta.get("nc")
+                meta_kpt_shape = meta.get("kpt_shape")
+                meta_output_format = meta.get("output_format")
+                meta_output_layout = meta.get("output_layout")
+                meta_box_format = meta.get("box_format")
+                meta_quantization = meta.get("quantization")
+        except Exception as e:
+            warnings.append(f"Failed to read metadata.yaml: {e}")
+
     inp_shape = inp_meta.shape
     inp_type = inp_meta.type
 
@@ -123,6 +148,32 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
         "true if custom/raw export without sigmoid)"
     )
 
+    # Override tensor-inferred values with ground-truth metadata when available
+    if meta_nc is not None:
+        num_classes = meta_nc
+        certain.append("num_classes")
+    if meta_task != task:
+        task = meta_task
+        certain.append("task")
+    if meta_kpt_shape:
+        certain += [
+            "output.num_keypoints",
+            "output.keypoint_dims",
+            "output.keypoint_scores_are_logits",
+        ]
+    if meta_output_format:
+        fmt = meta_output_format
+        certain.append("output.format")
+    if meta_output_layout:
+        out_layout = meta_output_layout
+        certain.append("output.layout")
+    if meta_box_format:
+        box_format = meta_box_format
+        certain.append("output.box_format")
+    if meta_quantization:
+        quant = meta_quantization
+        certain.append("output.quantization")
+
     cfg = {
         "file_path": model_path,
         "task": task,
@@ -139,6 +190,10 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
             "nms_iou": 0.45,
             "quantization": quant,
             **({"quant_scale": 255.0} if quant != "none" else {}),
+            **({"num_keypoints": meta_kpt_shape[0],
+                "keypoint_dims": meta_kpt_shape[1],
+                "keypoint_scores_are_logits": False}
+               if meta_kpt_shape else {}),
         },
         "input": {
             "layout": layout,
@@ -249,6 +304,31 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                     score_mode = "objectness" if num_names == 1 else "multi_class"
                     result["output"]["score_mode"] = score_mode
                     certain_fields.append("output.score_mode")
+
+                meta_output_format = meta.get("output_format")
+                if meta_output_format:
+                    result["output"]["format"] = meta_output_format
+                    certain_fields.append("output.format")
+
+                meta_output_layout = meta.get("output_layout")
+                if meta_output_layout:
+                    result["output"]["layout"] = meta_output_layout
+                    certain_fields.append("output.layout")
+
+                meta_box_format = meta.get("box_format")
+                if meta_box_format:
+                    result["output"]["box_format"] = meta_box_format
+                    certain_fields.append("output.box_format")
+
+                meta_quant = meta.get("quantization")
+                if meta_quant:
+                    result["output"]["quantization"] = meta_quant
+                    certain_fields.append("output.quantization")
+
+                meta_scale = meta.get("quant_scale")
+                if meta_scale is not None:
+                    result["output"]["quant_scale"] = float(meta_scale)
+                    certain_fields.append("output.quant_scale")
 
         except Exception as e:
             warnings.append(f"Failed to parse metadata.yaml: {e}")
