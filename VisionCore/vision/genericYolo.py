@@ -231,6 +231,28 @@ class GenericYolo:
 
         cfg = normalize_model_config(model_config)
         self.device = cfg.get("device", 0)
+        requested_device = cfg.get("device", 0)
+
+        try:
+            import torch
+            cuda_ok = (
+                torch.cuda.is_available()
+                and isinstance(requested_device, int)
+                and requested_device < torch.cuda.device_count()
+            )
+        except Exception:
+            cuda_ok = False
+
+        if not cuda_ok and requested_device != "cpu":
+            self.logger.info(
+                "Device %r not available (CUDA=%s, count=%d) — falling back to CPU",
+                requested_device,
+                torch.cuda.is_available() if 'torch' in dir() else False,
+                torch.cuda.device_count() if 'torch' in dir() else 0,
+            )
+            self.device = "cpu"
+        else:
+            self.device = requested_device
 
         self.model_file = cfg["file_path"]
         self.task = cfg["task"]
