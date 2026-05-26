@@ -331,12 +331,10 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
     stem = pt_path.stem
     parent = pt_path.parent
 
-    # step 1: .pt -> ONNX via Ultralytics
     onnx_path = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
     if not onnx_path.exists():
         raise RuntimeError(f"Intermediate ONNX export failed: {onnx_path}")
 
-    # step 2: ONNX -> RKNN via rknn-toolkit2
     try:
         from rknn.api import RKNN
     except ImportError:
@@ -344,7 +342,6 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
             "RKNN Toolkit not found. Install it to convert to RKNN format."
         )
 
-    # Auto-provision calibration dataset if missing
     prepare_quantization_dataset(dataset_path, boot=True)
     dataset_txt = Path(dataset_path) / "dataset.txt"
     if not dataset_txt.exists() or not dataset_txt.read_text().strip():
@@ -402,7 +399,7 @@ def convert_model(model_file, target_format, input_size, quantize=False):
         return _convert_rknn(
             pt_file=model_file,
             input_size=input_size,
-            dataset_path=str(_PROJECT_ROOT / "dataset"),
+            dataset_path=str(_PROJECT_ROOT / "QuantizeDataset"),
         )
 
     expected = {
@@ -424,7 +421,8 @@ def convert_model(model_file, target_format, input_size, quantize=False):
             logger.info("Cached %s model found: %s", target_format, out)
             return str(out)
 
-    dataset_root = str(_PROJECT_ROOT / "dataset")
+    dataset_root = str(_PROJECT_ROOT / "QuantizeDataset")
+    data_yaml = None
     if quantize:
         prepare_quantization_dataset(dataset_root, boot=True)
         data_yaml = str(Path(dataset_root) / "data.yaml")
