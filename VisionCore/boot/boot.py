@@ -120,7 +120,12 @@ def _is_installed(module_name: str) -> bool:
 
 
 def _pip_install(install_target: str) -> bool:
-    cmd = [sys.executable, "-m", "pip", "install", "--no-deps", install_target]
+    cmd = [sys.executable, "-m", "pip", "install"]
+    # Only use --no-deps for wheel URLs (RKNN) to avoid pulling in
+    # conflicting transitive deps; regular pip packages need their deps
+    if install_target.startswith("http") or install_target.endswith(".whl"):
+        cmd.append("--no-deps")
+    cmd.append(install_target)
     if not _in_virtualenv():
         cmd.append("--break-system-packages")
     try:
