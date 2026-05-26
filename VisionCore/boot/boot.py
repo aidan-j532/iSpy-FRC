@@ -23,10 +23,7 @@ from VisionCore.config.AutoOpt import recommend_format
 from VisionCore.validations.validate_system import validate_system
 from VisionCore.validations.model_validator import enforce_model_organization
 from VisionCore.config.VisionCoreConfig import VisionCoreConfig
-from VisionCore.dataset.dataset import (
-    prepare_quantization_dataset,
-    validate_quantization_dataset,
-)
+from VisionCore.dataset.dataset import prepare_quantization_dataset
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -347,11 +344,13 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
             "RKNN Toolkit not found. Install it to convert to RKNN format."
         )
 
+    # Auto-provision calibration dataset if missing
+    prepare_quantization_dataset(dataset_path, boot=True)
     dataset_txt = Path(dataset_path) / "dataset.txt"
-    if not dataset_txt.exists():
-        raise FileNotFoundError(f"RKNN calibration dataset not found: {dataset_txt}")
-    if not dataset_txt.read_text().strip():
-        raise ValueError(f"RKNN calibration dataset is empty: {dataset_txt}")
+    if not dataset_txt.exists() or not dataset_txt.read_text().strip():
+        raise FileNotFoundError(
+            f"RKNN calibration dataset could not be prepared at: {dataset_txt}"
+        )
 
     rknn_output = parent / f"{stem}.rknn"
     logger.info("Converting ONNX -> RKNN with dataset=%s", dataset_txt)
@@ -425,17 +424,12 @@ def convert_model(model_file, target_format, input_size, quantize=False):
             logger.info("Cached %s model found: %s", target_format, out)
             return str(out)
 
-    data_yaml = None
+    dataset_root = str(_PROJECT_ROOT / "dataset")
     if quantize:
-        result = validate_quantization_dataset(str(_PROJECT_ROOT / "QuantizeDataset"))
-        if result["valid"]:
-            data_yaml = str(_PROJECT_ROOT / "dataset" / "data.yaml")
-        else:
-            logger.warning(
-                "Quantization dataset invalid — skipping dataset-aware quantize"
-            )
-            for issue in result["issues"]:
-                logger.warning("  dataset issue: %s", issue)
+        prepare_quantization_dataset(dataset_root, boot=True)
+        data_yaml = str(Path(dataset_root) / "data.yaml")
+    else:
+        Path(dataset_root).mkdir(parents=True, exist_ok=True)
 
     try:
         result = _export_ultralytics(model_file, target_format, input_size, data_yaml)
