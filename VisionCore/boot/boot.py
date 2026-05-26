@@ -504,7 +504,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
     if config.get("auto_opt"):
         install_special_dependencies(auto_install=True)
 
-        best_format = recommend_format()
+        best_format = recommend_format(ignore_dependencies=True)
         logger.info("Auto-opt enabled. Recommended format: %s", best_format)
         matcher = FORMAT_MATCHERS.get(best_format)
         if not matcher:
