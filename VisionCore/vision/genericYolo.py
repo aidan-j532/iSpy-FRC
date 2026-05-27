@@ -466,10 +466,10 @@ class GenericYolo:
         is_list = isinstance(frame_or_frames, list)
         frames = frame_or_frames if is_list else [frame_or_frames]
         
-        if self.model_type == "yolo" and self._pool is not None:
+        if self.model_type == "yolo" and self._pool is not None and is_list:
             raw_results = self._pool.infer_batch(frames)
             results_list = [self._convert_ultralytics_to_results(raw) for raw in raw_results]
-            return results_list if is_list else results_list[0]
+            return results_list
 
         results_list = []
         for frame in frames:
