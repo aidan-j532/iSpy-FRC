@@ -89,7 +89,7 @@ def _rknn_wheel_url() -> str | None:
 def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
     deps: dict[str, list[tuple[str, str]]] = {
         "onnx": [("onnxruntime", "onnxruntime")],
-        "engine": [("tensorrt", "tensorrt<10.0.0")],
+        "engine": [("tensorrt", "tensorrt")],
         "openvino": [("openvino", "openvino")],
         "coreml": [("coremltools", "coremltools")],
         "tflite": [("tflite_runtime", "tflite-runtime")],
@@ -286,7 +286,23 @@ def search_for_config():
     return str(chosen)
 
 
+def _patch_tensorrt_for_ultralytics():
+    try:
+        import tensorrt as trt
+    except ImportError:
+        return
+    if not hasattr(trt.NetworkDefinitionCreationFlag, "EXPLICIT_BATCH"):
+        trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH = 0
+        logger.info(
+            "Monkey-patched missing trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH "
+            "for TensorRT %s compatibility", trt.__version__
+        )
+
+
 def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
+    if target_format == "engine":
+        _patch_tensorrt_for_ultralytics()
+
     model = ultralytics.YOLO(model_file)
 
     native_kwargs = {

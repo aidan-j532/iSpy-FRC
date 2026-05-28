@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visioncore-frc"
-version = "2.10.21.40"
+version = "2.10.21.41"
 description = "FRC vision pipeline for custom, hardware accelerated object detection."
 readme = "README.md"
 requires-python = ">=3.10"
