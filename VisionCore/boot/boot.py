@@ -88,7 +88,7 @@ def _rknn_wheel_url() -> str | None:
 def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
     deps: dict[str, list[tuple[str, str]]] = {
         "onnx": [("onnxruntime", "onnxruntime")],
-        "engine": [("tensorrt", "tensorrt")],
+        "engine": [("tensorrt", "tensorrt<10.0.0")],
         "openvino": [("openvino", "openvino")],
         "coreml": [("coremltools", "coremltools")],
         "tflite": [("tflite_runtime", "tflite-runtime")],
@@ -431,6 +431,15 @@ def convert_model(model_file, target_format, input_size, quantize=False):
 
     try:
         result = _export_ultralytics(model_file, target_format, input_size, data_yaml)
+    except AttributeError as e:
+        if "EXPLICIT_BATCH" in str(e):
+            logger.error(
+                "TensorRT 10+ is incompatible with the ultralytics export path. "
+                "Skipping engine conversion. Falling back to .pt."
+            )
+        else:
+            logger.error("Conversion to %s failed: %s", target_format, e, exc_info=True)
+        return model_file
     except Exception as e:
         logger.error("Conversion to %s failed: %s", target_format, e, exc_info=True)
         return model_file
