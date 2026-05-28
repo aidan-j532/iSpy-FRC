@@ -89,7 +89,7 @@ def _rknn_wheel_url() -> str | None:
 def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
     deps: dict[str, list[tuple[str, str]]] = {
         "onnx": [("onnxruntime", "onnxruntime")],
-        "engine": [("tensorrt", "tensorrt")],
+        "engine": [("tensorrt", "tensorrt==10.16.1.11")],
         "openvino": [("openvino", "openvino")],
         "coreml": [("coremltools", "coremltools")],
         "tflite": [("tflite_runtime", "tflite-runtime")],
@@ -159,8 +159,6 @@ def _check_version_constraint(package_name: str, constraint: str) -> bool:
 
 def _pip_install(install_target: str, force_reinstall: bool = False) -> bool:
     cmd = [sys.executable, "-m", "pip", "install"]
-    # Only use --no-deps for wheel URLs (RKNN) to avoid pulling in
-    # conflicting transitive deps; regular pip packages need their deps
     if install_target.startswith("http") or install_target.endswith(".whl"):
         cmd.append("--no-deps")
     if force_reinstall:
@@ -286,23 +284,7 @@ def search_for_config():
     return str(chosen)
 
 
-def _patch_tensorrt_for_ultralytics():
-    try:
-        import tensorrt as trt
-    except ImportError:
-        return
-    if not hasattr(trt.NetworkDefinitionCreationFlag, "EXPLICIT_BATCH"):
-        trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH = 0
-        logger.info(
-            "Monkey-patched missing trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH "
-            "for TensorRT %s compatibility", trt.__version__
-        )
-
-
 def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
-    if target_format == "engine":
-        _patch_tensorrt_for_ultralytics()
-
     model = ultralytics.YOLO(model_file)
 
     native_kwargs = {
@@ -352,8 +334,6 @@ def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
             except Exception:
                 pass
 
-        # Output format — known because WE did the conversion
-        # ONNX output is (feat, anchors), RKNN compiler preserves this layout
         meta["output_format"] = "raw"
         meta["output_layout"] = "features_first"
         meta["box_format"] = "cxcywh"
@@ -394,7 +374,6 @@ def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
             except Exception:
                 pass
 
-        # Standard Ultralytics ONNX export output format
         meta["output_format"] = "raw"
         meta["output_layout"] = "features_first"
         meta["box_format"] = "cxcywh"
