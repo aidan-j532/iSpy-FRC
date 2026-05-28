@@ -18,40 +18,44 @@ except ImportError:
 
 class _GPUInferencePool:
     def __init__(self, model_file: str, task: str, devices: list[int], input_size: tuple, min_conf: float):
-        # Removed maxsize to prevent deadlocks when submitting batches larger than the queue size
         self._in_q  = queue.Queue()
         self._out_q = queue.Queue()
-        self._input_size = (input_size[1], input_size[0])  # ultralytics wants (h, w)
+        self._input_size = (input_size[1], input_size[0])
         self._min_conf = min_conf
         self._n = len(devices)
+        self._model_file = model_file
+        self._task = task
 
         self.logger = logging.getLogger(__name__)
 
         for device in devices:
-            model = YOLO(model_file, task=task, verbose=False)
-            model.to(f"cuda:{device}")
             threading.Thread(
                 target=self._worker,
-                args=(model, device),
+                args=(device,),
                 daemon=True,
                 name=f"GPU{device}-Infer",
             ).start()
 
         self.logger.info("Multi-GPU inference pool: %d device(s) %s", len(devices), devices)
 
-    def _worker(self, model, device):
-        # 1. Prime the model directly in the worker thread to guarantee this GPU warms up
+    def _worker(self, device):
+        # Load model INSIDE the worker thread so TensorRT creates a context on this GPU
+        import torch
+        torch.cuda.set_device(device)
+        model = YOLO(self._model_file, task=self._task, verbose=False)
+        if self._model_file.endswith(".pt"):
+            model.to(f"cuda:{device}")
+
         dummy_frame = np.zeros((self._input_size[1], self._input_size[0], 3), dtype=np.uint8)
         model(dummy_frame, verbose=False, show=False, imgsz=self._input_size, device=device)
 
-        # 2. Main execution loop
         while True:
             item = self._in_q.get()
             if item is None:
                 break
-            
-            idx, frame = item  # Unpack the index and the frame
-            
+
+            idx, frame = item
+
             result = model(
                 frame,
                 verbose=False,
@@ -61,8 +65,7 @@ class _GPUInferencePool:
                 device=device,
             )
             result[0].orig_img = None
-            
-            # Put the index back with the result so we can sort them later
+
             self._out_q.put((idx, result[0]))
 
     def infer_batch(self, frames: list[np.ndarray]):
@@ -104,6 +107,11 @@ def normalize_model_config(model_config: dict) -> dict:
 
     if "input" in cfg:
         cfg["input"] = _validate_input_block(dict(cfg["input"]))
+
+    frame_batches = int(cfg.get("frame_batches", 1))
+    if frame_batches < 1:
+        raise ValueError("frame_batches must be >= 1.")
+    cfg["frame_batches"] = frame_batches
 
     return cfg
 
@@ -259,6 +267,7 @@ class GenericYolo:
         self.num_classes = int(cfg["num_classes"])
         self.input_size = tuple(cfg["input_size"])
         self.min_conf = float(cfg["min_conf"]) if "min_conf" in cfg else 0.25
+        self.frame_batches = cfg.get("frame_batches", 1)
         self.output = cfg["output"]
         self.pnp_config = cfg.get("pnp")
         self.input = cfg.get("input")
@@ -301,7 +310,6 @@ class GenericYolo:
             if self.model_file.endswith(".pt"):
                 self.model.to(f"cuda:{self.device}")
 
-            # after self.model_type = "yolo" and self.model = YOLO(...)
             self._pool: _GPUInferencePool | None = None
 
             num_gpus = cfg.get("num_gpus", 1)
@@ -330,6 +338,8 @@ class GenericYolo:
         else:
             raise ValueError(f"Unsupported model file type: {self.model_file}")
 
+        self._output_verified = False
+        self._feat_width = 0
         self.logger.info(
             "GenericYolo loaded: %s  type=%s  task=%s  output=%s",
             self.model_file,
@@ -468,31 +478,41 @@ class GenericYolo:
         
         if self.model_type == "yolo" and self._pool is not None and is_list:
             raw_results = self._pool.infer_batch(frames)
-            results_list = [self._convert_ultralytics_to_results(raw) for raw in raw_results]
-            return results_list
+            return [self._convert_ultralytics_to_results(raw) for raw in raw_results]
 
         results_list = []
-        for frame in frames:
-            target_shape = orig_shape if orig_shape is not None else frame.shape
-            if self.model_type == "rknn":
-                results_list.append(self._run_rknn(self._preprocess_frame(frame), target_shape))
-            elif self.model_type == "onnx":
-                results_list.append(self._run_onnx(frame, target_shape))
-            elif self.model_type == "tflite":
-                results_list.append(self._run_tflite(frame, target_shape))
-            else:
-                # Single GPU fallback
-                result = self.model(
-                    frame,
-                    verbose=False,
-                    show=False,
-                    imgsz=(self.input_size[1], self.input_size[0]),
-                    conf=self.min_conf,
-                    device=self.device,
-                )
-                result[0].orig_img = None
-                result = self._convert_ultralytics_to_results(result[0])
-                results_list.append(result)
+        if self.model_type == "yolo" and is_list and len(frames) > 1:
+            raw_results = self.model(
+                frames,
+                verbose=False,
+                show=False,
+                imgsz=(self.input_size[1], self.input_size[0]),
+                conf=self.min_conf,
+                device=self.device,
+            )
+            for r in raw_results:
+                r.orig_img = None
+                results_list.append(self._convert_ultralytics_to_results(r))
+        else:
+            for frame in frames:
+                target_shape = orig_shape if orig_shape is not None else frame.shape
+                if self.model_type == "rknn":
+                    results_list.append(self._run_rknn(self._preprocess_frame(frame), target_shape))
+                elif self.model_type == "onnx":
+                    results_list.append(self._run_onnx(frame, target_shape))
+                elif self.model_type == "tflite":
+                    results_list.append(self._run_tflite(frame, target_shape))
+                else:
+                    result = self.model(
+                        frame,
+                        verbose=False,
+                        show=False,
+                        imgsz=(self.input_size[1], self.input_size[0]),
+                        conf=self.min_conf,
+                        device=self.device,
+                    )
+                    result[0].orig_img = None
+                    results_list.append(self._convert_ultralytics_to_results(result[0]))
                 
         return results_list if is_list else results_list[0]
 
@@ -560,16 +580,26 @@ class GenericYolo:
             tensor = tensor[0]
         if tensor.ndim == 3 and tensor.shape[0] == 1:
             tensor = tensor[0]
-        if tensor.ndim != 2:
-            raise ValueError(f"Expected 2D output tensor, got shape {tensor.shape}.")
+        if not self._output_verified:
+            self._verify_output_format(tensor)
         if self.output["format"] == "hardware_nms":
             return tensor
 
-        feat_w = self._feature_width()
+        feat_w = self._feat_width
         if self.output["layout"] == "features_first":
             if tensor.shape[0] == feat_w:
                 tensor = tensor.T
-            elif tensor.shape[1] != feat_w:
+        return tensor
+
+    def _verify_output_format(self, tensor: np.ndarray) -> None:
+        if tensor.ndim != 2:
+            raise ValueError(f"Expected 2D output tensor, got shape {tensor.shape}.")
+        if self.output["format"] == "hardware_nms":
+            self._output_verified = True
+            return
+        feat_w = self._feature_width()
+        if self.output["layout"] == "features_first":
+            if not (tensor.shape[0] == feat_w or tensor.shape[1] == feat_w):
                 raise ValueError(
                     f"Tensor shape {tensor.shape} vs feature width {feat_w}."
                 )
@@ -580,7 +610,8 @@ class GenericYolo:
                     "Set output.layout to 'features_first'."
                 )
             raise ValueError(f"Tensor shape {tensor.shape} vs feature width {feat_w}.")
-        return tensor
+        self._feat_width = feat_w
+        self._output_verified = True
 
     def _apply_score_activation(
         self, scores: np.ndarray, are_logits: bool
@@ -809,34 +840,29 @@ class GenericYolo:
 
     def _convert_ultralytics_to_results(self, ultralytics_result) -> Results:
         boxes = []
+        _is_torch = False
         for b in ultralytics_result.boxes:
             xyxy = b.xyxy
-            if hasattr(xyxy, "cpu"):
+            if not _is_torch:
+                _is_torch = hasattr(xyxy, "cpu")
+            if _is_torch:
                 xyxy = xyxy.cpu().numpy()
-            xyxy = np.asarray(xyxy)
+                conf = b.conf.cpu().item()
+                cls_id = b.cls.cpu().item() if hasattr(b, "cls") else 0
+            else:
+                xyxy = np.asarray(xyxy)
+                conf = float(np.asarray(b.conf).item())
+                cls_id = int(np.asarray(b.cls).item()) if hasattr(b, "cls") else 0
             xyxy = xyxy[0] if xyxy.ndim > 1 else xyxy
-            conf = b.conf
-            if hasattr(conf, "cpu"):
-                conf = conf.cpu().numpy()
-            conf = float(np.asarray(conf).item())
-            cls_id = b.cls if hasattr(b, "cls") else 0
-            if hasattr(cls_id, "cpu"):
-                cls_id = cls_id.cpu().numpy()
-            cls_id = int(np.asarray(cls_id).item())
             boxes.append(Box(xyxy.tolist(), conf, cls_id))
 
         keypoints_list = []
-        if (
-            hasattr(ultralytics_result, "keypoints")
-            and ultralytics_result.keypoints is not None
-        ):
-            kpt_data = ultralytics_result.keypoints.data
-            if hasattr(kpt_data, "cpu"):
-                kpt_data = kpt_data.cpu().numpy()
-            # Run PnP on Ultralytics keypoints too if pnp_config is set
-            for kpt_set in kpt_data:
+        kpt_data = getattr(ultralytics_result, "keypoints", None)
+        if kpt_data is not None and kpt_data.data is not None:
+            kpt_arrs = kpt_data.data.cpu().numpy() if _is_torch else np.asarray(kpt_data.data)
+            for i, kpt_set in enumerate(kpt_arrs):
                 kpt_arr = np.asarray(kpt_set)
-                if self.pnp_config and len(boxes) == len(kpt_data):
+                if self.pnp_config and len(boxes) == len(kpt_arrs):
                     idx = len(keypoints_list)
                     euler, tvec = self._solve_pnp(kpt_arr)
                     if euler is not None:

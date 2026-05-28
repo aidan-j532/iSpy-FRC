@@ -646,6 +646,19 @@ def fill_missing_config(model_config: dict) -> dict:
 
     task = model_config.get("task", "detect")
 
+    # .engine files lose task metadata during export. Inspect the source .pt to detect the real task.
+    if model_path.endswith(".engine"):
+        pt_path = model_config.get("source_pt", model_path.replace(".engine", ".pt"))
+        if os.path.exists(pt_path):
+            try:
+                pt_info = inspect_model(pt_path, "detect")
+                pt_task = pt_info.get("task")
+                if pt_task and pt_task != task:
+                    logger.info("Detected task=%s from source .pt (%s)", pt_task, pt_path)
+                    task = pt_task
+            except Exception:
+                pass
+
     try:
         detected = inspect_model(model_path, task)
     except Exception as e:
