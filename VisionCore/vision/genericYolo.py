@@ -240,6 +240,8 @@ class GenericYolo:
         cfg = normalize_model_config(model_config)
         self.device = cfg.get("device", 0)
         requested_device = cfg.get("device", 0)
+        self._is_tpu = False
+        self._tpu_device = None
 
         try:
             import torch
@@ -251,7 +253,17 @@ class GenericYolo:
         except Exception:
             cuda_ok = False
 
-        if not cuda_ok and requested_device != "cpu":
+        if isinstance(requested_device, str) and requested_device == "tpu":
+            try:
+                import torch_xla.core.xla_model as xm
+                self._tpu_device = xm.xla_device()
+                self._is_tpu = True
+                self.device = "tpu"
+                self.logger.info("TPU device initialized: %s", self._tpu_device)
+            except Exception:
+                self.logger.warning("TPU requested but torch_xla not available — falling back to CPU")
+                self.device = "cpu"
+        elif not cuda_ok and requested_device != "cpu":
             self.logger.info(
                 "Device %r not available (CUDA=%s, count=%d) — falling back to CPU",
                 requested_device,
@@ -298,6 +310,11 @@ class GenericYolo:
             self._require_input_block()
             self.model_type = "tflite"
             self._load_tflite(self.model_file)
+
+        elif self.model_file.endswith(".pt") and self._is_tpu:
+            self.model_type = "tpu"
+            self._load_tpu(self.model_file)
+            self._pool = None
 
         elif (
             self.model_file.endswith(".pt")
@@ -502,6 +519,8 @@ class GenericYolo:
                     results_list.append(self._run_onnx(frame, target_shape))
                 elif self.model_type == "tflite":
                     results_list.append(self._run_tflite(frame, target_shape))
+                elif self.model_type == "tpu":
+                    results_list.append(self._run_tpu(frame, target_shape))
                 else:
                     result = self.model(
                         frame,
@@ -515,6 +534,52 @@ class GenericYolo:
                     results_list.append(self._convert_ultralytics_to_results(result[0]))
                 
         return results_list if is_list else results_list[0]
+
+    def _preprocess_tpu(self, frame: np.ndarray) -> "torch.Tensor":
+        import torch
+        target_w, target_h = self.input_size
+        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(img_rgb, (target_w, target_h))
+        tensor = (
+            torch.from_numpy(resized)
+            .permute(2, 0, 1)
+            .unsqueeze(0)
+            .float()
+            .div(255.0)
+            .to(self._tpu_device)
+        )
+        return tensor
+
+    def _load_tpu(self, model_file: str):
+        import torch
+        import torch_xla.core.xla_model as xm
+        from ultralytics import YOLO
+
+        yolo = YOLO(model_file, task=self.task, verbose=False)
+        raw_model = yolo.model
+        raw_model = raw_model.to(self._tpu_device)
+        raw_model.eval()
+
+        dummy = torch.zeros((1, 3, self.input_size[0], self.input_size[1])).to(self._tpu_device)
+        with torch.no_grad():
+            _ = raw_model(dummy)
+        xm.mark_step()
+
+        self.model = raw_model
+        self.logger.info("TPU model loaded on %s", self._tpu_device)
+
+    def _run_tpu(self, frame: np.ndarray, orig_shape) -> "Results":
+        import torch_xla.core.xla_model as xm
+
+        tensor = self._preprocess_tpu(frame)
+        with torch.no_grad():
+            output = self.model(tensor)
+        xm.mark_step()
+
+        output = output.cpu().numpy()
+        if output.ndim == 3:
+            output = output[0]
+        return self.postprocess([output], orig_shape)
 
     def _dequantize_tensor(self, tensor: np.ndarray) -> np.ndarray:
         q = self.output["quantization"]

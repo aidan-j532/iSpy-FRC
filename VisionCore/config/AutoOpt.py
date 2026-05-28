@@ -6,7 +6,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_FORMATS = {"tflite", "openvino", "coreml", "onnx", "rknn", "engine"}
+SUPPORTED_FORMATS = {"tflite", "openvino", "coreml", "onnx", "rknn", "engine", "tpu"}
 
 
 def _run(cmd: str) -> str:
@@ -79,6 +79,18 @@ def has_tensorrt() -> bool:
         pass
     # Check the system Python in case we're in a venv that doesn't have it
     return _cmd_ok("python3 -c 'import tensorrt' 2>/dev/null")
+
+
+@lru_cache()
+def has_tpu() -> bool:
+    try:
+        import torch_xla
+        import torch_xla.core.xla_model as xm
+        dev = xm.xla_device()
+        return True
+    except Exception:
+        pass
+    return False
 
 
 def has_amd_gpu() -> bool:
@@ -155,7 +167,12 @@ def recommend_format(ignore_dependencies: bool = False) -> str:
         logger.info("Apple Silicon detected - using Core ML format for hardware acceleration.")
         return "coreml"
 
-    # 3. NVIDIA - prefer TensorRT engine over raw ONNX for max FPS     ─
+    # 3. Google TPU - run PyTorch models via XLA
+    if has_tpu():
+        logger.info("Google TPU detected - using TPU format for hardware acceleration.")
+        return "tpu"
+
+    # 4. NVIDIA - prefer TensorRT engine over raw ONNX for max FPS     ─
     if has_nvidia():
         if has_tensorrt() or ignore_dependencies:
             logger.info(
@@ -168,7 +185,7 @@ def recommend_format(ignore_dependencies: bool = False) -> str:
         )
         return "onnx"
 
-    # 4. Other desktop hardware                       ─
+    # 5. Other desktop hardware                       ─
     if os.name != "nt" and has_intel_vpu():
         logger.info("Intel VPU detected - using OpenVINO format for hardware acceleration.")
         return "openvino"
@@ -179,7 +196,7 @@ def recommend_format(ignore_dependencies: bool = False) -> str:
         logger.info("AMD GPU detected - using ONNX format for hardware acceleration.")
         return "onnx"  # ROCm / DirectML execution providers
 
-    # 5. ARM edge (Jetson, RPi, etc.)
+    # 6. ARM edge (Jetson, RPi, etc.)
     if has_arm():
         logger.info("ARM edge device detected - using TFLite format for hardware acceleration.")
         return "tflite"

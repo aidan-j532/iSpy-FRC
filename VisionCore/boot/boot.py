@@ -40,6 +40,7 @@ FORMAT_MATCHERS = {
     "coreml": lambda p: p.suffix == ".mlpackage",
     "openvino": lambda p: p.is_dir() and p.name.endswith("_openvino_model"),
     "engine": lambda p: p.suffix == ".engine",
+    "tpu": lambda p: p.suffix == ".pt",
 }
 
 _ARCH = platform.machine().lower()
@@ -93,6 +94,7 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
         "openvino": [("openvino", "openvino")],
         "coreml": [("coremltools", "coremltools")],
         "tflite": [("tflite_runtime", "tflite-runtime")],
+        "tpu": [("torch_xla", "torch-xla")],
     }
     rknn_url = _rknn_wheel_url()
     if rknn_url:
@@ -633,6 +635,10 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
         model_full_path = _PROJECT_ROOT / model_full_path
     if not model_full_path.exists():
         raise FileNotFoundError(f"Model file not found: {model_full_path}")
+
+    if best_format == "tpu":
+        config.set("vision_model", "device", "tpu")
+        logger.info("TPU backend configured - device set to 'tpu'")
 
     vision_cfg = config.get("vision_model", {})
     filled = fill_missing_config(vision_cfg)
