@@ -27,3 +27,5 @@ image/*.img
 .venv/
 visioncore_frc-*/
 /Config/visioncore_frc-*
+.svg
+.html

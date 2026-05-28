@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import platform
 import importlib.util
+import importlib.metadata
 import ultralytics
 from VisionCore.vision.ModelInspector import fill_missing_config
 from VisionCore.config.AutoOpt import recommend_format
@@ -116,12 +117,54 @@ def _is_installed(module_name: str) -> bool:
     return importlib.util.find_spec(module_name) is not None
 
 
-def _pip_install(install_target: str) -> bool:
+def _get_installed_version(package_name: str) -> str | None:
+    try:
+        return importlib.metadata.version(package_name)
+    except Exception:
+        return None
+
+
+def _check_version_constraint(package_name: str, constraint: str) -> bool:
+    if not constraint:
+        return True
+    installed = _get_installed_version(package_name)
+    if installed is None:
+        return False
+    try:
+        from packaging.version import Version
+        inst = Version(installed)
+        bound = constraint.lstrip("<>=!~")
+        if constraint.startswith("<="):
+            return inst <= Version(bound)
+        if constraint.startswith(">="):
+            return inst >= Version(bound)
+        if constraint.startswith("!="):
+            return inst != Version(bound)
+        if constraint.startswith("=="):
+            return inst == Version(bound)
+        if constraint.startswith("<"):
+            return inst < Version(bound)
+        if constraint.startswith(">"):
+            return inst > Version(bound)
+        if constraint.startswith("~="):
+            return (
+                inst.release[: len(Version(bound).release)]
+                == Version(bound).release
+                and inst >= Version(bound)
+            )
+    except Exception:
+        pass
+    return True
+
+
+def _pip_install(install_target: str, force_reinstall: bool = False) -> bool:
     cmd = [sys.executable, "-m", "pip", "install"]
     # Only use --no-deps for wheel URLs (RKNN) to avoid pulling in
     # conflicting transitive deps; regular pip packages need their deps
     if install_target.startswith("http") or install_target.endswith(".whl"):
         cmd.append("--no-deps")
+    if force_reinstall:
+        cmd.append("--force-reinstall")
     cmd.append(install_target)
     if not _in_virtualenv():
         cmd.append("--break-system-packages")
@@ -134,6 +177,16 @@ def _pip_install(install_target: str) -> bool:
         return False
 
 
+def _parse_pip_target(pip_target: str) -> tuple[str, str]:
+    parts = pip_target.split("[")
+    base = parts[0]
+    for sep in ("<=", ">=", "!=", "==", "<", ">", "~="):
+        if sep in base:
+            name, ver = base.split(sep, 1)
+            return name, sep + ver
+    return base, ""
+
+
 def install_special_dependencies(auto_install: bool = False):
     backend = recommend_format(ignore_dependencies=True)
     logger.info("Recommended backend: %s", backend)
@@ -143,7 +196,21 @@ def install_special_dependencies(auto_install: bool = False):
         logger.info("No extra dependencies required for %s", backend)
         return
 
-    missing = [(mod, target) for mod, target in deps if not _is_installed(mod)]
+    missing = []
+    for mod, target in deps:
+        pkg_name, constraint = _parse_pip_target(target)
+        if not _is_installed(mod):
+            missing.append((mod, target, False))
+        elif constraint and not _check_version_constraint(pkg_name, constraint):
+            logger.warning(
+                "Installed %s (%s) does not satisfy %s. Will reinstall.",
+                pkg_name,
+                _get_installed_version(pkg_name),
+                target,
+            )
+            missing.append((mod, target, True))
+        else:
+            logger.debug("Dependency %s satisfied: %s", mod, target)
 
     if not missing:
         logger.info("All dependencies already installed for %s", backend)
@@ -152,7 +219,7 @@ def install_special_dependencies(auto_install: bool = False):
     logger.warning(
         "Missing dependencies for %s: %s",
         backend,
-        [target for _, target in missing],
+        [target for _, target, _ in missing],
     )
 
     if not auto_install:
@@ -176,8 +243,8 @@ def install_special_dependencies(auto_install: bool = False):
             backend,
         )
 
-    for mod, target in missing:
-        if _pip_install(target):
+    for mod, target, force in missing:
+        if _pip_install(target, force_reinstall=force):
             logger.info("Installed %s successfully.", target)
         else:
             logger.error(
