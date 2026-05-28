@@ -94,7 +94,7 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
         "openvino": [("openvino", "openvino")],
         "coreml": [("coremltools", "coremltools")],
         "tflite": [("tflite_runtime", "tflite-runtime")],
-        "tpu": [("torch_xla", "torch-xla")],
+        "tpu": [("torch_xla", "torch_xla[tpu]", ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"])],
     }
     rknn_url = _rknn_wheel_url()
     if rknn_url:
@@ -159,12 +159,14 @@ def _check_version_constraint(package_name: str, constraint: str) -> bool:
     return True
 
 
-def _pip_install(install_target: str, force_reinstall: bool = False) -> bool:
+def _pip_install(install_target: str, force_reinstall: bool = False, extra_args: list[str] | None = None) -> bool:
     cmd = [sys.executable, "-m", "pip", "install"]
     if install_target.startswith("http") or install_target.endswith(".whl"):
         cmd.append("--no-deps")
     if force_reinstall:
         cmd.append("--force-reinstall")
+    if extra_args:
+        cmd.extend(extra_args)
     cmd.append(install_target)
     if not _in_virtualenv():
         cmd.append("--break-system-packages")
@@ -197,10 +199,12 @@ def install_special_dependencies(auto_install: bool = False):
         return
 
     missing = []
-    for mod, target in deps:
+    for entry in deps:
+        mod, target = entry[0], entry[1]
+        extra_args = list(entry[2]) if len(entry) > 2 else None
         pkg_name, constraint = _parse_pip_target(target)
         if not _is_installed(mod):
-            missing.append((mod, target, False))
+            missing.append((mod, target, False, extra_args))
         elif constraint and not _check_version_constraint(pkg_name, constraint):
             logger.warning(
                 "Installed %s (%s) does not satisfy %s. Will reinstall.",
@@ -208,7 +212,7 @@ def install_special_dependencies(auto_install: bool = False):
                 _get_installed_version(pkg_name),
                 target,
             )
-            missing.append((mod, target, True))
+            missing.append((mod, target, True, extra_args))
         else:
             logger.debug("Dependency %s satisfied: %s", mod, target)
 
@@ -219,7 +223,7 @@ def install_special_dependencies(auto_install: bool = False):
     logger.warning(
         "Missing dependencies for %s: %s",
         backend,
-        [target for _, target, _ in missing],
+        [target for _, target, _, _ in missing],
     )
 
     if not auto_install:
@@ -243,8 +247,8 @@ def install_special_dependencies(auto_install: bool = False):
             backend,
         )
 
-    for mod, target, force in missing:
-        if _pip_install(target, force_reinstall=force):
+    for mod, target, force, extra_args in missing:
+        if _pip_install(target, force_reinstall=force, extra_args=extra_args):
             logger.info("Installed %s successfully.", target)
         else:
             logger.error(

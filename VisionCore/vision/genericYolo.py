@@ -539,9 +539,17 @@ class GenericYolo:
         import torch
         target_w, target_h = self.input_size
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        resized = cv2.resize(img_rgb, (target_w, target_h))
+
+        inp = self.input
+        if inp and inp.get("letterbox", True):
+            canvas = np.full((target_h, target_w, 3), inp.get("pad_value", 114), dtype=np.uint8)
+            self._letterbox_into(img_rgb, canvas, self.input_size, inp.get("pad_value", 114))
+            img_rgb = canvas
+        else:
+            img_rgb = cv2.resize(img_rgb, (target_w, target_h))
+
         tensor = (
-            torch.from_numpy(resized)
+            torch.from_numpy(img_rgb)
             .permute(2, 0, 1)
             .unsqueeze(0)
             .float()
@@ -566,6 +574,13 @@ class GenericYolo:
         xm.mark_step()
 
         self.model = raw_model
+
+        # Raw model output is [1, C, H, W] features_first, not hardware_nms.
+        # Override output config so postprocess() dispatches to _parse_raw_*.
+        self.output["format"] = "raw"
+        self.output["layout"] = "features_first"
+        self.output["box_format"] = "cxcywh"
+
         self.logger.info("TPU model loaded on %s", self._tpu_device)
 
     def _run_tpu(self, frame: np.ndarray, orig_shape) -> "Results":
