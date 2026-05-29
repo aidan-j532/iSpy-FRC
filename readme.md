@@ -1,4 +1,4 @@
-# VisionCore
+# iSpy
 
 > FRC vision pipeline for object detection and field mapping - runs on Orange Pi with Rockchip NPU, supports RKNN, ONNX, OpenVINO, TFLite, and CoreML backends.
 
@@ -6,7 +6,7 @@
 
 ## What It Does
 
-VisionCore is a plug-and-play computer vision system for FRC robots. You point a camera at the field, it detects game pieces, converts pixel positions into field-relative coordinates, and sends them to your robot over NetworkTables - all automatically.
+iSpy is a plug-and-play computer vision system for FRC robots. You point a camera at the field, it detects game pieces, converts pixel positions into field-relative coordinates, and sends them to your robot over NetworkTables - all automatically.
 
 - Detects objects with a YOLO model (any size, any format)
 - Converts detections to real-world field coordinates using camera calibration
@@ -57,14 +57,14 @@ journalctl -u first-boot -f
 Once complete, the pipeline runs as a systemd service on every boot:
 
 ```bash
-journalctl -u visioncore -f   # live logs
-systemctl restart visioncore  # restart
-systemctl stop visioncore     # stop
+journalctl -u iSpy -f   # live logs
+systemctl restart iSpy  # restart
+systemctl stop iSpy     # stop
 ```
 
 ### 4. Configure
 
-Edit `/etc/visioncore/config.json` on the board, then restart the service. See [Configuration](#configuration) below.
+Edit `/etc/iSpy/config.json` on the board, then restart the service. See [Configuration](#configuration) below.
 
 ---
 
@@ -73,8 +73,8 @@ Edit `/etc/visioncore/config.json` on the board, then restart the service. See [
 If you have a board already running Ubuntu/Debian:
 
 ```bash
-git clone https://github.com/aidan-j532/VisionCore-Deploy
-cd VisionCore-Deploy
+git clone https://github.com/aidan-j532/iSpy-Deploy
+cd iSpy-Deploy
 chmod +x install-deploy.sh
 ./install-deploy.sh
 ```
@@ -82,7 +82,7 @@ chmod +x install-deploy.sh
 Or run the full provisioner in one line:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aidan-j532/VisionCore-Deploy/main/Image/provision.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aidan-j532/iSpy-Deploy/main/Image/provision.sh | bash
 ```
 
 ---
@@ -92,8 +92,8 @@ curl -fsSL https://raw.githubusercontent.com/aidan-j532/VisionCore-Deploy/main/I
 Use this to train models, convert formats, or modify the pipeline on a regular computer.
 
 ```bash
-git clone https://github.com/aidan-j532/VisionCore-Deploy
-cd VisionCore-Deploy
+git clone https://github.com/aidan-j532/iSpy-Deploy
+cd iSpy-Deploy
 chmod +x install-dev.sh
 ./install-dev.sh
 ```
@@ -101,20 +101,20 @@ chmod +x install-dev.sh
 Run the pipeline locally (uses a webcam or image file):
 
 ```bash
-visioncore-run
+iSpy-run
 ```
 
 Run the boot sequence (downloads a default model, sets up service):
 
 ```bash
-visioncore-boot
+iSpy-boot
 ```
 
 ---
 
 ## Configuration
 
-The config file lives at `Config/config.json` (or `/etc/visioncore/config.json` on deployed boards).
+The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on deployed boards).
 
 ```json
 {
@@ -194,12 +194,12 @@ YoloModels/
   openvino/nano/my_model_openvino_model/
 ```
 
-With `auto_opt: true`, VisionCore converts your `.pt` model at boot time and caches the result. Supported formats: `rknn`, `onnx`, `openvino`, `tflite`, `coreml`.
+With `auto_opt: true`, iSpy converts your `.pt` model at boot time and caches the result. Supported formats: `rknn`, `onnx`, `openvino`, `tflite`, `coreml`.
 
 To convert manually on a dev machine:
 
 ```python
-from VisionCore.utilities.laptop.AllInOneConvert import convert_model
+from iSpy.utilities.laptop.AllInOneConvert import convert_model
 
 convert_model("my_model.pt", format="rknn", task="detect")
 ```
@@ -224,7 +224,7 @@ The health endpoint returns `200 OK` when everything is healthy, `503` when degr
 
 ## NetworkTables Output
 
-VisionCore publishes to the `VisionData` table:
+iSpy publishes to the `VisionData` table:
 
 | Key | Type | Description |
 |---|---|---|
@@ -238,13 +238,13 @@ VisionCore publishes to the `VisionData` table:
 
 ## Plugin System
 
-VisionCore uses a plugin architecture. Drop a file into the right folder and it loads automatically.
+iSpy uses a plugin architecture. Drop a file into the right folder and it loads automatically.
 
 ### Custom tracker
 
 ```python
-# VisionCore/plugins/trackers/my_tracker.py
-from VisionCore.plugins.bases import TrackerBase
+# iSpy/plugins/trackers/my_tracker.py
+from iSpy.plugins.bases import TrackerBase
 
 class MyTracker(TrackerBase):
     plugin_name = "my_tracker"
@@ -259,8 +259,8 @@ Then add `"my_tracker"` to `plugins.trackers` in your config.
 ### Custom utility (Flask route, side effect, etc.)
 
 ```python
-# VisionCore/plugins/utilities/my_utility.py
-from VisionCore.plugins.bases import UtilityBase
+# iSpy/plugins/utilities/my_utility.py
+from iSpy.plugins.bases import UtilityBase
 
 class MyUtility(UtilityBase):
     plugin_name = "my_utility"
@@ -288,16 +288,16 @@ Run before deploying to catch config or model issues:
 
 ```bash
 # Unit tests
-python -m VisionCore.validations.ez
+python -m iSpy.validations.ez
 
 # Check model organization
-python -m VisionCore.validations.model_validator check-org
+python -m iSpy.validations.model_validator check-org
 
 # Full system validation (tests + model + config checks)
-python -c "from VisionCore.validations.validate_system import validate_system; validate_system()"
+python -c "from iSpy.validations.validate_system import validate_system; validate_system()"
 
 # Config recommendations
-python -c "from VisionCore.validations.validate_system import get_recommendations; print(get_recommendations())"
+python -c "from iSpy.validations.validate_system import get_recommendations; print(get_recommendations())"
 ```
 
 ---
@@ -306,7 +306,7 @@ python -c "from VisionCore.validations.validate_system import get_recommendation
 
 ```
 game_loop.py
-  └── VisionCore
+  └── iSpy
         ├── ObjectDetectionCamera (per camera)
         │     ├── Camera (threaded frame reader)
         │     └── GenericYolo (RKNN / ONNX / TFLite / Ultralytics)
@@ -318,7 +318,7 @@ game_loop.py
 
 The main loop runs at whatever FPS the camera and model allow. On an Orange Pi 5 with a nano RKNN model, expect 30–60 FPS.
 
-Benchmarking I'VE tested with default models (pip install visioncore-frc, visioncore-boot -f, visioncore-run):
+Benchmarking I'VE tested with default models (pip install iSpy-frc, iSpy-boot -f, iSpy-run):
 | Pose (Yolov8 Nano)          | Detect (Yolov8 Nano)          | Detect (Yolov26 Nano)       |
 |-----------------------------|-------------------------------|-----------------------------|
 | Orange Pi (RK3588): ~30 fps | Orange Pi (RK3588): ~32 fps   | Orange Pi (RK3588): ~60 fps |

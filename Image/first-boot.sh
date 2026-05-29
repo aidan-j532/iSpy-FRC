@@ -1,13 +1,13 @@
 #!/bin/bash
 # first-boot.sh - baked into the image, runs once on first boot
-# Pulls the repo and provisions the full VisionCore environment
+# Pulls the repo and provisions the full iSpy environment
 set -e
 
-LOG="/var/log/visioncore-firstboot.log"
+LOG="/var/log/iSpy-firstboot.log"
 exec > >(tee -a "$LOG") 2>&1
 
 echo "============================================"
-echo " VisionCore First Boot - $(date)"
+echo " iSpy First Boot - $(date)"
 echo "============================================"
 
 # Wait for a real internet connection before doing anything
@@ -25,13 +25,13 @@ for i in $(seq 1 30); do
 done
 
 # Run the main provisioner
-curl -fsSL https://raw.githubusercontent.com/aidan-j532/VisionCore-Deploy/main/Image/provision.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aidan-j532/iSpy-Deploy/main/Image/provision.sh | bash
 
 # Remove the flag file so this service never runs again
-rm -f /etc/visioncore-firstboot
+rm -f /etc/iSpy-firstboot
 
 echo "============================================"
 echo " First boot complete - $(date)"
-echo " VisionCore is running."
-echo " Logs: journalctl -u visioncore -f"
+echo " iSpy is running."
+echo " Logs: journalctl -u iSpy -f"
 echo "============================================"

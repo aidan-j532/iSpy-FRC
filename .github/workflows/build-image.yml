@@ -27,6 +27,6 @@ jobs:
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: visioncore-orangepi
+          name: iSpy-orangepi
           path: "*.img"
           retention-days: 30

@@ -1,8 +1,8 @@
 [Unit]
-Description=VisionCore First Boot Provisioner
+Description=iSpy First Boot Provisioner
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/etc/visioncore-firstboot
+ConditionPathExists=/etc/iSpy-firstboot
 
 [Service]
 Type=oneshot

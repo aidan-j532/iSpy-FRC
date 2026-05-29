@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "visioncore-frc"
+name = "ispy-frc"
 version = "2.11.21.45"
 description = "FRC vision pipeline for custom, hardware accelerated object detection."
 readme = "README.md"
@@ -11,11 +11,11 @@ requires-python = ">=3.10"
 license = "GPL-3.0"
 
 authors = [
-    { name = "VisionCore Robotics Team", email = "aidanrjensen@gmail.com" }
+    { name = "iSpy FRC Author Team", email = "aidanrjensen@gmail.com" }
 ]
 
 maintainers = [
-    { name = "VisionCore Maintainer", email = "aidanrjensen@gmail.com" }
+    { name = "iSpy FRC Maintainer", email = "aidanrjensen@gmail.com" }
 ]
 
 # Universal deps — install cleanly on every platform (Orange Pi, RPi, x86, Mac, Windows).
@@ -62,8 +62,8 @@ tensorrt = [
 ]
 
 [project.scripts]
-visioncore-run  = "VisionCore.core.game_loop:main"
-visioncore-boot = "VisionCore.boot.boot:main"
+ispy-run  = "iSpy.core.game_loop:main"
+ispy-boot = "iSpy.boot.boot:main"
 
 [project.urls]
 Homepage = "https://github.com/aidan-j532/VisionCore-Deploy"
@@ -71,7 +71,7 @@ Repository = "https://github.com/aidan-j532/VisionCore-Deploy"
 Bug-Tracker = "https://github.com/aidan-j532/VisionCore-Deploy/issues"
 
 [tool.setuptools.packages.find]
-include = ["VisionCore", "VisionCore.*"]
+include = ["iSpy", "iSpy.*"]
 
 [tool.setuptools.package-data]
-"VisionCore" = ["assets/*"]
+"iSpy" = ["assets/*"]

@@ -1,7 +1,7 @@
 {
     "vision_model": {
         "file_path": "C:\\Users\\RoboticsTeam\\Desktop\\iSpy\\iSpy-Deploy\\YoloModels\\pytorch\\_default_pose_openvino_model",
-        "task": "pose",
+        "task": "detect",
         "num_classes": 1,
         "input_size": [
             640,

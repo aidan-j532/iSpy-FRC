@@ -1,14 +1,14 @@
 #!/bin/bash
-# provision.sh - run once on a fresh Orange Pi to set up VisionCore
+# provision.sh - run once on a fresh Orange Pi to set up iSpy
 # This is the automated version of install-deploy.sh used for imaging.
 set -e
 
-REPO_URL="https://github.com/aidan-j532/VisionCore-Deploy"
-INSTALL_DIR="/opt/visioncore"
-SERVICE_USER="visioncore"
-RKNN_WHEELS_URL="https://github.com/aidan-j532/VisionCore-Deploy/tree/main/RknnWheels"
+REPO_URL="https://github.com/aidan-j532/iSpy-Deploy"
+INSTALL_DIR="/opt/iSpy"
+SERVICE_USER="iSpy"
+RKNN_WHEELS_URL="https://github.com/aidan-j532/iSpy-Deploy/tree/main/RknnWheels"
 
-echo "=== VisionCore Provisioner ==="
+echo "=== iSpy Provisioner ==="
 echo "Python: $(python3 --version)"
 
 apt-get update -qq
@@ -26,7 +26,7 @@ else
     git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
-pip3 install "$INSTALL_DIR[deploy]" \
+pip3 install "$INSTALL_DIR" \
     --find-links "$RKNN_WHEELS_URL" \
     --break-system-packages
 
@@ -35,16 +35,16 @@ if ! id "$SERVICE_USER" &>/dev/null; then
 fi
 usermod -aG video "$SERVICE_USER"
 
-mkdir -p /etc/visioncore
-CONFIG_DEST="/etc/visioncore/config.json"
+mkdir -p /etc/iSpy
+CONFIG_DEST="/etc/iSpy/config.json"
 if [ ! -f "$CONFIG_DEST" ]; then
-    cp "$INSTALL_DIR/VisionCore/core/config.json" "$CONFIG_DEST"
+    cp "$INSTALL_DIR/Config/config.json" "$CONFIG_DEST"
     echo "Config copied to $CONFIG_DEST - edit this to configure your cameras."
 fi
 
-cat > /etc/systemd/system/visioncore.service <<EOF
+cat > /etc/systemd/system/iSpy.service <<EOF
 [Unit]
-Description=VisionCore FRC Vision Pipeline
+Description=iSpy FRC Vision Pipeline
 After=network.target
 Wants=network.target
 
@@ -52,23 +52,23 @@ Wants=network.target
 Type=simple
 User=$SERVICE_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/python3 -m VisionCore.boot.boot
+ExecStart=/usr/bin/python3 -m iSpy.boot.boot
 Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-Environment=VISIONCORE_CONFIG=$CONFIG_DEST
+Environment=iSpy_CONFIG=$CONFIG_DEST
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable visioncore
-systemctl start visioncore
+systemctl enable iSpy
+systemctl start iSpy
 
 echo ""
 echo "=== Done ==="
-echo "Status:  journalctl -u visioncore -f"
+echo "Status:  journalctl -u iSpy -f"
 echo "Config:  $CONFIG_DEST"
-echo "Restart: systemctl restart visioncore"
+echo "Restart: systemctl restart iSpy"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# build-image.sh - builds a custom Orange Pi image with VisionCore first-boot
+# build-image.sh - builds a custom Orange Pi image with iSpy first-boot
 # Run on an x86 Linux machine (Ubuntu/Debian recommended)
 # Requirements: debootstrap, qemu-user-static, qemu-system-arm, parted, kpartx
 set -e
@@ -7,9 +7,9 @@ set -e
 IMAGE_NAME="orangepi.img"
 IMAGE_SIZE="4G"
 UBUNTU_RELEASE="jammy" # Ubuntu 22.04 - matches Orange Pi OS base
-REPO_RAW="https://raw.githubusercontent.com/aidan-j532/VisionCore-Deploy/main/Image"
+REPO_RAW="https://raw.githubusercontent.com/aidan-j532/iSpy-Deploy/main/Image"
 
-echo "=== VisionCore Image Builder ==="
+echo "=== iSpy Image Builder ==="
 
 apt-get install -y \
     debootstrap qemu-user-static qemu-system-arm \
@@ -37,7 +37,7 @@ debootstrap \
 cp /usr/bin/qemu-aarch64-static "$MOUNT/usr/bin/"
 chroot "$MOUNT" /debootstrap/debootstrap --second-stage
 
-echo "visioncore" > "$MOUNT/etc/hostname"
+echo "iSpy" > "$MOUNT/etc/hostname"
 
 mkdir -p "$MOUNT/etc/systemd/system/getty@tty1.service.d"
 cat > "$MOUNT/etc/systemd/system/getty@tty1.service.d/override.conf" <<EOF
@@ -68,14 +68,14 @@ chmod +x "$MOUNT/usr/local/bin/first-boot.sh"
 curl -fsSL "$REPO_RAW/first-boot.service" \
     -o "$MOUNT/etc/systemd/system/first-boot.service"
 
-touch "$MOUNT/etc/visioncore-firstboot"
+touch "$MOUNT/etc/iSpy-firstboot"
 
 chroot "$MOUNT" systemctl enable first-boot.service
 
 cat > "$MOUNT/etc/issue" <<EOF
 
   |-----------------------------------------------|
-  |        VisionCore FRC - First Boot            |
+  |        iSpy FRC - First Boot            |
   |                                               |
   |  Connect ethernet, then power on.             |
   |  Setup runs automatically.                    |
