@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ispy-frc"
-version = "1.0.1"
+version = "1.0.2"
 description = "FRC vision pipeline for custom, hardware accelerated object detection."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -70,4 +70,4 @@ Bug-Tracker = "https://github.com/aidan-j532/iSpy-FRC/issues"
 include = ["iSpy", "iSpy.*"]
 
 [tool.setuptools.package-data]
-"iSpy" = ["assets/*"]
+"iSpy" = ["assets/*", "rknn_wheels/*.whl"]

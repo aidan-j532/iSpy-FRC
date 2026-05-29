@@ -47,9 +47,11 @@ _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
 _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
-_RKNN_WHEELS_BASE = os.environ.get(
+_RKNN_LITE_DIR = _PACKAGE_ROOT.parent / "rknn_wheels"
+
+_RKNN_FULL_BASE = os.environ.get(
     "iSpy_RKNN_WHEELS_URL",
-    "https://raw.githubusercontent.com/aidan-j532/iSpy-Deploy/main/RknnWheels",
+    "https://github.com/aidan-j532/iSpy-Deploy/releases/download/rknn-wheels-v2.3.2",
 ).rstrip("/")
 
 _RKNN_FULL_WHEELS: dict[tuple[str, str], str] = {
@@ -61,23 +63,30 @@ _RKNN_FULL_WHEELS: dict[tuple[str, str], str] = {
     ("x86_64", "cp312"): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
 }
 
-_RKNN_LITE_WHEELS: dict[tuple[str, str], str] = {
+_RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
     ("aarch64", "cp310"): "rknn_toolkit_lite2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
     ("aarch64", "cp311"): "rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
     ("aarch64", "cp312"): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
 }
 
 
-def _rknn_wheel_urls() -> list[tuple[str, str]]:
+def _rknn_wheel_targets() -> list[tuple[str, str]]:
     key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
-    urls: list[tuple[str, str]] = []
+    targets: list[tuple[str, str]] = []
+
     full_fn = _RKNN_FULL_WHEELS.get(key)
     if full_fn:
-        urls.append(("rknn", f"{_RKNN_WHEELS_BASE}/{full_fn}"))
-    lite_fn = _RKNN_LITE_WHEELS.get(key)
+        targets.append(("rknn", f"{_RKNN_FULL_BASE}/{full_fn}"))
+
+    lite_fn = _RKNN_LITE_FILENAMES.get(key)
     if lite_fn:
-        urls.append(("rknnlite", f"{_RKNN_WHEELS_BASE}/{lite_fn}"))
-    if not urls:
+        local_lite = _RKNN_LITE_DIR / lite_fn
+        if local_lite.exists():
+            targets.append(("rknnlite", str(local_lite)))
+        else:
+            logger.warning("Lite wheel not found in package: %s", local_lite)
+
+    if not targets:
         supported = sorted(f"{a} {v}" for (a, v) in _RKNN_FULL_WHEELS if a == key[0])
         logger.error(
             "No RKNN wheel for %s (Python %s). Supported: %s",
@@ -85,7 +94,7 @@ def _rknn_wheel_urls() -> list[tuple[str, str]]:
             _PY_TAG,
             ", ".join(supported),
         )
-    return urls
+    return targets
 
 
 def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
@@ -97,9 +106,9 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
         "tflite": [("tflite_runtime", "tflite-runtime")],
         "tpu": [("torch_xla", "torch_xla[tpu]", ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"])],
     }
-    rknn_wheels = _rknn_wheel_urls()
-    if rknn_wheels:
-        deps["rknn"] = rknn_wheels
+    rknn_targets = _rknn_wheel_targets()
+    if rknn_targets:
+        deps["rknn"] = rknn_targets
     return deps
 
 
@@ -555,6 +564,18 @@ def setup_files():
         if bundled.exists():
             shutil.copy(bundled, nano_pt)
 
+    # Clone the assets .pt into the YoloModels/pytorch directory if not already present
+    for file in yolo_dir.rglob("*.pt"):
+        try:
+            # Copy
+            target = yolo_dir / "pytorch" / file.name
+            if not target.exists():
+                shutil.copy(file, target)
+                logger.info("Copied %s to %s", file, target)
+            # Enforce organization
+            enforce_model_organization(file)
+        except Exception as e:
+            logger.warning("Failed to move %s: %s", file, e)
 
 def on_boot(install_service: bool = False, first_boot: bool = False):
     if first_boot:

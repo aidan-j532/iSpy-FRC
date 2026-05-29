@@ -319,10 +319,10 @@ game_loop.py
 The main loop runs at whatever FPS the camera and model allow. On an Orange Pi 5 with a nano RKNN model, expect 30–60 FPS.
 
 Benchmarking I'VE tested with default models (pip install iSpy-frc, iSpy-boot -f, iSpy-run):
-| Pose (Yolov8 Nano)          | Detect (Yolov8 Nano)          | Detect (Yolov26 Nano)       |
-|-----------------------------|-------------------------------|-----------------------------|
-| Orange Pi (RK3588): ~30 fps | Orange Pi (RK3588): ~32 fps   | Orange Pi (RK3588): ~60 fps |
-| Colab (2 T4's):     ~200 fps| Colab (2 T4's):     ~203 fps  | Colab (2 T4's): Not tested  |
+| Pose (Yolov8 Nano)          | Detect (Yolov8 Nano)             | Detect (Yolov26 Nano)       |
+|-----------------------------|----------------------------------|-----------------------------|
+| Orange Pi (RK3588): ~30 fps | Orange Pi (RK3588):   Not Tested | Orange Pi (RK3588): ~60 fps |
+| Colab (2 T4's):     ~180 fps| Colab (2 T4's):       Not Tested | Colab (2 T4's):  Not tested |
 
 ---
 
