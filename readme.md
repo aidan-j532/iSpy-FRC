@@ -73,16 +73,16 @@ Edit `/etc/iSpy/config.json` on the board, then restart the service. See [Config
 If you have a board already running Ubuntu/Debian:
 
 ```bash
-git clone https://github.com/aidan-j532/iSpy-Deploy
-cd iSpy-Deploy
-chmod +x install-deploy.sh
-./install-deploy.sh
+git clone https://github.com/aidan-j532/iSpy-FRC
+cd iSpy-FRC
+chmod +x install.sh
+./install.sh
 ```
 
 Or run the full provisioner in one line:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aidan-j532/iSpy-Deploy/main/Image/provision.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aidan-j532/iSpy-FRC/main/Image/provision.sh | bash
 ```
 
 ---
@@ -92,10 +92,10 @@ curl -fsSL https://raw.githubusercontent.com/aidan-j532/iSpy-Deploy/main/Image/p
 Use this to train models, convert formats, or modify the pipeline on a regular computer.
 
 ```bash
-git clone https://github.com/aidan-j532/iSpy-Deploy
-cd iSpy-Deploy
-chmod +x install-dev.sh
-./install-dev.sh
+git clone https://github.com/aidan-j532/iSpy-FRC
+cd iSpy-FRC
+chmod +x install.sh
+./install.sh dev
 ```
 
 Run the pipeline locally (uses a webcam or image file):

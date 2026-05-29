@@ -7,7 +7,7 @@ set -e
 IMAGE_NAME="orangepi.img"
 IMAGE_SIZE="4G"
 UBUNTU_RELEASE="jammy" # Ubuntu 22.04 - matches Orange Pi OS base
-REPO_RAW="https://raw.githubusercontent.com/aidan-j532/iSpy-Deploy/main/Image"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "=== iSpy Image Builder ==="
 
@@ -60,13 +60,15 @@ chroot "$MOUNT" systemctl enable systemd-resolved
 
 echo "Injecting first-boot service..."
 
-curl -fsSL "$REPO_RAW/first-boot.sh" \
-    -o "$MOUNT/usr/local/bin/first-boot.sh"
+cp "$SCRIPT_DIR/first-boot.sh" "$MOUNT/usr/local/bin/first-boot.sh"
 chmod +x "$MOUNT/usr/local/bin/first-boot.sh"
 
+# Bake provision.sh into the image so first-boot doesn't need network for it
+cp "$SCRIPT_DIR/provision.sh" "$MOUNT/usr/local/bin/provision.sh"
+chmod +x "$MOUNT/usr/local/bin/provision.sh"
+
 # Copy the systemd unit
-curl -fsSL "$REPO_RAW/first-boot.service" \
-    -o "$MOUNT/etc/systemd/system/first-boot.service"
+cp "$SCRIPT_DIR/first-boot.service" "$MOUNT/etc/systemd/system/first-boot.service"
 
 touch "$MOUNT/etc/iSpy-firstboot"
 

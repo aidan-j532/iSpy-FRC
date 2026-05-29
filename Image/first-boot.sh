@@ -24,8 +24,8 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
-# Run the main provisioner
-curl -fsSL https://raw.githubusercontent.com/aidan-j532/iSpy-Deploy/main/Image/provision.sh | bash
+# Run the main provisioner (baked into the image)
+bash /usr/local/bin/provision.sh
 
 # Remove the flag file so this service never runs again
 rm -f /etc/iSpy-firstboot

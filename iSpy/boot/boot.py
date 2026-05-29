@@ -22,7 +22,6 @@ import ultralytics
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.config.AutoOpt import recommend_format
 from iSpy.validations.validate_system import validate_system
-from iSpy.validations.model_validator import enforce_model_organization
 from iSpy.config.iSpyConfig import iSpyConfig
 from iSpy.dataset.dataset import prepare_quantization_dataset
 
@@ -47,11 +46,25 @@ _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
 _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
-_RKNN_LITE_DIR = _PACKAGE_ROOT.parent / "rknn_wheels"
+def _find_lite_wheel_dir() -> Path:
+    local = _PACKAGE_ROOT.parent / "rknn_wheels"
+    if local.exists():
+        return local
+    try:
+        spec = importlib.util.find_spec("iSpy")
+        if spec and spec.origin:
+            pkg = Path(spec.origin).parent / "rknn_wheels"
+            if pkg.exists():
+                return pkg
+    except Exception:
+        pass
+    return local
+
+_RKNN_LITE_DIR = _find_lite_wheel_dir()
 
 _RKNN_FULL_BASE = os.environ.get(
     "iSpy_RKNN_WHEELS_URL",
-    "https://github.com/aidan-j532/iSpy-Deploy/releases/download/rknn-wheels-v2.3.2",
+    "https://github.com/aidan-j532/iSpy-FRC/releases/download/v1.0.2",
 ).rstrip("/")
 
 _RKNN_FULL_WHEELS: dict[tuple[str, str], str] = {
@@ -567,13 +580,10 @@ def setup_files():
     # Clone the assets .pt into the YoloModels/pytorch directory if not already present
     for file in yolo_dir.rglob("*.pt"):
         try:
-            # Copy
             target = yolo_dir / "pytorch" / file.name
             if not target.exists():
                 shutil.copy(file, target)
                 logger.info("Copied %s to %s", file, target)
-            # Enforce organization
-            enforce_model_organization(file)
         except Exception as e:
             logger.warning("Failed to move %s: %s", file, e)
 

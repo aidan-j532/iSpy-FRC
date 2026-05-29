@@ -3,10 +3,9 @@
 # This is the automated version of install-deploy.sh used for imaging.
 set -e
 
-REPO_URL="https://github.com/aidan-j532/iSpy-Deploy"
+REPO_URL="https://github.com/aidan-j532/iSpy-FRC"
 INSTALL_DIR="/opt/iSpy"
 SERVICE_USER="iSpy"
-RKNN_WHEELS_URL="https://github.com/aidan-j532/iSpy-Deploy/tree/main/RknnWheels"
 
 echo "=== iSpy Provisioner ==="
 echo "Python: $(python3 --version)"
@@ -27,7 +26,6 @@ else
 fi
 
 pip3 install "$INSTALL_DIR" \
-    --find-links "$RKNN_WHEELS_URL" \
     --break-system-packages
 
 if ! id "$SERVICE_USER" &>/dev/null; then
