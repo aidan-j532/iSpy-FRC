@@ -46,6 +46,10 @@ def main():
         else:
             logger.warning("Unknown pipeline '%s' for camera '%s'", pipeline, cam_name)
 
+    if not cameras:
+        logger.error("No cameras configured or detected. Cannot run iSpy.")
+        sys.exit(1)
+
     vision = iSpy(cameras, config)
     vision.run()
 

@@ -30,7 +30,7 @@ from iSpy.dataset.dataset import prepare_quantization_dataset
 logging.getLogger().setLevel(logging.INFO)
 
 _BOOT_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = Path.cwd().resolve()
+_PROJECT_ROOT = _BOOT_DIR.parent.parent.resolve()
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
 
@@ -287,7 +287,6 @@ def reset_workspace():
     targets = [
         _PROJECT_ROOT / "YoloModels",
         _PROJECT_ROOT / "Outputs",
-        _PROJECT_ROOT / "Config",
     ]
     for target in targets:
         try:
@@ -298,7 +297,7 @@ def reset_workspace():
             logger.warning("Failed to fully remove %s: %s", target, e)
     for target in targets:
         target.mkdir(parents=True, exist_ok=True)
-    logger.info("Workspace fully reset and reinitialized.")
+    logger.info("Workspace reset (Config preserved).")
 
 
 def search_for_config():
@@ -576,20 +575,29 @@ def setup_files(first_boot: bool = False):
     prepare_quantization_dataset(str(dataset_dir), boot=True)
 
     pytorch_dir = yolo_dir / "pytorch"
-    for pt_file in _ASSETS_DIR.glob("*.pt"):
+    _SKIP_DIRS = {".venv", "__pycache__", ".git", ".pytest_cache", "env", "runs", "dist"}
+    seen = set()
+    for pt_file in _ASSETS_DIR.rglob("*.pt"):
         target = pytorch_dir / pt_file.name
         if first_boot or not target.exists():
-            shutil.copy(pt_file, target)
+            shutil.copy2(pt_file, target)
+            seen.add(pt_file.name)
             logger.info("Copied model %s -> %s", pt_file.name, target)
-
-    for file in yolo_dir.rglob("*.pt"):
-        try:
-            target = pytorch_dir / file.name
-            if first_boot or not target.exists():
-                shutil.copy(file, target)
-                logger.info("Copied %s to %s", file, target)
-        except Exception as e:
-            logger.warning("Failed to move %s: %s", file, e)
+    if first_boot:
+        for pt_file in _PROJECT_ROOT.rglob("*.pt"):
+            if pt_file.name in seen:
+                continue
+            if any(part in _SKIP_DIRS for part in pt_file.relative_to(_PROJECT_ROOT).parts):
+                continue
+            target = pytorch_dir / pt_file.name
+            try:
+                if target.exists() and os.path.samefile(pt_file, target):
+                    continue
+            except (OSError, ValueError):
+                pass
+            shutil.copy2(pt_file, target)
+            seen.add(pt_file.name)
+            logger.info("Copied model %s -> %s", pt_file.name, target)
 
 def on_boot(install_service: bool = False, first_boot: bool = False):
     if first_boot:

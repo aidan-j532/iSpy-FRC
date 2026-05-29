@@ -64,7 +64,7 @@ class iSpyConfig:
             "device": 0,
             "unit": "meter",
             "debug_mode": True,
-            "dbscan": {"elipson": 0.3, "min_samples": 3},
+            "dbscan": {"epsilon": 0.3, "min_samples": 3},
             "distance_threshold": 0.5,
             "stale_threshold": 1.0,
             "record_mode": True,

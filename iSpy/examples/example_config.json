@@ -32,7 +32,7 @@
     "unit": "meter",
     "debug_mode": true,
     "dbscan": {
-        "elipson": 0.3,
+        "epsilon": 0.3,
         "min_samples": 3
     },
     "distance_threshold": 0.5,

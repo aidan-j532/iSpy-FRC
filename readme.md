@@ -132,7 +132,7 @@ The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on dep
     "stale_threshold": 1.0,
     "distance_threshold": 0.5,
     "dbscan": {
-        "elipson": 0.3,
+        "epsilon": 0.3,
         "min_samples": 3
     },
     "camera_configs": {
@@ -323,6 +323,7 @@ Benchmarking I'VE tested with default models (pip install iSpy-frc, iSpy-boot -f
 |-----------------------------|----------------------------------|-----------------------------|
 | Orange Pi (RK3588): ~30 fps | Orange Pi (RK3588):   Not Tested | Orange Pi (RK3588): ~60 fps |
 | Colab (2 T4's):     ~180 fps| Colab (2 T4's):       Not Tested | Colab (2 T4's):  Not tested |
+Colab v5e1 Yolov8 nano pose 47 fps, detect is 
 
 ---
 

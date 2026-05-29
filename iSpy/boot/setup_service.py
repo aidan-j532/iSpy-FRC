@@ -32,7 +32,7 @@ After=network.target
 
 [Service]
 ExecStart={python} {os.path.abspath(script_path)}
-Restart=always
+Restart=on-failure
 RestartSec=5
 User={user}
 WorkingDirectory={workdir}

@@ -1,7 +1,7 @@
 {
     "vision_model": {
-        "file_path": "YoloModels\\pytorch\\_default_pose_openvino_model",
-        "task": "pose",
+        "file_path": "C:\\Users\\RoboticsTeam\\Desktop\\VisionCore\\VisionCore-Deploy\\YoloModels\\pytorch\\_default_pose_openvino_model",
+        "task": "detect",
         "num_classes": 1,
         "input_size": [
             640,
@@ -29,10 +29,12 @@
         "source_pt": "YoloModels/pytorch/_default_pose.pt",
         "margin": 10
     },
+    "num_gpus": "auto",
+    "device": 0,
     "unit": "meter",
     "debug_mode": true,
     "dbscan": {
-        "elipson": 0.3,
+        "epsilon": 0.3,
         "min_samples": 3
     },
     "distance_threshold": 0.5,

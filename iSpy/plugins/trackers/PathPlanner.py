@@ -7,7 +7,7 @@ class PathPlanner(TrackerBase):
     plugin_name = "path_planner"
 
     def __init__(self, config: iSpyConfig):
-        self.epsilon = config["dbscan"]["elipson"]
+        self.epsilon = config["dbscan"]["epsilon"]
         self.min_samples = config["dbscan"]["min_samples"]
 
         self.fuel_positions = []

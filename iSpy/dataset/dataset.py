@@ -133,9 +133,10 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
     data_yaml = ds / "data.yaml"
     if data_yaml.exists():
         try:
-            import yaml
+            from ruamel.yaml import YAML
+            yaml = YAML()
             with open(data_yaml) as f:
-                cfg = yaml.safe_load(f) or {}
+                cfg = yaml.load(f) or {}
             train_path = cfg.get("train") or cfg.get("val")
             if train_path:
                 tp = Path(train_path)

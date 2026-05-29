@@ -140,13 +140,13 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
     recommendations = []
 
     dbscan = config.get("dbscan", {})
-    epsilon = dbscan.get("elipson", 0)
+    epsilon = dbscan.get("epsilon", 0)
     min_samples = dbscan.get("min_samples", 0)
 
     if epsilon == 0:
         recommendations.append(
             "DBSCAN epsilon is 0 - clustering is disabled. "
-            "Set 'dbscan.elipson' to a positive value (e.g., 0.3 for meters) to enable clustering."
+            "Set 'dbscan.epsilon' to a positive value (e.g., 0.3 for meters) to enable clustering."
         )
     elif epsilon < 0.1:
         recommendations.append(
