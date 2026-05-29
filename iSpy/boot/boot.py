@@ -52,39 +52,40 @@ _RKNN_WHEELS_BASE = os.environ.get(
     "https://raw.githubusercontent.com/aidan-j532/iSpy-Deploy/main/RknnWheels",
 ).rstrip("/")
 
-_KNOWN_RKNN_WHEELS: dict[tuple[str, str], str] = {
-    (
-        "aarch64",
-        "cp311",
-    ): "rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    (
-        "aarch64",
-        "cp312",
-    ): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    (
-        "x86_64",
-        "cp310",
-    ): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    (
-        "x86_64",
-        "cp312",
-    ): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+_RKNN_FULL_WHEELS: dict[tuple[str, str], str] = {
+    ("aarch64", "cp310"): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    ("aarch64", "cp311"): "rknn_toolkit2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    ("aarch64", "cp312"): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    ("x86_64", "cp310"): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    ("x86_64", "cp311"): "rknn_toolkit2-2.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    ("x86_64", "cp312"): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+}
+
+_RKNN_LITE_WHEELS: dict[tuple[str, str], str] = {
+    ("aarch64", "cp310"): "rknn_toolkit_lite2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    ("aarch64", "cp311"): "rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    ("aarch64", "cp312"): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
 }
 
 
-def _rknn_wheel_url() -> str | None:
+def _rknn_wheel_urls() -> list[tuple[str, str]]:
     key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
-    filename = _KNOWN_RKNN_WHEELS.get(key)
-    if not filename:
-        supported = sorted(f"{a} {v}" for (a, v) in _KNOWN_RKNN_WHEELS if a == key[0])
+    urls: list[tuple[str, str]] = []
+    full_fn = _RKNN_FULL_WHEELS.get(key)
+    if full_fn:
+        urls.append(("rknn", f"{_RKNN_WHEELS_BASE}/{full_fn}"))
+    lite_fn = _RKNN_LITE_WHEELS.get(key)
+    if lite_fn:
+        urls.append(("rknnlite", f"{_RKNN_WHEELS_BASE}/{lite_fn}"))
+    if not urls:
+        supported = sorted(f"{a} {v}" for (a, v) in _RKNN_FULL_WHEELS if a == key[0])
         logger.error(
             "No RKNN wheel for %s (Python %s). Supported: %s",
             key[0],
             _PY_TAG,
             ", ".join(supported),
         )
-        return None
-    return f"{_RKNN_WHEELS_BASE}/{filename}"
+    return urls
 
 
 def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
@@ -96,10 +97,9 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
         "tflite": [("tflite_runtime", "tflite-runtime")],
         "tpu": [("torch_xla", "torch_xla[tpu]", ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"])],
     }
-    rknn_url = _rknn_wheel_url()
-    if rknn_url:
-        mod = "rknnlite" if _IS_AARCH64 else "rknn"
-        deps["rknn"] = [(mod, rknn_url)]
+    rknn_wheels = _rknn_wheel_urls()
+    if rknn_wheels:
+        deps["rknn"] = rknn_wheels
     return deps
 
 
