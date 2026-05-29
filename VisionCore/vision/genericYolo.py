@@ -939,7 +939,7 @@ class GenericYolo:
         keypoints_list = []
         kpt_data = getattr(ultralytics_result, "keypoints", None)
         if kpt_data is not None and kpt_data.data is not None:
-            kpt_arrs = kpt_data.data.cpu().numpy() if _is_torch else np.asarray(kpt_data.data)
+            kpt_arrs = kpt_data.data.cpu().numpy() if hasattr(kpt_data.data, "cpu") else np.asarray(kpt_data.data)
             for i, kpt_set in enumerate(kpt_arrs):
                 kpt_arr = np.asarray(kpt_set)
                 if self.pnp_config and len(boxes) == len(kpt_arrs):
