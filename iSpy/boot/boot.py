@@ -121,7 +121,7 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
     }
     rknn_targets = _rknn_wheel_targets()
     if rknn_targets:
-        deps["rknn"] = rknn_targets
+        deps["rknn"] = rknn_targets + [("onnx", "onnx<1.17")]
     return deps
 
 
