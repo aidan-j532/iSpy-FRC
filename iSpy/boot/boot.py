@@ -417,6 +417,7 @@ def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
         logger.warning("Failed to export ONNX metadata: %s", e)
 
 def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
+    os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
     pt_path = Path(pt_file)
     stem = pt_path.stem
     parent = pt_path.parent
