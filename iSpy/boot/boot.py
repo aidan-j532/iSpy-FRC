@@ -1,4 +1,8 @@
 import sys
+import os
+
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
 import logging
 from pathlib import Path
 
@@ -10,8 +14,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-import os
-
 os.environ["YOLO_VERBOSE"] = "False"
 import shutil
 import subprocess
@@ -121,7 +123,7 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
     }
     rknn_targets = _rknn_wheel_targets()
     if rknn_targets:
-        deps["rknn"] = rknn_targets + [("onnx", "onnx<1.17")]
+        deps["rknn"] = rknn_targets + [("onnx", "onnx<1.17"), ("google.protobuf", "protobuf<4.0")]
     return deps
 
 
@@ -417,7 +419,6 @@ def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
         logger.warning("Failed to export ONNX metadata: %s", e)
 
 def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
-    os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
     pt_path = Path(pt_file)
     stem = pt_path.stem
     parent = pt_path.parent
