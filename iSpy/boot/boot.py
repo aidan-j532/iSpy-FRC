@@ -562,7 +562,7 @@ def convert_model(model_file, target_format, input_size, quantize=False):
     return model_file
 
 
-def setup_files():
+def setup_files(first_boot: bool = False):
     yolo_dir = _PROJECT_ROOT / "YoloModels"
     config_dir = _PROJECT_ROOT / "Config"
     outputs_dir = _PROJECT_ROOT / "Outputs"
@@ -574,17 +574,18 @@ def setup_files():
     for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
     prepare_quantization_dataset(str(dataset_dir), boot=True)
-    nano_pt = yolo_dir / "pytorch" / "_default_pose.pt"
-    if not nano_pt.exists():
-        bundled = _ASSETS_DIR / "_default_pose.pt"
-        if bundled.exists():
-            shutil.copy(bundled, nano_pt)
 
-    # Clone the assets .pt into the YoloModels/pytorch directory if not already present
+    pytorch_dir = yolo_dir / "pytorch"
+    for pt_file in _ASSETS_DIR.glob("*.pt"):
+        target = pytorch_dir / pt_file.name
+        if first_boot or not target.exists():
+            shutil.copy(pt_file, target)
+            logger.info("Copied model %s -> %s", pt_file.name, target)
+
     for file in yolo_dir.rglob("*.pt"):
         try:
-            target = yolo_dir / "pytorch" / file.name
-            if not target.exists():
+            target = pytorch_dir / file.name
+            if first_boot or not target.exists():
                 shutil.copy(file, target)
                 logger.info("Copied %s to %s", file, target)
         except Exception as e:
@@ -594,7 +595,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
     if first_boot:
         logger.info("First boot mode enabled. Resetting workspace...")
         reset_workspace()
-    setup_files()
+    setup_files(first_boot=first_boot)
     config_path = search_for_config()
     config = None
     if not config_path:
