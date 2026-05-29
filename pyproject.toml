@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ispy-frc"
-version = "2.11.21.45"
+version = "1.0.0"
 description = "FRC vision pipeline for custom, hardware accelerated object detection."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -57,18 +57,14 @@ dev = [
     "tensorrt>=10.0.0"
 ]
 
-tensorrt = [
-    "tensorrt>=10.0.0"
-]
-
 [project.scripts]
 ispy-run  = "iSpy.core.game_loop:main"
 ispy-boot = "iSpy.boot.boot:main"
 
 [project.urls]
-Homepage = "https://github.com/aidan-j532/VisionCore-Deploy"
-Repository = "https://github.com/aidan-j532/VisionCore-Deploy"
-Bug-Tracker = "https://github.com/aidan-j532/VisionCore-Deploy/issues"
+Homepage = "https://github.com/aidan-j532/iSpy-FRC"
+Repository = "https://github.com/aidan-j532/iSpy-FRC"
+Bug-Tracker = "https://github.com/aidan-j532/iSpy-FRC/issues"
 
 [tool.setuptools.packages.find]
 include = ["iSpy", "iSpy.*"]
