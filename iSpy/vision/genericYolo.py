@@ -591,6 +591,8 @@ class GenericYolo:
             output = self.model(tensor)
         xm.mark_step()
 
+        if isinstance(output, (list, tuple)):
+            output = output[0]
         output = output.cpu().numpy()
         if output.ndim == 3:
             output = output[0]
