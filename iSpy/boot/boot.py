@@ -48,6 +48,7 @@ _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
 _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
+
 def _find_lite_wheel_dir() -> Path:
     local = _PACKAGE_ROOT.parent / "rknn_wheels"
     if local.exists():
@@ -62,6 +63,7 @@ def _find_lite_wheel_dir() -> Path:
         pass
     return local
 
+
 _RKNN_LITE_DIR = _find_lite_wheel_dir()
 
 _RKNN_FULL_BASE = os.environ.get(
@@ -70,18 +72,45 @@ _RKNN_FULL_BASE = os.environ.get(
 ).rstrip("/")
 
 _RKNN_FULL_WHEELS: dict[tuple[str, str], str] = {
-    ("aarch64", "cp310"): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    ("aarch64", "cp311"): "rknn_toolkit2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    ("aarch64", "cp312"): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    ("x86_64", "cp310"): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    ("x86_64", "cp311"): "rknn_toolkit2-2.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    ("x86_64", "cp312"): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    (
+        "aarch64",
+        "cp310",
+    ): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    (
+        "aarch64",
+        "cp311",
+    ): "rknn_toolkit2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    (
+        "aarch64",
+        "cp312",
+    ): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    (
+        "x86_64",
+        "cp310",
+    ): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    (
+        "x86_64",
+        "cp311",
+    ): "rknn_toolkit2-2.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    (
+        "x86_64",
+        "cp312",
+    ): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
 }
 
 _RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
-    ("aarch64", "cp310"): "rknn_toolkit_lite2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    ("aarch64", "cp311"): "rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    ("aarch64", "cp312"): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    (
+        "aarch64",
+        "cp310",
+    ): "rknn_toolkit_lite2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    (
+        "aarch64",
+        "cp311",
+    ): "rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    (
+        "aarch64",
+        "cp312",
+    ): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
 }
 
 
@@ -119,11 +148,20 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
         "openvino": [("openvino", "openvino")],
         "coreml": [("coremltools", "coremltools")],
         "tflite": [("tflite_runtime", "tflite-runtime")],
-        "tpu": [("torch_xla", "torch_xla[tpu]", ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"])],
+        "tpu": [
+            (
+                "torch_xla",
+                "torch_xla[tpu]",
+                ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"],
+            )
+        ],
     }
     rknn_targets = _rknn_wheel_targets()
     if rknn_targets:
-        deps["rknn"] = rknn_targets + [("onnx", "onnx<1.17"), ("google.protobuf", "protobuf<4.0")]
+        deps["rknn"] = rknn_targets + [
+            ("onnx", "onnx<1.17"),
+            ("google.protobuf", "protobuf<4.0"),
+        ]
     return deps
 
 
@@ -158,6 +196,7 @@ def _check_version_constraint(package_name: str, constraint: str) -> bool:
         return False
     try:
         from packaging.version import Version
+
         inst = Version(installed)
         bound = constraint.lstrip("<>=!~")
         if constraint.startswith("<="):
@@ -173,17 +212,19 @@ def _check_version_constraint(package_name: str, constraint: str) -> bool:
         if constraint.startswith(">"):
             return inst > Version(bound)
         if constraint.startswith("~="):
-            return (
-                inst.release[: len(Version(bound).release)]
-                == Version(bound).release
-                and inst >= Version(bound)
-            )
+            return inst.release[: len(Version(bound).release)] == Version(
+                bound
+            ).release and inst >= Version(bound)
     except Exception:
         pass
     return True
 
 
-def _pip_install(install_target: str, force_reinstall: bool = False, extra_args: list[str] | None = None) -> bool:
+def _pip_install(
+    install_target: str,
+    force_reinstall: bool = False,
+    extra_args: list[str] | None = None,
+) -> bool:
     cmd = [sys.executable, "-m", "pip", "install"]
     if install_target.startswith("http") or install_target.endswith(".whl"):
         cmd.append("--no-deps")
@@ -378,6 +419,7 @@ def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
     except Exception as e:
         logger.warning("Failed to export RKNN metadata: %s", e)
 
+
 def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
     try:
         import ultralytics
@@ -416,6 +458,7 @@ def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
         logger.info("Exported ONNX metadata: %s", meta_path)
     except Exception as e:
         logger.warning("Failed to export ONNX metadata: %s", e)
+
 
 def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
     pt_path = Path(pt_file)
@@ -575,7 +618,15 @@ def setup_files(first_boot: bool = False):
     prepare_quantization_dataset(str(dataset_dir), boot=True)
 
     pytorch_dir = yolo_dir / "pytorch"
-    _SKIP_DIRS = {".venv", "__pycache__", ".git", ".pytest_cache", "env", "runs", "dist"}
+    _SKIP_DIRS = {
+        ".venv",
+        "__pycache__",
+        ".git",
+        ".pytest_cache",
+        "env",
+        "runs",
+        "dist",
+    }
     seen = set()
     for pt_file in _ASSETS_DIR.rglob("*.pt"):
         target = pytorch_dir / pt_file.name
@@ -587,7 +638,9 @@ def setup_files(first_boot: bool = False):
         for pt_file in _PROJECT_ROOT.rglob("*.pt"):
             if pt_file.name in seen:
                 continue
-            if any(part in _SKIP_DIRS for part in pt_file.relative_to(_PROJECT_ROOT).parts):
+            if any(
+                part in _SKIP_DIRS for part in pt_file.relative_to(_PROJECT_ROOT).parts
+            ):
                 continue
             target = pytorch_dir / pt_file.name
             try:
@@ -598,6 +651,7 @@ def setup_files(first_boot: bool = False):
             shutil.copy2(pt_file, target)
             seen.add(pt_file.name)
             logger.info("Copied model %s -> %s", pt_file.name, target)
+
 
 def on_boot(install_service: bool = False, first_boot: bool = False):
     if first_boot:
