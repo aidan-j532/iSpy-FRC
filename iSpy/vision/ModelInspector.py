@@ -699,6 +699,15 @@ def fill_missing_config(model_config: dict) -> dict:
                     field_path, user_val, detected_val,
                 )
 
+    actual_task = detected.get("task", task)
+    if actual_task != "pose":
+        out = merged.get("output")
+        if out:
+            for key in ("num_keypoints", "keypoint_dims", "keypoint_scores_are_logits"):
+                if key in out:
+                    del out[key]
+                    logger.info("Removed stale output.%s (task=%s)", key, actual_task)
+
     return merged
 
 
