@@ -341,7 +341,7 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
     model = ultralytics.YOLO(model_file)
 
     native_kwargs = {
-        "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=12),
+        "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=17, dynamic=False),
         "tflite": dict(format="tflite", imgsz=input_size, int8=True),
         "openvino": dict(format="openvino", imgsz=input_size, half=True),
         "coreml": dict(format="coreml", imgsz=input_size, nms=True),
