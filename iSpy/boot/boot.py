@@ -324,23 +324,6 @@ def install_special_dependencies(auto_install: bool = False):
     logger.info("Dependency installation complete for %s", backend)
 
 
-def reset_workspace():
-    targets = [
-        _PROJECT_ROOT / "YoloModels",
-        _PROJECT_ROOT / "Outputs",
-    ]
-    for target in targets:
-        try:
-            if target.exists():
-                logger.warning("Resetting: %s", target)
-                shutil.rmtree(target, ignore_errors=False)
-        except Exception as e:
-            logger.warning("Failed to fully remove %s: %s", target, e)
-    for target in targets:
-        target.mkdir(parents=True, exist_ok=True)
-    logger.info("Workspace reset (Config preserved).")
-
-
 def search_for_config():
     config_dir = _PROJECT_ROOT / "Config"
     if not config_dir.exists():
@@ -655,8 +638,7 @@ def setup_files(first_boot: bool = False):
 
 def on_boot(install_service: bool = False, first_boot: bool = False):
     if first_boot:
-        logger.info("First boot mode enabled. Resetting workspace...")
-        reset_workspace()
+        logger.info("First boot mode — ensuring fresh conversion for selected model")
     setup_files(first_boot=first_boot)
     config_path = search_for_config()
     config = None
@@ -678,50 +660,84 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
 
         best_format = recommend_format(ignore_dependencies=True)
         logger.info("Auto-opt enabled. Recommended format: %s", best_format)
-        matcher = FORMAT_MATCHERS.get(best_format)
-        if not matcher:
-            raise ValueError(f"No matcher for format: {best_format}")
-        model_dir = _PROJECT_ROOT / "YoloModels"
-        optimized = [p for p in model_dir.rglob("*") if matcher(p)]
-        if optimized:
-            logger.info("Found cached optimised model: %s", optimized[0])
-            config.set("vision_model", "file_path", str(optimized[0]))
-        else:
-            logger.info(
-                "No cached %s model found. Attempting conversion...", best_format
-            )
-            pt_path = config.get("vision_model", {}).get("source_pt")
-            if pt_path:
-                pt_full = Path(pt_path)
-                if not pt_full.is_absolute():
-                    pt_full = _PROJECT_ROOT / pt_path
-                if not pt_full.exists():
-                    logger.warning("Model missing, copying bundled _default_pose.pt")
-                    bundled = _ASSETS_DIR / "_default_pose.pt"
-                    target = _PROJECT_ROOT / "YoloModels/pytorch/_default_pose.pt"
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy(bundled, target)
-                    pt_full = target
-                input_size = config.get("input_size") or [640, 640]
-                converted = Path(
-                    convert_model(
-                        str(pt_full),
-                        best_format,
-                        input_size,
-                        quantize=config.get("quantize", False),
-                    )
+
+        def _cached_output(pt_path: Path) -> Path | None:
+            stem = pt_path.stem
+            parent = pt_path.parent
+            fmt_paths = {
+                "onnx": parent / f"{stem}.onnx",
+                "rknn": parent / f"{stem}.rknn",
+                "openvino": parent / f"{stem}_openvino_model",
+                "coreml": parent / f"{stem}.mlpackage",
+                "engine": parent / f"{stem}.engine",
+            }
+            out = fmt_paths.get(best_format)
+            if out and out.exists():
+                return out
+            if best_format == "tflite":
+                saved = parent / f"{stem}_saved_model"
+                if saved.exists():
+                    tflites = list(saved.rglob("*.tflite"))
+                    if tflites:
+                        return tflites[0]
+            return None
+
+        pytorch_dir = _PROJECT_ROOT / "YoloModels/pytorch"
+        pt_path = config.get("vision_model", {}).get("source_pt")
+        pt_full = None
+        if pt_path:
+            pt_full = Path(pt_path)
+            if not pt_full.is_absolute():
+                pt_full = _PROJECT_ROOT / pt_full
+
+        if pt_full and pt_full.exists():
+            cached = _cached_output(pt_full)
+            if cached:
+                logger.info("Found cached %s model: %s", best_format, cached)
+                config.set("vision_model", "file_path", str(cached))
+                need_conversion = False
+            else:
+                logger.info(
+                    "No cached %s model for %s. Converting...", best_format, pt_full.name
                 )
-                if converted != pt_full:
-                    logger.info("Conversion successful: %s", converted)
-                    config.set("vision_model", "file_path", str(converted))
-                else:
-                    logger.warning(
-                        "Conversion to %s failed or was skipped. Using .pt model.",
-                        best_format,
-                    )
+                need_conversion = True
+        else:
+            if pt_full and not pt_full.exists():
+                logger.warning("Configured source_pt %s not found, scanning...", pt_full)
+            candidates = sorted(pytorch_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
+            user_models = [p for p in candidates if not p.name.startswith("_default_")]
+            if user_models:
+                pt_full = user_models[0]
+                logger.info("Auto-detected user model: %s", pt_full.name)
+            elif candidates:
+                pt_full = candidates[0]
+                logger.info("Using default model: %s", pt_full.name)
+            else:
+                logger.warning("No .pt found, copying bundled _default_pose.pt")
+                bundled = _ASSETS_DIR / "_default_pose.pt"
+                pt_full = pytorch_dir / "_default_pose.pt"
+                pt_full.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(bundled, pt_full)
+            config.set("vision_model", "source_pt", str(pt_full))
+            need_conversion = True
+
+        if need_conversion:
+            input_size = config.get("input_size") or [640, 640]
+            converted = Path(
+                convert_model(
+                    str(pt_full),
+                    best_format,
+                    input_size,
+                    quantize=config.get("quantize", False),
+                )
+            )
+            if converted != pt_full:
+                logger.info("Conversion successful: %s", converted)
+                config.set("vision_model", "file_path", str(converted))
             else:
                 logger.warning(
-                    "No source .pt model found to convert. Using configured model."
+                    "Conversion to %s failed or was skipped. Using .pt model.",
+                    best_format,
                 )
     else:
         logger.info("Auto-opt disabled.")
