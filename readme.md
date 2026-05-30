@@ -324,6 +324,7 @@ Benchmarking I'VE tested with default models (pip install iSpy-frc, iSpy-boot -f
 | Orange Pi (RK3588): ~30 fps | Orange Pi (RK3588):   Not Tested | Orange Pi (RK3588): ~60 fps |
 | Colab (2 T4's):     ~180 fps| Colab (2 T4's):       Not Tested | Colab (2 T4's):  Not tested |
 Colab v5e1 Yolov8 nano pose 47 fps, detect is 
+Kaggle 2 P100's yolov8 nano detect 
 
 ---
 

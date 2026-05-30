@@ -662,6 +662,8 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
         logger.info("Auto-opt enabled. Recommended format: %s", best_format)
 
         def _cached_output(pt_path: Path) -> Path | None:
+            if best_format == "tpu":
+                return pt_path if pt_path.exists() else None
             stem = pt_path.stem
             parent = pt_path.parent
             fmt_paths = {
