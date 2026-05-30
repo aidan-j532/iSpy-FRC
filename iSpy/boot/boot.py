@@ -30,7 +30,7 @@ from iSpy.dataset.dataset import prepare_quantization_dataset
 logging.getLogger().setLevel(logging.INFO)
 
 _BOOT_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = _BOOT_DIR.parent.parent.resolve()
+_PROJECT_ROOT = Path.cwd().resolve()
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
 
