@@ -60,7 +60,7 @@ dev = [
 [project.scripts]
 ispy-run  = "iSpy.core.game_loop:main"
 ispy-boot = "iSpy.boot.boot:main"
-ispy-test = "ispy-test:main"
+ispy-bench = "iSpy.validations.benchmarking:main"
 
 [project.urls]
 Homepage = "https://github.com/aidan-j532/iSpy-FRC"
