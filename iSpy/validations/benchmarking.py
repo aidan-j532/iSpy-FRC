@@ -116,9 +116,21 @@ def detect_test_plan():
 
 @contextlib.contextmanager
 def _quiet():
-    with open(os.devnull, "w") as null:
-        with contextlib.redirect_stdout(null), contextlib.redirect_stderr(null):
-            yield
+    """Redirect stdout+stderr at the OS fd level to suppress C library output."""
+    devnull = "nul" if os.name == "nt" else "/dev/null"
+    fd = os.open(devnull, os.O_WRONLY)
+    old_out = os.dup(1)
+    old_err = os.dup(2)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.close(fd)
+    try:
+        yield
+    finally:
+        os.dup2(old_out, 1)
+        os.dup2(old_err, 2)
+        os.close(old_out)
+        os.close(old_err)
 
 
 def get_or_convert(pt_path, fmt, input_size=(640, 640)):
@@ -174,15 +186,16 @@ def benchmark(model_config, core_mask, duration=5.0):
     else:
         infer = lambda: model.predict(frame, orig_shape=frame.shape)
 
-    for _ in range(5):
-        infer()
-    start = time.perf_counter()
-    count = 0
-    while time.perf_counter() - start < duration:
-        infer()
-        count += 1
-    elapsed = time.perf_counter() - start
-    fps = count / elapsed
+    with _quiet():
+        for _ in range(5):
+            infer()
+        start = time.perf_counter()
+        count = 0
+        while time.perf_counter() - start < duration:
+            infer()
+            count += 1
+        elapsed = time.perf_counter() - start
+        fps = count / elapsed
     model.release()
     return fps, count, elapsed
 

@@ -18,6 +18,7 @@ os.environ["YOLO_VERBOSE"] = "False"
 import shutil
 import subprocess
 import platform
+import contextlib
 import importlib.util
 import importlib.metadata
 import ultralytics
@@ -362,12 +363,32 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
     return model.export(**kwargs)
 
 
+@contextlib.contextmanager
+def _silent_fd():
+    """Redirect stdout+stderr at the OS fd level to suppress C library output."""
+    devnull = "nul" if os.name == "nt" else "/dev/null"
+    fd = os.open(devnull, os.O_WRONLY)
+    old_out = os.dup(1)
+    old_err = os.dup(2)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.close(fd)
+    try:
+        yield
+    finally:
+        os.dup2(old_out, 1)
+        os.dup2(old_err, 2)
+        os.close(old_out)
+        os.close(old_err)
+
+
 def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
     try:
-        import ultralytics
-        from ruamel.yaml import YAML
+        with _silent_fd():
+            import ultralytics
+            from ruamel.yaml import YAML
 
-        model = ultralytics.YOLO(pt_file, verbose=False)
+            model = ultralytics.YOLO(pt_file, verbose=False)
         meta = {}
         model_task = getattr(model, "task", "detect") or "detect"
         meta["task"] = model_task
@@ -405,10 +426,11 @@ def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
 
 def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
     try:
-        import ultralytics
-        from ruamel.yaml import YAML
+        with _silent_fd():
+            import ultralytics
+            from ruamel.yaml import YAML
 
-        model = ultralytics.YOLO(pt_file, verbose=False)
+            model = ultralytics.YOLO(pt_file, verbose=False)
         meta = {}
         model_task = getattr(model, "task", "detect") or "detect"
         meta["task"] = model_task
