@@ -339,6 +339,7 @@ def _main_body():
         return 1
 
     best: dict[str, dict] = {}
+    all_results: list[dict] = []
 
     for pt_path in pt_files:
         name = pt_path.stem
@@ -362,6 +363,7 @@ def _main_body():
                     r = {"model": name, "backend": label, "format": fmt,
                          "device": str(device), "core_mask": core_mask,
                          "fps": None, "error": str(e)}
+                all_results.append(r)
                 cur = best.get(name)
                 if cur is None or (r["fps"] or 0) > (cur["fps"] or 0):
                     best[name] = r
@@ -385,7 +387,7 @@ def _main_body():
     output_path = args.output or str(_PROJECT_ROOT / "Outputs" / "benchmark_results.json")
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
-        json.dump(best, f, indent=2)
+        json.dump({"best": best, "all": all_results}, f, indent=2)
     print(f"\n  Results saved to {output_path}")
 
 
