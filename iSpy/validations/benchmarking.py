@@ -31,6 +31,9 @@ import cv2
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parent.parent.resolve()
+# Fallback if installed non-editably (__file__ in site-packages)
+if not (_PROJECT_ROOT / "iSpy").is_dir():
+    _PROJECT_ROOT = Path.cwd()
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 os.environ["RKNN_LOG_LEVEL"] = "3"
@@ -384,7 +387,7 @@ def _main_body():
         print()
         print(f"  OVERALL WINNER: {overall['backend']} @ {overall['fps']} FPS ({overall['model']})")
 
-    output_path = args.output or str(_PROJECT_ROOT / "Outputs" / "benchmark_results.json")
+    output_path = args.output or str(Path.cwd() / "Outputs" / "benchmark_results.json")
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         json.dump({"best": best, "all": all_results}, f, indent=2)
