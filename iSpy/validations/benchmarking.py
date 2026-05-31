@@ -119,23 +119,46 @@ _KERNEL_PRINTK: list[int] | None = None
 
 
 def _mute_kernel_rknn():
-    """Suppress KERN_DEBUG messages from the rknn kernel driver on console.
+    """Suppress RKNN kernel driver debug output from console.
 
-    Saves the current printk levels and sets console_loglevel to 4
-    (KERN_INFO and above only). Call _restore_kernel_rknn() to revert.
-    This only affects the current console — dmesg log is untouched.
+    Tries:
+      1. RKNN kernel module debug=0 param (no root needed if writable)
+      2. Write to /proc/sys/kernel/printk (needs root)
+      3. Call dmesg -n 4 (needs root)
+    Restores in _restore_kernel_log().
     """
     global _KERNEL_PRINTK
+    for _mod_param in ("/sys/module/rknn/parameters/debug_level",
+                       "/sys/module/rknn/parameters/debug"):
+        try:
+            with open(_mod_param) as _f:
+                _cur = int(_f.read().strip())
+            if _cur > 0:
+                with open(_mod_param, "w") as _f:
+                    _f.write("0")
+            break
+        except Exception:
+            continue
     try:
         with open("/proc/sys/kernel/printk") as f:
             vals = re.findall(r"\d+", f.read())
         if vals:
             _KERNEL_PRINTK = [int(v) for v in vals[:4]]
-            # console_loglevel=4 suppresses KERN_DEBUG (7), KERN_INFO (6) kept
+            if _KERNEL_PRINTK[0] <= 4:
+                return  # already muted
             with open("/proc/sys/kernel/printk", "w") as f:
                 f.write("4 4 1 7")
-    except (PermissionError, FileNotFoundError, OSError):
-        pass  # not on Linux or no permission
+            return
+    except PermissionError:
+        pass
+    except (FileNotFoundError, OSError):
+        pass
+    # Fallback: try dmesg -n 4
+    try:
+        import subprocess as _sp
+        _sp.run(["dmesg", "-n", "4"], capture_output=True, timeout=5)
+    except Exception:
+        pass
 
 
 def _restore_kernel_log():
@@ -146,7 +169,11 @@ def _restore_kernel_log():
             with open("/proc/sys/kernel/printk", "w") as f:
                 f.write(" ".join(str(v) for v in _KERNEL_PRINTK))
         except (PermissionError, FileNotFoundError, OSError):
-            pass
+            try:
+                import subprocess as _sp
+                _sp.run(["dmesg", "-n", str(_KERNEL_PRINTK[0])], capture_output=True, timeout=5)
+            except Exception:
+                pass
         _KERNEL_PRINTK = None
 
 
@@ -222,16 +249,18 @@ def benchmark(model_config, core_mask, duration=5.0):
     else:
         infer = lambda: model.predict(frame, orig_shape=frame.shape)
 
-    for _ in range(5):
-        infer()
-    start = time.perf_counter()
-    count = 0
-    while time.perf_counter() - start < duration:
-        infer()
-        count += 1
-    elapsed = time.perf_counter() - start
-    fps = count / elapsed
-    model.release()
+    with _quiet():
+        for _ in range(5):
+            infer()
+        start = time.perf_counter()
+        count = 0
+        while time.perf_counter() - start < duration:
+            infer()
+            count += 1
+        elapsed = time.perf_counter() - start
+        fps = count / elapsed
+    with _quiet():
+        model.release()
     return fps, count, elapsed
 
 

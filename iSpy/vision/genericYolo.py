@@ -15,19 +15,39 @@ try:
     RKNN_FOUND = True
 
     import ctypes
-    _librknnrt = None
-    for _libname in ("librknnrt.so", "librknnmrt.so"):
-        try:
-            _librknnrt = ctypes.CDLL(_libname)
-            break
-        except OSError:
-            pass
+    import os as _os
+
+    _rknn_log_set = False
 
     def _set_rknn_log_level(level: int) -> None:
-        if _librknnrt is not None:
+        global _rknn_log_set
+        if _rknn_log_set:
+            return
+        _rknn_log_set = True
+        _lib = None
+        # Search rknnlite package directory for librknnrt.so
+        _pkg_dir = _os.path.dirname(__import__("rknnlite").__file__)
+        for _f in _os.listdir(_pkg_dir):
+            if "librknnrt" in _f and (_f.endswith(".so") or ".so." in _f):
+                try:
+                    _lib = ctypes.CDLL(_os.path.join(_pkg_dir, _f), use_errno=False)
+                    _lib.rknn_set_log_level
+                    break
+                except (AttributeError, OSError):
+                    _lib = None
+        # Fallback: try standard dlopen search
+        if _lib is None:
+            for _name in ("librknnrt.so", "librknnmrt.so"):
+                try:
+                    _lib = ctypes.CDLL(_name, use_errno=False)
+                    _lib.rknn_set_log_level
+                    break
+                except (AttributeError, OSError):
+                    _lib = None
+        if _lib is not None:
             try:
-                _librknnrt.rknn_set_log_level(ctypes.c_int(level))
-            except AttributeError:
+                _lib.rknn_set_log_level(ctypes.c_int(level))
+            except Exception:
                 pass
 
 except ImportError:
