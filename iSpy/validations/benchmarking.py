@@ -120,7 +120,6 @@ def _npu_masks():
 
 
 def _cuda_devices() -> list[tuple[int, str]]:
-    """Enumerate all CUDA-capable GPUs on the system."""
     try:
         import torch
         n = torch.cuda.device_count()
@@ -166,14 +165,6 @@ _KERNEL_PRINTK: list[int] | None = None
 
 
 def _mute_kernel_rknn():
-    """Suppress RKNN kernel driver debug output from console.
-
-    Tries:
-      1. RKNN kernel module debug=0 param (no root needed if writable)
-      2. Write to /proc/sys/kernel/printk (needs root)
-      3. Call dmesg -n 4 (needs root)
-    Restores in _restore_kernel_log().
-    """
     global _KERNEL_PRINTK
     for _mod_param in ("/sys/module/rknn/parameters/debug_level",
                        "/sys/module/rknn/parameters/debug"):
@@ -209,7 +200,6 @@ def _mute_kernel_rknn():
 
 
 def _restore_kernel_log():
-    """Restore the kernel printk levels saved by _mute_kernel_rknn()."""
     global _KERNEL_PRINTK
     if _KERNEL_PRINTK is not None:
         try:
@@ -226,7 +216,6 @@ def _restore_kernel_log():
 
 @contextlib.contextmanager
 def _quiet():
-    """Redirect stdout+stderr at the OS fd level to suppress C library output."""
     devnull = "nul" if os.name == "nt" else "/dev/null"
     fd = os.open(devnull, os.O_WRONLY)
     old_out = os.dup(1)
