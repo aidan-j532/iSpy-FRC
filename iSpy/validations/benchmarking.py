@@ -8,7 +8,23 @@ import hashlib
 import warnings
 import contextlib
 import re
+import ctypes
 from pathlib import Path
+
+# Load libc for fflush() — used by _quiet() to flush C stdio buffers
+_libc = None
+for _libname in ("libc.so.6", "libc.so", "libc.musl.so"):
+    try:
+        _libc = ctypes.CDLL(_libname, use_errno=False)
+        _libc.fflush(None)  # verify the function exists
+        break
+    except Exception:
+        _libc = None
+if _libc is not None:
+    _fflush = _libc.fflush
+else:
+    def _fflush(_) -> None:
+        pass
 
 import numpy as np
 import cv2
@@ -103,16 +119,47 @@ def _npu_masks():
     return masks
 
 
-def detect_test_plan():
-    return {
-        "rknn": ("rknn", 0, _npu_masks()) if has_rockchip_npu() else None,
-        "tpu": ("tpu", "tpu", [(None, "TPU")]) if has_tpu() else None,
-        "engine": ("engine", 0, [(None, "TensorRT")]) if has_nvidia() and has_tensorrt() else None,
-        "pt_cuda": ("pt", 0, [(None, "CUDA")]) if has_nvidia() else None,
-        "onnx_cuda": ("onnx", 0, [(None, "ONNX-CUDA")]) if has_nvidia() else None,
-        "pt_cpu": ("pt", "cpu", [(None, "CPU")]) if not has_rockchip_npu() else None,
-        "onnx_cpu": ("onnx", "cpu", [(None, "ONNX-CPU")]) if not has_rockchip_npu() else None,
-    }
+def _cuda_devices() -> list[tuple[int, str]]:
+    """Enumerate all CUDA-capable GPUs on the system."""
+    try:
+        import torch
+        n = torch.cuda.device_count()
+        if n > 0:
+            return [(i, f"CUDA-{i}") for i in range(n)]
+    except Exception:
+        pass
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            timeout=10,
+        ).decode().strip()
+        indices = [int(line) for line in out.splitlines() if line.strip().isdigit()]
+        if indices:
+            return [(i, f"CUDA-{i}") for i in indices]
+    except Exception:
+        pass
+    return [(0, "CUDA-0")]
+
+
+def detect_test_plan() -> dict:
+    plan: dict[str, tuple] = {}
+    if has_rockchip_npu():
+        plan["rknn"] = ("rknn", 0, _npu_masks())
+    if has_tpu():
+        plan["tpu"] = ("tpu", "tpu", [(None, "TPU")])
+    if has_nvidia():
+        cuda_devs = _cuda_devices()
+        for dev, label in cuda_devs:
+            plan[f"pt_{label.lower()}"] = ("pt", dev, [(None, label)])
+            plan[f"onnx_{label.lower()}"] = ("onnx", dev, [(None, f"ONNX-{label}")])
+        if has_tensorrt():
+            dev, label = cuda_devs[0]
+            plan[f"engine_{label.lower()}"] = ("engine", dev, [(None, f"TensorRT")])
+    if not has_rockchip_npu():
+        plan["pt_cpu"] = ("pt", "cpu", [(None, "CPU")])
+        plan["onnx_cpu"] = ("onnx", "cpu", [(None, "ONNX-CPU")])
+    return plan
 
 
 _KERNEL_PRINTK: list[int] | None = None
@@ -190,6 +237,7 @@ def _quiet():
     try:
         yield
     finally:
+        _fflush(None)
         os.dup2(old_out, 1)
         os.dup2(old_err, 2)
         os.close(old_out)
