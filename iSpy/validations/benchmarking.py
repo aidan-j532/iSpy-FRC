@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import warnings
 import contextlib
+import re
 from pathlib import Path
 
 import numpy as np
@@ -114,6 +115,41 @@ def detect_test_plan():
     }
 
 
+_KERNEL_PRINTK: list[int] | None = None
+
+
+def _mute_kernel_rknn():
+    """Suppress KERN_DEBUG messages from the rknn kernel driver on console.
+
+    Saves the current printk levels and sets console_loglevel to 4
+    (KERN_INFO and above only). Call _restore_kernel_rknn() to revert.
+    This only affects the current console — dmesg log is untouched.
+    """
+    global _KERNEL_PRINTK
+    try:
+        with open("/proc/sys/kernel/printk") as f:
+            vals = re.findall(r"\d+", f.read())
+        if vals:
+            _KERNEL_PRINTK = [int(v) for v in vals[:4]]
+            # console_loglevel=4 suppresses KERN_DEBUG (7), KERN_INFO (6) kept
+            with open("/proc/sys/kernel/printk", "w") as f:
+                f.write("4 4 1 7")
+    except (PermissionError, FileNotFoundError, OSError):
+        pass  # not on Linux or no permission
+
+
+def _restore_kernel_log():
+    """Restore the kernel printk levels saved by _mute_kernel_rknn()."""
+    global _KERNEL_PRINTK
+    if _KERNEL_PRINTK is not None:
+        try:
+            with open("/proc/sys/kernel/printk", "w") as f:
+                f.write(" ".join(str(v) for v in _KERNEL_PRINTK))
+        except (PermissionError, FileNotFoundError, OSError):
+            pass
+        _KERNEL_PRINTK = None
+
+
 @contextlib.contextmanager
 def _quiet():
     """Redirect stdout+stderr at the OS fd level to suppress C library output."""
@@ -186,16 +222,15 @@ def benchmark(model_config, core_mask, duration=5.0):
     else:
         infer = lambda: model.predict(frame, orig_shape=frame.shape)
 
-    with _quiet():
-        for _ in range(5):
-            infer()
-        start = time.perf_counter()
-        count = 0
-        while time.perf_counter() - start < duration:
-            infer()
-            count += 1
-        elapsed = time.perf_counter() - start
-        fps = count / elapsed
+    for _ in range(5):
+        infer()
+    start = time.perf_counter()
+    count = 0
+    while time.perf_counter() - start < duration:
+        infer()
+        count += 1
+    elapsed = time.perf_counter() - start
+    fps = count / elapsed
     model.release()
     return fps, count, elapsed
 
@@ -207,6 +242,14 @@ def _fmt_result(r: dict) -> str:
 
 
 def main():
+    _mute_kernel_rknn()
+    try:
+        return _main_body()
+    finally:
+        _restore_kernel_log()
+
+
+def _main_body():
     parser = argparse.ArgumentParser(description="Find the fastest inference backend")
     parser.add_argument("--duration", type=float, default=5.0)
     parser.add_argument("--output", default=None)

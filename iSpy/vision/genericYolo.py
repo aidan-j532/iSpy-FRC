@@ -13,8 +13,28 @@ try:
     from rknnlite.api import RKNNLite
 
     RKNN_FOUND = True
+
+    import ctypes
+    _librknnrt = None
+    for _libname in ("librknnrt.so", "librknnmrt.so"):
+        try:
+            _librknnrt = ctypes.CDLL(_libname)
+            break
+        except OSError:
+            pass
+
+    def _set_rknn_log_level(level: int) -> None:
+        if _librknnrt is not None:
+            try:
+                _librknnrt.rknn_set_log_level(ctypes.c_int(level))
+            except AttributeError:
+                pass
+
 except ImportError:
     RKNN_FOUND = False
+
+    def _set_rknn_log_level(level: int) -> None:
+        pass
 
 class _GPUInferencePool:
     def __init__(self, model_file: str, task: str, devices: list[int], input_size: tuple, min_conf: float):
@@ -298,6 +318,7 @@ class GenericYolo:
             self.model = RKNNLite(verbose=False)
             if self.model.load_rknn(self.model_file) != 0:
                 raise ValueError(f"Failed to load RKNN model: {self.model_file}")
+            _set_rknn_log_level(3)
             if self.model.init_runtime(core_mask=(core_mask if core_mask is not None else 7)) != 0:
                 raise ValueError(f"Failed to init RKNN runtime: {self.model_file}")
 
