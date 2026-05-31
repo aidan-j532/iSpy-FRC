@@ -295,7 +295,7 @@ class GenericYolo:
                 )
             self._require_input_block()
             self.model_type = "rknn"
-            self.model = RKNNLite()
+            self.model = RKNNLite(verbose=False)
             if self.model.load_rknn(self.model_file) != 0:
                 raise ValueError(f"Failed to load RKNN model: {self.model_file}")
             if self.model.init_runtime(core_mask=(core_mask if core_mask is not None else 7)) != 0:

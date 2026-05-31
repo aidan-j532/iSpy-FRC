@@ -469,7 +469,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
     rknn_output = parent / f"{stem}.rknn"
     logger.info("Converting ONNX -> RKNN with dataset=%s", dataset_txt)
 
-    rknn = RKNN()
+    rknn = RKNN(verbose=False)
     try:
         rknn.config(
             mean_values=[[0, 0, 0]],
@@ -514,6 +514,10 @@ def convert_model(model_file, target_format, input_size, quantize=False):
     parent = pt_path.parent
 
     if target_format == "rknn":
+        rknn_path = parent / f"{stem}.rknn"
+        if rknn_path.exists():
+            logger.info("Cached rknn model found: %s", rknn_path)
+            return str(rknn_path)
         return _convert_rknn(
             pt_file=model_file,
             input_size=input_size,
