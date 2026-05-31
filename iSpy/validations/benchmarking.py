@@ -17,13 +17,16 @@ from iSpy.config.AutoOpt import has_rockchip_npu, has_nvidia, has_tensorrt, has_
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.boot.boot import convert_model
 
-logging.basicConfig(level=logging.WARNING, format="%(message)s")
+logging.basicConfig(level=logging.WARNING, format="%(message)s", force=True)
 logging.getLogger("iSpy.vision.ModelInspector").setLevel(logging.INFO)
+for name in list(logging.root.manager.loggerDict):
+    if not name.startswith("iSpy") and name != "ispy-test":
+        logging.getLogger(name).setLevel(logging.CRITICAL + 1)
 logger = logging.getLogger("ispy-test")
 
 
 def find_pt_files():
-    candidates = set()
+    raw: list[Path] = []
 
     dirs = [
         _PROJECT_ROOT / "YoloModels" / "pytorch",
@@ -32,7 +35,7 @@ def find_pt_files():
     for d in dirs:
         if d.exists():
             for f in d.glob("*.pt"):
-                candidates.add(f)
+                raw.append(f.resolve())
 
     config_path = _PROJECT_ROOT / "Config" / "config.json"
     if config_path.exists():
@@ -47,17 +50,24 @@ def find_pt_files():
                     if not p.is_absolute():
                         p = _PROJECT_ROOT / p
                     if p.suffix == ".pt" and p.exists():
-                        candidates.add(p.resolve())
+                        raw.append(p.resolve())
         except Exception:
             pass
 
     try:
         for f in (Path.home() / "YoloModels" / "pytorch").glob("*.pt"):
-            candidates.add(f.resolve())
+            raw.append(f.resolve())
     except Exception:
         pass
 
-    return sorted(candidates, key=lambda p: p.name)
+    seen: set[Path] = set()
+    unique = []
+    for p in raw:
+        canon = p.resolve()
+        if canon not in seen:
+            seen.add(canon)
+            unique.append(canon)
+    return sorted(unique, key=lambda p: p.name)
 
 
 def make_placeholder_frame(h=480, w=640):
@@ -169,7 +179,7 @@ def main():
     args = parser.parse_args()
 
     test_plan = detect_test_plan()
-    print(f"Detected {len(test_plan)} backend(s):")
+    print(f"Detected {len(test_plan)} POSSIBLE backend(s):")
     for _, _, _, label in test_plan:
         print(f"  - {label}")
     print()

@@ -708,6 +708,14 @@ def fill_missing_config(model_config: dict) -> dict:
                     del out[key]
                     logger.info("Removed stale output.%s (task=%s)", key, actual_task)
 
+    out = merged.get("output")
+    if out and out.get("score_mode") == "objectness" and merged.get("num_classes", 1) > 1:
+        out["score_mode"] = "multi_class"
+        logger.info(
+            "Corrected    output.score_mode           your value='objectness'  -> 'multi_class' (num_classes=%d)",
+            merged["num_classes"],
+        )
+
     return merged
 
 

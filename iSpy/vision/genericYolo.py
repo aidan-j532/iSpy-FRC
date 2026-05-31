@@ -325,7 +325,7 @@ class GenericYolo:
             self.model_type = "yolo"
             self.model = YOLO(self.model_file, task=self.task, verbose=False)
             if self.model_file.endswith(".pt"):
-                self.model.to(f"cuda:{self.device}")
+                self.model.to("cpu" if self.device == "cpu" else f"cuda:{self.device}")
 
             self._pool: _GPUInferencePool | None = None
 
@@ -958,5 +958,6 @@ class GenericYolo:
     def release(self):
         if self.model_type == "rknn":
             self.model.release()
-        if self._pool is not None:
-            self._pool.stop()
+        pool = getattr(self, "_pool", None)
+        if pool is not None:
+            pool.stop()
