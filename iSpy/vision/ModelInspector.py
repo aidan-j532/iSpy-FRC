@@ -64,8 +64,8 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 
     certain, detected, manual, warnings = [], [], [], []
 
-    # Check for metadata.yaml saved by iSpy during conversion
-    meta_path = Path(model_path).parent / "metadata.yaml"
+    # Check for model-specific metadata saved by iSpy during conversion
+    meta_path = Path(model_path).parent / f"{Path(model_path).stem}_metadata.yaml"
     meta_task = task
     meta_nc = None
     meta_kpt_shape = None
@@ -267,7 +267,7 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
         },
     }
 
-    meta_path = Path(model_path).parent / "metadata.yaml"
+    meta_path = Path(model_path).parent / f"{Path(model_path).stem}_metadata.yaml"
     if meta_path.exists():
         try:
             from ruamel.yaml import YAML

@@ -393,7 +393,7 @@ def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
         meta["quantization"] = "int8"
         meta["quant_scale"] = 255.0
 
-        meta_path = rknn_output.parent / "metadata.yaml"
+        meta_path = rknn_output.parent / f"{rknn_output.stem}_metadata.yaml"
         yaml = YAML()
         yaml.default_flow_style = False
         with open(meta_path, "w") as f:
@@ -433,7 +433,7 @@ def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
         meta["box_format"] = "cxcywh"
         meta["quantization"] = "none"
 
-        meta_path = onnx_output.parent / "metadata.yaml"
+        meta_path = onnx_output.parent / f"{onnx_output.stem}_metadata.yaml"
         yaml = YAML()
         yaml.default_flow_style = False
         with open(meta_path, "w") as f:
@@ -516,6 +516,9 @@ def convert_model(model_file, target_format, input_size, quantize=False):
     if target_format == "rknn":
         rknn_path = parent / f"{stem}.rknn"
         if rknn_path.exists():
+            meta_path = rknn_path.parent / f"{stem}_metadata.yaml"
+            if not meta_path.exists():
+                _export_rknn_metadata(model_file, rknn_path)
             logger.info("Cached rknn model found: %s", rknn_path)
             return str(rknn_path)
         return _convert_rknn(

@@ -117,7 +117,7 @@ def detect_test_plan():
 @contextlib.contextmanager
 def _quiet():
     with open(os.devnull, "w") as null:
-        with contextlib.redirect_stderr(null):
+        with contextlib.redirect_stdout(null), contextlib.redirect_stderr(null):
             yield
 
 
@@ -236,6 +236,7 @@ def main():
                          "device": str(device), "core_mask": core_mask,
                          "fps": round(fps, 1), "frames": count, "elapsed": round(elapsed, 3)}
                 except Exception as e:
+                    print(f"X {label}: {e}")
                     r = {"model": name, "backend": label, "format": fmt,
                          "device": str(device), "core_mask": core_mask,
                          "fps": None, "error": str(e)}
@@ -245,7 +246,7 @@ def main():
 
         w = best.get(name)
         if w:
-            print(f"    \u2192 {_fmt_result(w)}")
+            print(f"SUCCESS: {_fmt_result(w)}")
 
     print()
     print("=" * 55)
