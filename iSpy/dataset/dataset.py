@@ -16,7 +16,7 @@ def _generate_calibration_images(folder: Path, count: int = _CALIB_COUNT, imgsz:
     try:
         from PIL import Image
     except ImportError:
-        logger.warning("Pillow not available — cannot generate calibration images")
+        logger.warning("Pillow not available - cannot generate calibration images")
         return []
 
     images_dir = folder / "images"
@@ -111,7 +111,7 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
     result["image_count"] = len(imgs)
 
     if not imgs:
-        issues.append("No calibration images found — add images (*.jpg, *.png, etc.) to the dataset folder")
+        issues.append("No calibration images found - add images (*.jpg, *.png, etc.) to the dataset folder")
 
     dataset_txt = ds / "dataset.txt"
     if dataset_txt.exists():

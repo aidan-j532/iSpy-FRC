@@ -18,7 +18,7 @@ maintainers = [
     { name = "iSpy FRC Maintainer", email = "aidanrjensen@gmail.com" }
 ]
 
-# Universal deps — install cleanly on every platform (Orange Pi, RPi, x86, Mac, Windows).
+# Universal deps - install cleanly on every platform (Orange Pi, RPi, x86, Mac, Windows).
 # Hardware-specific backends (RKNN, TensorRT, OpenVINO, TFLite, CoreML) are NOT listed here.
 # boot.py detects the hardware at runtime and pip-installs whatever is needed automatically.
 dependencies = [
@@ -36,11 +36,11 @@ dependencies = [
     "pyntcore>=2024.0.0",
     "robotpy>=2024.0.0",
     "plotly>=5.0",
-    "onnxruntime>=1.16.0",  # CPU ONNX fallback — works everywhere, used until boot picks a better backend
+    "onnxruntime>=1.16.0",  # CPU ONNX fallback - works everywhere, used until boot picks a better backend
 ]
 
 [project.optional-dependencies]
-# For model training, conversion, and development — x86 only.
+# For model training, conversion, and development - x86 only.
 # pip install ".[dev]"   (install-dev.sh handles the rknn-toolkit2 --find-links)
 dev = [
     "torch>=2.0.0",

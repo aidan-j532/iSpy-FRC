@@ -123,7 +123,7 @@ def _export_rknn_metadata(pt_file: str, rknn_output_path: str) -> None:
             except Exception:
                 pass
 
-        # Output format — known because WE did the conversion
+        # Output format - known because WE did the conversion
         # ONNX output is (feat, anchors), RKNN compiler preserves this layout
         meta["output_format"] = "raw"
         meta["output_layout"] = "features_first"
@@ -131,7 +131,7 @@ def _export_rknn_metadata(pt_file: str, rknn_output_path: str) -> None:
         meta["quantization"] = "int8"
         meta["quant_scale"] = 255.0
 
-        meta_path = Path(rknn_output_path).parent / "metadata.yaml"
+        meta_path = Path(rknn_output_path).parent / f"{Path(rknn_output_path).stem}_metadata.yaml"
         yaml = YAML()
         yaml.default_flow_style = False
         with open(meta_path, "w") as f:

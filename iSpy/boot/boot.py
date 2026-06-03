@@ -293,7 +293,7 @@ def install_special_dependencies(auto_install: bool = False):
     )
 
     if not auto_install:
-        logger.info("auto_install=False — skipping installation")
+        logger.info("auto_install=False - skipping installation")
         return
 
     if backend == "rknn":
@@ -308,7 +308,7 @@ def install_special_dependencies(auto_install: bool = False):
 
     if backend in {"rknn", "engine"}:
         logger.warning(
-            "%s is a hardware/vendor backend — installation may require "
+            "%s is a hardware/vendor backend - installation may require "
             "system-level setup and can take a few minutes.",
             backend,
         )
@@ -382,12 +382,13 @@ def _silent_fd():
         os.close(old_err)
 
 
-def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
+def _export_rknn_metadata(pt_file: str, rknn_output, input_size=None) -> None:
     try:
+        from pathlib import Path
         with _silent_fd():
             import ultralytics
             from ruamel.yaml import YAML
-
+ 
             model = ultralytics.YOLO(pt_file, verbose=False)
         meta = {}
         model_task = getattr(model, "task", "detect") or "detect"
@@ -407,14 +408,20 @@ def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
                     meta["kpt_shape"] = [int(kpt_shape[0]), int(kpt_shape[1])]
             except Exception:
                 pass
-
+ 
         meta["output_format"] = "raw"
         meta["output_layout"] = "features_first"
         meta["box_format"] = "cxcywh"
         meta["quantization"] = "int8"
         meta["quant_scale"] = 255.0
-
-        meta_path = rknn_output.parent / f"{rknn_output.stem}_metadata.yaml"
+ 
+        if input_size is not None:
+            if hasattr(input_size, "__iter__"):
+                meta["input_size"] = [int(x) for x in input_size]
+            else:
+                meta["input_size"] = [int(input_size), int(input_size)]
+ 
+        meta_path = Path(rknn_output).parent / f"{Path(rknn_output).stem}_metadata.yaml"
         yaml = YAML()
         yaml.default_flow_style = False
         with open(meta_path, "w") as f:
@@ -422,8 +429,8 @@ def _export_rknn_metadata(pt_file: str, rknn_output: Path) -> None:
         logger.info("Exported RKNN metadata: %s", meta_path)
     except Exception as e:
         logger.warning("Failed to export RKNN metadata: %s", e)
-
-
+ 
+ 
 def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
     try:
         with _silent_fd():
@@ -667,7 +674,7 @@ def setup_files(first_boot: bool = False):
 
 def on_boot(install_service: bool = False, first_boot: bool = False):
     if first_boot:
-        logger.info("First boot mode — ensuring fresh conversion for selected model")
+        logger.info("First boot mode - ensuring fresh conversion for selected model")
     setup_files(first_boot=first_boot)
     config_path = search_for_config()
     config = None

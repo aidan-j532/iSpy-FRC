@@ -11,7 +11,7 @@ import re
 import ctypes
 from pathlib import Path
 
-# Load libc for fflush() — used by _quiet() to flush C stdio buffers
+# Load libc for fflush() - used by _quiet() to flush C stdio buffers
 _libc = None
 for _libname in ("libc.so.6", "libc.so", "libc.musl.so"):
     try:
@@ -237,12 +237,13 @@ def _quiet():
 
 
 def get_or_convert(pt_path, fmt, input_size=(640, 640)):
-    if fmt == "tpu" or fmt == "pt":
+    if fmt in ("tpu", "pt"):
         return pt_path
     with _quiet():
         result = Path(convert_model(str(pt_path), fmt, input_size))
-    return result if result.exists() and result != pt_path else pt_path
-
+    if not result.exists() or result == pt_path:
+        return None
+    return result
 
 def make_base_config(pt_path, model_path, device):
     return {
@@ -253,23 +254,23 @@ def make_base_config(pt_path, model_path, device):
         "input_size": [640, 640],
         "min_conf": 0.5,
         "device": device,
-        "output": {
-            "format": "raw",
-            "layout": "features_first",
-            "box_format": "cxcywh",
-            "score_mode": "objectness",
-            "scores_are_logits": False,
-            "apply_software_nms": False,
-            "nms_iou": 0.45,
-            "quantization": "none",
-        },
-        "input": {
-            "layout": "nhwc",
-            "dtype": "uint8",
-            "letterbox": True,
-            "pad_value": 114,
-            "normalize": False,
-        },
+        # "output": {
+        #     "format": "raw",
+        #     "layout": "features_first",
+        #     "box_format": "cxcywh",
+        #     "score_mode": "objectness",
+        #     "scores_are_logits": False,
+        #     "apply_software_nms": False,
+        #     "nms_iou": 0.45,
+        #     "quantization": "none",
+        # },
+        # "input": {
+        #     "layout": "nhwc",
+        #     "dtype": "uint8",
+        #     "letterbox": True,
+        #     "pad_value": 114,
+        #     "normalize": False,
+        # },
     }
 
 
@@ -350,7 +351,7 @@ def _main_body():
 
         for _, (fmt, device, masks) in active.items():
             model_path = get_or_convert(pt_path, fmt)
-            if not model_path.exists():
+            if model_path is None:
                 continue
             cfg = make_base_config(pt_path, model_path, device)
             cfg = fill_missing_config(cfg)

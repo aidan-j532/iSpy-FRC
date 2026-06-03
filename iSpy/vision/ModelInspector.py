@@ -221,42 +221,41 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 
 
 def _inspect_rknn(model_path: str, task: str) -> dict:
-    warnings = []
+    from pathlib import Path
+    from typing import Any
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+ 
+    warnings_list = []
     manual = []
-
-    # These are RKNN hardware guarantees, not guesses
+ 
+    # Hardware contracts - always correct, no metadata needed
     certain_fields = [
-        "input.layout",    # RKNN runtime always expects NHWC
-        "input.dtype",     # RKNN runtime always expects uint8
-        "input.normalize", # always false for uint8 input
+        "input.layout",    # RKNN runtime always NHWC
+        "input.dtype",     # RKNN runtime always uint8
+        "input.normalize", # uint8 -> never normalise in Python
     ]
-
-    # These are reasonable defaults but the inspector can't actually
-    # read RKNN output shapes without running inference
-    detected_fields = [
-        "output.format",      # hardware_nms is correct for all Ultralytics exports
-        "output.layout",
-        "output.box_format",
-        "output.score_mode",
-        "output.quantization",
-    ]
-
+    detected_fields: list[str] = []
+ 
+    # Defaults tuned for RKNN TOOLKIT export (ONNX -> rknn.build())
+    # If you used Ultralytics' own RKNN export path these would be wrong,
+    # but that path is not used here.
     result: dict[str, Any] = {
         "file_path": model_path,
         "task": task,
         "num_classes": 1,
-        "input_size": [640, 640],
+        "input_size": [640, 640],   # overridden below if metadata has it
         "min_conf": 0.5,
         "output": {
-            "format": "hardware_nms",  # Ultralytics RKNN exports are always end2end NMS
-            "layout": "anchors_first",
-            "box_format": "xyxy",
+            "format": "raw",              # Toolkit: raw tensor, NOT end-to-end NMS
+            "layout": "features_first",   # Ultralytics ONNX -> Toolkit: (feat, anchors)
+            "box_format": "cxcywh",       # Ultralytics ONNX internal encoding
             "score_mode": "objectness",
-            "scores_are_logits": False,
-            "apply_software_nms": False,
+            "scores_are_logits": False,   # Ultralytics applies sigmoid before ONNX export
+            "apply_software_nms": True,   # required for raw format
             "nms_iou": 0.45,
-            "quantization": "int8",
-            "quant_scale": 255.0,
+            "quantization": "int8",       # confirmed: do_quantization=True in boot.py
+            "quant_scale": 255.0,         # confirmed: std_values=[[255,255,255]] in boot.py
         },
         "input": {
             "layout": "nhwc",
@@ -266,17 +265,23 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
             "normalize": False,
         },
     }
-
+ 
     meta_path = Path(model_path).parent / f"{Path(model_path).stem}_metadata.yaml"
-    if meta_path.exists():
+    has_metadata = meta_path.exists()
+ 
+    if has_metadata:
         try:
             from ruamel.yaml import YAML
             meta = YAML(typ="safe").load(meta_path)
             if isinstance(meta, dict):
+                # task
                 rknn_task = meta.get("task", "")
-                if rknn_task == "pose":
-                    result["task"] = "pose"
+                if rknn_task:
+                    result["task"] = rknn_task
                     certain_fields.append("task")
+ 
+                # pose keypoints
+                if rknn_task == "pose":
                     kpt_shape = meta.get("kpt_shape")
                     if kpt_shape and len(kpt_shape) == 2:
                         n_kpts, kpt_dims = kpt_shape
@@ -291,69 +296,206 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                             "output.keypoint_scores_are_logits",
                             "output.score_mode",
                         ]
-                        warnings.append(
-                            "Pose model detected from metadata.yaml. "
-                            "Verify keypoint ordering in your config."
-                        )
-
+ 
+                # num_classes -> drives score_mode
                 names = meta.get("names")
                 if isinstance(names, dict):
-                    num_names = len(names)
-                    result["num_classes"] = num_names
+                    nc = len(names)
+                    result["num_classes"] = nc
                     certain_fields.append("num_classes")
-                    score_mode = "objectness" if num_names == 1 else "multi_class"
-                    result["output"]["score_mode"] = score_mode
+                    result["output"]["score_mode"] = (
+                        "objectness" if nc == 1 else "multi_class"
+                    )
                     certain_fields.append("output.score_mode")
-
-                meta_output_format = meta.get("output_format")
-                if meta_output_format:
-                    result["output"]["format"] = meta_output_format
-                    certain_fields.append("output.format")
-
-                meta_output_layout = meta.get("output_layout")
-                if meta_output_layout:
-                    result["output"]["layout"] = meta_output_layout
-                    certain_fields.append("output.layout")
-
-                meta_box_format = meta.get("box_format")
-                if meta_box_format:
-                    result["output"]["box_format"] = meta_box_format
-                    certain_fields.append("output.box_format")
-
-                meta_quant = meta.get("quantization")
-                if meta_quant:
-                    result["output"]["quantization"] = meta_quant
-                    certain_fields.append("output.quantization")
-
-                meta_scale = meta.get("quant_scale")
-                if meta_scale is not None:
-                    result["output"]["quant_scale"] = float(meta_scale)
-                    certain_fields.append("output.quant_scale")
-
+ 
+                # output format fields written by _export_rknn_metadata
+                for meta_key, cfg_path in (
+                    ("output_format",  "output.format"),
+                    ("output_layout",  "output.layout"),
+                    ("box_format",     "output.box_format"),
+                    ("quantization",   "output.quantization"),
+                    ("quant_scale",    "output.quant_scale"),
+                ):
+                    val = meta.get(meta_key)
+                    if val is not None:
+                        parts = cfg_path.split(".")
+                        d = result
+                        for p in parts[:-1]:
+                            d = d[p]
+                        d[parts[-1]] = val
+                        certain_fields.append(cfg_path)
+ 
+                # input_size - now saved by updated _export_rknn_metadata
+                saved_size = meta.get("input_size")
+                if saved_size and len(saved_size) == 2:
+                    result["input_size"] = [int(x) for x in saved_size]
+                    certain_fields.append("input_size")
+ 
         except Exception as e:
-            warnings.append(f"Failed to parse metadata.yaml: {e}")
-
-    if not result.get("output", {}).get("num_keypoints"):
-        manual += [
-            "input_size           (verify against your training config)",
-            "output.format        (hardware_nms if end2end export, raw otherwise)",
-            "output.layout        (features_first for Ultralytics exports)",
-            "output.score_mode    (objectness for 1-class, multi_class otherwise)",
-            "output.quantization  (int8 default - check your rknn build config)",
+            warnings_list.append(f"Failed to parse {meta_path.name}: {e}")
+ 
+    # When no metadata - every output field is a guess, warn loudly
+    if not has_metadata:
+        _logger.warning(
+            "--------------------------------------------------------------\n"
+            "  RKNN model loaded WITHOUT metadata: %s\n"
+            "  Expected: %s\n"
+            "  All output config fields are educated guesses.\n"
+            "  Fields you MUST verify before deploying:\n"
+            "--------------------------------------------------------------",
+            Path(model_path).name,
+            meta_path,
+        )
+        _MUST_VERIFY = [
+            (
+                "input_size",
+                "Not readable from .rknn binary. "
+                "Verify it matches the imgsz used during ONNX export (likely [640,640]).",
+            ),
+            (
+                "output.format",
+                "CRITICAL - defaulted to 'raw' (correct for RKNN Toolkit). "
+                "Wrong value processes all 8400 raw anchors unfiltered every frame.",
+            ),
+            (
+                "output.layout",
+                "Defaulted to 'features_first' (Ultralytics ONNX -> Toolkit). "
+                "Verify against your actual ONNX export.",
+            ),
+            (
+                "output.quantization",
+                "Defaulted to 'int8'. Change to 'none' if do_quantization=False was used.",
+            ),
+            (
+                "output.quant_scale",
+                "Defaulted to 255.0 (std_values=[[255,255,255]]). "
+                "Update if your rknn.config() used different std_values.",
+            ),
         ]
-        if not warnings:
-            warnings.append(
-                "RKNN models carry limited metadata. "
-                "Input layout/size are inferred from RKNN conventions (NHWC uint8). "
-                "Output fields are defaults only - your config values will be kept."
-            )
-
+        for field, reason in _MUST_VERIFY:
+            _logger.warning("  %-28s  %s", field, reason)
+            manual.append(f"{field}  -  {reason}")
+        _logger.warning("--------------------------------------------------------------")
+        warnings_list.append("No metadata - output fields are defaults. See warnings above.")
+ 
+    # Even with metadata: input_size is unverifiable if it wasn't saved
+    if "input_size" not in certain_fields:
+        manual.append(
+            "input_size  -  defaulted to [640,640]. "
+            "Verify it matches your training/export resolution. "
+            "(Re-run boot.py conversion to save this automatically.)"
+        )
+ 
     result["_certain_fields"] = certain_fields
     result["_detected_fields"] = detected_fields
     result["_manual_fields"] = manual
-    result["_warnings"] = warnings
+    result["_warnings"] = warnings_list
     return result
-
+ 
+  
+def fill_missing_config(model_config: dict) -> dict:
+    import os
+    from pathlib import Path
+ 
+    model_path = model_config.get("file_path", "")
+    if not model_path or not os.path.exists(model_path):
+        return model_config
+ 
+    task = model_config.get("task", "detect")
+ 
+    if model_path.endswith(".engine"):
+        pt_path = model_config.get("source_pt", model_path.replace(".engine", ".pt"))
+        if os.path.exists(pt_path):
+            try:
+                pt_info = inspect_model(pt_path, "detect")
+                pt_task = pt_info.get("task")
+                if pt_task and pt_task != task:
+                    logger.info("Detected task=%s from source .pt (%s)", pt_task, pt_path)
+                    task = pt_task
+            except Exception:
+                pass
+ 
+    try:
+        detected = inspect_model(model_path, task)
+    except Exception as e:
+        logger.warning("ModelInspector could not inspect %s: %s", model_path, e)
+        return model_config
+ 
+    certain_fields  = set(detected.pop("_certain_fields", []))
+    detected_fields = set(detected.pop("_detected_fields", []))
+    manual_fields   = detected.pop("_manual_fields", [])   # was silently dropped before
+    detected.pop("_warnings", None)
+ 
+    # Surface manual fields - previously these were thrown away entirely
+    if manual_fields:
+        is_rknn = model_path.endswith(".rknn")
+        logger.warning(
+            "%s (%s) - fields to verify manually:",
+            "RKNN model" if is_rknn else "Model",
+            Path(model_path).name,
+        )
+        for field in manual_fields:
+            logger.warning("  • %s", field)
+ 
+    merged = _deep_merge_missing(detected, model_config)
+ 
+    for field_path in certain_fields | detected_fields:
+        detected_val = _get_dotpath(detected, field_path)
+        user_val     = _get_dotpath(model_config, field_path)
+ 
+        if detected_val is None:
+            continue
+ 
+        if user_val is None:
+            _set_dotpath(merged, field_path, detected_val)
+            logger.info("Auto-filled  %-35s = %r", field_path, detected_val)
+        elif user_val != detected_val:
+            if field_path in certain_fields:
+                _set_dotpath(merged, field_path, detected_val)
+                logger.warning(
+                    "Corrected    %-35s  your value=%r  model says=%r",
+                    field_path, user_val, detected_val,
+                )
+            else:
+                logger.debug(
+                    "Keeping user %-35s = %r  (inspector guessed %r)",
+                    field_path, user_val, detected_val,
+                )
+ 
+    actual_task = detected.get("task", task)
+    if actual_task != "pose":
+        out = merged.get("output")
+        if out:
+            for key in ("num_keypoints", "keypoint_dims", "keypoint_scores_are_logits"):
+                if key in out:
+                    del out[key]
+                    logger.info("Removed stale output.%s (task=%s)", key, actual_task)
+ 
+    out = merged.get("output")
+    if out and out.get("score_mode") == "objectness" and merged.get("num_classes", 1) > 1:
+        if not model_config.get("output", {}).get("score_mode") == "multi_class":
+            # only log if user didn't already have it right
+            logger.info(
+                "Corrected    output.score_mode  'objectness' -> 'multi_class' (num_classes=%d)",
+                merged["num_classes"],
+            )
+        out["score_mode"] = "multi_class"
+ 
+    # RKNN-specific: raw format + NMS disabled = all 8400 anchors pass every frame
+    if model_path.endswith(".rknn"):
+        merged_out = merged.get("output", {})
+        if (
+            merged_out.get("format") == "raw"
+            and not merged_out.get("apply_software_nms", True)
+        ):
+            logger.warning(
+                "RKNN MISCONFIGURATION: output.format='raw' but apply_software_nms=False. "
+                "All ~8400 raw anchors would be returned unfiltered every frame. "
+                "Auto-correcting to apply_software_nms=True."
+            )
+            merged_out["apply_software_nms"] = True
+ 
+    return merged
 
 def _inspect_tflite(model_path: str, task: str) -> dict:
     certain, detected, manual, warnings = [], [], [], []
@@ -680,20 +822,20 @@ def fill_missing_config(model_config: dict) -> dict:
             continue
 
         if user_val is None:
-            # Field is missing entirely — always fill it in
+            # Field is missing entirely - always fill it in
             _set_dotpath(merged, field_path, detected_val)
             logger.info("Auto-filled  %-35s = %r", field_path, detected_val)
 
         elif user_val != detected_val:
             if field_path in certain_fields:
-                # Inspector is certain — overwrite and warn loudly
+                # Inspector is certain - overwrite and warn loudly
                 _set_dotpath(merged, field_path, detected_val)
                 logger.warning(
                     "Corrected    %-35s  your value=%r  model says=%r",
                     field_path, user_val, detected_val,
                 )
             else:
-                # Inspector is guessing — trust the user, just log at debug
+                # Inspector is guessing - trust the user, just log at debug
                 logger.debug(
                     "Keeping user %-35s = %r  (inspector guessed %r)",
                     field_path, user_val, detected_val,

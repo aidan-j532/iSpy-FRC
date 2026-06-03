@@ -311,7 +311,7 @@ game_loop.py
         │     ├── Camera (threaded frame reader)
         │     └── GenericYolo (RKNN / ONNX / TFLite / Ultralytics)
         ├── MultipleCameraHandler (merges multi-camera detections)
-        ├── Trackers (object_tracker → path_planner → your plugins)
+        ├── Trackers (object_tracker -> path_planner -> your plugins)
         ├── Utilities (health_reporter, video_recorder, network_handler, your plugins)
         └── CameraApp (Flask web server)
 ```

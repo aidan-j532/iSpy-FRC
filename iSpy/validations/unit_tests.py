@@ -590,7 +590,7 @@ if __name__ == "__main__":
 #             pt = os.path.join(d, "model.pt")
 #             open(pt, "w").close()
 
-#             # export() succeeds but output file is never created → fallback
+#             # export() succeeds but output file is never created -> fallback
 #             with patch("ultralytics.YOLO") as mock_yolo:
 #                 mock_yolo.return_value.export.return_value = "somewhere_else.rknn"
 #                 result = convert_model(pt, "rknn", (320, 320))

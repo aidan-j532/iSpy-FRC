@@ -301,11 +301,11 @@ class GenericYolo:
                 self.device = "tpu"
                 self.logger.info("TPU device initialized: %s", self._tpu_device)
             except Exception:
-                self.logger.warning("TPU requested but torch_xla not available — falling back to CPU")
+                self.logger.warning("TPU requested but torch_xla not available - falling back to CPU")
                 self.device = "cpu"
         elif not cuda_ok and requested_device != "cpu":
             self.logger.info(
-                "Device %r not available (CUDA=%s, count=%d) — falling back to CPU",
+                "Device %r not available (CUDA=%s, count=%d) - falling back to CPU",
                 requested_device,
                 torch.cuda.is_available() if 'torch' in dir() else False,
                 torch.cuda.device_count() if 'torch' in dir() else 0,
@@ -661,7 +661,7 @@ class GenericYolo:
             if actual_fmt != self.output["format"]:
                 self.logger.warning(
                     "RKNN output shape %s says format should be %r but config has %r "
-                    "— correcting and saving to config.",
+                    "- correcting and saving to config.",
                     tensor.shape, actual_fmt, self.output["format"],
                 )
                 self.output["format"] = actual_fmt

@@ -36,3 +36,5 @@ opencode.json
 *env/
 RknnWheels/
 runs/
+iSpy/assets/*.yaml
+iSpy/assets/*.onnx
