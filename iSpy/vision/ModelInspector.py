@@ -217,6 +217,17 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
             "output.quant_scale  (required for int8/uint8 - check your quantization params)"
         )
 
+    # Save metadata sidecar so future loads can be metadata-first
+    try:
+        from iSpy.vision.metadata import metadata_path_for, write_metadata
+        meta_path = metadata_path_for(Path(model_path))
+        if not meta_path.exists():
+            flat = _flatten_config_to_metadata(cfg)
+            write_metadata(meta_path, flat)
+            logger.info("Auto-saved metadata to %s", meta_path.name)
+    except Exception:
+        logger.debug("Could not auto-save metadata for %s", model_path)
+
     return cfg
 
 
@@ -394,15 +405,32 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
  
   
 def fill_missing_config(model_config: dict) -> dict:
+    """
+    Auto-fill every vision_model config field that isn't already set.
+    Priority: metadata file > tensor inspection > safe defaults.
+    """
     import os
     from pathlib import Path
- 
+    from iSpy.vision.metadata import read_metadata, metadata_path_for
+
     model_path = model_config.get("file_path", "")
     if not model_path or not os.path.exists(model_path):
         return model_config
- 
+
+    # --- Step 1: load metadata sidecar if present ---
+    try:
+        sidecar = read_metadata(Path(model_path))
+    except Exception:
+        sidecar = None
+
+    if sidecar:
+        logger.info("Loaded metadata from %s_metadata.yaml", Path(model_path).stem)
+        return _apply_metadata_to_config(sidecar, model_config)
+
+    # --- Step 2: tensor inspection (existing logic) ---
+    logger.info("No metadata file for %s - falling back to tensor inspection", Path(model_path).name)
     task = model_config.get("task", "detect")
- 
+
     if model_path.endswith(".engine"):
         pt_path = model_config.get("source_pt", model_path.replace(".engine", ".pt"))
         if os.path.exists(pt_path):
@@ -414,19 +442,18 @@ def fill_missing_config(model_config: dict) -> dict:
                     task = pt_task
             except Exception:
                 pass
- 
+
     try:
         detected = inspect_model(model_path, task)
     except Exception as e:
         logger.warning("ModelInspector could not inspect %s: %s", model_path, e)
         return model_config
- 
-    certain_fields  = set(detected.pop("_certain_fields", []))
+
+    certain_fields = set(detected.pop("_certain_fields", []))
     detected_fields = set(detected.pop("_detected_fields", []))
-    manual_fields   = detected.pop("_manual_fields", [])   # was silently dropped before
+    manual_fields = detected.pop("_manual_fields", [])
     detected.pop("_warnings", None)
- 
-    # Surface manual fields - previously these were thrown away entirely
+
     if manual_fields:
         is_rknn = model_path.endswith(".rknn")
         logger.warning(
@@ -436,16 +463,13 @@ def fill_missing_config(model_config: dict) -> dict:
         )
         for field in manual_fields:
             logger.warning("  • %s", field)
- 
+
     merged = _deep_merge_missing(detected, model_config)
- 
     for field_path in certain_fields | detected_fields:
         detected_val = _get_dotpath(detected, field_path)
-        user_val     = _get_dotpath(model_config, field_path)
- 
+        user_val = _get_dotpath(model_config, field_path)
         if detected_val is None:
             continue
- 
         if user_val is None:
             _set_dotpath(merged, field_path, detected_val)
             logger.info("Auto-filled  %-35s = %r", field_path, detected_val)
@@ -454,14 +478,18 @@ def fill_missing_config(model_config: dict) -> dict:
                 _set_dotpath(merged, field_path, detected_val)
                 logger.warning(
                     "Corrected    %-35s  your value=%r  model says=%r",
-                    field_path, user_val, detected_val,
+                    field_path,
+                    user_val,
+                    detected_val,
                 )
             else:
                 logger.debug(
                     "Keeping user %-35s = %r  (inspector guessed %r)",
-                    field_path, user_val, detected_val,
+                    field_path,
+                    user_val,
+                    detected_val,
                 )
- 
+
     actual_task = detected.get("task", task)
     if actual_task != "pose":
         out = merged.get("output")
@@ -470,32 +498,124 @@ def fill_missing_config(model_config: dict) -> dict:
                 if key in out:
                     del out[key]
                     logger.info("Removed stale output.%s (task=%s)", key, actual_task)
- 
+
     out = merged.get("output")
     if out and out.get("score_mode") == "objectness" and merged.get("num_classes", 1) > 1:
         if not model_config.get("output", {}).get("score_mode") == "multi_class":
-            # only log if user didn't already have it right
             logger.info(
                 "Corrected    output.score_mode  'objectness' -> 'multi_class' (num_classes=%d)",
                 merged["num_classes"],
             )
         out["score_mode"] = "multi_class"
- 
-    # RKNN-specific: raw format + NMS disabled = all 8400 anchors pass every frame
+
+    # RKNN-specific guard
     if model_path.endswith(".rknn"):
         merged_out = merged.get("output", {})
-        if (
-            merged_out.get("format") == "raw"
-            and not merged_out.get("apply_software_nms", True)
-        ):
+        if merged_out.get("format") == "raw" and not merged_out.get("apply_software_nms", True):
             logger.warning(
-                "RKNN MISCONFIGURATION: output.format='raw' but apply_software_nms=False. "
-                "All ~8400 raw anchors would be returned unfiltered every frame. "
-                "Auto-correcting to apply_software_nms=True."
+                "RKNN MISCONFIGURATION: output.format='raw' but apply_software_nms=False. Auto-correcting to apply_software_nms=True."
             )
             merged_out["apply_software_nms"] = True
- 
+
     return merged
+
+
+def _apply_metadata_to_config(sidecar: dict, model_config: dict) -> dict:
+    """
+    Translate flat metadata.yaml keys into the nested config structure
+    and merge with any user overrides already in model_config.
+    """
+    from_sidecar = {
+        "task": sidecar.get("task", "detect"),
+        "num_classes": sidecar.get("nc", 1),
+        "input_size": sidecar.get("input_size", [640, 640]),
+        "output": {
+            "format": sidecar.get("output_format", "raw"),
+            "layout": sidecar.get("output_layout", "features_first"),
+            "box_format": sidecar.get("box_format", "cxcywh"),
+            "score_mode": sidecar.get("score_mode", "objectness"),
+            "scores_are_logits": sidecar.get("scores_are_logits", False),
+            "apply_software_nms": sidecar.get("apply_software_nms", True),
+            "nms_iou": sidecar.get("nms_iou", 0.45),
+            "quantization": sidecar.get("quantization", "none"),
+        },
+        "input": {
+            "layout": sidecar.get("input_layout", "nchw"),
+            "dtype": sidecar.get("input_dtype", "float32"),
+            "letterbox": sidecar.get("input_letterbox", True),
+            "pad_value": sidecar.get("input_pad_value", 114),
+            "normalize": sidecar.get("input_normalize", False),
+        },
+    }
+
+    if sidecar.get("quantization", "none") != "none" and "quant_scale" in sidecar:
+        from_sidecar["output"]["quant_scale"] = sidecar["quant_scale"]
+    if sidecar.get("input_normalize") and "input_scale" in sidecar:
+        from_sidecar["input"]["scale"] = sidecar["input_scale"]
+    if sidecar.get("task") == "pose" and "kpt_shape" in sidecar:
+        ks = sidecar["kpt_shape"]
+        from_sidecar["output"]["num_keypoints"] = ks[0]
+        from_sidecar["output"]["keypoint_dims"] = ks[1]
+        from_sidecar["output"]["keypoint_scores_are_logits"] = False
+
+    result = _deep_merge_missing(from_sidecar, model_config)
+
+    AUTHORITATIVE = [
+        "task",
+        "num_classes",
+        "input_size",
+        "output.format",
+        "output.layout",
+        "output.box_format",
+        "output.score_mode",
+        "output.quantization",
+        "input.layout",
+        "input.dtype",
+        "input.normalize",
+        "input.letterbox",
+    ]
+    for field_path in AUTHORITATIVE:
+        val = _get_dotpath(from_sidecar, field_path)
+        if val is not None:
+            _set_dotpath(result, field_path, val)
+
+    return result
+
+
+def _flatten_config_to_metadata(cfg: dict) -> dict:
+    meta: dict = {}
+    meta["task"] = cfg.get("task")
+    if cfg.get("num_classes") is not None:
+        meta["nc"] = int(cfg.get("num_classes"))
+    if cfg.get("input_size"):
+        meta["input_size"] = list(cfg.get("input_size"))
+
+    out = cfg.get("output", {})
+    if out:
+        meta["output_format"] = out.get("format")
+        meta["output_layout"] = out.get("layout")
+        meta["box_format"] = out.get("box_format")
+        meta["score_mode"] = out.get("score_mode")
+        if out.get("quantization"):
+            meta["quantization"] = out.get("quantization")
+        if out.get("quant_scale") is not None:
+            meta["quant_scale"] = out.get("quant_scale")
+
+    inp = cfg.get("input", {})
+    if inp:
+        meta["input_layout"] = inp.get("layout")
+        meta["input_dtype"] = inp.get("dtype")
+        meta["input_letterbox"] = inp.get("letterbox")
+        meta["input_pad_value"] = inp.get("pad_value")
+        meta["input_normalize"] = inp.get("normalize")
+        if inp.get("scale") is not None:
+            meta["input_scale"] = inp.get("scale")
+
+    # Pose-specific
+    if out.get("num_keypoints") is not None and out.get("keypoint_dims") is not None:
+        meta["kpt_shape"] = [int(out.get("num_keypoints")), int(out.get("keypoint_dims"))]
+
+    return meta
 
 def _inspect_tflite(model_path: str, task: str) -> dict:
     certain, detected, manual, warnings = [], [], [], []
@@ -564,7 +684,7 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
         quant, quant_scale = "none", 255.0
         manual += ["input_size", "num_classes", "output.format", "output.score_mode"]
 
-    return {
+    cfg = {
         "file_path": model_path,
         "task": task,
         "num_classes": num_classes,
@@ -594,6 +714,19 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
         "_manual_fields": manual + ["min_conf", "output.nms_iou", "output.scores_are_logits"],
         "_warnings": warnings,
     }
+
+    # Auto-save metadata sidecar for future loads
+    try:
+        from iSpy.vision.metadata import metadata_path_for, write_metadata
+        meta_path = metadata_path_for(Path(model_path))
+        if not meta_path.exists():
+            flat = _flatten_config_to_metadata(cfg)
+            write_metadata(meta_path, flat)
+            logger.info("Auto-saved metadata to %s", meta_path.name)
+    except Exception:
+        logger.debug("Could not auto-save metadata for %s", model_path)
+
+    return cfg
 
 
 def _inspect_ultralytics(model_path: str, task: str) -> dict:
@@ -780,85 +913,6 @@ def _set_dotpath(d: dict, dotpath: str, value) -> None:
         d = d[key]
     d[keys[-1]] = value
 
-
-def fill_missing_config(model_config: dict) -> dict:
-    model_path = model_config.get("file_path", "")
-    if not model_path or not os.path.exists(model_path):
-        return model_config
-
-    task = model_config.get("task", "detect")
-
-    # .engine files lose task metadata during export. Inspect the source .pt to detect the real task.
-    if model_path.endswith(".engine"):
-        pt_path = model_config.get("source_pt", model_path.replace(".engine", ".pt"))
-        if os.path.exists(pt_path):
-            try:
-                pt_info = inspect_model(pt_path, "detect")
-                pt_task = pt_info.get("task")
-                if pt_task and pt_task != task:
-                    logger.info("Detected task=%s from source .pt (%s)", pt_task, pt_path)
-                    task = pt_task
-            except Exception:
-                pass
-
-    try:
-        detected = inspect_model(model_path, task)
-    except Exception as e:
-        logger.warning("ModelInspector could not inspect %s: %s", model_path, e)
-        return model_config
-
-    certain_fields  = set(detected.pop("_certain_fields", []))
-    detected_fields = set(detected.pop("_detected_fields", []))
-    detected.pop("_manual_fields", None)
-    detected.pop("_warnings", None)
-
-    merged = _deep_merge_missing(detected, model_config)
-
-    for field_path in certain_fields | detected_fields:
-        detected_val = _get_dotpath(detected, field_path)
-        user_val     = _get_dotpath(model_config, field_path)
-
-        if detected_val is None:
-            continue
-
-        if user_val is None:
-            # Field is missing entirely - always fill it in
-            _set_dotpath(merged, field_path, detected_val)
-            logger.info("Auto-filled  %-35s = %r", field_path, detected_val)
-
-        elif user_val != detected_val:
-            if field_path in certain_fields:
-                # Inspector is certain - overwrite and warn loudly
-                _set_dotpath(merged, field_path, detected_val)
-                logger.warning(
-                    "Corrected    %-35s  your value=%r  model says=%r",
-                    field_path, user_val, detected_val,
-                )
-            else:
-                # Inspector is guessing - trust the user, just log at debug
-                logger.debug(
-                    "Keeping user %-35s = %r  (inspector guessed %r)",
-                    field_path, user_val, detected_val,
-                )
-
-    actual_task = detected.get("task", task)
-    if actual_task != "pose":
-        out = merged.get("output")
-        if out:
-            for key in ("num_keypoints", "keypoint_dims", "keypoint_scores_are_logits"):
-                if key in out:
-                    del out[key]
-                    logger.info("Removed stale output.%s (task=%s)", key, actual_task)
-
-    out = merged.get("output")
-    if out and out.get("score_mode") == "objectness" and merged.get("num_classes", 1) > 1:
-        out["score_mode"] = "multi_class"
-        logger.info(
-            "Corrected    output.score_mode           your value='objectness'  -> 'multi_class' (num_classes=%d)",
-            merged["num_classes"],
-        )
-
-    return merged
 
 
 def _deep_merge_missing(base: dict, override: dict) -> dict:

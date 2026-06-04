@@ -1,32 +1,8 @@
 {
     "vision_model": {
-        "file_path": "YoloModels\\pytorch\\_default_pose_openvino_model",
-        "task": "detect",
-        "num_classes": 1,
-        "input_size": [
-            640,
-            640
-        ],
-        "min_conf": 0.5,
-        "output": {
-            "format": "hardware_nms",
-            "layout": "anchors_first",
-            "box_format": "xyxy",
-            "score_mode": "objectness",
-            "scores_are_logits": false,
-            "apply_software_nms": true,
-            "nms_iou": 0.45,
-            "quantization": "none"
-        },
-        "input": {
-            "layout": "nhwc",
-            "dtype": "uint8",
-            "letterbox": true,
-            "pad_value": 114,
-            "normalize": false,
-            "scale": 255.0
-        },
+        "file_path": "YoloModels/pytorch/_default_pose_openvino_model",
         "source_pt": "YoloModels/pytorch/_default_pose.pt",
+        "min_conf": 0.5,
         "margin": 10
     },
     "unit": "meter",

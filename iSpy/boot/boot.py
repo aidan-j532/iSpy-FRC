@@ -23,6 +23,13 @@ import importlib.util
 import importlib.metadata
 import ultralytics
 from iSpy.vision.ModelInspector import fill_missing_config
+from iSpy.vision.metadata import (
+    metadata_path_for,
+    metadata_from_pt,
+    write_metadata,
+    read_metadata,
+    derive_format_metadata,
+)
 from iSpy.config.AutoOpt import recommend_format
 from iSpy.validations.validate_system import validate_system
 from iSpy.config.iSpyConfig import iSpyConfig
@@ -602,8 +609,16 @@ def convert_model(model_file, target_format, input_size, quantize=False):
         result_path = Path(result)
         if result_path.exists():
             logger.info("%s export successful: %s", target_format, result_path)
-            if target_format == "onnx":
-                _export_onnx_metadata(model_file, result_path)
+            # Write derived metadata for converted file based on source .pt
+            try:
+                pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
+                format_meta = derive_format_metadata(pt_meta, target_format)
+                # Ensure input_size is recorded as the actual size used
+                format_meta["input_size"] = list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)]
+                write_metadata(metadata_path_for(result_path), format_meta)
+                logger.info("Wrote metadata for converted %s", result_path.name)
+            except Exception as e:
+                logger.warning("Could not write metadata for converted %s: %s", result_path.name, e)
             return str(result_path)
 
     if target_format == "tflite":
@@ -670,6 +685,22 @@ def setup_files(first_boot: bool = False):
             shutil.copy2(pt_file, target)
             seen.add(pt_file.name)
             logger.info("Copied model %s -> %s", pt_file.name, target)
+
+    # Ensure every .pt in the pytorch directory has a metadata sidecar
+    try:
+        for pt_file in pytorch_dir.glob("*.pt"):
+            meta_path = metadata_path_for(pt_file)
+            if not meta_path.exists():
+                try:
+                    logger.info("Generating metadata for %s", pt_file.name)
+                    meta = metadata_from_pt(pt_file)
+                    write_metadata(meta_path, meta)
+                    logger.info("Wrote metadata %s", meta_path.name)
+                except Exception as e:
+                    logger.warning("Could not generate metadata for %s: %s", pt_file.name, e)
+    except Exception:
+        # Best-effort; do not fail boot if metadata generation isn't possible.
+        pass
 
 
 def on_boot(install_service: bool = False, first_boot: bool = False):

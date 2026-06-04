@@ -12,6 +12,9 @@ class iSpyConfig:
 
         self.default_config = {
             "vision_model": {
+                # NOTE: output.* and input.* vision model fields are auto-detected
+                # from the model's _metadata.yaml sidecar file. You do not need to set them.
+                # Override here only if you know the metadata is wrong.
                 "file_path": "YoloModels/pytorch/_default_pose.pt",
                 "source_pt": "YoloModels/pytorch/_default_pose.pt",
                 "input_size": [640, 640],
@@ -19,39 +22,7 @@ class iSpyConfig:
                 "margin": 10,
                 "task": "detect",
                 "num_classes": 1,
-                "output": {
-                    # "raw" = decode + optional software NMS; "hardware_nms" = baked NMS.
-                    "format": "raw",
-                    # "anchors_first" (N×D) or "features_first" (D×N, transposed export).
-                    "layout": "features_first",
-                    # Box encoding in raw tensor: "cxcywh" or "xyxy".
-                    "box_format": "cxcywh",
-                    # "multi_class" (per-class scores) or "objectness" (1 score, num_classes=1).
-                    "score_mode": "multi_class",
-                    # If true, apply sigmoid to score columns before threshold/NMS.
-                    "scores_are_logits": False,
-                    # Software NMS when format is "raw" (ignored for hardware_nms).
-                    "apply_software_nms": True,
-                    "nms_iou": 0.45,
-                    # Dequantization: "none", "int8", or "uint8" (+ quant_scale if not none).
-                    "quantization": "none",
-                    # Pose-only (required when task is "pose"):
-                    # "num_keypoints": 17,
-                    # "keypoint_dims": 3,
-                    # "keypoint_scores_are_logits": False,
-                },
-                "input": {
-                    # "nhwc" (RKNN/TFLite) or "nchw" (typical ONNX export).
-                    "layout": "nchw",
-                    # "uint8" or "float32".
-                    "dtype": "float32",
-                    # Letterbox to input_size with pad_value (RKNN-style).
-                    "letterbox": True,
-                    "pad_value": 114,
-                    # Divide by scale when true (common for float32 ONNX).
-                    "normalize": True,
-                    "scale": 255.0,  # required when normalize is true
-                },
+            },
                 # Optional PnP for pose (translation stored on Box; rotation not stored):
                 # "pnp": {
                 #     "object_points": [[0, 0, 0], ...],

@@ -2,6 +2,13 @@ from ultralytics import YOLO
 import logging
 import os
 from pathlib import Path
+from iSpy.vision.metadata import (
+    read_metadata,
+    metadata_from_pt,
+    derive_format_metadata,
+    metadata_path_for,
+    write_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +175,24 @@ def convert_model(
             dataset_txt=rknn_dataset_txt,
             output_path=rknn_output_path,
         )
-        _export_rknn_metadata(file, rknn_path)
+        try:
+            pt_meta = read_metadata(Path(file)) or metadata_from_pt(Path(file))
+            fmt_meta = derive_format_metadata(pt_meta, "rknn")
+            fmt_meta["input_size"] = list(pt_meta.get("input_size", [640, 640]))
+            write_metadata(metadata_path_for(Path(rknn_path)), fmt_meta)
+            logger.info("Wrote metadata for converted %s", Path(rknn_path).name)
+        except Exception as e:
+            logger.warning("Could not write metadata for %s: %s", rknn_path, e)
         return rknn_path
 
-    return _export_ultralytics(file, format, task)
+    out = _export_ultralytics(file, format, task)
+    try:
+        out_path = Path(out)
+        pt_meta = read_metadata(Path(file)) or metadata_from_pt(Path(file))
+        fmt_meta = derive_format_metadata(pt_meta, format)
+        fmt_meta["input_size"] = list(pt_meta.get("input_size", [640, 640]))
+        write_metadata(metadata_path_for(out_path), fmt_meta)
+        logger.info("Wrote metadata for converted %s", out_path.name)
+    except Exception as e:
+        logger.warning("Could not write metadata for converted output %s: %s", out, e)
+    return out
