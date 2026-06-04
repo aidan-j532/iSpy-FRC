@@ -23,6 +23,7 @@ class iSpyConfig:
                 "task": "detect",
                 "num_classes": 1,
             },
+                "none"
                 # Optional PnP for pose (translation stored on Box; rotation not stored):
                 # "pnp": {
                 #     "object_points": [[0, 0, 0], ...],
@@ -30,7 +31,7 @@ class iSpyConfig:
                 #     "dist_coeffs": [0, 0, 0, 0, 0],
                 #     "min_keypoint_conf": 0.5,
                 # },
-            },
+            # },
             "num_gpus": "auto",
             "device": 0,
             "unit": "meter",
