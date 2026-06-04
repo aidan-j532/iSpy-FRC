@@ -438,6 +438,65 @@ def _export_rknn_metadata(pt_file: str, rknn_output, input_size=None) -> None:
         logger.warning("Failed to export RKNN metadata: %s", e)
  
  
+def _yolo_models_dir() -> Path:
+    return _PROJECT_ROOT / "YoloModels"
+ 
+ 
+def _format_output_dir(target_format: str) -> Path:
+    if target_format == "pytorch":
+        return _yolo_models_dir() / "pytorch"
+    return _yolo_models_dir() / target_format
+ 
+ 
+def _desired_output_path(pt_path: Path, target_format: str) -> Path:
+    stem = pt_path.stem
+    out_dir = _format_output_dir(target_format)
+    out_dir.mkdir(parents=True, exist_ok=True)
+ 
+    if target_format == "rknn":
+        return out_dir / f"{stem}.rknn"
+    if target_format == "onnx":
+        return out_dir / f"{stem}.onnx"
+    if target_format == "openvino":
+        return out_dir / f"{stem}_openvino_model"
+    if target_format == "coreml":
+        return out_dir / f"{stem}.mlpackage"
+    if target_format == "engine":
+        return out_dir / f"{stem}.engine"
+    if target_format == "tflite":
+        return out_dir / f"{stem}.tflite"
+    return out_dir / f"{stem}.{target_format}"
+ 
+ 
+def _organize_exported_output(result_path: Path, desired_path: Path) -> Path:
+    if not result_path.exists():
+        return result_path
+    if result_path == desired_path:
+        return result_path
+ 
+    desired_path.parent.mkdir(parents=True, exist_ok=True)
+    if desired_path.exists():
+        if desired_path.is_dir():
+            shutil.rmtree(desired_path)
+        else:
+            desired_path.unlink()
+ 
+    if result_path.is_dir():
+        shutil.move(str(result_path), str(desired_path))
+        return desired_path
+    shutil.move(str(result_path), str(desired_path))
+    return desired_path
+ 
+ 
+def _find_tflite_artifact(saved_path: Path) -> Path | None:
+    if saved_path.is_file() and saved_path.suffix == ".tflite":
+        return saved_path
+    if saved_path.is_dir():
+        candidates = list(saved_path.rglob("*.tflite"))
+        return candidates[0] if candidates else None
+    return None
+ 
+ 
 def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
     try:
         with _silent_fd():
@@ -481,9 +540,6 @@ def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
 
 def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
     pt_path = Path(pt_file)
-    stem = pt_path.stem
-    parent = pt_path.parent
-
     onnx_path = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
     if not onnx_path.exists():
         raise RuntimeError(f"Intermediate ONNX export failed: {onnx_path}")
@@ -502,7 +558,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
             f"RKNN calibration dataset could not be prepared at: {dataset_txt}"
         )
 
-    rknn_output = parent / f"{stem}.rknn"
+    rknn_output = _desired_output_path(pt_path, "rknn")
     logger.info("Converting ONNX -> RKNN with dataset=%s", dataset_txt)
 
     rknn = RKNN(verbose=False)
@@ -511,9 +567,6 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
             mean_values=[[0, 0, 0]],
             std_values=[[255, 255, 255]],
             target_platform="rk3588",
-            # quantized_algorithm="kl_divergence",
-            # quantized_dtype="w8a8",
-            # quantized_hybrid_level=3,
             disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
         )
         ret = rknn.load_onnx(model=str(onnx_path))
@@ -529,9 +582,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
         rknn.release()
 
     logger.info("RKNN conversion successful: %s", rknn_output)
-
     _export_rknn_metadata(pt_file, rknn_output)
-
     return str(rknn_output)
 
 
@@ -547,12 +598,11 @@ def convert_model(model_file, target_format, input_size, quantize=False):
 
     pt_path = Path(model_file)
     stem = pt_path.stem
-    parent = pt_path.parent
 
     if target_format == "rknn":
-        rknn_path = parent / f"{stem}.rknn"
+        rknn_path = _desired_output_path(pt_path, "rknn")
         if rknn_path.exists():
-            meta_path = rknn_path.parent / f"{stem}_metadata.yaml"
+            meta_path = metadata_path_for(rknn_path)
             if not meta_path.exists():
                 _export_rknn_metadata(model_file, rknn_path)
             logger.info("Cached rknn model found: %s", rknn_path)
@@ -563,24 +613,15 @@ def convert_model(model_file, target_format, input_size, quantize=False):
             dataset_path=str(_PROJECT_ROOT / "QuantizeDataset"),
         )
 
-    expected = {
-        "onnx": parent / f"{stem}.onnx",
-        "openvino": parent / f"{stem}_openvino_model",
-        "coreml": parent / f"{stem}.mlpackage",
-        "engine": parent / f"{stem}.engine",
-    }
+    desired = _desired_output_path(pt_path, target_format)
     if target_format == "tflite":
-        saved = parent / f"{stem}_saved_model"
-        if saved.exists():
-            tflites = list(saved.rglob("*.tflite"))
-            if tflites:
-                logger.info("Cached tflite model found: %s", tflites[0])
-                return str(tflites[0])
+        if desired.exists():
+            logger.info("Cached tflite model found: %s", desired)
+            return str(desired)
     else:
-        out = expected.get(target_format)
-        if out and out.exists():
-            logger.info("Cached %s model found: %s", target_format, out)
-            return str(out)
+        if desired.exists():
+            logger.info("Cached %s model found: %s", target_format, desired)
+            return str(desired)
 
     dataset_root = str(_PROJECT_ROOT / "QuantizeDataset")
     data_yaml = None
@@ -607,7 +648,36 @@ def convert_model(model_file, target_format, input_size, quantize=False):
 
     if result is not None:
         result_path = Path(result)
+        desired_path = _desired_output_path(pt_path, target_format)
         if result_path.exists():
+            if target_format == "tflite":
+                if result_path.is_dir():
+                    tflite_artifact = _find_tflite_artifact(result_path)
+                    if tflite_artifact:
+                        result_path = tflite_artifact
+                if not result_path.exists() or result_path.suffix != ".tflite":
+                    logger.warning(
+                        "TFLite export did not produce a .tflite artifact at %s",
+                        result,
+                    )
+                else:
+                    if result_path.parent != desired_path.parent:
+                        desired_path = desired_path
+                        desired_path.parent.mkdir(parents=True, exist_ok=True)
+                        if desired_path.exists():
+                            desired_path.unlink()
+                        shutil.move(str(result_path), str(desired_path))
+                        result_path = desired_path
+            else:
+                if result_path != desired_path:
+                    if desired_path.exists():
+                        if desired_path.is_dir():
+                            shutil.rmtree(desired_path)
+                        else:
+                            desired_path.unlink()
+                    shutil.move(str(result_path), str(desired_path))
+                    result_path = desired_path
+ 
             logger.info("%s export successful: %s", target_format, result_path)
             # Write derived metadata for converted file based on source .pt
             try:
@@ -620,19 +690,6 @@ def convert_model(model_file, target_format, input_size, quantize=False):
             except Exception as e:
                 logger.warning("Could not write metadata for converted %s: %s", result_path.name, e)
             return str(result_path)
-
-    if target_format == "tflite":
-        saved = parent / f"{stem}_saved_model"
-        if saved.exists():
-            tflites = list(saved.rglob("*.tflite"))
-            if tflites:
-                logger.info("TFLite export successful: %s", tflites[0])
-                return str(tflites[0])
-    else:
-        out = expected.get(target_format)
-        if out and out.exists():
-            logger.info("%s export successful: %s", target_format, out)
-            return str(out)
 
     logger.warning("Conversion to %s failed, falling back to .pt", target_format)
     return model_file
@@ -647,7 +704,7 @@ def setup_files(first_boot: bool = False):
     config_dir.mkdir(parents=True, exist_ok=True)
     outputs_dir.mkdir(parents=True, exist_ok=True)
     dataset_dir.mkdir(parents=True, exist_ok=True)
-    for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml"]:
+    for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml", "engine"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
     prepare_quantization_dataset(str(dataset_dir), boot=True)
 
@@ -731,24 +788,16 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
         def _cached_output(pt_path: Path) -> Path | None:
             if best_format == "tpu":
                 return pt_path if pt_path.exists() else None
-            stem = pt_path.stem
-            parent = pt_path.parent
-            fmt_paths = {
-                "onnx": parent / f"{stem}.onnx",
-                "rknn": parent / f"{stem}.rknn",
-                "openvino": parent / f"{stem}_openvino_model",
-                "coreml": parent / f"{stem}.mlpackage",
-                "engine": parent / f"{stem}.engine",
-            }
-            out = fmt_paths.get(best_format)
-            if out and out.exists():
-                return out
-            if best_format == "tflite":
-                saved = parent / f"{stem}_saved_model"
-                if saved.exists():
-                    tflites = list(saved.rglob("*.tflite"))
-                    if tflites:
-                        return tflites[0]
+            desired = _desired_output_path(pt_path, best_format)
+            if desired.exists():
+                if best_format == "tflite":
+                    if desired.is_file():
+                        return desired
+                    tflite_artifact = _find_tflite_artifact(desired)
+                    if tflite_artifact:
+                        return tflite_artifact
+                else:
+                    return desired
             return None
 
         pytorch_dir = _PROJECT_ROOT / "YoloModels/pytorch"

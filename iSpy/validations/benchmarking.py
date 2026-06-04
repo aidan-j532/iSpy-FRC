@@ -328,7 +328,7 @@ def _main_body():
 
     plan = detect_test_plan()
     active = {k: v for k, v in plan.items() if v is not None}
-    print(f"Testing {len(active)} backend type(s)...")
+    print(f"Testing {len(active)} backend type(s): {', '.join(active.keys())}...")
     print()
 
     pt_files = []
