@@ -525,23 +525,40 @@ def _apply_metadata_to_config(sidecar: dict, model_config: dict) -> dict:
     Translate flat metadata.yaml keys into the nested config structure
     and merge with any user overrides already in model_config.
     """
+    nc = int(sidecar.get("nc", 1))
+    score_mode = sidecar.get("score_mode")
+    if score_mode is None:
+        score_mode = "objectness" if nc == 1 else "multi_class"
+
+    output_format = sidecar.get("output_format")
+    if output_format is None:
+        output_format = "hardware_nms" if Path(model_config.get("file_path", "")).suffix.lower() == ".pt" else "raw"
+
+    output_layout = sidecar.get("output_layout")
+    if output_layout is None:
+        output_layout = "anchors_first" if output_format == "hardware_nms" else "features_first"
+
+    box_format = sidecar.get("box_format")
+    if box_format is None:
+        box_format = "xyxy" if output_format == "hardware_nms" else "cxcywh"
+
     from_sidecar = {
         "task": sidecar.get("task", "detect"),
-        "num_classes": sidecar.get("nc", 1),
+        "num_classes": nc,
         "input_size": sidecar.get("input_size", [640, 640]),
         "output": {
-            "format": sidecar.get("output_format", "raw"),
-            "layout": sidecar.get("output_layout", "features_first"),
-            "box_format": sidecar.get("box_format", "cxcywh"),
-            "score_mode": sidecar.get("score_mode", "objectness"),
+            "format": output_format,
+            "layout": output_layout,
+            "box_format": box_format,
+            "score_mode": score_mode,
             "scores_are_logits": sidecar.get("scores_are_logits", False),
-            "apply_software_nms": sidecar.get("apply_software_nms", True),
+            "apply_software_nms": sidecar.get("apply_software_nms", output_format != "hardware_nms"),
             "nms_iou": sidecar.get("nms_iou", 0.45),
             "quantization": sidecar.get("quantization", "none"),
         },
         "input": {
-            "layout": sidecar.get("input_layout", "nchw"),
-            "dtype": sidecar.get("input_dtype", "float32"),
+            "layout": sidecar.get("input_layout", "nhwc" if Path(model_config.get("file_path", "")).suffix.lower() == ".pt" else "nchw"),
+            "dtype": sidecar.get("input_dtype", "uint8" if Path(model_config.get("file_path", "")).suffix.lower() == ".pt" else "float32"),
             "letterbox": sidecar.get("input_letterbox", True),
             "pad_value": sidecar.get("input_pad_value", 114),
             "normalize": sidecar.get("input_normalize", False),
@@ -788,7 +805,7 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
             "format": "hardware_nms",
             "layout": "anchors_first",
             "box_format": "xyxy",
-            "score_mode": "objectness",
+            "score_mode": "objectness" if num_classes == 1 else "multi_class",
             "scores_are_logits": False,
             "apply_software_nms": False,
             "nms_iou": 0.45,

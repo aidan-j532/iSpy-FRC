@@ -81,6 +81,17 @@ def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
         "input_size": input_size,
         "scores_are_logits": False,
         "nms_iou": 0.45,
+        "output_format": "hardware_nms",
+        "output_layout": "anchors_first",
+        "box_format": "xyxy",
+        "score_mode": "objectness" if nc == 1 else "multi_class",
+        "apply_software_nms": False,
+        "quantization": "none",
+        "input_layout": "nhwc",
+        "input_dtype": "uint8",
+        "input_letterbox": True,
+        "input_pad_value": 114,
+        "input_normalize": False,
     }
 
     if task == "pose":
