@@ -586,10 +586,8 @@ class GenericYolo:
         else:
             for frame in frames:
                 target_shape = orig_shape if orig_shape is not None else frame.shape
-                if self.model_file.endswith(".rknn"):
-                    self.model_type = "rknn"
-                    core_masks = [1, 2, 4]  # Core0, Core1, Core2 individually
-                    self._rknn_pool = _RKNNCorePool(self.model_file, self.input_size, core_masks)
+                if self.model_type == "rknn":
+                    results_list.append(self._run_rknn(self._preprocess_frame(frame), target_shape))
                 elif self.model_type == "onnx":
                     results_list.append(self._run_onnx(frame, target_shape))
                 elif self.model_type == "tflite":
