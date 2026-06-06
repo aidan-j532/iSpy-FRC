@@ -562,15 +562,21 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
 
     rknn = RKNN(verbose=False)
     try:
+        # rknn.config(
+        #     mean_values=[[0, 0, 0]],
+        #     std_values=[[255, 255, 255]],
+        #     target_platform="rk3588",
+        #     disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
+        #     quantized_algorithm="kl_divergence",  # better than default normal dist
+        #     quantized_dtype="w8a8", # 8-bit weights AND activations
+        #     quantized_hybrid_level=3, # max hybrid quant
+        #     optimization_level=3, # max graph optimization
+        # )
         rknn.config(
             mean_values=[[0, 0, 0]],
             std_values=[[255, 255, 255]],
             target_platform="rk3588",
             disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
-            quantized_algorithm="kl_divergence",  # better than default normal dist
-            quantized_dtype="w8a8", # 8-bit weights AND activations
-            quantized_hybrid_level=3, # max hybrid quant
-            optimization_level=3, # max graph optimization
         )
         ret = rknn.load_onnx(model=str(onnx_path))
         if ret != 0:
