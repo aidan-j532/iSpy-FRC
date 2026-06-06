@@ -56,38 +56,6 @@ except ImportError:
     def _set_rknn_log_level(level: int) -> None:
         pass
 
-class _RKNNCorePool:
-    def __init__(self, model_file, input_size, core_masks):
-        self._in_q = queue.Queue()
-        self._out_q = queue.Queue()
-        self._n = len(core_masks)
-        
-        for mask in core_masks:
-            threading.Thread(
-                target=self._worker,
-                args=(model_file, mask),
-                daemon=True
-            ).start()
-    
-    def _worker(self, model_file, core_mask):
-        from rknnlite.api import RKNNLite
-        model = RKNNLite(verbose=False)
-        model.load_rknn(model_file)
-        model.init_runtime(core_mask=core_mask)
-        
-        while True:
-            item = self._in_q.get()
-            if item is None:
-                break
-            idx, preprocessed, orig_shape = item
-            result = model.inference(inputs=[preprocessed])
-            self._out_q.put((idx, result, orig_shape))
-    
-    def infer(self, preprocessed, orig_shape):
-        self._in_q.put((0, preprocessed, orig_shape))
-        _, result, shape = self._out_q.get()
-        return result, shape
-
 class _GPUInferencePool:
     def __init__(self, model_file: str, task: str, devices: list[int], input_size: tuple, min_conf: float):
         self._in_q  = queue.Queue()
