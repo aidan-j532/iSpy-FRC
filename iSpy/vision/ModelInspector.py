@@ -405,10 +405,6 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
  
   
 def fill_missing_config(model_config: dict) -> dict:
-    """
-    Auto-fill every vision_model config field that isn't already set.
-    Priority: metadata file > tensor inspection > safe defaults.
-    """
     import os
     from pathlib import Path
     from iSpy.vision.metadata import read_metadata, metadata_path_for
@@ -521,10 +517,6 @@ def fill_missing_config(model_config: dict) -> dict:
 
 
 def _apply_metadata_to_config(sidecar: dict, model_config: dict) -> dict:
-    """
-    Translate flat metadata.yaml keys into the nested config structure
-    and merge with any user overrides already in model_config.
-    """
     nc = int(sidecar.get("nc", 1))
     score_mode = sidecar.get("score_mode")
     if score_mode is None:

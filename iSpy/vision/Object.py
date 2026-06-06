@@ -45,7 +45,6 @@ class Object:
         return (self.roll, self.pitch, self.yaw)
 
     def has_rotation(self) -> bool:
-        """True if a pose model provided non-zero orientation data."""
         return self.roll != 0.0 or self.pitch != 0.0 or self.yaw != 0.0
 
     def reset_time(self):

@@ -174,21 +174,19 @@ class CameraApp:
 
     def _generate(self):
         import time
+        target_interval = 1.0 / 20  # cap stream at 20fps
         while True:
+            t0 = time.perf_counter()
             with self.lock:
                 frame = self.frame
-
             if frame is None:
                 time.sleep(0.05)
                 continue
-
-            ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])  # drop quality too
             if not ok:
                 continue
-
-            yield (
-                b'--frame\r\n'
-                b'Content-Type: image/jpeg\r\n\r\n'
-                + buf.tobytes()
-                + b'\r\n'
-            )
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            elapsed = time.perf_counter() - t0
+            sleep_time = target_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)

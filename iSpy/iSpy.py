@@ -156,14 +156,11 @@ class iSpy:
     def _update_camera_app(self, frame, camera=None, handler=None):
         if not self.camera_app or frame is None:
             return
-        self.camera_app.set_frame(frame)
         if camera:
-            cam_name = (
-                camera.config.get("name", "Camera 1")
-                if hasattr(camera, "config")
-                else "Camera 1"
-            )
+            cam_name = camera.config.get("name", "Camera 1") if hasattr(camera, "config") else "Camera 1"
             self.camera_app.set_frame(frame, camera_name=cam_name)
+        else:
+            self.camera_app.set_frame(frame)
         if handler:
             for i, cam in enumerate(handler.cameras):
                 cam_name = (

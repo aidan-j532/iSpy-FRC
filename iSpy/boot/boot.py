@@ -372,7 +372,6 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
 
 @contextlib.contextmanager
 def _silent_fd():
-    """Redirect stdout+stderr at the OS fd level to suppress C library output."""
     devnull = "nul" if os.name == "nt" else "/dev/null"
     fd = os.open(devnull, os.O_WRONLY)
     old_out = os.dup(1)
@@ -568,6 +567,10 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
             std_values=[[255, 255, 255]],
             target_platform="rk3588",
             disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
+            quantized_algorithm="kl_divergence",  # better than default normal dist
+            quantized_dtype="w8a8", # 8-bit weights AND activations
+            quantized_hybrid_level=3, # max hybrid quant
+            optimization_level=3, # max graph optimization
         )
         ret = rknn.load_onnx(model=str(onnx_path))
         if ret != 0:
