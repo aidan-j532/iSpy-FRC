@@ -276,51 +276,33 @@ def make_base_config(pt_path, model_path, device):
 
 def benchmark(model_config, core_mask, duration=5.0):
     from iSpy.vision.genericYolo import GenericYolo
-    import queue, threading
 
     with _quiet():
         model = GenericYolo(model_config, core_mask=core_mask)
 
     target_h, target_w = model.input_size[1], model.input_size[0]
     frame = make_placeholder_frame(target_h, target_w)
-
     buf = np.empty((1, target_h, target_w, 3), dtype=np.uint8)
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     model._letterbox_into(rgb, buf[0], model.input_size)
 
-    preproc_q = queue.Queue(maxsize=1)
-    stop = threading.Event()
-
-    def preprocess_worker():
-        while not stop.is_set():
-            if not preproc_q.full():
-                preproc_q.put_nowait((buf, frame.shape))
-
-    threading.Thread(target=preprocess_worker, daemon=True).start()
-
-    # warm up
     with _quiet():
         for _ in range(5):
             model.predict_preprocessed(buf, frame.shape)
 
-    count = 0
     start = time.perf_counter()
+    count = 0
     while time.perf_counter() - start < duration:
-        try:
-            preprocessed, orig_shape = preproc_q.get(timeout=0.1)
-            with _quiet():
-                model.predict_preprocessed(preprocessed, orig_shape)
-            count += 1
-        except queue.Empty:
-            pass
+        with _quiet():
+            model.predict_preprocessed(buf, frame.shape)
+        count += 1
 
     elapsed = time.perf_counter() - start
-    stop.set()
     with _quiet():
         model.release()
 
     fps = count / elapsed
-    inference_ms = (elapsed / count * 1000) if count > 0 else 0
+    inference_ms = elapsed / count * 1000
     return fps, inference_ms, count, elapsed
 
 def _fmt_result(r: dict) -> str:
