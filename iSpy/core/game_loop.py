@@ -8,7 +8,7 @@ from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import VisionBase
 import iSpy.plugins as _plugins_pkg
 import sys
-
+from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
 
 for name in logging.root.manager.loggerDict:
@@ -25,6 +25,13 @@ def main():
     logger.info(f"Using config file: {config_path}")
 
     config = iSpyConfig(str(config_path))
+
+    is_valid, corrected_model_path = enforce_model_organization(repo_root, config.config)
+    if corrected_model_path:
+        config.config["vision_model"]["file_path"] = corrected_model_path
+
+    # Fill vision_model from metadata before cameras are created
+    config.set("vision_model", fill_missing_config(dict(config["vision_model"])))
 
     logger.info("Validating YOLO model organization...")
     is_valid, corrected_model_path = enforce_model_organization(
