@@ -18,6 +18,7 @@ from iSpy.validations.model_validator import (
 from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import TrackerBase, UtilityBase
 from wpimath.geometry import Pose2d
+from iSpy.vision.ModelInspector import fill_missing_config
 
 try:
     from rknnlite.api import RKNNLite
@@ -39,6 +40,8 @@ class iSpy:
     def __init__(self, cameras: list[ObjectDetectionCamera], config: iSpyConfig):
         self.cameras = cameras
         self.config = config
+        
+        config.set("vision_model", fill_missing_config(dict(config["vision_model"])))
 
         self.shutdown_event = threading.Event()
         os.makedirs("Outputs", exist_ok=True)
