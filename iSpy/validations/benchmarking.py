@@ -275,34 +275,39 @@ def make_base_config(pt_path, model_path, device):
 
 
 def benchmark(model_config, core_mask, duration=5.0):
-    from iSpy.vision.genericYolo import GenericYolo
+    from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
+    from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+
+    config = iSpyConfig()
+    config.set("vision_model", model_config)
+
+    cam_config = iSpyCameraConfig({
+        "name": "bench",
+        "source": 0,  # will fail to open -> placeholder
+        "fps_cap": 1000,
+        "yaw": 0, "pitch": 0, "height": 1.0,
+        "x": 0, "y": 0,
+        "grayscale": False,
+        "subsystem": "bench",
+        "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
+    })
 
     with _quiet():
-        model = GenericYolo(model_config, core_mask=core_mask)
-    target_h, target_w = model.input_size[1], model.input_size[0]
-    frame = make_placeholder_frame(target_h, target_w)
+        camera = ObjectDetectionCamera(cam_config, config, core_mask=core_mask)
 
-    if model.model_type == "rknn":
-        buf = np.empty((1, target_h, target_w, 3), dtype=np.uint8)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        model._letterbox_into(rgb, buf[0], model.input_size)
-        infer = lambda: model.predict_preprocessed(buf, frame.shape)
-    else:
-        infer = lambda: model.predict(frame, orig_shape=frame.shape)
+    # warm up
+    for _ in range(5):
+        camera.run()
 
-    with _quiet():
-        for _ in range(5):
-            infer()
-        start = time.perf_counter()
-        count = 0
-        while time.perf_counter() - start < duration:
-            infer()
-            count += 1
-        elapsed = time.perf_counter() - start
-        fps = count / elapsed
-    with _quiet():
-        model.release()
-    return fps, count, elapsed
+    start = time.perf_counter()
+    count = 0
+    while time.perf_counter() - start < duration:
+        camera.run()
+        count += 1
+    elapsed = time.perf_counter() - start
+
+    camera.destroy()
+    return count / elapsed, count, elapsed
 
 
 def _fmt_result(r: dict) -> str:
