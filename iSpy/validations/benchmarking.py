@@ -275,46 +275,58 @@ def make_base_config(pt_path, model_path, device):
 
 
 def benchmark(model_config, core_mask, duration=5.0):
-    from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
-    from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
-
-    config = iSpyConfig()
-    config.set("vision_model", model_config)
-
-    cam_config = iSpyCameraConfig({
-        "name": "bench",
-        "source": 0,  # will fail to open -> placeholder
-        "fps_cap": 1000,
-        "yaw": 0, "pitch": 0, "height": 1.0,
-        "x": 0, "y": 0,
-        "grayscale": False,
-        "subsystem": "bench",
-        "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
-    })
+    from iSpy.vision.genericYolo import GenericYolo
+    import queue, threading
 
     with _quiet():
-        camera = ObjectDetectionCamera(cam_config, config, core_mask=core_mask)
+        model = GenericYolo(model_config, core_mask=core_mask)
+
+    target_h, target_w = model.input_size[1], model.input_size[0]
+    frame = make_placeholder_frame(target_h, target_w)
+
+    buf = np.empty((1, target_h, target_w, 3), dtype=np.uint8)
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    model._letterbox_into(rgb, buf[0], model.input_size)
+
+    preproc_q = queue.Queue(maxsize=1)
+    stop = threading.Event()
+
+    def preprocess_worker():
+        while not stop.is_set():
+            if not preproc_q.full():
+                preproc_q.put_nowait((buf, frame.shape))
+
+    threading.Thread(target=preprocess_worker, daemon=True).start()
 
     # warm up
-    for _ in range(5):
-        camera.run()
+    with _quiet():
+        for _ in range(5):
+            model.predict_preprocessed(buf, frame.shape)
 
-    start = time.perf_counter()
     count = 0
+    start = time.perf_counter()
     while time.perf_counter() - start < duration:
-        camera.run()
-        count += 1
+        try:
+            preprocessed, orig_shape = preproc_q.get(timeout=0.1)
+            with _quiet():
+                model.predict_preprocessed(preprocessed, orig_shape)
+            count += 1
+        except queue.Empty:
+            pass
+
     elapsed = time.perf_counter() - start
+    stop.set()
+    with _quiet():
+        model.release()
 
-    camera.destroy()
-    return count / elapsed, count, elapsed
-
+    fps = count / elapsed
+    inference_ms = (elapsed / count * 1000) if count > 0 else 0
+    return fps, inference_ms, count, elapsed
 
 def _fmt_result(r: dict) -> str:
     if r.get("fps"):
-        return f"{r['backend']:20s}  {r['fps']:7.1f} FPS"
+        return f"{r['backend']:20s}  {r['fps']:6.1f} FPS  {r.get('inference_ms', 0):6.1f}ms"
     return f"{r['backend']:20s}  ERROR"
-
 
 def main():
     _mute_kernel_rknn()
@@ -363,15 +375,15 @@ def _main_body():
 
             for core_mask, label in masks:
                 try:
-                    fps, count, elapsed = benchmark(cfg, core_mask, args.duration)
+                    fps, inference_ms, count, elapsed = benchmark(cfg, core_mask, args.duration)
                     r = {"model": name, "backend": label, "format": fmt,
                          "device": str(device), "core_mask": core_mask,
-                         "fps": round(fps, 1), "frames": count, "elapsed": round(elapsed, 3)}
+                         "fps": round(fps, 1), "inference_ms": round(inference_ms, 1), "frames": count, "elapsed": round(elapsed, 3)}
                 except Exception as e:
                     print(f"X {label}: {e}")
                     r = {"model": name, "backend": label, "format": fmt,
                          "device": str(device), "core_mask": core_mask,
-                         "fps": None, "error": str(e)}
+                         "fps": None, "inference_ms": None, "error": str(e)}
                 all_results.append(r)
                 cur = best.get(name)
                 if cur is None or (r["fps"] or 0) > (cur["fps"] or 0):
