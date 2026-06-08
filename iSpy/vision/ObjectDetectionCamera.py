@@ -102,7 +102,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
         self._last_frame: np.ndarray | None = None
         self.last_time = time.perf_counter()
         self.frame_timeout = 1.0 / max(self.fps_cap, 1)
-
+        self._pipeline_timeout = 0.1
+        
         if self._use_pipeline:
             threading.Thread(
                 target=self._preprocess_worker,
@@ -158,18 +159,21 @@ class ObjectDetectionCamera(Camera, VisionBase):
             with self.frame_lock:
                 frame = self.frame
                 ts = self.frame_timestamp
-                
+
             if frame is None:
                 self._frame_event.wait(timeout=0.05)
                 self._frame_event.clear()
                 continue
-            if ts == last_ts and not self.is_image:
+
+            # Real camera: skip duplicate frames
+            if not self.is_image and ts == last_ts:
                 self._frame_event.wait(timeout=0.05)
                 self._frame_event.clear()
                 continue
 
+            # Placeholder: wait until inference consumed last frame
             if not self._preproc_q.empty():
-                time.sleep(0.005)
+                time.sleep(0.001)
                 continue
 
             last_ts = ts
@@ -248,7 +252,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
         if self._use_pipeline:
             try:
                 preprocessed, orig_frame, orig_shape = self._preproc_q.get(
-                    timeout=self.frame_timeout
+                    timeout=self._pipeline_timeout
                 )
             except queue.Empty:
                 return self._last_result, self._last_frame
