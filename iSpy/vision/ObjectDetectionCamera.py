@@ -96,7 +96,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
         )
 
         self._preproc_q: queue.Queue = queue.Queue(maxsize=1)
-        self._use_pipeline = (self.model_type == "rknn")
+        self._use_pipeline = (self.model.model_type == "rknn")
 
         self._last_result: Results | None = None
         self._last_frame: np.ndarray | None = None

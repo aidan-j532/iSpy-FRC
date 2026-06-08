@@ -618,10 +618,10 @@ class GenericYolo:
 
         # Raw model output is [1, C, H, W] features_first, not hardware_nms.
         # Override output config so postprocess() dispatches to _parse_raw_*.
-        self.output["format"] = "raw"
-        self.output["layout"] = "features_first"
-        self.output["box_format"] = "cxcywh"
-
+        if self.output.get("format") != "hardware_nms":
+            self.output["format"] = "raw"
+            self.output["layout"] = "features_first"
+            self.output["box_format"] = "cxcywh"
         self.logger.info("TPU model loaded on %s", self._tpu_device)
 
     def _run_tpu(self, frame: np.ndarray, orig_shape) -> "Results":

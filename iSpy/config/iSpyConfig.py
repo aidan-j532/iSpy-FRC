@@ -12,16 +12,12 @@ class iSpyConfig:
 
         self.default_config = {
             "vision_model": {
-                # NOTE: output.* and input.* vision model fields are auto-detected
+                # output.* and input.* vision model fields are auto-detected
                 # from the model's _metadata.yaml sidecar file. You do not need to set them.
                 # Override here only if you know the metadata is wrong.
                 "file_path": "YoloModels/pytorch/_default_pose.pt",
                 "source_pt": "YoloModels/pytorch/_default_pose.pt",
-                "input_size": [640, 640],
                 "min_conf": 0.5,
-                "margin": 10,
-                "task": "detect",
-                "num_classes": 1,
             },
                 "none"
                 # Optional PnP for pose (translation stored on Box; rotation not stored):
