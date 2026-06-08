@@ -275,31 +275,38 @@ def make_base_config(pt_path, model_path, device):
 
 
 def benchmark(model_config, core_mask, duration=5.0):
-    from iSpy.vision.genericYolo import GenericYolo
+    from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
+    from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+
+    config = iSpyConfig()
+    config.set("vision_model", model_config)
+
+    cam_cfg = iSpyCameraConfig({
+        "name": "bench",
+        "source": 99,  # won't open -> placeholder
+        "fps_cap": 1000,
+        "yaw": 0, "pitch": 0, "height": 1.0,
+        "x": 0, "y": 0,
+        "grayscale": False,
+        "subsystem": "bench",
+        "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
+    })
 
     with _quiet():
-        model = GenericYolo(model_config, core_mask=core_mask)
+        camera = ObjectDetectionCamera(cam_cfg, config, core_mask=core_mask)
 
-    target_h, target_w = model.input_size[1], model.input_size[0]
-    frame = make_placeholder_frame(target_h, target_w)
-    buf = np.empty((1, target_h, target_w, 3), dtype=np.uint8)
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    model._letterbox_into(rgb, buf[0], model.input_size)
+    # warm up
+    for _ in range(5):
+        camera.run()
 
-    with _quiet():
-        for _ in range(5):
-            model.predict_preprocessed(buf, frame.shape)
-
-    start = time.perf_counter()
     count = 0
+    start = time.perf_counter()
     while time.perf_counter() - start < duration:
-        with _quiet():
-            model.predict_preprocessed(buf, frame.shape)
+        camera.run()
         count += 1
 
     elapsed = time.perf_counter() - start
-    with _quiet():
-        model.release()
+    camera.destroy()
 
     fps = count / elapsed
     inference_ms = elapsed / count * 1000
