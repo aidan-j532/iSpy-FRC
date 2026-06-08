@@ -156,22 +156,19 @@ class ObjectDetectionCamera(Camera, VisionBase):
         buf_idx = 0
 
         while not self.stopped:
-            with self.frame_lock:
-                frame = self.frame
-                ts = self.frame_timestamp
+            if self.is_image:
+                frame = self.get_frame()
+                ts = 0  # placeholder has no timestamp
+            else:
+                with self.frame_lock:
+                    frame = self.frame
+                    ts = self.frame_timestamp
 
-            if frame is None:
-                self._frame_event.wait(timeout=0.05)
-                self._frame_event.clear()
-                continue
+                if frame is None or ts == last_ts:
+                    self._frame_event.wait(timeout=0.05)
+                    self._frame_event.clear()
+                    continue
 
-            # Real camera: skip duplicate frames
-            if not self.is_image and ts == last_ts:
-                self._frame_event.wait(timeout=0.05)
-                self._frame_event.clear()
-                continue
-
-            # Placeholder: wait until inference consumed last frame
             if not self._preproc_q.empty():
                 time.sleep(0.001)
                 continue
