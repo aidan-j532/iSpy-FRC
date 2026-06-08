@@ -886,7 +886,13 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
 
     vision_cfg = config.get("vision_model", {})
     filled = fill_missing_config(vision_cfg)
-    config.set("vision_model", filled)
+    config.set("vision_model", {
+        "file_path": filled.get("file_path"),
+        "source_pt": filled.get("source_pt"),
+        "min_conf": filled.get("min_conf", 0.5),
+        "margin": filled.get("margin", 0),
+    })
+    config.save(quiet=True)
     logger.info("Model config auto-filled and saved.")
     logger.info(
         "Boot sequence complete. Final model path: %s",
