@@ -96,7 +96,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
         )
 
         self._preproc_q: queue.Queue = queue.Queue(maxsize=1)
-        self._use_pipeline = (not self.is_image) and (self.model.model_type == "rknn")
+        self._use_pipeline = (self.model_type == "rknn")
 
         self._last_result: Results | None = None
         self._last_frame: np.ndarray | None = None
@@ -158,8 +158,12 @@ class ObjectDetectionCamera(Camera, VisionBase):
             with self.frame_lock:
                 frame = self.frame
                 ts = self.frame_timestamp
-
-            if frame is None or ts == last_ts:
+                
+            if frame is None:
+                self._frame_event.wait(timeout=0.05)
+                self._frame_event.clear()
+                continue
+            if ts == last_ts and not self.is_image:
                 self._frame_event.wait(timeout=0.05)
                 self._frame_event.clear()
                 continue
