@@ -627,7 +627,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
     return str(rknn_output)
 
 
-def convert_model(model_file, target_format, input_size, quantize=False):
+def convert_model(model_file, target_format, input_size, quantize=False, force=False):
     if not os.path.exists(model_file):
         logger.warning("Model file %s is missing. Skipping conversion.", model_file)
         return model_file
@@ -642,12 +642,18 @@ def convert_model(model_file, target_format, input_size, quantize=False):
 
     if target_format == "rknn":
         rknn_path = _desired_output_path(pt_path, "rknn")
-        if rknn_path.exists():
+        if rknn_path.exists() and not force:
             meta_path = metadata_path_for(rknn_path)
             if not meta_path.exists():
                 _export_rknn_metadata(model_file, rknn_path)
             logger.info("Cached rknn model found: %s", rknn_path)
             return str(rknn_path)
+        if force and rknn_path.exists():
+            logger.info("Fresh conversion forced for %s", rknn_path.name)
+            rknn_path.unlink()
+            meta = metadata_path_for(rknn_path)
+            if meta.exists():
+                meta.unlink()
         return _convert_rknn(
             pt_file=model_file,
             input_size=input_size,
@@ -655,14 +661,15 @@ def convert_model(model_file, target_format, input_size, quantize=False):
         )
 
     desired = _desired_output_path(pt_path, target_format)
-    if target_format == "tflite":
-        if desired.exists():
-            logger.info("Cached tflite model found: %s", desired)
-            return str(desired)
-    else:
-        if desired.exists():
-            logger.info("Cached %s model found: %s", target_format, desired)
-            return str(desired)
+    if not force:
+        if target_format == "tflite":
+            if desired.exists():
+                logger.info("Cached tflite model found: %s", desired)
+                return str(desired)
+        else:
+            if desired.exists():
+                logger.info("Cached %s model found: %s", target_format, desired)
+                return str(desired)
 
     dataset_root = str(_PROJECT_ROOT / "QuantizeDataset")
     data_yaml = None
@@ -938,6 +945,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                     best_format,
                     input_size,
                     quantize=config.get("quantize", False),
+                    force=first_boot,
                 )
             )
             if converted != pt_full:
@@ -948,6 +956,23 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                     "Conversion to %s failed or was skipped. Using .pt model.",
                     best_format,
                 )
+
+        # Convert all other .pt models too (ensures correct metadata for bench/run)
+        if pytorch_dir.exists():
+            other_input_size = config.get("input_size") or [640, 640]
+            for other in pytorch_dir.glob("*.pt"):
+                if pt_full and other.resolve() == pt_full.resolve():
+                    continue
+                try:
+                    convert_model(
+                        str(other),
+                        best_format,
+                        other_input_size,
+                        quantize=config.get("quantize", False),
+                        force=first_boot,
+                    )
+                except Exception as e:
+                    logger.warning("Could not convert %s: %s", other.name, e)
     else:
         logger.info("Auto-opt disabled.")
 
