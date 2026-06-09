@@ -19,7 +19,6 @@ class iSpyConfig:
                 "source_pt": "YoloModels/pytorch/_default_pose.pt",
                 "min_conf": 0.5,
             },
-                "none"
                 # Optional PnP for pose (translation stored on Box; rotation not stored):
                 # "pnp": {
                 #     "object_points": [[0, 0, 0], ...],

@@ -388,7 +388,15 @@ def _silent_fd():
         os.close(old_err)
 
 
-def _export_rknn_metadata(pt_file: str, rknn_output, input_size=None) -> None:
+def _export_rknn_metadata(
+    pt_file: str,
+    rknn_output,
+    input_size=None,
+    *,
+    output_format=None,
+    output_layout=None,
+    box_format=None,
+) -> None:
     try:
         from pathlib import Path
         with _silent_fd():
@@ -415,9 +423,9 @@ def _export_rknn_metadata(pt_file: str, rknn_output, input_size=None) -> None:
             except Exception:
                 pass
  
-        meta["output_format"] = "raw"
-        meta["output_layout"] = "features_first"
-        meta["box_format"] = "cxcywh"
+        meta["output_format"] = output_format if output_format is not None else "raw"
+        meta["output_layout"] = output_layout if output_layout is not None else "features_first"
+        meta["box_format"] = box_format if box_format is not None else "cxcywh"
         meta["quantization"] = "int8"
         meta["quant_scale"] = 255.0
  
@@ -561,17 +569,10 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
     logger.info("Converting ONNX -> RKNN with dataset=%s", dataset_txt)
 
     rknn = RKNN(verbose=False)
+    detected_format = None
+    detected_layout = None
+    detected_box_format = None
     try:
-        # rknn.config(
-        #     mean_values=[[0, 0, 0]],
-        #     std_values=[[255, 255, 255]],
-        #     target_platform="rk3588",
-        #     disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
-        #     quantized_algorithm="kl_divergence",  # better than default normal dist
-        #     quantized_dtype="w8a8", # 8-bit weights AND activations
-        #     quantized_hybrid_level=3, # max hybrid quant
-        #     optimization_level=3, # max graph optimization
-        # )
         rknn.config(
             mean_values=[[0, 0, 0]],
             std_values=[[255, 255, 255]],
@@ -587,11 +588,42 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
         ret = rknn.export_rknn(str(rknn_output))
         if ret != 0:
             raise RuntimeError(f"RKNN export failed with code {ret}")
+
+        # Detect actual output format by running a quick inference
+        try:
+            import numpy as np
+            rknn.init_runtime()
+            if isinstance(input_size, int):
+                h = w = input_size
+            elif isinstance(input_size, (list, tuple)):
+                h, w = int(input_size[0]), int(input_size[1]) if len(input_size) > 1 else int(input_size[0])
+            else:
+                h = w = 640
+            dummy = np.zeros((1, h, w, 3), dtype=np.uint8)
+            outputs = rknn.inference(inputs=[dummy])
+            if outputs and len(outputs) > 0:
+                tensor = outputs[0]
+                t = tensor[0] if tensor.ndim == 3 else tensor
+                is_nms = (t.shape[-1] == 6) or (t.shape[0] == 6)
+                detected_format = "hardware_nms" if is_nms else "raw"
+                detected_layout = "anchors_first" if is_nms else "features_first"
+                detected_box_format = "xyxy" if is_nms else "cxcywh"
+                logger.info(
+                    "RKNN output shape %s -> detected format: %s",
+                    tensor.shape, detected_format,
+                )
+        except Exception as e:
+            logger.debug("RKNN inference for format detection failed: %s", e)
     finally:
         rknn.release()
 
     logger.info("RKNN conversion successful: %s", rknn_output)
-    _export_rknn_metadata(pt_file, rknn_output)
+    _export_rknn_metadata(
+        pt_file, rknn_output, input_size=input_size,
+        output_format=detected_format,
+        output_layout=detected_layout,
+        box_format=detected_box_format,
+    )
     return str(rknn_output)
 
 
@@ -698,6 +730,26 @@ def convert_model(model_file, target_format, input_size, quantize=False):
                 logger.info("Wrote metadata for converted %s", result_path.name)
             except Exception as e:
                 logger.warning("Could not write metadata for converted %s: %s", result_path.name, e)
+
+            # Post-conversion: run ModelInspector silently on the exported model to verify and update metadata
+            try:
+                from iSpy.vision.ModelInspector import inspect_model, _flatten_config_to_metadata
+                inspected = inspect_model(str(result_path))
+                if inspected:
+                    inspected_meta = _flatten_config_to_metadata(inspected)
+                    meta_path = metadata_path_for(result_path)
+                    existing = read_metadata(result_path) or {}
+                    updated = dict(existing)
+                    changed = False
+                    for k, v in inspected_meta.items():
+                        if v is not None and k in existing and v != existing[k]:
+                            updated[k] = v
+                            changed = True
+                    if changed:
+                        write_metadata(meta_path, updated)
+                        logger.info("ModelInspector updated metadata for %s", result_path.name)
+            except Exception:
+                pass
             return str(result_path)
 
     logger.warning("Conversion to %s failed, falling back to .pt", target_format)
@@ -765,9 +817,39 @@ def setup_files(first_boot: bool = False):
                 except Exception as e:
                     logger.warning("Could not generate metadata for %s: %s", pt_file.name, e)
     except Exception:
-        # Best-effort; do not fail boot if metadata generation isn't possible.
         pass
 
+    # Run ModelInspector silently on each .pt to enrich metadata
+    try:
+        from iSpy.vision.ModelInspector import inspect_model, _flatten_config_to_metadata
+        for pt_file in pytorch_dir.glob("*.pt"):
+            meta_path = metadata_path_for(pt_file)
+            if not meta_path.exists():
+                continue
+            try:
+                inspected = inspect_model(str(pt_file))
+                if not inspected:
+                    continue
+                inspected_meta = _flatten_config_to_metadata(inspected)
+                existing = read_metadata(pt_file) or {}
+                updated = dict(existing)
+                changed = False
+                for k, v in inspected_meta.items():
+                    if v is None:
+                        continue
+                    if k not in existing:
+                        updated[k] = v
+                        changed = True
+                    elif v != existing[k]:
+                        updated[k] = v
+                        changed = True
+                if changed:
+                    write_metadata(meta_path, updated)
+                    logger.info("ModelInspector updated metadata for %s", pt_file.name)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 def on_boot(install_service: bool = False, first_boot: bool = False):
     if first_boot:
