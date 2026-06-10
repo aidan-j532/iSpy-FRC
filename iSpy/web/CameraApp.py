@@ -52,9 +52,8 @@ class CameraApp:
         with self.lock:
             if camera_name:
                 self.camera_frames[camera_name] = frame
-            else:
-                self.frame  = frame
-                self.height, self.width = frame.shape[:2]
+            self.frame  = frame
+            self.height, self.width = frame.shape[:2]
 
     def run(self, host='0.0.0.0', port=5000):
         try:
