@@ -33,6 +33,12 @@ class Camera:
         self._frame_event = threading.Event()
         self.frame_timeout = 1.0 / max(self.fps_cap, 1)
 
+        self.auto_brightness = camera_config.get("auto_brightness", True)
+        self._brightness_target = 128.0
+        self._brightness_gamma = 1.0
+        self._brightness_lut: np.ndarray | None = None
+        self._brightness_frame_count = 0
+
         if isinstance(self.source, str) and self.source.lower().endswith(
             (".png", ".jpg", ".jpeg", ".bmp")
         ):
@@ -138,6 +144,22 @@ class Camera:
             if frame.max() < 1:
                 self.logger.debug("Solid-black frame skipped.")
                 continue
+
+            if self.auto_brightness:
+                self._brightness_frame_count += 1
+                if self._brightness_frame_count % 15 == 0:
+                    mean_br = np.mean(frame)
+                    if abs(mean_br - self._brightness_target) > 5:
+                        target_gamma = max(mean_br, 1.0) / self._brightness_target
+                        target_gamma = np.clip(target_gamma, 0.3, 3.0)
+                        self._brightness_gamma += (target_gamma - self._brightness_gamma) * 0.2
+                        self._brightness_gamma = np.clip(self._brightness_gamma, 0.3, 3.0)
+                        gamma_table = (
+                            (np.arange(256, dtype=np.float32) / 255.0) ** self._brightness_gamma * 255.0
+                        ).astype(np.uint8)
+                        self._brightness_lut = gamma_table
+                if self._brightness_lut is not None:
+                    frame = cv2.LUT(frame, self._brightness_lut)
 
             with self.frame_lock:
                 self.frame = frame

@@ -47,6 +47,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
         self.yolo_model_file = config["vision_model"]["file_path"]
         self.input_size = tuple(config["vision_model"]["input_size"])
         self.quantized = config["vision_model"].get("quantized", False)
+        self.frame_sync = config.get("frame_sync", False)
         self.core_mask = core_mask
         self.unit = config["unit"]
         self.debug_mode = config["debug_mode"]
@@ -169,7 +170,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
                     self._frame_event.clear()
                     continue
 
-            if not self._preproc_q.empty():
+            if not self.frame_sync and not self._preproc_q.empty():
                 time.sleep(0.001)
                 continue
 
@@ -249,7 +250,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
         if self._use_pipeline:
             try:
                 preprocessed, orig_frame, orig_shape = self._preproc_q.get(
-                    timeout=self._pipeline_timeout
+                    timeout=None if self.frame_sync else self._pipeline_timeout
                 )
             except queue.Empty:
                 return self._last_result, self._last_frame
@@ -269,25 +270,26 @@ class ObjectDetectionCamera(Camera, VisionBase):
             self._last_result = results
             self._last_frame = annotated_frame
 
-        if self.debug_mode and annotated_frame is not None:
+        if annotated_frame is not None:
             annotated_frame = results.plot(annotated_frame.copy())
-            new_time = time.perf_counter()
-            fps = 1 / max(new_time - self.last_time, 1e-6)
-            self.last_time = new_time
-            cv2.putText(
-                annotated_frame,
-                f"FPS: {int(fps)}",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 0, 255),
-                2,
-                cv2.LINE_AA,
-            )
+            if self.debug_mode:
+                new_time = time.perf_counter()
+                fps = 1 / max(new_time - self.last_time, 1e-6)
+                self.last_time = new_time
+                cv2.putText(
+                    annotated_frame,
+                    f"FPS: {int(fps)}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 0, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                if self.gui_available:
+                    cv2.imshow("YOLO Detections", annotated_frame)
+                    cv2.waitKey(1)
             self._last_frame = annotated_frame
-            if self.gui_available:
-                cv2.imshow("YOLO Detections", annotated_frame)
-                cv2.waitKey(1)
 
         return results, annotated_frame
 
