@@ -283,6 +283,8 @@ class iSpyCameraConfig:
         "yaw": 0,
         "grayscale": False,
         "auto_brightness": True,
+        "capture_width": 640,
+        "capture_height": 480,
         "fps_cap": 30,
         "calibration": {"size": 0, "distance": 0, "game_piece_size": 0, "fov": 0},
         "source": "/dev/video0",

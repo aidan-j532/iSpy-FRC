@@ -22,8 +22,10 @@ class Camera:
         self.logger = logging.getLogger(__name__)
 
         self.fps_cap = fps_cap
-        self.input_size = input_size  # (w, h)
+        self.input_size = input_size  # (w, h) — model input size
         self.grayscale = grayscale
+        self._cap_w = camera_config.get("capture_width", 640)
+        self._cap_h = camera_config.get("capture_height", 480)
 
         self.source = camera_config["source"]
         self.stopped = False
@@ -110,21 +112,20 @@ class Camera:
         for _ in range(10):
             self.cap.grab()
 
-        # v4l2-ctl is Linux-only
         if not is_windows:
             device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
             subprocess.run(
                 [
                     "v4l2-ctl", "-d", device,
-                    f"--set-fmt-video=width={self.input_size[0]},height={self.input_size[1]},pixelformat=MJPG",
+                    f"--set-fmt-video=width={self._cap_w},height={self._cap_h},pixelformat=MJPG",
                 ],
                 capture_output=True,
             )
             time.sleep(0.15)
 
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.input_size[0])
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.input_size[1])
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
         self.cap.set(cv2.CAP_PROP_FPS, self.fps_cap)
 
         for _ in range(20):
@@ -133,11 +134,30 @@ class Camera:
         if not self.cap.isOpened():
             raise ValueError(f"Camera lost after configuration: {self.source}")
 
+        actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
+        fourcc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
+        fourcc_str = "".join(chr((fourcc >> 8 * i) & 0xFF) for i in range(4)) if fourcc else "N/A"
+        self.logger.info(
+            "Camera %s: capture %dx%d @ %.1f FPS (format %s)",
+            self.source, actual_w, actual_h, actual_fps, fourcc_str,
+        )
+        if actual_w != self._cap_w or actual_h != self._cap_h:
+            self.logger.warning(
+                "Requested %dx%d but camera settled on %dx%d",
+                self._cap_w, self._cap_h, actual_w, actual_h,
+            )
+        if fourcc_str not in ("MJPG", "JPEG"):
+            self.logger.warning(
+                "Camera format is %s (not MJPG). USB bandwidth may be higher.", fourcc_str
+            )
+
     def _reader(self):
         while not self.stopped:
             ret, frame = self.cap.read()
             if not ret:
-                self.logger.warning(f"Frame read failed on {self.source}, retrying…")
+                self.logger.warning(f"Frame read failed on {self.source}, retrying...")
                 time.sleep(0.05)
                 continue
 
