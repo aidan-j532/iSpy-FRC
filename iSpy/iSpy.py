@@ -41,8 +41,6 @@ class iSpy:
         self.cameras = cameras
         self.config = config
         
-        config.set("vision_model", fill_missing_config(dict(config["vision_model"])))
-
         self.shutdown_event = threading.Event()
         os.makedirs("Outputs", exist_ok=True)
         self.logger = logging.getLogger(__name__)

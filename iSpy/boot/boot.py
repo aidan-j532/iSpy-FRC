@@ -604,7 +604,9 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
             if outputs and len(outputs) > 0:
                 tensor = outputs[0]
                 t = tensor[0] if tensor.ndim == 3 else tensor
-                is_nms = (t.shape[-1] == 6) or (t.shape[0] == 6)
+                smaller = min(t.shape[0], t.shape[-1])
+                larger = max(t.shape[0], t.shape[-1])
+                is_nms = (smaller == 6 and larger < 1000)
                 detected_format = "hardware_nms" if is_nms else "raw"
                 detected_layout = "anchors_first" if is_nms else "features_first"
                 detected_box_format = "xyxy" if is_nms else "cxcywh"

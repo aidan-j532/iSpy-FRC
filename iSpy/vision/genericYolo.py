@@ -239,21 +239,16 @@ class Results:
         for box in self.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = ""
-            if box.translation is not None:
-                tx, ty, tz = box.translation
-                label += f"X:{tx:.2f} Y:{ty:.2f} Z:{tz:.2f} "
             if box.rotation is not None:
                 roll, pitch, yaw = box.rotation
-                label += (
+                label = (
                     f"R:{math.degrees(roll):.0f} "
                     f"P:{math.degrees(pitch):.0f} "
                     f"Y:{math.degrees(yaw):.0f}"
                 )
-            if label:
                 cv2.putText(
                     frame,
-                    label.strip(),
+                    label,
                     (x1, y1 - 4),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
@@ -277,10 +272,6 @@ class GenericYolo:
         self.logger = logging.getLogger(__name__)
         self._iSpy_config = iSpy_config
         model_config = fill_missing_config(model_config)
-
-        if iSpy_config is not None:
-            iSpy_config.set("vision_model", model_config)
-            iSpy_config.save(quiet=True)
 
         cfg = normalize_model_config(model_config)
         self.device = cfg.get("device", 0)
@@ -661,20 +652,18 @@ class GenericYolo:
         if not hasattr(self, '_rknn_fmt_verified'):
             self._rknn_fmt_verified = True
             t = tensor[0] if tensor.ndim == 3 else tensor
-            actual_fmt = "hardware_nms" if t.shape[-1] == 6 or t.shape[0] == 6 else "raw"
+            smaller = min(t.shape[0], t.shape[-1])
+            larger = max(t.shape[0], t.shape[-1])
+            actual_fmt = "hardware_nms" if (smaller == 6 and larger < 1000) else "raw"
 
             if actual_fmt != self.output["format"]:
                 self.logger.warning(
                     "RKNN output shape %s says format should be %r but config has %r "
-                    "- correcting and saving to config.",
+                    "- correcting.",
                     tensor.shape, actual_fmt, self.output["format"],
                 )
                 self.output["format"] = actual_fmt
                 self.has_hardware_nms = actual_fmt == "hardware_nms"
-
-                if self._iSpy_config is not None:
-                    self._iSpy_config.set("vision_model", "output", "format", actual_fmt)
-                    self._iSpy_config.save(quiet=True)
 
         return self.postprocess([tensor], orig_shape)
 

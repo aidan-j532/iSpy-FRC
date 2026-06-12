@@ -18,14 +18,13 @@ class Camera:
     _PLACEHOLDER_W = 640
     _PLACEHOLDER_H = 480
 
-    def __init__(self, camera_config: iSpyCameraConfig, fps_cap: int, input_size: tuple, grayscale: bool):
+    def __init__(self, camera_config: iSpyCameraConfig, input_size: tuple, grayscale: bool):
         self.logger = logging.getLogger(__name__)
 
-        self.fps_cap = fps_cap
-        self.input_size = input_size  # (w, h) — model input size
+        self.input_size = input_size
         self.grayscale = grayscale
-        self._cap_w = camera_config.get("capture_width", 640)
-        self._cap_h = camera_config.get("capture_height", 480)
+        self._cap_w = input_size[0]
+        self._cap_h = input_size[1]
 
         self.source = camera_config["source"]
         self.stopped = False
@@ -33,13 +32,17 @@ class Camera:
         self.frame_timestamp: float | None = None
         self.frame_lock = threading.Lock()
         self._frame_event = threading.Event()
-        self.frame_timeout = 1.0 / max(self.fps_cap, 1)
 
         self.auto_brightness = camera_config.get("auto_brightness", True)
         self._brightness_target = 128.0
         self._brightness_gamma = 1.0
         self._brightness_lut: np.ndarray | None = None
         self._brightness_frame_count = 0
+
+        # UVC exposure/gain settings. Short exposure ensures the camera can
+        # deliver the requested frame rate even in moderate-to-low light.
+        self._exposure_time = camera_config.get("exposure_time", 100)   # 10 ms
+        self._gain = camera_config.get("gain", 200)
 
         if isinstance(self.source, str) and self.source.lower().endswith(
             (".png", ".jpg", ".jpeg", ".bmp")
@@ -100,6 +103,54 @@ class Camera:
     def _open_camera(self):
         is_windows = platform.system() == "Windows"
 
+        if not is_windows:
+            device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
+
+            _fmt_resolutions = [
+                (self._cap_w, self._cap_h),    # model input size
+                (640, 480),
+                (1280, 720),
+                (800, 600),
+                (640, 360),
+            ]
+            _fmt_ok = False
+            for _fw, _fh in _fmt_resolutions:
+                try:
+                    result = subprocess.run(
+                        [
+                            "v4l2-ctl", "-d", device,
+                            f"--set-fmt-video=width={_fw},height={_fh},pixelformat=MJPG",
+                        ],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if result.returncode == 0:
+                        _fmt_ok = True
+                        break
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    break
+
+            if not _fmt_ok:
+                self.logger.warning(
+                    "v4l2-ctl format set failed for %s — skipping hardware format negotiation",
+                    device,
+                )
+
+            try:
+                subprocess.run(
+                    ["v4l2-ctl", "-d", device,
+                     "--set-ctrl=exposure_dynamic_framerate=0",
+                     "--set-ctrl=auto_exposure=1",
+                     f"--set-ctrl=exposure_time_absolute={self._exposure_time}",
+                     f"--set-ctrl=gain={self._gain}"],
+                    capture_output=True, text=True, timeout=5,
+                )
+            except FileNotFoundError:
+                pass
+            except subprocess.TimeoutExpired:
+                self.logger.warning("v4l2-ctl timed out setting UVC controls on %s", device)
+
+            time.sleep(0.15)
+
         if is_windows:
             self.cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
         else:
@@ -108,25 +159,21 @@ class Camera:
         if not self.cap.isOpened():
             raise ValueError(f"Camera failed to open: {self.source}")
 
-        # Drain stale frames
         for _ in range(10):
             self.cap.grab()
 
         if not is_windows:
-            device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
-            subprocess.run(
-                [
-                    "v4l2-ctl", "-d", device,
-                    f"--set-fmt-video=width={self._cap_w},height={self._cap_h},pixelformat=MJPG",
-                ],
-                capture_output=True,
-            )
-            time.sleep(0.15)
-
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
-        self.cap.set(cv2.CAP_PROP_FPS, self.fps_cap)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+        else:
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
 
         for _ in range(20):
             self.cap.grab()

@@ -31,7 +31,6 @@ class ObjectDetectionCamera(Camera, VisionBase):
             self.known_calibration_pixel_height = camera_config["calibration"]["size"]
             self.fov = camera_config["calibration"]["fov"]
             self.grayscale = camera_config.get("grayscale", False)
-            self.fps_cap = camera_config.get("fps_cap", 30)
             self.subsystem = camera_config["subsystem"]
 
             self.camera_bot_relative_yaw = camera_config["yaw"]
@@ -79,7 +78,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
             )
             self.focal_length_pixels = 1.0
 
-        super().__init__(camera_config, self.fps_cap, self.input_size, self.grayscale)
+        super().__init__(camera_config, self.input_size, self.grayscale)
 
         model_config = dict(config["vision_model"])
         if "file_path" not in model_config:
@@ -103,7 +102,6 @@ class ObjectDetectionCamera(Camera, VisionBase):
         self._last_result: Results | None = None
         self._last_frame: np.ndarray | None = None
         self.last_time = time.perf_counter()
-        self.frame_timeout = 1.0 / max(self.fps_cap, 1)
         self._pipeline_timeout = 0.1
         
         if self._use_pipeline:
