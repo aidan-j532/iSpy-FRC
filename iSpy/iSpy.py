@@ -75,7 +75,7 @@ class iSpy:
                 self.logger.warning("Unknown tracker: %s", name)
 
         # Grab the two built-in trackers by name for use in the loop
-        self._fuel_tracker = self.trackers.get("fuel")
+        self._fuel_tracker = self.trackers.get("object_tracker")
         self._detection_cleanup = self.trackers.get("path_planner")
 
         context = {
@@ -98,7 +98,7 @@ class iSpy:
 
         # Wire health reporter to network handler if both exist
         health = self.utilities.get("health_reporter")
-        nt = self.utilities.get("network_table")
+        nt = self.utilities.get("network_table_handler")
         if health and nt:
             health.set_network_handler(nt)
 

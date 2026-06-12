@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import logging
 
 from iSpy.plugins.bases import TrackerBase
@@ -32,6 +33,7 @@ class ObjectTracker(TrackerBase):
         robot_x: float,
         robot_y: float,
         robot_yaw: float,
+        robot_z: float = 0.0,
     ) -> list[Object]:
 
         # age + cleanup
@@ -42,7 +44,7 @@ class ObjectTracker(TrackerBase):
 
         # convert detections into robot frame
         for fuel in new_fuel_list:
-            fuel.relative_to(robot_x, robot_y, robot_yaw)
+            fuel.relative_to(robot_x, robot_y, robot_z, robot_yaw=robot_yaw)
 
         # merge
         self._merge(new_fuel_list)
@@ -69,9 +71,20 @@ class ObjectTracker(TrackerBase):
                 # reset timer
                 existing.reset_time()
 
-                # EMA smoothing
+                # EMA smoothing on position
                 existing.x += _EMA_ALPHA * (new_fuel.x - existing.x)
                 existing.y += _EMA_ALPHA * (new_fuel.y - existing.y)
+                existing.z += _EMA_ALPHA * (new_fuel.z - existing.z)
+
+                # EMA smoothing on angles (shortest-path wrapping)
+                d_roll = (new_fuel.roll - existing.roll + math.pi) % (2 * math.pi) - math.pi
+                existing.roll = (existing.roll + _EMA_ALPHA * d_roll) % (2 * math.pi)
+
+                d_pitch = (new_fuel.pitch - existing.pitch + math.pi) % (2 * math.pi) - math.pi
+                existing.pitch = (existing.pitch + _EMA_ALPHA * d_pitch) % (2 * math.pi)
+
+                d_yaw = (new_fuel.yaw - existing.yaw + math.pi) % (2 * math.pi) - math.pi
+                existing.yaw = (existing.yaw + _EMA_ALPHA * d_yaw) % (2 * math.pi)
 
                 return True
 

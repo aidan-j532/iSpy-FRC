@@ -300,7 +300,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
         roll, pitch, yaw = 0.0, 0.0, 0.0
         if box.rotation is not None:
             roll, pitch, yaw = box.rotation
-        return Object(float(pt[0]), float(pt[1]), roll=roll, pitch=pitch, yaw=yaw)
+        z = float(pt[2]) if len(pt) > 2 else 0.0
+        return Object(float(pt[0]), float(pt[1]), z=z, roll=roll, pitch=pitch, yaw=yaw)
 
     def run(self):
         data, frame = self.get_yolo_data()

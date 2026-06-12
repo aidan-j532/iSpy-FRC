@@ -145,7 +145,7 @@ class Camera:
         )
         if actual_w != self._cap_w or actual_h != self._cap_h:
             self.logger.warning(
-                "Requested %dx%d but camera settled on %dx%d",
+                "Requested %dx%d but camera vetoed to %dx%d",
                 self._cap_w, self._cap_h, actual_w, actual_h,
             )
         if fourcc_str not in ("MJPG", "JPEG"):

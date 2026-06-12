@@ -13,6 +13,7 @@ from iSpy.vision.Object import Object
 class FuelStruct:
     x: float
     y: float
+    z: float = 0.0
     roll: float = 0.0
     pitch: float = 0.0
     yaw: float = 0.0
@@ -97,6 +98,7 @@ class NetworkTableHandler(UtilityBase):
                 FuelStruct(
                     x=float(f.get_position_normally()[0]),
                     y=float(f.get_position_normally()[1]),
+                    z=float(f.get_position_normally()[2]),
                     roll=f.roll,
                     pitch=f.pitch,
                     yaw=f.yaw,
