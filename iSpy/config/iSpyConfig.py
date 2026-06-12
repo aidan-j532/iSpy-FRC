@@ -277,6 +277,7 @@ class iSpyCameraConfig:
         "name": "default",
         "x": 0,
         "y": 0,
+        "z": 0,
         "height": 0,
         "pitch": 0,
         "yaw": 0,
