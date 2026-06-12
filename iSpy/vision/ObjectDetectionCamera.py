@@ -39,6 +39,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
             self.camera_height = camera_config["height"]
             self.camera_x = camera_config["x"]
             self.camera_y = camera_config["y"]
+            self.camera_z = camera_config["z"]
         except KeyError as e:
             raise ValueError(f"Missing camera config key: {e}")
 
@@ -293,8 +294,29 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         return results, annotated_frame
 
+    def _pnp_to_robot_coordinates(
+        self, tvec: tuple[float, float, float]
+    ) -> np.ndarray:
+        fx, fy, fz = tvec
+        yaw_rad = math.radians(self.camera_bot_relative_yaw)
+        cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
+        x_rot = fz * cos_y + (-fx) * sin_y
+        y_rot = fz * sin_y - (-fx) * cos_y
+        scale = self.conversions.get(self.unit, self.conversions["meter"])
+        return np.array(
+            [
+                (x_rot + self.camera_x) * scale,
+                (y_rot + self.camera_y) * scale,
+                (-fy + self.camera_z) * scale,
+            ],
+            dtype=np.float32,
+        )
+
     def _box_to_object(self, box: Box, img_w: int, img_h: int) -> Object|None:
-        pt = self._box_to_robot_point(box, img_w, img_h)
+        if box.translation is not None:
+            pt = self._pnp_to_robot_coordinates(box.translation)
+        else:
+            pt = self._box_to_robot_point(box, img_w, img_h)
         if pt is None:
             return None
         roll, pitch, yaw = 0.0, 0.0, 0.0

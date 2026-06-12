@@ -45,9 +45,9 @@ RKNN_CONFIG = {
     "std_values": [[255, 255, 255]],
     "target_platform": "rk3588",
     "disable_rules": ["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
-    "quantized_algorithm": "kl_divergence",
-    "quantized_dtype": "w8a8",
-    "quantized_hybrid_level": 3,
+    # "quantized_algorithm": "kl_divergence",
+    # "quantized_dtype": "w8a8",
+    # "quantized_hybrid_level": 3,
 }
 
 VALID_TASKS = ("detect", "classify", "segment")

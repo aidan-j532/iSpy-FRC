@@ -239,16 +239,21 @@ class Results:
         for box in self.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            label = ""
+            if box.translation is not None:
+                tx, ty, tz = box.translation
+                label += f"X:{tx:.2f} Y:{ty:.2f} Z:{tz:.2f} "
             if box.rotation is not None:
                 roll, pitch, yaw = box.rotation
-                label = (
+                label += (
                     f"R:{math.degrees(roll):.0f} "
                     f"P:{math.degrees(pitch):.0f} "
                     f"Y:{math.degrees(yaw):.0f}"
                 )
+            if label:
                 cv2.putText(
                     frame,
-                    label,
+                    label.strip(),
                     (x1, y1 - 4),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
