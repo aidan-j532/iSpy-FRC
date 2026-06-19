@@ -636,9 +636,10 @@ class GenericYolo:
         return self.postprocess([output], orig_shape)
 
     def _dequantize_tensor(self, tensor: np.ndarray) -> np.ndarray:
-        q = self.output["quantization"]
-        if q == "none":
-            return tensor.astype(np.float32) if tensor.dtype != np.float32 else tensor
+        if tensor.dtype == np.float32:
+            return tensor
+        if tensor.dtype == np.uint8:
+            return tensor.astype(np.float32) / 255.0
         scale = float(self.output["quant_scale"])
         return tensor.astype(np.float32) / scale
 

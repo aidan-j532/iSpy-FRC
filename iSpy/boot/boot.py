@@ -577,6 +577,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
             mean_values=[[0, 0, 0]],
             std_values=[[255, 255, 255]],
             target_platform="rk3588",
+            quantized_dtype="asymmetric_quantized-8",
             disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
         )
         ret = rknn.load_onnx(model=str(onnx_path))
