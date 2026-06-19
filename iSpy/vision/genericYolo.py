@@ -640,6 +640,8 @@ class GenericYolo:
             return tensor
         if tensor.dtype == np.uint8:
             return tensor.astype(np.float32) / 255.0
+        if tensor.dtype == np.int8:
+            return tensor.astype(np.float32) / 127.0
         scale = float(self.output["quant_scale"])
         return tensor.astype(np.float32) / scale
 
@@ -648,6 +650,11 @@ class GenericYolo:
         if raw_outputs is None:
             return Results([], orig_shape)
 
+        self.logger.debug(
+            "RKNN raw output[0]: dtype=%s shape=%s min=%.4f max=%.4f",
+            raw_outputs[0].dtype, raw_outputs[0].shape,
+            raw_outputs[0].min(), raw_outputs[0].max(),
+        )
         tensor = self._dequantize_tensor(raw_outputs[0])
 
         if not hasattr(self, '_rknn_fmt_verified'):
