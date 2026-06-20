@@ -52,6 +52,8 @@ FORMAT_MATCHERS = {
     "tpu": lambda p: p.suffix == ".pt",
 }
 
+_BUNDLED_DEFAULT_MODELS = {"_default_pose.pt", "_default_box.pt"}
+
 _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
 _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
@@ -925,7 +927,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
             if pt_full and not pt_full.exists():
                 logger.warning("Configured source_pt %s not found, scanning...", pt_full)
             candidates = sorted(pytorch_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
-            user_models = [p for p in candidates if not p.name.startswith("_default_")]
+            user_models = [p for p in candidates if p.name not in _BUNDLED_DEFAULT_MODELS]
             if user_models:
                 pt_full = user_models[0]
                 logger.info("Auto-detected user model: %s", pt_full.name)
