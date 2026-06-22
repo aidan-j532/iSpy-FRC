@@ -921,8 +921,12 @@ class GenericYolo:
             orig_shape,
             keypoints=final_kpts if kpts_raw is not None else None,
         )
-
+        
     def _parse_hardware_nms(self, tensor: np.ndarray, orig_shape) -> Results:
+        # Defensive: hardware_nms output is expected as (N, 6) anchors-first.
+        # If the model actually emits (6, N) features-first, fix the orientation.
+        if tensor.ndim == 2 and tensor.shape[0] == 6 and tensor.shape[1] != 6:
+            tensor = tensor.T
         if tensor.shape[1] < 6:
             return Results([], orig_shape)
         confs = tensor[:, 4]
