@@ -12,6 +12,10 @@ for name in logging.root.manager.loggerDict:
     logging.getLogger(name).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+for name in logging.root.manager.loggerDict:
+    if not name.startswith("iSpy"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
 def main():
     repo_root = Path.cwd()
 

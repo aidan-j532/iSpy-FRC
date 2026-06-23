@@ -394,13 +394,40 @@ class GenericYolo:
 
         self._output_verified = False
         self._feat_width = 0
-        self.logger.info(
-            "GenericYolo loaded: %s  type=%s  task=%s  output=%s",
-            self.model_file,
-            self.model_type,
-            self.task,
-            self.output["format"],
-        )
+
+        inp_cfg = self.input or {}
+        msg_lines = [
+            f"Model             : {self.model_file}",
+            f"Type              : {self.model_type}",
+            f"Task              : {self.task}",
+            f"Classes           : {self.num_classes}",
+            f"Input size        : {self.input_size[0]}x{self.input_size[1]}",
+            f"Min confidence    : {self.min_conf}",
+            f"Device            : {self.device}",
+            f"Output format     : {self.output['format']}",
+            f"Output layout     : {self.output.get('layout', 'N/A')}",
+            f"Frame batches     : {self.frame_batches}",
+        ]
+        if inp_cfg:
+            msg_lines.append(f"Input layout      : {inp_cfg.get('layout', 'N/A')}")
+            msg_lines.append(f"Input dtype       : {inp_cfg.get('dtype', 'N/A')}")
+            msg_lines.append(f"Letterbox         : {inp_cfg.get('letterbox', 'N/A')}")
+        if self.output["format"] == "raw":
+            msg_lines.append(f"Box format        : {self.output.get('box_format', 'N/A')}")
+            msg_lines.append(f"Score mode        : {self.output.get('score_mode', 'N/A')}")
+            msg_lines.append(f"Software NMS      : {self.output.get('apply_software_nms', 'N/A')}")
+            if self.output.get("apply_software_nms"):
+                msg_lines.append(f"NMS IoU           : {self.output.get('nms_iou', 'N/A')}")
+
+        pad = max(len(l) for l in msg_lines)
+        sep = "=" * pad
+        full = "\n".join([
+            f"+{sep}+",
+            *[f"|{l:<{pad}}|" for l in msg_lines],
+            f"+{sep}+",
+        ])
+        print(full)
+        self.logger.info("GenericYolo loaded:\n%s", full)
 
     def _require_input_block(self) -> None:
         if self.input is None:
