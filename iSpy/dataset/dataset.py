@@ -16,43 +16,58 @@ def _search_urls_ddg(keyword: str, count: int, headers: dict) -> list[str]:
     import re
     import urllib.parse
 
+    # Use primp (browser-grade TLS fingerprinting) if available,
+    # otherwise fall back to requests.
     try:
-        import requests as _requests
+        import primp as _http
+        get_kwargs: dict = {"follow_redirects": True}
     except ImportError:
-        return []
-
-    session = _requests.Session()
-    session.headers.update(headers)
-    session.verify = False
+        try:
+            import requests as _http
+            get_kwargs = {"allow_redirects": True}
+        except ImportError:
+            return []
 
     try:
-        resp = session.get(
+        # 1) Fetch the search page to extract the vqd token
+        resp = _http.get(
             f"https://duckduckgo.com/?q={urllib.parse.quote(keyword)}",
+            headers=headers,
             timeout=15,
+            **get_kwargs,
         )
-        resp.raise_for_status()
+        html = resp.text
 
         vqd = None
-        m = re.search(r'vqd=([\d-]+)', resp.text)
+        m = re.search(r"vqd=([\w-]+)&", html)
         if m:
             vqd = m.group(1)
         if not vqd:
-            m = re.search(r'vqd["\']:\s*["\']([\d-]+)["\']', resp.text)
+            m = re.search(r"""vqd["']?\s*:\s*["']([\w-]+)["']""", html)
             if m:
                 vqd = m.group(1)
         if not vqd:
             return []
 
-        resp = session.get(
-            f"https://duckduckgo.com/i.js?q={urllib.parse.quote(keyword)}&vqd={vqd}&o=json&p=1",
-            timeout=15,
-        )
-        resp.raise_for_status()
+        # 2) Fetch image results
+        img_headers = {
+            **headers,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": "https://duckduckgo.com/",
+            "X-Requested-With": "XMLHttpRequest",
+        }
 
+        resp = _http.get(
+            "https://duckduckgo.com/i.js",
+            params={"q": keyword, "vqd": vqd, "o": "json", "p": "1"},
+            headers=img_headers,
+            timeout=15,
+            **get_kwargs,
+        )
         data = resp.json()
         results = data.get("results", [])
 
-        urls = []
+        urls: list[str] = []
         for r in results:
             image_url = r.get("image", "")
             if image_url and image_url.startswith("http"):
@@ -84,6 +99,7 @@ def _search_urls_bing(keyword: str, count: int, headers: dict) -> list[str]:
         html = resp.text
 
         patterns = [
+            r'"murl"\s*:\s*"(https?://[^"]+)"',
             r'"mediaurl"\s*:\s*"(https?://[^"]+)"',
             r'"contentUrl"\s*:\s*"(https?://[^"]+)"',
             r'"thumbUrl"\s*:\s*"(https?://[^"]+)"',
@@ -149,12 +165,14 @@ def _collect_urls(keywords: list[str], count: int) -> tuple[list[str], dict]:
                     seen.add(url)
                     all_urls.append(url)
 
-    # 3) picsum.photos guaranteed fallback
+    # 3) Warn if not enough real URLs were found
     if len(all_urls) < count:
-        needed = count * 2 - len(all_urls)
-        for i in range(needed):
-            seed = f"{keywords[0]}_{i}_{len(all_urls)}"
-            all_urls.append(f"https://picsum.photos/seed/{seed}/{_IMGSZ}/{_IMGSZ}")
+        logger.warning(
+            "Only collected %d / %d image URLs from search engines "
+            "(no synthetic fallback will be used).",
+            len(all_urls),
+            count,
+        )
 
     return all_urls, dl_headers_base
 
@@ -199,7 +217,7 @@ def _download_images(
             elif "gif" in content_type:
                 ext = ".gif"
             elif "webp" in content_type:
-                ext = ".webp"
+                continue
             elif "jpeg" in content_type:
                 ext = ".jpg"
 

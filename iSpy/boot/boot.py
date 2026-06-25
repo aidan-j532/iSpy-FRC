@@ -58,7 +58,7 @@ _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
 _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
-keywords = ["car", "person", "bicycle", "motorcycle", "bus", "truck", "traffic light", "stop sign", "sexy women"]
+keywords = ["car"]
 
 def _find_lite_wheel_dir() -> Path:
     local = _PACKAGE_ROOT.parent / "rknn_wheels"
@@ -399,6 +399,7 @@ def _export_rknn_metadata(
     output_format=None,
     output_layout=None,
     box_format=None,
+    quantize=None,
 ) -> None:
     try:
         pt_path = Path(pt_file)
@@ -413,6 +414,10 @@ def _export_rknn_metadata(
             meta["output_layout"] = output_layout
         if box_format is not None:
             meta["box_format"] = box_format
+        if quantize is not None:
+            meta["quantization"] = "int8" if quantize else "none"
+            meta["quant_scale"] = 255.0 if quantize else 1.0
+            meta["input_dtype"] = "uint8" if quantize else "float32"
         if input_size is not None:
             if hasattr(input_size, "__iter__"):
                 meta["input_size"] = [int(x) for x in input_size]
@@ -488,7 +493,9 @@ def _find_tflite_artifact(saved_path: Path) -> Path | None:
 
 
 
-def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
+def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=True, kw=None):
+    if kw is None:
+        kw = keywords
     pt_path = Path(pt_file)
     raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
     if not raw_onnx.exists():
@@ -523,7 +530,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
             "RKNN Toolkit not found. Install it to convert to RKNN format."
         )
 
-    prepare_quantization_dataset(dataset_path, boot=True, keywords=keywords)
+    prepare_quantization_dataset(dataset_path, boot=True, keywords=kw)
     dataset_txt = Path(dataset_path) / "dataset.txt"
     if not dataset_txt.exists() or not dataset_txt.read_text().strip():
         raise FileNotFoundError(
@@ -538,17 +545,19 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
     detected_layout = None
     detected_box_format = None
     try:
-        rknn.config(
+        config_kwargs = dict(
             mean_values=[[0, 0, 0]],
             std_values=[[255, 255, 255]],
             target_platform="rk3588",
-            quantized_dtype="asymmetric_quantized-8",
             disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
         )
+        if quantize:
+            config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
+        rknn.config(**config_kwargs)
         ret = rknn.load_onnx(model=str(onnx_path))
         if ret != 0:
             raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
-        ret = rknn.build(do_quantization=True, dataset=str(dataset_txt))
+        ret = rknn.build(do_quantization=quantize, dataset=str(dataset_txt))
         if ret != 0:
             raise RuntimeError(f"RKNN build failed with code {ret}")
         ret = rknn.export_rknn(str(rknn_output))
@@ -591,11 +600,12 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
         output_format=detected_format,
         output_layout=detected_layout,
         box_format=detected_box_format,
+        quantize=quantize,
     )
     return str(rknn_output)
 
 
-def convert_model(model_file, target_format, input_size, quantize=False, force=False):
+def convert_model(model_file, target_format, input_size, quantize=False, force=False, kw=None):
     if not os.path.exists(model_file):
         logger.warning("Model file %s is missing. Skipping conversion.", model_file)
         return model_file
@@ -626,6 +636,8 @@ def convert_model(model_file, target_format, input_size, quantize=False, force=F
             pt_file=model_file,
             input_size=input_size,
             dataset_path=str(_PROJECT_ROOT / "QuantizeDataset"),
+            quantize=quantize,
+            kw=kw,
         )
 
     desired = _desired_output_path(pt_path, target_format)
@@ -642,7 +654,7 @@ def convert_model(model_file, target_format, input_size, quantize=False, force=F
     dataset_root = str(_PROJECT_ROOT / "QuantizeDataset")
     data_yaml = None
     if quantize:
-        prepare_quantization_dataset(dataset_root, boot=True, keywords=keywords)
+        prepare_quantization_dataset(dataset_root, boot=True, keywords=kw if kw is not None else keywords)
         data_yaml = str(Path(dataset_root) / "data.yaml")
     else:
         Path(dataset_root).mkdir(parents=True, exist_ok=True)
@@ -913,7 +925,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                     str(pt_full),
                     best_format,
                     input_size,
-                    quantize=config.get("quantize", False),
+                    quantize=config.get("quantize", True),
                     force=first_boot,
                 )
             )

@@ -272,8 +272,8 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
             "scores_are_logits": False,   # Ultralytics applies sigmoid before ONNX export
             "apply_software_nms": True,   # required for raw format
             "nms_iou": 0.45,
-            "quantization": "int8",       # confirmed: do_quantization=True in boot.py
-            "quant_scale": 255.0,         # confirmed: std_values=[[255,255,255]] in boot.py
+            "quantization": "int8",       # overridden by metadata when available; int8 = quantized, none = unquantized
+            "quant_scale": 255.0,         # 255 for quantized, 1.0 for unquantized
         },
         "input": {
             "layout": "nhwc",
