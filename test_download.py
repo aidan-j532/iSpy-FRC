@@ -13,7 +13,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--proxy", type=str, default=None, help="Proxy URL (e.g. http://user:pass@127.0.0.1:8080)")
     args = parser.parse_args()
 
-    keywords = ["sexy women in bikini"]
+    keywords = ["car"]
     proxies = {"http": args.proxy, "https": args.proxy} if args.proxy else None
     print(f"Downloading {args.count} images for: {keywords}")
     if proxies:

@@ -162,8 +162,15 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
             "output.keypoint_scores_are_logits",
         ]
     if meta_output_format:
-        fmt = meta_output_format
-        certain.append("output.format")
+        if fmt != "hardware_nms":
+            fmt = meta_output_format
+            certain.append("output.format")
+        else:
+            warnings.append(
+                "metadata said output_format=%r but tensor shape %s shows hardware_nms "
+                "(6 columns) — trusting tensor"
+                % (meta_output_format, out_shape)
+            )
     if meta_output_layout:
         out_layout = meta_output_layout
         certain.append("output.layout")
@@ -605,6 +612,9 @@ def _flatten_config_to_metadata(cfg: dict) -> dict:
         meta["output_layout"] = out.get("layout")
         meta["box_format"] = out.get("box_format")
         meta["score_mode"] = out.get("score_mode")
+        meta["scores_are_logits"] = out.get("scores_are_logits", False)
+        meta["apply_software_nms"] = out.get("apply_software_nms", False)
+        meta["nms_iou"] = out.get("nms_iou", 0.45)
         if out.get("quantization"):
             meta["quantization"] = out.get("quantization")
         if out.get("quant_scale") is not None:

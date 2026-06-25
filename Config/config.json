@@ -1,33 +1,9 @@
 {
     "vision_model": {
-        "task": "detect",
-        "num_classes": 1,
-        "input_size": [
-            640,
-            640
-        ],
-        "output": {
-            "format": "hardware_nms",
-            "layout": "anchors_first",
-            "box_format": "xyxy",
-            "score_mode": "objectness",
-            "scores_are_logits": false,
-            "apply_software_nms": false,
-            "nms_iou": 0.45,
-            "quantization": "none"
-        },
-        "input": {
-            "layout": "nhwc",
-            "dtype": "uint8",
-            "letterbox": true,
-            "pad_value": 114,
-            "normalize": false
-        },
-        "file_path": "YoloModels\\openvino\\_default_v26_detect_for_fuel_openvino_model",
+        "file_path": "C:\\Users\\Aidan\\Documents\\Vscode\\iSpy-FRC\\iSpy-FRC\\YoloModels\\openvino\\_default_v26_detect_for_fuel_openvino_model",
         "source_pt": "C:\\Users\\Aidan\\Documents\\Vscode\\iSpy-FRC\\iSpy-FRC\\YoloModels\\pytorch\\_default_v26_detect_for_fuel.pt",
         "min_conf": 0.5,
-        "margin": 10,
-        "quantized": false
+        "margin": 10
     },
     "num_gpus": "auto",
     "device": 0,
@@ -41,6 +17,7 @@
     "stale_threshold": 1.0,
     "record_mode": true,
     "record_dir": "VideoRecordings",
+    "frame_sync": false,
     "auto_opt": true,
     "log_level": "INFO",
     "log_file": "Outputs/log.txt",

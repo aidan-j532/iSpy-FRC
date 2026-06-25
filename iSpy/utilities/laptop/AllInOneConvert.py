@@ -1,3 +1,4 @@
+import shutil
 from ultralytics import YOLO
 import logging
 import os
@@ -9,6 +10,42 @@ from iSpy.vision.metadata import (
     metadata_path_for,
     write_metadata,
 )
+
+
+YOLO_MODELS_DIR = Path("YoloModels")
+
+
+def _desired_output_path(pt_path: Path, target_format: str) -> Path:
+    stem = pt_path.stem
+    out_dir = YOLO_MODELS_DIR / target_format
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if target_format == "rknn":
+        return out_dir / f"{stem}.rknn"
+    if target_format == "onnx":
+        return out_dir / f"{stem}.onnx"
+    if target_format == "openvino":
+        return out_dir / f"{stem}_openvino_model"
+    if target_format == "coreml":
+        return out_dir / f"{stem}.mlpackage"
+    if target_format == "engine":
+        return out_dir / f"{stem}.engine"
+    if target_format == "tflite":
+        return out_dir / f"{stem}.tflite"
+    return out_dir / f"{stem}.{target_format}"
+
+
+def _move_to_format_dir(source: Path, pt_path: Path, target_format: str) -> Path:
+    dest = _desired_output_path(pt_path, target_format)
+    if source == dest:
+        return source
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        if dest.is_dir():
+            shutil.rmtree(dest)
+        else:
+            dest.unlink()
+    shutil.move(str(source), str(dest))
+    return dest
 
 logger = logging.getLogger(__name__)
 
@@ -165,18 +202,32 @@ def convert_model(
     if task not in VALID_TASKS:
         raise ValueError(f"Unsupported task '{task}'. Choose from: {', '.join(VALID_TASKS)}")
 
+    pt_path = Path(file)
+
     if format == "rknn":
         logger.info("RKNN target -- exporting to ONNX first...")
-        onnx_path = _export_ultralytics(file, "onnx", task)
-        logger.info(f"Intermediate ONNX saved -> {onnx_path}")
+        raw_onnx = _export_ultralytics(file, "onnx", task)
+        logger.info(f"Intermediate ONNX saved -> {raw_onnx}")
+        # Route intermediate ONNX to onnx folder with sidecar
+        try:
+            onnx_path = _move_to_format_dir(Path(raw_onnx), pt_path, "onnx")
+            pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
+            fmt_meta = derive_format_metadata(pt_meta, "onnx")
+            fmt_meta["input_size"] = list(pt_meta.get("input_size", [640, 640]))
+            write_metadata(metadata_path_for(onnx_path), fmt_meta)
+            logger.info("Routed intermediate ONNX to %s", onnx_path)
+        except Exception as e:
+            logger.warning("Could not route intermediate ONNX: %s", e)
+            onnx_path = Path(raw_onnx)
+
         rknn_path = _export_rknn(
-            onnx_file=onnx_path,
+            onnx_file=str(onnx_path),
             task=task,
             dataset_txt=rknn_dataset_txt,
-            output_path=rknn_output_path,
+            output_path=str(_desired_output_path(pt_path, "rknn")),
         )
         try:
-            pt_meta = read_metadata(Path(file)) or metadata_from_pt(Path(file))
+            pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
             fmt_meta = derive_format_metadata(pt_meta, "rknn")
             fmt_meta["input_size"] = list(pt_meta.get("input_size", [640, 640]))
             write_metadata(metadata_path_for(Path(rknn_path)), fmt_meta)
@@ -185,14 +236,14 @@ def convert_model(
             logger.warning("Could not write metadata for %s: %s", rknn_path, e)
         return rknn_path
 
-    out = _export_ultralytics(file, format, task)
+    raw_out = _export_ultralytics(file, format, task)
+    out_path = _move_to_format_dir(Path(raw_out), pt_path, format)
     try:
-        out_path = Path(out)
-        pt_meta = read_metadata(Path(file)) or metadata_from_pt(Path(file))
+        pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
         fmt_meta = derive_format_metadata(pt_meta, format)
         fmt_meta["input_size"] = list(pt_meta.get("input_size", [640, 640]))
         write_metadata(metadata_path_for(out_path), fmt_meta)
         logger.info("Wrote metadata for converted %s", out_path.name)
     except Exception as e:
-        logger.warning("Could not write metadata for converted output %s: %s", out, e)
-    return out
+        logger.warning("Could not write metadata for converted output %s: %s", out_path, e)
+    return str(out_path)

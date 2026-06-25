@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -9,44 +10,202 @@ _CALIB_COUNT = 20
 _IMGSZ = 640
 
 
-def _generate_calibration_images(folder: Path, count: int = _CALIB_COUNT, imgsz: int = _IMGSZ, boot: bool = False):
-    if not boot:
-        logger.warning("Generating SYNTHETIC calibration images, expect poor quantization results! Add real images to %s to improve accuracy.", folder / "images")
-    import numpy as np
+def _search_urls_ddg(keyword: str, count: int, headers: dict, proxies: dict | None = None) -> list[str]:
+    import re
+    import urllib.parse
+
     try:
-        from PIL import Image
+        import requests as _requests
     except ImportError:
-        logger.warning("Pillow not available - cannot generate calibration images")
         return []
 
+    session = _requests.Session()
+    session.headers.update(headers)
+    if proxies:
+        session.proxies.update(proxies)
+
+    try:
+        resp = session.get(
+            f"https://duckduckgo.com/?q={urllib.parse.quote(keyword)}",
+            timeout=15,
+        )
+        resp.raise_for_status()
+
+        vqd = None
+        m = re.search(r'vqd=([\d-]+)', resp.text)
+        if m:
+            vqd = m.group(1)
+        if not vqd:
+            m = re.search(r'vqd["\']:\s*["\']([\d-]+)["\']', resp.text)
+            if m:
+                vqd = m.group(1)
+        if not vqd:
+            return []
+
+        resp = session.get(
+            f"https://duckduckgo.com/i.js?q={urllib.parse.quote(keyword)}&vqd={vqd}&o=json&p=1",
+            timeout=15,
+        )
+        resp.raise_for_status()
+
+        data = resp.json()
+        results = data.get("results", [])
+
+        urls = []
+        for r in results:
+            image_url = r.get("image", "")
+            if image_url and image_url.startswith("http"):
+                urls.append(image_url)
+            if len(urls) >= count:
+                break
+        return urls
+    except Exception:
+        return []
+
+
+def _search_urls_bing(keyword: str, count: int, headers: dict, proxies: dict | None = None) -> list[str]:
+    import re
+    import urllib.parse
+
+    try:
+        import requests as _requests
+    except ImportError:
+        return []
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    try:
+        query = urllib.parse.quote(keyword)
+        search_url = f"https://www.bing.com/images/search?q={query}&count={count * 2}"
+        resp = _requests.get(search_url, headers=headers, proxies=proxies, timeout=15)
+        resp.raise_for_status()
+        html = resp.text
+
+        patterns = [
+            r'"mediaurl"\s*:\s*"(https?://[^"]+)"',
+            r'"contentUrl"\s*:\s*"(https?://[^"]+)"',
+            r'"thumbUrl"\s*:\s*"(https?://[^"]+)"',
+            r'<img[^>]+src="(https?://[^"]+)"[^>]+class="mimg"',
+            r'<img[^>]+class="mimg"[^>]+src="(https?://[^"]+)"',
+        ]
+
+        for pat in patterns:
+            for match in re.finditer(pat, html, re.IGNORECASE):
+                img_url = match.group(1).replace("\\/", "/")
+                if img_url not in seen:
+                    seen.add(img_url)
+                    found.append(img_url)
+                    if len(found) >= count:
+                        break
+            if len(found) >= count:
+                break
+    except Exception:
+        pass
+
+    return found
+
+
+def _download_images(
+    keywords: list[str],
+    folder: Path,
+    count: int = _CALIB_COUNT,
+    boot: bool = False,
+    proxies: dict | None = None,
+) -> list[Path]:
     images_dir = folder / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
+    downloaded = []
 
-    generated = []
-    for i in range(count):
-        path = images_dir / f"calib_{i:03d}.jpg"
-        if path.exists():
-            generated.append(path)
+    try:
+        import requests as _requests
+    except ImportError:
+        return []
+
+    if proxies:
+        os.environ["HTTP_PROXY"] = proxies.get("http", "")
+        os.environ["HTTPS_PROXY"] = proxies.get("https", proxies.get("http", ""))
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+
+    all_urls: list[str] = []
+    seen: set[str] = set()
+
+    # 1) Try simple_image_download (Google Images)
+    try:
+        from simple_image_download.simple_image_download import Downloader
+        keyword_str = ", ".join(keywords)
+        per_keyword = max(1, count * 2 // len(keywords))
+        dl = Downloader()
+        results = dl.search_urls(keyword_str, limit=per_keyword, timer=5000)
+        for name, (_, resp) in results.items():
+            url = getattr(resp, "url", None) or name
+            if url and url not in seen:
+                seen.add(url)
+                all_urls.append(url)
+    except Exception as e:
+        logger.debug("simple_image_download failed: %s", e)
+
+    # 2) DuckDuckGo fallback
+    if len(all_urls) < count:
+        for kw in keywords:
+            urls = _search_urls_ddg(kw, count - len(all_urls), headers, proxies)
+            for url in urls:
+                if url not in seen:
+                    seen.add(url)
+                    all_urls.append(url)
+                    if len(all_urls) >= count * 2:
+                        break
+            if len(all_urls) >= count * 2:
+                break
+
+    # 3) Bing fallback
+    if len(all_urls) < count:
+        for kw in keywords:
+            urls = _search_urls_bing(kw, count - len(all_urls), headers, proxies)
+            for url in urls:
+                if url not in seen:
+                    seen.add(url)
+                    all_urls.append(url)
+                    if len(all_urls) >= count * 2:
+                        break
+            if len(all_urls) >= count * 2:
+                break
+
+    for url in all_urls:
+        if len(downloaded) >= count:
+            break
+        try:
+            resp = _requests.get(url, timeout=15, stream=True, proxies=proxies)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            if "image" not in content_type:
+                continue
+            ext = ".jpg"
+            if "png" in content_type:
+                ext = ".png"
+            elif "bmp" in content_type:
+                ext = ".bmp"
+            elif "gif" in content_type:
+                ext = ".gif"
+            elif "webp" in content_type:
+                ext = ".webp"
+
+            dest = images_dir / f"img_{len(downloaded):03d}{ext}"
+            with open(dest, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            downloaded.append(dest)
+        except Exception:
             continue
-        rng = np.random.default_rng(seed=i)
-        mode = i % 4
-        if mode == 0:
-            arr = rng.integers(0, 256, (imgsz, imgsz, 3), dtype=np.uint8)
-        elif mode == 1:
-            ramp = np.tile(np.linspace(0, 255, imgsz, dtype=np.uint8), (imgsz, 1))
-            arr = np.stack([ramp, ramp[::-1], ramp], axis=-1)
-        elif mode == 2:
-            block = rng.integers(0, 256, (32, 32, 3), dtype=np.uint8)
-            arr = np.tile(block, (imgsz // 32 + 1, imgsz // 32 + 1, 1))[:imgsz, :imgsz]
-        else:
-            arr = rng.integers(200, 256, (imgsz, imgsz, 3), dtype=np.uint8)
-            blur_k = rng.integers(0, 50, (imgsz, imgsz), dtype=np.uint8)
-            arr = np.clip(arr.astype(np.int16) - blur_k[..., None], 0, 255).astype(np.uint8)
-        Image.fromarray(arr).save(path, quality=85)
-        generated.append(path)
 
-    logger.info("Generated %d calibration images in %s", len(generated), images_dir)
-    return generated
+    return downloaded
 
 
 def _find_images(folder: Path):
@@ -66,7 +225,14 @@ def _rebuild_dataset_txt(ds: Path):
     return False
 
 
-def prepare_quantization_dataset(dataset_path: str = "dataset", imgsz: int = _IMGSZ, boot: bool = False) -> Path:
+def prepare_quantization_dataset(
+    dataset_path: str = "dataset",
+    imgsz: int = _IMGSZ,
+    boot: bool = False,
+    keywords: list[str] | None = None,
+    count: int = _CALIB_COUNT,
+    proxies: dict | None = None,
+) -> Path:
     ds = Path(dataset_path)
     for sub in _REQUIRED_DIRS:
         (ds / sub).mkdir(parents=True, exist_ok=True)
@@ -79,10 +245,17 @@ def prepare_quantization_dataset(dataset_path: str = "dataset", imgsz: int = _IM
             "nc: 1\n"
             "names: ['object']\n"
         )
-        logger.info("Created %s", data_yaml)
 
-    if not _find_images(ds):
-        _generate_calibration_images(ds, imgsz=imgsz, boot=boot)
+    existing = _find_images(ds)
+    if len(existing) < count:
+        if keywords:
+            for f in existing:
+                f.unlink()
+            _download_images(keywords, ds, count, boot=boot, proxies=proxies)
+
+        existing = _find_images(ds)
+        if len(existing) < count:
+            logger.warning("Only downloaded %d / %d requested images", len(existing), count)
 
     _rebuild_dataset_txt(ds)
 

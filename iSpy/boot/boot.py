@@ -58,6 +58,7 @@ _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
 _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
+keywords = ["car", "person", "bicycle", "motorcycle", "bus", "truck", "traffic light", "stop sign", "sexy women"]
 
 def _find_lite_wheel_dir() -> Path:
     local = _PACKAGE_ROOT.parent / "rknn_wheels"
@@ -506,52 +507,36 @@ def _find_tflite_artifact(saved_path: Path) -> Path | None:
     return None
  
  
-def _export_onnx_metadata(pt_file: str, onnx_output: Path) -> None:
-    try:
-        with _silent_fd():
-            import ultralytics
-            from ruamel.yaml import YAML
 
-            model = ultralytics.YOLO(pt_file, verbose=False)
-        meta = {}
-        model_task = getattr(model, "task", "detect") or "detect"
-        meta["task"] = model_task
-        try:
-            nc = int(model.model.model[-1].nc)
-            meta["nc"] = nc
-            names = getattr(model, "names", None)
-            if names and isinstance(names, dict):
-                meta["names"] = names
-        except Exception:
-            pass
-        if model_task == "pose":
-            try:
-                kpt_shape = model.model.model[-1].kpt_shape
-                if kpt_shape and len(kpt_shape) == 2:
-                    meta["kpt_shape"] = [int(kpt_shape[0]), int(kpt_shape[1])]
-            except Exception:
-                pass
-
-        meta["output_format"] = "raw"
-        meta["output_layout"] = "features_first"
-        meta["box_format"] = "cxcywh"
-        meta["quantization"] = "none"
-
-        meta_path = onnx_output.parent / f"{onnx_output.stem}_metadata.yaml"
-        yaml = YAML()
-        yaml.default_flow_style = False
-        with open(meta_path, "w") as f:
-            yaml.dump(meta, f)
-        logger.info("Exported ONNX metadata: %s", meta_path)
-    except Exception as e:
-        logger.warning("Failed to export ONNX metadata: %s", e)
 
 
 def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
     pt_path = Path(pt_file)
-    onnx_path = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
-    if not onnx_path.exists():
-        raise RuntimeError(f"Intermediate ONNX export failed: {onnx_path}")
+    raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
+    if not raw_onnx.exists():
+        raise RuntimeError(f"Intermediate ONNX export failed: {raw_onnx}")
+
+    # Route intermediate ONNX to the onnx folder with its own sidecar
+    try:
+        onnx_path = _desired_output_path(pt_path, "onnx")
+        if raw_onnx != onnx_path:
+            onnx_path.parent.mkdir(parents=True, exist_ok=True)
+            if onnx_path.exists():
+                if onnx_path.is_dir():
+                    shutil.rmtree(onnx_path)
+                else:
+                    onnx_path.unlink()
+            shutil.move(str(raw_onnx), str(onnx_path))
+        pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
+        format_meta = derive_format_metadata(pt_meta, "onnx")
+        format_meta["input_size"] = (
+            list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)]
+        )
+        write_metadata(metadata_path_for(onnx_path), format_meta)
+        logger.info("Intermediate ONNX routed to %s with sidecar", onnx_path)
+    except Exception as e:
+        logger.warning("Could not route intermediate ONNX: %s", e)
+        onnx_path = raw_onnx
 
     try:
         from rknn.api import RKNN
@@ -560,7 +545,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect"):
             "RKNN Toolkit not found. Install it to convert to RKNN format."
         )
 
-    prepare_quantization_dataset(dataset_path, boot=True)
+    prepare_quantization_dataset(dataset_path, boot=True, keywords=keywords)
     dataset_txt = Path(dataset_path) / "dataset.txt"
     if not dataset_txt.exists() or not dataset_txt.read_text().strip():
         raise FileNotFoundError(
@@ -679,7 +664,7 @@ def convert_model(model_file, target_format, input_size, quantize=False, force=F
     dataset_root = str(_PROJECT_ROOT / "QuantizeDataset")
     data_yaml = None
     if quantize:
-        prepare_quantization_dataset(dataset_root, boot=True)
+        prepare_quantization_dataset(dataset_root, boot=True, keywords=keywords)
         data_yaml = str(Path(dataset_root) / "data.yaml")
     else:
         Path(dataset_root).mkdir(parents=True, exist_ok=True)
@@ -754,7 +739,7 @@ def convert_model(model_file, target_format, input_size, quantize=False, force=F
                     updated = dict(existing)
                     changed = False
                     for k, v in inspected_meta.items():
-                        if v is not None and k in existing and v != existing[k]:
+                        if v is not None and (k not in existing or v != existing[k]):
                             updated[k] = v
                             changed = True
                     if changed:
@@ -779,7 +764,7 @@ def setup_files(first_boot: bool = False):
     dataset_dir.mkdir(parents=True, exist_ok=True)
     for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml", "engine"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
-    prepare_quantization_dataset(str(dataset_dir), boot=True)
+    prepare_quantization_dataset(str(dataset_dir), boot=True, keywords=keywords)
 
     pytorch_dir = yolo_dir / "pytorch"
     _SKIP_DIRS = {
