@@ -1,5 +1,5 @@
 import logging
-import os
+import warnings
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -9,8 +9,10 @@ _IMAGE_EXTS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
 _CALIB_COUNT = 20
 _IMGSZ = 640
 
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
-def _search_urls_ddg(keyword: str, count: int, headers: dict, proxies: dict | None = None) -> list[str]:
+
+def _search_urls_ddg(keyword: str, count: int, headers: dict) -> list[str]:
     import re
     import urllib.parse
 
@@ -21,8 +23,7 @@ def _search_urls_ddg(keyword: str, count: int, headers: dict, proxies: dict | No
 
     session = _requests.Session()
     session.headers.update(headers)
-    if proxies:
-        session.proxies.update(proxies)
+    session.verify = False
 
     try:
         resp = session.get(
@@ -63,7 +64,7 @@ def _search_urls_ddg(keyword: str, count: int, headers: dict, proxies: dict | No
         return []
 
 
-def _search_urls_bing(keyword: str, count: int, headers: dict, proxies: dict | None = None) -> list[str]:
+def _search_urls_bing(keyword: str, count: int, headers: dict) -> list[str]:
     import re
     import urllib.parse
 
@@ -78,7 +79,7 @@ def _search_urls_bing(keyword: str, count: int, headers: dict, proxies: dict | N
     try:
         query = urllib.parse.quote(keyword)
         search_url = f"https://www.bing.com/images/search?q={query}&count={count * 2}"
-        resp = _requests.get(search_url, headers=headers, proxies=proxies, timeout=15)
+        resp = _requests.get(search_url, headers=headers, timeout=15, verify=False)
         resp.raise_for_status()
         html = resp.text
 
@@ -106,85 +107,88 @@ def _search_urls_bing(keyword: str, count: int, headers: dict, proxies: dict | N
     return found
 
 
+def _collect_urls(keywords: list[str], count: int) -> tuple[list[str], dict]:
+    import requests as _requests
+
+    search_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    dl_headers_base = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    all_urls: list[str] = []
+    seen: set[str] = set()
+
+    # 1) DuckDuckGo
+    for kw in keywords:
+        urls = _search_urls_ddg(kw, count * 3, search_headers)
+        for url in urls:
+            if url not in seen:
+                seen.add(url)
+                all_urls.append(url)
+
+    # 2) Bing fallback
+    if len(all_urls) < count:
+        for kw in keywords:
+            urls = _search_urls_bing(kw, count * 3, search_headers)
+            for url in urls:
+                if url not in seen:
+                    seen.add(url)
+                    all_urls.append(url)
+
+    # 3) picsum.photos guaranteed fallback
+    if len(all_urls) < count:
+        needed = count * 2 - len(all_urls)
+        for i in range(needed):
+            seed = f"{keywords[0]}_{i}_{len(all_urls)}"
+            all_urls.append(f"https://picsum.photos/seed/{seed}/{_IMGSZ}/{_IMGSZ}")
+
+    return all_urls, dl_headers_base
+
+
 def _download_images(
     keywords: list[str],
     folder: Path,
     count: int = _CALIB_COUNT,
     boot: bool = False,
-    proxies: dict | None = None,
 ) -> list[Path]:
     images_dir = folder / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
-    downloaded = []
+    downloaded: list[Path] = []
 
     try:
         import requests as _requests
     except ImportError:
         return []
 
-    if proxies:
-        os.environ["HTTP_PROXY"] = proxies.get("http", "")
-        os.environ["HTTPS_PROXY"] = proxies.get("https", proxies.get("http", ""))
+    all_urls, dl_headers_base = _collect_urls(keywords, count)
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
-    }
-
-    all_urls: list[str] = []
-    seen: set[str] = set()
-
-    # 1) Try simple_image_download (Google Images)
-    try:
-        from simple_image_download.simple_image_download import Downloader
-        keyword_str = ", ".join(keywords)
-        per_keyword = max(1, count * 2 // len(keywords))
-        dl = Downloader()
-        results = dl.search_urls(keyword_str, limit=per_keyword, timer=5000)
-        for name, (_, resp) in results.items():
-            url = getattr(resp, "url", None) or name
-            if url and url not in seen:
-                seen.add(url)
-                all_urls.append(url)
-    except Exception as e:
-        logger.debug("simple_image_download failed: %s", e)
-
-    # 2) DuckDuckGo fallback
-    if len(all_urls) < count:
-        for kw in keywords:
-            urls = _search_urls_ddg(kw, count - len(all_urls), headers, proxies)
-            for url in urls:
-                if url not in seen:
-                    seen.add(url)
-                    all_urls.append(url)
-                    if len(all_urls) >= count * 2:
-                        break
-            if len(all_urls) >= count * 2:
-                break
-
-    # 3) Bing fallback
-    if len(all_urls) < count:
-        for kw in keywords:
-            urls = _search_urls_bing(kw, count - len(all_urls), headers, proxies)
-            for url in urls:
-                if url not in seen:
-                    seen.add(url)
-                    all_urls.append(url)
-                    if len(all_urls) >= count * 2:
-                        break
-            if len(all_urls) >= count * 2:
-                break
+    logger.info("Collected %d image URLs, attempting to download %d", len(all_urls), count)
 
     for url in all_urls:
         if len(downloaded) >= count:
             break
         try:
-            resp = _requests.get(url, timeout=15, stream=True, proxies=proxies)
+            dl_headers = dict(dl_headers_base)
+            dl_headers["Referer"] = url
+            resp = _requests.get(
+                url, headers=dl_headers, timeout=30, stream=True, verify=False,
+            )
             resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
+            content_type = resp.headers.get("content-type", "").lower()
             if "image" not in content_type:
                 continue
             ext = ".jpg"
@@ -196,6 +200,8 @@ def _download_images(
                 ext = ".gif"
             elif "webp" in content_type:
                 ext = ".webp"
+            elif "jpeg" in content_type:
+                ext = ".jpg"
 
             dest = images_dir / f"img_{len(downloaded):03d}{ext}"
             with open(dest, "wb") as f:
@@ -205,6 +211,7 @@ def _download_images(
         except Exception:
             continue
 
+    logger.info("Downloaded %d images", len(downloaded))
     return downloaded
 
 
@@ -231,7 +238,6 @@ def prepare_quantization_dataset(
     boot: bool = False,
     keywords: list[str] | None = None,
     count: int = _CALIB_COUNT,
-    proxies: dict | None = None,
 ) -> Path:
     ds = Path(dataset_path)
     for sub in _REQUIRED_DIRS:
@@ -251,7 +257,7 @@ def prepare_quantization_dataset(
         if keywords:
             for f in existing:
                 f.unlink()
-            _download_images(keywords, ds, count, boot=boot, proxies=proxies)
+            _download_images(keywords, ds, count, boot=boot)
 
         existing = _find_images(ds)
         if len(existing) < count:

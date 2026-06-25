@@ -401,48 +401,26 @@ def _export_rknn_metadata(
     box_format=None,
 ) -> None:
     try:
-        from pathlib import Path
-        with _silent_fd():
-            import ultralytics
-            from ruamel.yaml import YAML
- 
-            model = ultralytics.YOLO(pt_file, verbose=False)
-        meta = {}
-        model_task = getattr(model, "task", "detect") or "detect"
-        meta["task"] = model_task
-        try:
-            nc = int(model.model.model[-1].nc)
-            meta["nc"] = nc
-            names = getattr(model, "names", None)
-            if names and isinstance(names, dict):
-                meta["names"] = names
-        except Exception:
-            pass
-        if model_task == "pose":
-            try:
-                kpt_shape = model.model.model[-1].kpt_shape
-                if kpt_shape and len(kpt_shape) == 2:
-                    meta["kpt_shape"] = [int(kpt_shape[0]), int(kpt_shape[1])]
-            except Exception:
-                pass
- 
-        meta["output_format"] = output_format if output_format is not None else "raw"
-        meta["output_layout"] = output_layout if output_layout is not None else "features_first"
-        meta["box_format"] = box_format if box_format is not None else "cxcywh"
-        meta["quantization"] = "int8"
-        meta["quant_scale"] = 255.0
- 
+        pt_path = Path(pt_file)
+        rknn_path = Path(rknn_output)
+        pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
+        meta = derive_format_metadata(pt_meta, "rknn")
+
+        # Override detected fields from RKNN inference probe
+        if output_format is not None:
+            meta["output_format"] = output_format
+        if output_layout is not None:
+            meta["output_layout"] = output_layout
+        if box_format is not None:
+            meta["box_format"] = box_format
         if input_size is not None:
             if hasattr(input_size, "__iter__"):
                 meta["input_size"] = [int(x) for x in input_size]
             else:
                 meta["input_size"] = [int(input_size), int(input_size)]
- 
-        meta_path = Path(rknn_output).parent / f"{Path(rknn_output).stem}_metadata.yaml"
-        yaml = YAML()
-        yaml.default_flow_style = False
-        with open(meta_path, "w") as f:
-            yaml.dump(meta, f)
+
+        meta_path = metadata_path_for(rknn_path)
+        write_metadata(meta_path, meta)
         logger.info("Exported RKNN metadata: %s", meta_path)
     except Exception as e:
         logger.warning("Failed to export RKNN metadata: %s", e)
