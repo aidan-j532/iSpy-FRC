@@ -198,7 +198,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
             return False
         if h_px == 0:
             return False
-        aspect = w_px / h_px
+        aspect = w_px / h_px # Aspect is calculate but I won't use it because
+        # I want it to continue detections partial objectcs/rectangles
         return True
         # return 0.8 <= aspect <= 1.2
 
@@ -355,7 +356,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
             return None
         positions, _ = self.run()
         if self.subsystem == "hopper":
-            return positions.shape[0] > 0
+            return len(positions) > 0
         return positions
 
     def get_subsystem(self) -> str:

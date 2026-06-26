@@ -1,3 +1,5 @@
+import time
+
 from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
 from iSpy.vision.Object import Object
 import cv2
@@ -32,6 +34,7 @@ class MultipleCameraHandler:
                 self._fresh[i].set()
             except Exception as e:
                 self.logger.warning(f"Camera {camera.source} error: {e}")
+                time.sleep(0.05) # Dont starve CPU
 
     def predict(self) -> list[Object]:
         for event in self._fresh:

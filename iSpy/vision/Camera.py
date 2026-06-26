@@ -205,11 +205,12 @@ class Camera:
             ret, frame = self.cap.read()
             if not ret:
                 self.logger.warning(f"Frame read failed on {self.source}, retrying...")
-                time.sleep(0.05)
+                time.sleep(0.05) # Don't starve CPU
                 continue
 
             if frame.max() < 1:
                 self.logger.debug("Solid-black frame skipped.")
+                time.sleep(0.05) # Don't starve CPU
                 continue
 
             if self.auto_brightness:

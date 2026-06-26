@@ -157,6 +157,7 @@ class VideoRecorder:
         try:
             self._queue.put_nowait(None)
         except queue.Full:
+            self.logger.warning("Queue full, unable to signal worker to stop.")
             pass
 
         if self._thread:

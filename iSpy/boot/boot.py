@@ -354,7 +354,7 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
     model = ultralytics.YOLO(model_file)
 
     native_kwargs = {
-        "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=17, dynamic=False),
+        "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=17, dynamic=False, end2end=False),
         "tflite": dict(format="tflite", imgsz=input_size, int8=True),
         "openvino": dict(format="openvino", imgsz=input_size, half=True),
         "coreml": dict(format="coreml", imgsz=input_size, nms=True),
@@ -496,7 +496,9 @@ def _find_tflite_artifact(saved_path: Path) -> Path | None:
 
 
 
-def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=True, kw=None):
+def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=None, kw=None):
+    if quantize is None:
+        quantize = _RKNN_QUANTIZE
     if kw is None:
         kw = keywords
     pt_path = Path(pt_file)
@@ -609,7 +611,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Tru
     return str(rknn_output)
 
 
-def convert_model(model_file, target_format, input_size, quantize=False, force=False, kw=None):
+def convert_model(model_file, target_format, input_size, quantize=None, force=False, kw=None):
     if not os.path.exists(model_file):
         logger.warning("Model file %s is missing. Skipping conversion.", model_file)
         return model_file
@@ -623,6 +625,8 @@ def convert_model(model_file, target_format, input_size, quantize=False, force=F
     stem = pt_path.stem
 
     if target_format == "rknn":
+        if quantize is None:
+            quantize = _RKNN_QUANTIZE
         rknn_path = _desired_output_path(pt_path, "rknn")
         if rknn_path.exists() and not force:
             meta_path = metadata_path_for(rknn_path)
@@ -632,8 +636,9 @@ def convert_model(model_file, target_format, input_size, quantize=False, force=F
                 old_meta = read_metadata(rknn_path) or {}
                 stored_quantize = old_meta.get("quantize")
                 if stored_quantize is None:
-                    stored_quantize = old_meta.get("quantization") != "none"
-                if stored_quantize != quantize:
+                    q = old_meta.get("quantization")
+                    stored_quantize = q != "none" if q is not None else None
+                if stored_quantize is not None and stored_quantize != quantize:
                     logger.info(
                         "Cached rknn model %s has quantize=%s but config says %s. Re-converting.",
                         rknn_path.name, stored_quantize, quantize,
@@ -892,6 +897,18 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                 return pt_path if pt_path.exists() else None
             desired = _desired_output_path(pt_path, best_format)
             if desired.exists():
+                if best_format == "rknn":
+                    old_meta = read_metadata(desired) or {}
+                    stored_q = old_meta.get("quantize")
+                    if stored_q is None:
+                        stored_q = old_meta.get("quantization")
+                        stored_q = stored_q != "none" if stored_q is not None else None
+                    if stored_q is not None and stored_q != _RKNN_QUANTIZE:
+                        logger.info(
+                            "Cached rknn model %s has quantize=%s but boot says %s. Re-converting.",
+                            desired.name, stored_q, _RKNN_QUANTIZE,
+                        )
+                        return None
                 if best_format == "tflite":
                     if desired.is_file():
                         return desired
