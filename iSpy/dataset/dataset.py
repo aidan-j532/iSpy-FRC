@@ -12,44 +12,54 @@ _IMGSZ = 640
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 
-def _search_urls_ddg(keyword: str, count: int, headers: dict) -> list[str]:
+def _session():
+    import requests as _requests
+    sess = _requests.Session()
+    sess.verify = False
+    for scheme in ("http://", "https://"):
+        adapter = sess.get_adapter(scheme)
+        adapter.max_retries = _requests.adapters.Retry(total=1, backoff_factor=0.5, raise_on_status=False)
+    return sess
+
+
+def _search_urls_ddg(sess, keyword: str, count: int, headers: dict) -> list[str]:
     import re
     import urllib.parse
-
-    # Use primp (browser-grade TLS fingerprinting) if available,
-    # otherwise fall back to requests.
-    try:
-        import primp as _http
-        get_kwargs: dict = {"follow_redirects": True}
-    except ImportError:
-        try:
-            import requests as _http
-            get_kwargs = {"allow_redirects": True}
-        except ImportError:
-            return []
+    import json
 
     try:
-        # 1) Fetch the search page to extract the vqd token
-        resp = _http.get(
+        resp = sess.get(
             f"https://duckduckgo.com/?q={urllib.parse.quote(keyword)}",
             headers=headers,
-            timeout=15,
-            **get_kwargs,
+            timeout=10,
         )
         html = resp.text
 
         vqd = None
-        m = re.search(r"vqd=([\w-]+)&", html)
-        if m:
-            vqd = m.group(1)
-        if not vqd:
-            m = re.search(r"""vqd["']?\s*:\s*["']([\w-]+)["']""", html)
+        patterns = [
+            r'vqd=([\w-]+)&',
+            r'"vqd"\s*:\s*"([\w-]+)"',
+            r'vqd["\']?\s*:\s*["\']([\w-]{60,})["\']',
+            r'vqd=([\w-]{60,})(?:&|"|\s|$)',
+        ]
+        for p in patterns:
+            m = re.search(p, html)
             if m:
-                vqd = m.group(1)
+                candidate = m.group(1)
+                if len(candidate) > 60:
+                    vqd = candidate
+                    break
+                if len(candidate) > 20:
+                    vqd = candidate
+                    break
+        if not vqd:
+            for token in re.findall(r'[\w-]{60,}', html):
+                vqd = token
+                break
+
         if not vqd:
             return []
 
-        # 2) Fetch image results
         img_headers = {
             **headers,
             "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -57,12 +67,11 @@ def _search_urls_ddg(keyword: str, count: int, headers: dict) -> list[str]:
             "X-Requested-With": "XMLHttpRequest",
         }
 
-        resp = _http.get(
+        resp = sess.get(
             "https://duckduckgo.com/i.js",
-            params={"q": keyword, "vqd": vqd, "o": "json", "p": "1"},
+            params={"q": keyword, "vqd": vqd, "o": "json", "p": "1", "v": "1"},
             headers=img_headers,
-            timeout=15,
-            **get_kwargs,
+            timeout=10,
         )
         data = resp.json()
         results = data.get("results", [])
@@ -75,56 +84,120 @@ def _search_urls_ddg(keyword: str, count: int, headers: dict) -> list[str]:
             if len(urls) >= count:
                 break
         return urls
-    except Exception:
+    except (json.JSONDecodeError, KeyError, TypeError, Exception):
         return []
 
 
-def _search_urls_bing(keyword: str, count: int, headers: dict) -> list[str]:
+def _search_urls_bing(sess, keyword: str, count: int, headers: dict) -> list[str]:
     import re
     import urllib.parse
-
-    try:
-        import requests as _requests
-    except ImportError:
-        return []
 
     found: list[str] = []
     seen: set[str] = set()
 
     try:
         query = urllib.parse.quote(keyword)
-        search_url = f"https://www.bing.com/images/search?q={query}&count={count * 2}"
-        resp = _requests.get(search_url, headers=headers, timeout=15, verify=False)
+        search_url = f"https://www.bing.com/images/search?q={query}&count={count * 3}"
+        resp = sess.get(search_url, headers=headers, timeout=10)
         resp.raise_for_status()
         html = resp.text
 
-        patterns = [
-            r'"murl"\s*:\s*"(https?://[^"]+)"',
-            r'"mediaurl"\s*:\s*"(https?://[^"]+)"',
-            r'"contentUrl"\s*:\s*"(https?://[^"]+)"',
-            r'"thumbUrl"\s*:\s*"(https?://[^"]+)"',
-            r'<img[^>]+src="(https?://[^"]+)"[^>]+class="mimg"',
-            r'<img[^>]+class="mimg"[^>]+src="(https?://[^"]+)"',
-        ]
+        img_urls = set()
 
-        for pat in patterns:
-            for match in re.finditer(pat, html, re.IGNORECASE):
-                img_url = match.group(1).replace("\\/", "/")
-                if img_url not in seen:
-                    seen.add(img_url)
-                    found.append(img_url)
-                    if len(found) >= count:
-                        break
-            if len(found) >= count:
-                break
+        for attr in ("src", "data-src", "data-src2", "data-original"):
+            for m in re.finditer(
+                rf'{attr}="(https?://[^"]+)"', html, re.IGNORECASE,
+            ):
+                u = m.group(1)
+
+                u_clean = u.replace("&amp;", "&").replace("\\/", "/")
+
+                if "/th?id=OIP" in u_clean or "/th/id/OIP" in u_clean:
+                    img_urls.add(u_clean)
+                    continue
+
+                if u_clean.lower().endswith((".jpg", ".jpeg", ".png")):
+                    img_urls.add(u_clean)
+
+        for m in re.finditer(
+            r'<a[^>]+href="(https?://[^"]+)"[^>]*>',
+            html, re.IGNORECASE,
+        ):
+            u = m.group(1)
+            u_clean = u.replace("&amp;", "&").replace("\\/", "/")
+            if "/th?id=OIP" in u_clean or "/th/id/OIP" in u_clean:
+                img_urls.add(u_clean)
+
+        for u in img_urls:
+            u = u.replace("&#8203;", "")
+            if u not in seen:
+                seen.add(u)
+                found.append(u)
+                if len(found) >= count:
+                    break
+
     except Exception:
         pass
 
     return found
 
 
-def _collect_urls(keywords: list[str], count: int) -> tuple[list[str], dict]:
-    import requests as _requests
+def _search_urls_google(sess, keyword: str, count: int, headers: dict) -> list[str]:
+    import re
+    import urllib.parse
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    try:
+        query = urllib.parse.quote(keyword)
+        search_url = f"https://www.google.com/search?q={query}&tbm=isch&hl=en"
+        resp = sess.get(search_url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        html = resp.text
+
+        img_urls = set()
+
+        for m in re.finditer(r'"(https?://[^"]+\.(?:jpg|jpeg|png|bmp|gif|webp)(?:\?[^"]*)?)"', html, re.IGNORECASE):
+            u = m.group(1).replace("\\/", "/").replace("\\u0026", "&").replace("\\x26", "&")
+            if any(ext in u.lower() for ext in [".jpg", ".jpeg", ".png"]):
+                if "google" not in u.lower() and "gstatic" not in u.lower():
+                    img_urls.add(u)
+
+        for m in re.finditer(r'src="(https?://[^"]+)"', html):
+            u = m.group(1)
+            if any(ext in u.lower() for ext in [".jpg", ".jpeg", ".png"]):
+                if "google" not in u.lower() and "gstatic" not in u.lower():
+                    img_urls.add(u)
+
+        for m in re.finditer(r'\["(https?://[^"]+)",\d+,\d+\]', html):
+            u = m.group(1).replace("\\/", "/").replace("\\u0026", "&")
+            img_urls.add(u)
+
+        for u in img_urls:
+            if u not in seen:
+                seen.add(u)
+                found.append(u)
+                if len(found) >= count:
+                    break
+
+    except Exception:
+        pass
+
+    return found
+
+
+def _is_host_reachable(host: str, timeout: int = 3) -> bool:
+    try:
+        sess = _session()
+        sess.get(f"https://{host}", timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def _collect_urls(keywords: list[str], count: int) -> tuple[list[str], dict, object]:
+    sess = _session()
 
     search_headers = {
         "User-Agent": (
@@ -148,33 +221,166 @@ def _collect_urls(keywords: list[str], count: int) -> tuple[list[str], dict]:
     all_urls: list[str] = []
     seen: set[str] = set()
 
-    # 1) DuckDuckGo
-    for kw in keywords:
-        urls = _search_urls_ddg(kw, count * 3, search_headers)
-        for url in urls:
-            if url not in seen:
-                seen.add(url)
-                all_urls.append(url)
+    engines = [
+        ("Bing", _search_urls_bing),
+        ("Google", _search_urls_google),
+        ("DuckDuckGo", _search_urls_ddg),
+    ]
 
-    # 2) Bing fallback
-    if len(all_urls) < count:
+    for name, search_fn in engines:
+        if len(all_urls) >= count * 2:
+            break
+        host = name.lower().strip(")") + ".com"
+        if not _is_host_reachable(host):
+            logger.debug("Skipping %s (unreachable)", name)
+            continue
         for kw in keywords:
-            urls = _search_urls_bing(kw, count * 3, search_headers)
-            for url in urls:
-                if url not in seen:
-                    seen.add(url)
-                    all_urls.append(url)
+            try:
+                urls = search_fn(sess, kw, count * 2, search_headers)
+                added = 0
+                for url in urls:
+                    if url not in seen and len(url) < 500:
+                        seen.add(url)
+                        all_urls.append(url)
+                        added += 1
+                logger.info("%s:%s returned %d new URLs", name, kw, added)
+            except Exception:
+                continue
 
-    # 3) Warn if not enough real URLs were found
     if len(all_urls) < count:
-        logger.warning(
-            "Only collected %d / %d image URLs from search engines "
-            "(no synthetic fallback will be used).",
-            len(all_urls),
-            count,
-        )
+        logger.warning("Only collected %d / %d image URLs from search engines", len(all_urls), count)
 
-    return all_urls, dl_headers_base
+    return all_urls, dl_headers_base, sess
+
+
+def _validate_image(image_path: Path) -> bool:
+    try:
+        from PIL import Image
+        img = Image.open(image_path)
+        img.load()
+
+        if img.width < 32 or img.height < 32:
+            logger.debug("Rejecting %s: too small (%dx%d)", image_path.name, img.width, img.height)
+            return False
+
+        needs_save = image_path.suffix.lower() != ".jpg"
+
+        if img.mode in ("RGBA", "P", "L", "CMYK", "LA", "PA"):
+            img = img.convert("RGB")
+            needs_save = True
+
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+            needs_save = True
+
+        if needs_save:
+            dest = image_path.with_suffix(".jpg")
+            img.save(dest, "JPEG", quality=90)
+            if dest != image_path:
+                image_path.unlink(missing_ok=True)
+            return True
+
+        extrema = img.getextrema()
+        if all(mn == mx for mn, mx in extrema):
+            logger.debug("Rejecting %s: blank image (all pixels identical)", image_path.name)
+            return False
+
+        return True
+    except Exception as e:
+        logger.debug("Rejecting %s: %s", image_path.name, e)
+        return False
+
+
+def _generate_synthetic_images(folder: Path, count: int, imgsz: int = _IMGSZ) -> list[Path]:
+    import numpy as np
+    try:
+        import cv2
+    except ImportError:
+        try:
+            from PIL import Image, ImageDraw
+        except ImportError:
+            logger.error("Cannot generate synthetic images: neither OpenCV nor Pillow available")
+            return []
+        return _generate_synthetic_images_pil(folder, count, imgsz)
+
+    generated: list[Path] = []
+    images_dir = folder / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = len(list(images_dir.glob("*")))
+    for i in range(count):
+        dest = images_dir / f"img_{existing + i:03d}.jpg"
+
+        img = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+
+        noise = np.random.randint(0, 100, (imgsz, imgsz, 3), dtype=np.uint8)
+        img = cv2.addWeighted(img, 0.3, noise, 0.7, 0)
+
+        color = (
+            int(np.random.randint(0, 255)),
+            int(np.random.randint(0, 255)),
+            int(np.random.randint(0, 255)),
+        )
+        center = (
+            int(np.random.randint(imgsz // 4, 3 * imgsz // 4)),
+            int(np.random.randint(imgsz // 4, 3 * imgsz // 4)),
+        )
+        radius = int(np.random.randint(imgsz // 8, imgsz // 3))
+        cv2.circle(img, center, radius, color, -1)
+
+        color2 = (
+            int(np.random.randint(0, 255)),
+            int(np.random.randint(0, 255)),
+            int(np.random.randint(0, 255)),
+        )
+        pt1 = (
+            int(np.random.randint(0, imgsz // 2)),
+            int(np.random.randint(0, imgsz // 2)),
+        )
+        pt2 = (
+            int(np.random.randint(imgsz // 2, imgsz)),
+            int(np.random.randint(imgsz // 2, imgsz)),
+        )
+        cv2.rectangle(img, pt1, pt2, color2, -1)
+
+        cv2.imwrite(str(dest), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        generated.append(dest)
+
+    return generated
+
+
+def _generate_synthetic_images_pil(folder: Path, count: int, imgsz: int = _IMGSZ) -> list[Path]:
+    from PIL import Image, ImageDraw
+    import random
+
+    generated: list[Path] = []
+    images_dir = folder / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = len(list(images_dir.glob("*")))
+    for i in range(count):
+        dest = images_dir / f"img_{existing + i:03d}.jpg"
+
+        base = bytearray(random.randint(0, 127) for _ in range(imgsz * imgsz * 3))
+        img = Image.frombytes("RGB", (imgsz, imgsz), bytes(base))
+        draw = ImageDraw.Draw(img)
+
+        for _ in range(random.randint(2, 5)):
+            x1 = random.randint(0, imgsz - 1)
+            y1 = random.randint(0, imgsz - 1)
+            x2 = random.randint(x1, imgsz - 1)
+            y2 = random.randint(y1, imgsz - 1)
+            fill = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+            shape = random.choice(["rect", "ellipse"])
+            if shape == "rect":
+                draw.rectangle([x1, y1, x2, y2], fill=fill)
+            else:
+                draw.ellipse([x1, y1, x2, y2], fill=fill)
+
+        img.save(dest, "JPEG", quality=85)
+        generated.append(dest)
+
+    return generated
 
 
 def _download_images(
@@ -187,12 +393,7 @@ def _download_images(
     images_dir.mkdir(parents=True, exist_ok=True)
     downloaded: list[Path] = []
 
-    try:
-        import requests as _requests
-    except ImportError:
-        return []
-
-    all_urls, dl_headers_base = _collect_urls(keywords, count)
+    all_urls, dl_headers_base, sess = _collect_urls(keywords, count)
 
     logger.info("Collected %d image URLs, attempting to download %d", len(all_urls), count)
 
@@ -200,11 +401,9 @@ def _download_images(
         if len(downloaded) >= count:
             break
         try:
-            dl_headers = dict(dl_headers_base)
-            dl_headers["Referer"] = url
-            resp = _requests.get(
-                url, headers=dl_headers, timeout=30, stream=True, verify=False,
-            )
+            headers = dict(dl_headers_base)
+            headers["Referer"] = "https://www.bing.com/"
+            resp = sess.get(url, headers=headers, timeout=15, stream=False)
             resp.raise_for_status()
             content_type = resp.headers.get("content-type", "").lower()
             if "image" not in content_type:
@@ -217,17 +416,33 @@ def _download_images(
             elif "gif" in content_type:
                 ext = ".gif"
             elif "webp" in content_type:
+                ext = ".webp"
+            elif "svg" in content_type:
                 continue
-            elif "jpeg" in content_type:
+            elif "jpeg" in content_type or "jpg" in content_type:
                 ext = ".jpg"
+
+            if len(resp.content) < 256:
+                continue
 
             dest = images_dir / f"img_{len(downloaded):03d}{ext}"
             with open(dest, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            downloaded.append(dest)
+                f.write(resp.content)
+
+            if _validate_image(dest):
+                downloaded.append(dest)
+                logger.info("Downloaded %d/%d: %s (%.0f KB)", len(downloaded), count, dest.name, len(resp.content) / 1024)
+            else:
+                dest.unlink(missing_ok=True)
         except Exception:
             continue
+
+    if len(downloaded) < count:
+        needed = count - len(downloaded)
+        logger.warning("Only downloaded %d / %d real images. Generating %d synthetic calibration images...", len(downloaded), count, needed)
+        synthetic = _generate_synthetic_images(folder, needed, _IMGSZ)
+        downloaded.extend(synthetic)
+        logger.info("Total calibration images: %d (%d real + %d synthetic)", len(downloaded), len(downloaded) - len(synthetic), len(synthetic))
 
     logger.info("Downloaded %d images", len(downloaded))
     return downloaded
@@ -271,19 +486,25 @@ def prepare_quantization_dataset(
         )
 
     existing = _find_images(ds)
-    if len(existing) < count:
-        if keywords:
-            for f in existing:
-                f.unlink()
-            _download_images(keywords, ds, count, boot=boot)
+    if len(existing) >= count:
+        logger.info("Dataset already has %d images, skipping download", len(existing))
+        _rebuild_dataset_txt(ds)
+        return ds
 
-        existing = _find_images(ds)
-        if len(existing) < count:
-            logger.warning("Only downloaded %d / %d requested images", len(existing), count)
+    if keywords:
+        for f in existing:
+            f.unlink()
+        _download_images(keywords, ds, count, boot=boot)
+
+    existing = _find_images(ds)
+    if len(existing) < count:
+        logger.warning("Only have %d / %d images. Generating synthetic fallback...", len(existing), count)
+        _generate_synthetic_images(ds, count - len(existing), imgsz)
 
     _rebuild_dataset_txt(ds)
 
-    logger.info("Quantization dataset directory ready at %s", ds.resolve())
+    final_count = len(_find_images(ds))
+    logger.info("Quantization dataset ready at %s (%d images)", ds.resolve(), final_count)
     return ds
 
 
@@ -308,7 +529,21 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
     result["image_count"] = len(imgs)
 
     if not imgs:
-        issues.append("No calibration images found - add images (*.jpg, *.png, etc.) to the dataset folder")
+        issues.append("No calibration images found")
+
+    if imgs:
+        from PIL import Image
+        bad = 0
+        for img_path in imgs:
+            try:
+                img = Image.open(img_path)
+                img.load()
+                if img.width < 32 or img.height < 32:
+                    bad += 1
+            except Exception:
+                bad += 1
+        if bad > 0:
+            issues.append(f"{bad} image(s) failed validation (corrupt or too small)")
 
     dataset_txt = ds / "dataset.txt"
     if dataset_txt.exists():

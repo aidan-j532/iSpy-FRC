@@ -12,12 +12,12 @@ from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
 
 for name in logging.root.manager.loggerDict:
-    logging.getLogger(name).setLevel(logging.WARNING)
+    logging.getLogger(name).setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 for name in logging.root.manager.loggerDict:
     if not name.startswith("iSpy"):
-        logging.getLogger(name).setLevel(logging.WARNING)
+        logging.getLogger(name).setLevel(logging.INFO)
 
 def main():
     repo_root = Path.cwd()

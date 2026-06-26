@@ -418,6 +418,7 @@ def _export_rknn_metadata(
             meta["quantization"] = "int8" if quantize else "none"
             meta["quant_scale"] = 255.0 if quantize else 1.0
             meta["input_dtype"] = "uint8" if quantize else "float32"
+            meta["quantize"] = quantize
         if input_size is not None:
             if hasattr(input_size, "__iter__"):
                 meta["input_size"] = [int(x) for x in input_size]
@@ -624,7 +625,23 @@ def convert_model(model_file, target_format, input_size, quantize=False, force=F
         if rknn_path.exists() and not force:
             meta_path = metadata_path_for(rknn_path)
             if not meta_path.exists():
-                _export_rknn_metadata(model_file, rknn_path)
+                _export_rknn_metadata(model_file, rknn_path, quantize=quantize)
+            else:
+                stored_quantize = (read_metadata(rknn_path) or {}).get("quantize")
+                if stored_quantize is not None and stored_quantize != quantize:
+                    logger.info(
+                        "Cached rknn model %s has quantize=%s but config says %s. Re-converting.",
+                        rknn_path.name, stored_quantize, quantize,
+                    )
+                    rknn_path.unlink()
+                    meta_path.unlink()
+                    return _convert_rknn(
+                        pt_file=model_file,
+                        input_size=input_size,
+                        dataset_path=str(_PROJECT_ROOT / "QuantizeDataset"),
+                        quantize=quantize,
+                        kw=kw,
+                    )
             logger.info("Cached rknn model found: %s", rknn_path)
             return str(rknn_path)
         if force and rknn_path.exists():
