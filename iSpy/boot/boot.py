@@ -551,7 +551,6 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Tru
             target_platform="rk3588",
             disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
             quantized_algorithm="kl_divergence",
-            quantized_hybrid_level=3,
         )
         if quantize:
             config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
