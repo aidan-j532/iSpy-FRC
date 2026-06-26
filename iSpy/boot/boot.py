@@ -629,8 +629,11 @@ def convert_model(model_file, target_format, input_size, quantize=False, force=F
             if not meta_path.exists():
                 _export_rknn_metadata(model_file, rknn_path, quantize=quantize)
             else:
-                stored_quantize = (read_metadata(rknn_path) or {}).get("quantize")
-                if stored_quantize is not None and stored_quantize != quantize:
+                old_meta = read_metadata(rknn_path) or {}
+                stored_quantize = old_meta.get("quantize")
+                if stored_quantize is None:
+                    stored_quantize = old_meta.get("quantization") != "none"
+                if stored_quantize != quantize:
                     logger.info(
                         "Cached rknn model %s has quantize=%s but config says %s. Re-converting.",
                         rknn_path.name, stored_quantize, quantize,
