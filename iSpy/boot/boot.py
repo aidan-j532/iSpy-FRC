@@ -60,6 +60,8 @@ _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
 keywords = ["car"]
 
+_RKNN_QUANTIZE = True
+
 def _find_lite_wheel_dir() -> Path:
     local = _PACKAGE_ROOT.parent / "rknn_wheels"
     if local.exists():
@@ -943,7 +945,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                     str(pt_full),
                     best_format,
                     input_size,
-                    quantize=config.get("quantize", True),
+                    quantize=_RKNN_QUANTIZE,
                     force=first_boot,
                 )
             )
@@ -967,7 +969,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                         str(other),
                         best_format,
                         other_input_size,
-                        quantize=config.get("quantize", False),
+                        quantize=_RKNN_QUANTIZE,
                         force=first_boot,
                     )
                 except Exception as e:
