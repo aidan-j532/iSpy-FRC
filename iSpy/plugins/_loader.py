@@ -12,7 +12,7 @@ def load_plugins(plugin_dir: Path, base_class) -> dict[str, type]:
         logger.warning("Plugin directory not found: %s", plugin_dir)
         return plugins
 
-    for path in sorted(plugin_dir.glob("*.py")):
+    for path in sorted(plugin_dir.rglob("*.py")):
         if path.name.startswith("_"):
             continue
 

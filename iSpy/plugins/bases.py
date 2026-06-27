@@ -4,6 +4,9 @@ class TrackerBase:
     """Base for tracker plugin"""
     def __init__(self, config):
         pass
+    
+    def start(self):
+        pass
 
     def update(self, fuel_list, robot_x, robot_y, robot_yaw):
         return fuel_list
@@ -14,6 +17,9 @@ class TrackerBase:
 class FrameProcessorBase:
     """Base for frame processor plugin"""
     def __init__(self, config):
+        pass
+    
+    def start(self):
         pass
 
     def process(self, frame):
@@ -34,6 +40,9 @@ class UtilityBase:
     """
     def __init__(self, context: dict):
         pass
+    
+    def start(self):
+        pass
 
     def update(self, frame_data: dict):
         pass
@@ -48,6 +57,12 @@ class UtilityBase:
 class VisionBase(ABC):
 
     plugin_name = "base"
+    
+    def __init__(self, context: dict):
+        self.context = context
+    
+    def start(self):
+        pass
 
     @abstractmethod
     def run(self):

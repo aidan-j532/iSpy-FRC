@@ -1,4 +1,5 @@
 import logging
+import os
 import warnings
 from pathlib import Path
 
@@ -6,10 +7,49 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED_DIRS = ["images"]
 _IMAGE_EXTS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
-_CALIB_COUNT = 20
+_CALIB_COUNT = 200
 _IMGSZ = 640
+_CALIBRATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/archive/refs/tags/RKNN_Quantization.zip"
 
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+
+# Github release -> web search - > synthetic
+# Synthetic is a fallback, one of them will work, then you can quatnize
+
+def _download_release_images(folder: Path, count: int = _CALIB_COUNT) -> list[Path]:
+    import zipfile
+    import io
+
+    downloaded: list[Path] = []
+    images_dir = folder / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    url = _CALIBRATION_RELEASE_URL
+    logger.info("Trying release calibration images: %s", url)
+    try:
+        sess = _session()
+        resp = sess.get(url, timeout=30)
+        resp.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            for member in zf.namelist():
+                path = Path(member)
+                if path.suffix.lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".tiff"):
+                    continue
+                dest = images_dir / path.name
+                dest.write_bytes(zf.read(member))
+                if _validate_image(dest):
+                    downloaded.append(dest)
+                    logger.info("Extracted release image %d/%d: %s", len(downloaded), count, dest.name)
+                    if len(downloaded) >= count:
+                        break
+                else:
+                    dest.unlink(missing_ok=True)
+    except Exception as e:
+        logger.warning("Failed to download release calibration images: %s", e)
+        return []
+
+    logger.info("Got %d calibration images from release", len(downloaded))
+    return downloaded
 
 
 def _session():
@@ -491,7 +531,10 @@ def prepare_quantization_dataset(
         _rebuild_dataset_txt(ds)
         return ds
 
-    if keywords:
+    release = _download_release_images(ds, count)
+    existing = _find_images(ds)
+
+    if keywords and len(existing) < count:
         for f in existing:
             f.unlink()
         _download_images(keywords, ds, count, boot=boot)

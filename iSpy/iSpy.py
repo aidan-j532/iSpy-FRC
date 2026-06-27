@@ -1,5 +1,6 @@
 from pathlib import Path
 from iSpy.plugins.trackers.BuiltIn.PathPlanner import PathPlanner
+from iSpy.plugins.utilities.BuiltIn import VideoRecorder
 from iSpy.utilities.MultipleCameraHandler import MultipleCameraHandler
 import time
 from iSpy.web.CameraApp import CameraApp
@@ -22,7 +23,7 @@ from wpimath.geometry import Pose2d
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.plugins.utilities.BuiltIn.NetworkHandler import NetworkTableHandler
 from iSpy.utilities.HealthReporter import HealthReporter
-from iSpy.utilities.VideoRecorder import VideoRecorder
+
 
 try:
     from rknnlite.api import RKNNLite
@@ -77,8 +78,8 @@ class iSpy:
                 self.logger.warning("Unknown tracker: %s", name)
 
         # Grab the two built-in trackers by name for use in the loop
-        self._fuel_tracker = self.trackers.get("object_tracker")
-        self._detection_cleanup = self.trackers.get("path_planner")
+        # self._fuel_tracker = self.trackers.get("object_tracker")
+        # self._detection_cleanup = self.trackers.get("path_planner")
 
         context = {
             "config": config,
@@ -88,7 +89,13 @@ class iSpy:
         }
 
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
-        self.utilities = {"health_reporter": HealthReporter(context), "video_recorder": VideoRecorder(context)}
+        self.utilities = {}
+        for name, cls in (("health_reporter", HealthReporter), ("video_recorder", VideoRecorder)):
+            try:
+                self.utilities[name] = cls(context)
+            except Exception:
+                self.logger.exception("Failed to initialize built-in utility: %s", name)
+
         for name in config.get_nested("plugins", "utilities", default=[]):
             if name in utility_classes:
                 try:
@@ -104,10 +111,13 @@ class iSpy:
             if name in frame_processor_classes:
                 try:
                     self.frame_processors[name] = frame_processor_classes[name](context)
+                    
+
                 except Exception:
                     self.logger.exception("Failed to initialize frame processor: %s", name)
             else:
                 self.logger.warning("Unknown frame processor: %s", name)
+
 
         # Wire health reporter to network handler if both exist
         health = self.utilities.get("health_reporter")
@@ -249,18 +259,23 @@ class iSpy:
         vision_s = time.perf_counter() - t_vis
 
         pose = self._get_pose()
-        fuel_list = (
-            self._fuel_tracker.update(
-                fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
-            )
-            if self._fuel_tracker
-            else fuel_list
-        )
+        # fuel_list = (
+        #     self._fuel_tracker.update(
+        #         fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
+        #     )
+        #     if self._fuel_tracker
+        #     else fuel_list
+        # )
 
         self._update_camera_app(frame, camera=camera)
 
-        if self._detection_cleanup and fuel_list:
-            _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
+        # if self._detection_cleanup and fuel_list:
+        #     _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
+
+        for tracker in self.trackers.values():
+            fuel_list = tracker.update(
+                fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
+            )
 
         loop_s = time.perf_counter() - t0
 
@@ -285,18 +300,23 @@ class iSpy:
         vision_s = time.perf_counter() - t_vis
 
         pose = self._get_pose()
-        fuel_list = (
-            self._fuel_tracker.update(
-                fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
-            )
-            if self._fuel_tracker
-            else fuel_list
-        )
+        # fuel_list = (
+        #     self._fuel_tracker.update(
+        #         fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
+        #     )
+        #     if self._fuel_tracker
+        #     else fuel_list
+        # )
 
         self._update_camera_app(frame, handler=handler)
 
-        if self._detection_cleanup and fuel_list:
-            _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
+        # if self._detection_cleanup and fuel_list:
+        #     _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
+
+        for tracker in self.trackers.values():
+            fuel_list = tracker.update(
+                fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
+            )
 
         loop_s = time.perf_counter() - t0
 
