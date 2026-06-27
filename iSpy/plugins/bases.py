@@ -11,6 +11,16 @@ class TrackerBase:
     def stop(self):
         pass
 
+class FrameProcessorBase:
+    """Base for frame processor plugin"""
+    def __init__(self, config):
+        pass
+
+    def process(self, frame):
+        return frame
+
+    def stop(self):
+        pass
 
 class UtilityBase:
     """

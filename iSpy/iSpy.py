@@ -1,4 +1,5 @@
 from pathlib import Path
+from iSpy.plugins.trackers.BuiltIn.PathPlanner import PathPlanner
 from iSpy.utilities.MultipleCameraHandler import MultipleCameraHandler
 import time
 from iSpy.web.CameraApp import CameraApp
@@ -19,6 +20,9 @@ from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import TrackerBase, UtilityBase
 from wpimath.geometry import Pose2d
 from iSpy.vision.ModelInspector import fill_missing_config
+from iSpy.plugins.utilities.BuiltIn.NetworkHandler import NetworkTableHandler
+from iSpy.utilities.HealthReporter import HealthReporter
+from iSpy.utilities.VideoRecorder import VideoRecorder
 
 try:
     from rknnlite.api import RKNNLite
@@ -65,7 +69,7 @@ class iSpy:
             self.camera_handler = MultipleCameraHandler(cameras)
 
         tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)
-        self.trackers = {}
+        self.trackers = {} # No default trackers
         for name in config.get_nested("plugins", "trackers", default=[]):
             if name in tracker_classes:
                 self.trackers[name] = tracker_classes[name](config)
@@ -84,7 +88,7 @@ class iSpy:
         }
 
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
-        self.utilities = {}
+        self.utilities = {"health_reporter": HealthReporter(context), "video_recorder": VideoRecorder(context)}
         for name in config.get_nested("plugins", "utilities", default=[]):
             if name in utility_classes:
                 try:
@@ -93,6 +97,17 @@ class iSpy:
                     self.logger.exception("Failed to initialize utility: %s", name)
             else:
                 self.logger.warning("Unknown utility: %s", name)
+
+        frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", UtilityBase)
+        self.frame_processors = {}
+        for name in config.get_nested("plugins", "frame_processors", default=[]):
+            if name in frame_processor_classes:
+                try:
+                    self.frame_processors[name] = frame_processor_classes[name](context)
+                except Exception:
+                    self.logger.exception("Failed to initialize frame processor: %s", name)
+            else:
+                self.logger.warning("Unknown frame processor: %s", name)
 
         # Wire health reporter to network handler if both exist
         health = self.utilities.get("health_reporter")
@@ -106,6 +121,12 @@ class iSpy:
             threading.Thread(target=self.camera_app.run, daemon=True).start()
 
         self._silence_external_loggers()
+        
+        # Make sure cameras get frame processors if any are configured
+        if self.frame_processors:
+            for camera in self.cameras:
+                for name, processor in self.frame_processors.items():
+                    camera.add_frame_processor(processor)
 
     def _silence_external_loggers(self):
         for name in logging.root.manager.loggerDict:

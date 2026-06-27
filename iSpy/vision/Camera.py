@@ -199,6 +199,8 @@ class Camera:
             self.logger.warning(
                 "Camera format is %s (not MJPG). USB bandwidth may be higher.", fourcc_str
             )
+            
+        self._frame_processors = []
 
     def _reader(self):
         while not self.stopped:
@@ -240,12 +242,26 @@ class Camera:
         with self.frame_lock:
             ts = self.frame_timestamp
         return 0.0 if ts is None else time.perf_counter() - ts
+    
+    def add_frame_processor(self, processor):
+        if self.is_image:
+            self.logger.warning("Cannot add frame processor to image source.")
+            return
+        self._frame_processors.append(processor)
 
     def get_frame(self) -> np.ndarray | None:
         if self.is_image:
             return self.image.copy() if self.image is not None else None
         with self.frame_lock:
             return self.frame.copy() if self.frame is not None else None
+        
+        try:
+            if self._frame_processors:
+                for processor in self._frame_processors:
+                    frame = processor.process(frame)
+        except Exception as exc:
+            self.logger.warning(f"Frame processor error: {exc}")
+            return None
 
     def destroy(self):
         self.stopped = True

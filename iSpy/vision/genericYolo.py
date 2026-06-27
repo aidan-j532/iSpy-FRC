@@ -426,7 +426,6 @@ class GenericYolo:
             *[f"|{l:<{pad}}|" for l in msg_lines],
             f"+{sep}+",
         ])
-        print(full)
         self.logger.info("GenericYolo loaded:\n%s", full)
 
     def _require_input_block(self) -> None:

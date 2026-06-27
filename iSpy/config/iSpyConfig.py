@@ -65,8 +65,11 @@ class iSpyConfig:
                 }
             },
             "plugins": {
-                "trackers": ["object_tracker", "path_planner"],
-                "utilities": ["video_recorder", "health_reporter"],
+                # "trackers": ["object_tracker", "path_planner"],
+                # "utilities": ["video_recorder", "health_reporter"],
+                "trackers": [],
+                "utilities": [],
+                "frame_processors": []
             },
         }
         self.config = json.loads(json.dumps(self.default_config))
@@ -109,20 +112,21 @@ class iSpyConfig:
         self.config.setdefault("plugins", {})
         self.config["plugins"].setdefault("trackers", [])
         self.config["plugins"].setdefault("utilities", [])
+        self.config["plugins"].setdefault("frame_processors", [])
 
-        required_trackers = ["path_planner"]
-        missing = False
-        for tracker in required_trackers:
-            if tracker not in self.config["plugins"]["trackers"]:
-                self.logger.warning(
-                    "%s not in trackers list. Re-adding required tracker.", tracker
-                )
-                self.config["plugins"]["trackers"].append(tracker)
-                missing = True
+        # required_trackers = ["path_planner"]
+        # missing = False
+        # for tracker in required_trackers:
+        #     if tracker not in self.config["plugins"]["trackers"]:
+        #         self.logger.warning(
+        #             "%s not in trackers list. Re-adding required tracker.", tracker
+        #         )
+        #         self.config["plugins"]["trackers"].append(tracker)
+        #         missing = True
 
-        if missing:
-            self.logger.info("Required trackers missing. Saving updated config.")
-            self.save()
+        # if missing:
+        #     self.logger.info("Required trackers missing. Saving updated config.")
+        #     self.save()
 
     def get_default_config(self) -> dict:
         return self.default_config

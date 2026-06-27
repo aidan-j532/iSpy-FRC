@@ -88,8 +88,6 @@ _HTML = """<!DOCTYPE html>
 </html>"""
 
 class HealthReporter(UtilityBase):
-    plugin_name = "health_reporter"
-
     def __init__(self, context: dict):
         config = context["config"]
         flask_app = context.get("flask_app")
