@@ -38,11 +38,7 @@ _HTML = """<!DOCTYPE html>
     <p><b>Loop count:</b> <span id="loop_count"></span></p>
   </div>
 
-  <div class="card">
-    <h3>Camera</h3>
-    <p>Status: <span id="camera_status"></span></p>
-    <p>Frame age: <span id="frame_age"></span> ms</p>
-  </div>
+  <div id="cameras-container"></div>
 
   <div class="card">
     <h3>NetworkTables</h3>
@@ -68,10 +64,20 @@ _HTML = """<!DOCTYPE html>
         s.textContent = data.status.toUpperCase();
         s.className   = data.status === 'ok' ? 'ok' : 'bad';
 
-        document.getElementById('camera_status').textContent =
-          data.camera.ok ? 'OK' : 'BAD';
-        document.getElementById('frame_age').textContent =
-          data.camera.frame_age_ms;
+        const container = document.getElementById('cameras-container');
+        container.innerHTML = '';
+        if (data.cameras && data.cameras.length) {
+          data.cameras.forEach(function(cam) {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = '<h3>' + cam.name + '</h3>' +
+              '<p>Source: ' + cam.source + '</p>' +
+              '<p>Status: <span class="' + (cam.ok ? 'ok' : 'bad') + '">' +
+              (cam.ok ? 'OK' : 'BAD') + '</span></p>' +
+              '<p>Frame age: ' + (cam.frame_age_ms != null ? cam.frame_age_ms : 'N/A') + ' ms</p>';
+            container.appendChild(card);
+          });
+        }
 
         document.getElementById('nt_enabled').textContent =
           data.network_tables.enabled;
@@ -137,15 +143,34 @@ class HealthReporter(UtilityBase):
         stale_s = round(now - last_tick, 2)
         uptime_s = round(now - self._uptime_start, 1)
 
-        camera_ok = False
-        frame_age_ms = None
+        cameras_data = []
+        all_cameras_ok = True
         if self.cameras:
-            try:
-                age = self.cameras[0].get_frame_age()
-                frame_age_ms = round(age * 1000, 1)
-                camera_ok = age < self._stale_threshold
-            except Exception:
-                pass
+            for cam in self.cameras:
+                try:
+                    age = cam.get_frame_age()
+                    cam_ok = age < self._stale_threshold
+                    cam_name = (
+                        cam.config.get("name", str(cam.source))
+                        if hasattr(cam, "config")
+                        else str(cam.source)
+                    )
+                    cameras_data.append({
+                        "name": cam_name,
+                        "source": str(cam.source),
+                        "ok": cam_ok,
+                        "frame_age_ms": round(age * 1000, 1),
+                    })
+                    if not cam_ok:
+                        all_cameras_ok = False
+                except Exception:
+                    cameras_data.append({
+                        "name": str(getattr(cam, "source", "unknown")),
+                        "source": str(getattr(cam, "source", "unknown")),
+                        "ok": False,
+                        "frame_age_ms": None,
+                    })
+                    all_cameras_ok = False
 
         nt_connected = None
         if self._network_handler is not None:
@@ -156,7 +181,7 @@ class HealthReporter(UtilityBase):
 
         healthy = (
             stale_s < self._stale_threshold
-            and camera_ok
+            and all_cameras_ok
             and (nt_connected is None or nt_connected)
         )
 
@@ -168,10 +193,7 @@ class HealthReporter(UtilityBase):
             "fps": fps,
             "vision_ms": vision_ms,
             "detections": detections,
-            "camera": {
-                "ok": camera_ok,
-                "frame_age_ms": frame_age_ms,
-            },
+            "cameras": cameras_data,
             "network_tables": {
                 "enabled": self._network_handler is not None,
                 "connected": nt_connected,

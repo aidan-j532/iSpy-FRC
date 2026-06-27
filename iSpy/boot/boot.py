@@ -35,6 +35,9 @@ from iSpy.validations.validate_system import validate_system
 from iSpy.config.iSpyConfig import iSpyConfig
 from iSpy.dataset.dataset import prepare_quantization_dataset
 from iSpy.config.AutoOpt import recommend_format, has_jetson
+import argparse
+from iSpy.config.AutoOpt import has_jetson
+from iSpy.boot.opencv_fix import ensure_csi_capable_opencv
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -1051,25 +1054,32 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
         logger.info("Skipping service installation. Run with -s to install.")
 
 
+def _any_camera_uses_csi() -> bool:
+    config_path = search_for_config()
+    if not config_path:
+        return False
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+        cams = data.get("config", data).get("camera_configs", {})
+        return any(c.get("csi", False) for c in cams.values())
+    except Exception:
+        return False
+
+
 def main():
-    import argparse
+    if has_jetson() and _any_camera_uses_csi():
+        if ensure_csi_capable_opencv(auto_fix=True):
+            logger.info("OpenCV fixed - re-executing boot.py to pick it up...")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
 
     parser = argparse.ArgumentParser(description="iSpy boot sequence")
-    parser.add_argument(
-        "-s",
-        "--service",
-        action="store_true",
-        help="Install and start the watchdog service",
-    )
-    parser.add_argument(
-        "-f",
-        "--first-boot",
-        action="store_true",
-        help="Delete Config, Outputs, and YoloModels before booting",
-    )
+    parser.add_argument("-s", "--service", action="store_true",
+                         help="Install and start the watchdog service")
+    parser.add_argument("-f", "--first-boot", action="store_true",
+                         help="Delete Config, Outputs, and YoloModels before booting")
     args = parser.parse_args()
     on_boot(install_service=args.service, first_boot=args.first_boot)
-
 
 if __name__ == "__main__":
     main()
