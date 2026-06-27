@@ -22,7 +22,7 @@ from iSpy.plugins.bases import TrackerBase, UtilityBase
 from wpimath.geometry import Pose2d
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.plugins.utilities.BuiltIn.NetworkHandler import NetworkTableHandler
-from iSpy.utilities.HealthReporter import HealthReporter
+from iSpy.plugins.utilities.BuiltIn.HealthReporter import HealthReporter
 
 
 try:
@@ -90,11 +90,11 @@ class iSpy:
 
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
         self.utilities = {}
-        for name, cls in (("health_reporter", HealthReporter), ("video_recorder", VideoRecorder)):
-            try:
-                self.utilities[name] = cls(context)
-            except Exception:
-                self.logger.exception("Failed to initialize built-in utility: %s", name)
+        # for name, cls in (("health_reporter", HealthReporter), ("video_recorder", VideoRecorder)):
+        #     try:
+        #         self.utilities[name] = cls(context)
+        #     except Exception:
+        #         self.logger.exception("Failed to initialize built-in utility: %s", name)
 
         for name in config.get_nested("plugins", "utilities", default=[]):
             if name in utility_classes:

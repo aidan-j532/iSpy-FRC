@@ -250,11 +250,6 @@ class Camera:
         self._frame_processors.append(processor)
 
     def get_frame(self) -> np.ndarray | None:
-        if self.is_image:
-            return self.image.copy() if self.image is not None else None
-        with self.frame_lock:
-            return self.frame.copy() if self.frame is not None else None
-        
         try:
             if self._frame_processors:
                 for processor in self._frame_processors:
@@ -262,6 +257,11 @@ class Camera:
         except Exception as exc:
             self.logger.warning(f"Frame processor error: {exc}")
             return None
+        
+        if self.is_image:
+            return self.image.copy() if self.image is not None else None
+        with self.frame_lock:
+            return self.frame.copy() if self.frame is not None else None
 
     def destroy(self):
         self.stopped = True
