@@ -48,8 +48,27 @@ def _lsusb_output() -> str:
     return ""
 
 
+
+@lru_cache()
+def has_jetson() -> bool:
+    """Detect Jetson boards. They don't expose /dev/nvidia0 or nvidia-smi the
+    way desktop/server NVIDIA GPUs do, so has_nvidia() needs a separate check."""
+    if os.path.exists("/etc/nv_tegra_release"):
+        return True
+    for path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
+        try:
+            model = open(path, "rb").read().decode(errors="ignore").lower()
+            if "jetson" in model or "tegra" in model:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 @lru_cache()
 def has_nvidia() -> bool:
+    if has_jetson():
+        return True
     if any(
         os.path.exists(p)
         for p in ("/dev/nvidia0", "/dev/nvidiactl", "/proc/driver/nvidia/version")
@@ -59,7 +78,6 @@ def has_nvidia() -> bool:
         return True
     try:
         import torch
-
         if torch.cuda.is_available():
             return True
     except ImportError:

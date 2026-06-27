@@ -34,6 +34,7 @@ from iSpy.config.AutoOpt import recommend_format
 from iSpy.validations.validate_system import validate_system
 from iSpy.config.iSpyConfig import iSpyConfig
 from iSpy.dataset.dataset import prepare_quantization_dataset
+from iSpy.config.AutoOpt import recommend_format, has_jetson
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -52,7 +53,9 @@ FORMAT_MATCHERS = {
     "tpu": lambda p: p.suffix == ".pt",
 }
 
-_BUNDLED_DEFAULT_MODELS = {"_default_pose.pt", "_default_box.pt"}
+_BUNDLED_DEFAULT_MODELS = {"_default_pose.pt", "_default_box.pt", "_default_v26_detect_for_fuel.pt"}
+
+_JETSON_SYSTEM_MANAGED = {"tensorrt", "onnxruntime"}
 
 _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
@@ -276,33 +279,43 @@ def install_special_dependencies(auto_install: bool = False):
         logger.info("No extra dependencies required for %s", backend)
         return
 
+    on_jetson = has_jetson()
     missing = []
     for entry in deps:
         mod, target = entry[0], entry[1]
         extra_args = list(entry[2]) if len(entry) > 2 else None
         pkg_name, constraint = _parse_pip_target(target)
+
+        if on_jetson and mod in _JETSON_SYSTEM_MANAGED:
+            if _is_installed(mod):
+                logger.debug("Dependency %s satisfied (JetPack system package).", mod)
+            else:
+                logger.error(
+                    "%s is not importable. On Jetson this must come from JetPack "
+                    "(apt), not pip — pip has no matching GPU-enabled build for "
+                    "this board. Verify it with the L4T-provided python3, and "
+                    "make sure your venv was created with --system-site-packages "
+                    "so it can see it.",
+                    mod,
+                )
+            continue
+
         if not _is_installed(mod):
             missing.append((mod, target, False, extra_args))
         elif constraint and not _check_version_constraint(pkg_name, constraint):
             logger.warning(
                 "Installed %s (%s) does not satisfy %s. Will reinstall.",
-                pkg_name,
-                _get_installed_version(pkg_name),
-                target,
+                pkg_name, _get_installed_version(pkg_name), target,
             )
             missing.append((mod, target, True, extra_args))
         else:
             logger.debug("Dependency %s satisfied: %s", mod, target)
 
     if not missing:
-        logger.info("All dependencies already installed for %s", backend)
+        logger.info("All pip-installable dependencies already satisfied for %s", backend)
         return
 
-    logger.warning(
-        "Missing dependencies for %s: %s",
-        backend,
-        [target for _, target, _, _ in missing],
-    )
+    logger.warning("Missing dependencies for %s: %s", backend, [t for _, t, _, _ in missing])
 
     if not auto_install:
         logger.info("auto_install=False - skipping installation")
@@ -313,29 +326,23 @@ def install_special_dependencies(auto_install: bool = False):
         if not (_IS_AARCH64 or "x86_64" in arch or "amd64" in arch):
             logger.error(
                 "RKNN wheels are only available for aarch64 and x86_64. "
-                "Your architecture (%s) is not supported.",
-                arch,
+                "Your architecture (%s) is not supported.", arch,
             )
             return
 
     if backend in {"rknn", "engine"}:
         logger.warning(
             "%s is a hardware/vendor backend - installation may require "
-            "system-level setup and can take a few minutes.",
-            backend,
+            "system-level setup and can take a few minutes.", backend,
         )
 
     for mod, target, force, extra_args in missing:
         if _pip_install(target, force_reinstall=force, extra_args=extra_args):
             logger.info("Installed %s successfully.", target)
         else:
-            logger.error(
-                "Failed to install %s. You may need to install it manually.",
-                target,
-            )
+            logger.error("Failed to install %s. You may need to install it manually.", target)
 
     logger.info("Dependency installation complete for %s", backend)
-
 
 def search_for_config():
     config_dir = _PROJECT_ROOT / "Config"
@@ -365,15 +372,18 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
     if not kwargs:
         raise ValueError(f"Unsupported native format: {target_format}")
 
-    if data_yaml and target_format in ("tflite", "openvino"):
+    if data_yaml and target_format in ("tflite", "openvino", "engine"):
         kwargs = dict(format=target_format, imgsz=input_size, int8=True, data=data_yaml)
+        if target_format == "engine":
+            kwargs["device"] = 0
+            kwargs["half"] = True  # let TRT fall back to FP16 for layers it won't quantize
+
         logger.info(
             "Dataset-aware %s quantization enabled (data=%s)", target_format, data_yaml
         )
 
     logger.info("Exporting %s -> %s with kwargs: %s", model_file, target_format, kwargs)
     return model.export(**kwargs)
-
 
 @contextlib.contextmanager
 def _silent_fd():
