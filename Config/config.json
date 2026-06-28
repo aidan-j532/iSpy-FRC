@@ -55,6 +55,7 @@
         "utilities": [
             "video_recorder",
             "health_reporter"
-        ]
+        ],
+        "frame_processors": []
     }
 }

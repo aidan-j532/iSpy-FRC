@@ -15,6 +15,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 os.environ["YOLO_VERBOSE"] = "False"
+import json
 import shutil
 import subprocess
 import platform
@@ -789,6 +790,26 @@ def setup_files(first_boot: bool = False):
     config_dir = _PROJECT_ROOT / "Config"
     outputs_dir = _PROJECT_ROOT / "Outputs"
     dataset_dir = _PROJECT_ROOT / "QuantizeDataset"
+
+    saved_config = None
+    if first_boot:
+        config_path = config_dir / "config.json"
+        if config_path.exists():
+            try:
+                with open(str(config_path)) as f:
+                    existing_config = json.load(f)
+                default_cfg = iSpyConfig().default_config
+                if existing_config != default_cfg:
+                    saved_config = existing_config
+                    logger.info("Preserving user config (differs from default)")
+            except Exception as e:
+                logger.warning("Could not read existing config: %s", e)
+
+        for d in [yolo_dir, config_dir, outputs_dir, dataset_dir]:
+            if d.exists():
+                shutil.rmtree(d)
+                logger.info("Deleted %s", d)
+
     yolo_dir.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
     outputs_dir.mkdir(parents=True, exist_ok=True)
@@ -796,6 +817,12 @@ def setup_files(first_boot: bool = False):
     for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml", "engine"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
     prepare_quantization_dataset(str(dataset_dir), boot=True, keywords=keywords)
+
+    if saved_config is not None:
+        config_path = config_dir / "config.json"
+        with open(str(config_path), "w") as f:
+            json.dump(saved_config, f, indent=4)
+        logger.info("Restored user config")
 
     pytorch_dir = yolo_dir / "pytorch"
     _SKIP_DIRS = {

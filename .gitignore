@@ -38,3 +38,4 @@ RknnWheels/
 runs/
 iSpy/assets/*.yaml
 iSpy/assets/*.onnx
+*frame_work_laptop_boot.txt
