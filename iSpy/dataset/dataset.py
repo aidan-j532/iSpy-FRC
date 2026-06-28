@@ -2,6 +2,7 @@ import logging
 import os
 import warnings
 from pathlib import Path
+import shutil
 
 logger = logging.getLogger(__name__)
 
