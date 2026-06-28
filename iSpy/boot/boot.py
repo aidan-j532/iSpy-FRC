@@ -74,6 +74,15 @@ _BOOT_MANAGED_VISION_FIELDS = {
     "output", "input", "frame_batches", "device",
 }
 
+_MANUAL_POSTPROCESS_FORMATS = {"onnx", "tflite"}
+
+
+def _model_supports_end2end(model: "ultralytics.YOLO") -> bool:
+    # Set by Ultralytics on every DetectionModel/SegmentationModel/PoseModel/
+    # OBBModel: self.end2end = getattr(self.model[-1], "end2end", False).
+    # Reflects the actual trained head - not a version guess.
+    return bool(getattr(model.model, "end2end", False))
+
 
 def _strip_boot_managed_fields(cfg: dict) -> dict:
     cfg = json.loads(json.dumps(cfg))  # deep copy, don't mutate caller's dict
@@ -388,9 +397,10 @@ def search_for_config():
 
 def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
     model = ultralytics.YOLO(model_file)
+    has_e2e = _model_supports_end2end(model)
 
     native_kwargs = {
-        "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=17, dynamic=False, end2end=False),
+        "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=17, dynamic=False),
         "tflite": dict(format="tflite", imgsz=input_size, int8=True),
         "openvino": dict(format="openvino", imgsz=input_size, half=True),
         "coreml": dict(format="coreml", imgsz=input_size, nms=True),
@@ -401,11 +411,29 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
     if not kwargs:
         raise ValueError(f"Unsupported native format: {target_format}")
 
+    if has_e2e and target_format in _MANUAL_POSTPROCESS_FORMATS:
+        kwargs["end2end"] = False
+        logger.info(
+            "%s has an end-to-end (dual-head) architecture - forcing "
+            "end2end=False for %s export so the raw-tensor parser gets "
+            "the traditional (1, nc+4, N) output instead of (1, 300, 6).",
+            Path(model_file).name, target_format,
+        )
+    elif has_e2e:
+        logger.info(
+            "%s has an end-to-end architecture; leaving the default head for "
+            "%s export (Ultralytics decodes it natively at runtime - no "
+            "speed reason to disable it here).",
+            Path(model_file).name, target_format,
+        )
+
     if data_yaml and target_format in ("tflite", "openvino", "engine"):
         kwargs = dict(format=target_format, imgsz=input_size, int8=True, data=data_yaml)
+        if has_e2e and target_format in _MANUAL_POSTPROCESS_FORMATS:
+            kwargs["end2end"] = False
         if target_format == "engine":
             kwargs["device"] = 0
-            kwargs["half"] = True  # let TRT fall back to FP16 for layers it won't quantize
+            kwargs["half"] = True
 
         logger.info(
             "Dataset-aware %s quantization enabled (data=%s)", target_format, data_yaml

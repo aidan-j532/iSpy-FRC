@@ -9,7 +9,7 @@ _REQUIRED_DIRS = ["images"]
 _IMAGE_EXTS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
 _CALIB_COUNT = 200
 _IMGSZ = 640
-_CALIBRATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/archive/refs/tags/RKNN_Quantization.zip"
+_CALIBRATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/releases/download/RKNN_Quantization/200.Robotics.Images.zip"
 
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
@@ -31,19 +31,21 @@ def _download_release_images(folder: Path, count: int = _CALIB_COUNT) -> list[Pa
         resp = sess.get(url, timeout=30)
         resp.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-            for member in zf.namelist():
-                path = Path(member)
-                if path.suffix.lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".tiff"):
+            for member in zf.infolist():
+                if member.is_dir():
                     continue
+
+                path = Path(member.filename)
+
+                if path.suffix.lower() not in {
+                    ".jpg", ".jpeg", ".png", ".bmp", ".tiff"
+                }:
+                    continue
+
                 dest = images_dir / path.name
-                dest.write_bytes(zf.read(member))
-                if _validate_image(dest):
-                    downloaded.append(dest)
-                    logger.info("Extracted release image %d/%d: %s", len(downloaded), count, dest.name)
-                    if len(downloaded) >= count:
-                        break
-                else:
-                    dest.unlink(missing_ok=True)
+                with zf.open(member) as src, open(dest, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                downloaded.append(dest)
     except Exception as e:
         logger.warning("Failed to download release calibration images: %s", e)
         return []
