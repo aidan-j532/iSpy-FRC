@@ -10,9 +10,9 @@ from iSpy.dataset.dataset import validate_quantization_dataset
 logger = logging.getLogger(__name__)
 
 _MODEL_PATTERN = re.compile(
-r"^YoloModels/" # starts with YoloModels/
-r"(?:(?:pytorch|onnx|tflite|rknn|openvino|coreml)/)?" # optional format folder
-r"[a-zA-Z0-9_\-]+.*\.(pt|onnx|tflite|rknn|bin|xml|yaml)$")
+    r"^YoloModels/"
+    r"(?:(?:pytorch|onnx|tflite|rknn|openvino|coreml|engine)/)?"
+    r"[a-zA-Z0-9_\-]+.*\.(pt|onnx|tflite|rknn|bin|xml|yaml|engine)$")
 
 def is_valid_model_path(path: str) -> bool:
     return bool(_MODEL_PATTERN.match(path.replace("\\", "/")))
@@ -23,14 +23,15 @@ def validate_model_files() -> None:
         logger.warning("YoloModels directory not found - skipping model path validation.")
         return
 
-    for root, _, files in os.walk(model_dir):
+    for root, dirs, files in os.walk(model_dir):
+        dirs[:] = [d for d in dirs if not (d.endswith(".mlpackage") or d.endswith("_openvino_model"))]
         for file in files:
             full_path = os.path.join(root, file)
             if not is_valid_model_path(full_path):
                 raise ValueError(f"Invalid model file path: {full_path}")
 
     logger.info("All model file paths are valid.")
-
+    
 def validate_config_files() -> None:
     config_dir = Path("Config")
     if not config_dir.exists():

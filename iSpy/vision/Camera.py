@@ -31,7 +31,8 @@ class Camera:
         self.frame: np.ndarray | None = None
         self.frame_timestamp: float | None = None
         self.frame_lock = threading.Lock()
-        self._frame_event = threading.Event()
+        self._frame_event = threading.Event()   
+        self._frame_processors = []
 
         self.auto_brightness = camera_config.get("auto_brightness", True)
         self._brightness_target = 128.0
@@ -250,19 +251,24 @@ class Camera:
         self._frame_processors.append(processor)
 
     def get_frame(self) -> np.ndarray | None:
-        try:
-            if self._frame_processors:
-                for processor in self._frame_processors:
-                    frame = processor.process(frame)
-        except Exception as exc:
-            self.logger.warning(f"Frame processor error: {exc}")
-            return None
-        
-        if self.is_image:
-            return self.image.copy() if self.image is not None else None
-        with self.frame_lock:
-            return self.frame.copy() if self.frame is not None else None
+            if self.is_image:
+                frame = self.image.copy() if self.image is not None else None
+            else:
+                with self.frame_lock:
+                    frame = self.frame.copy() if self.frame is not None else None
 
+            if frame is None:
+                return None
+
+            for processor in self._frame_processors:
+                try:
+                    frame = processor.process(frame)
+                except Exception as exc:
+                    self.logger.warning(f"Frame processor error: {exc}")
+                    break
+
+            return frame
+        
     def destroy(self):
         self.stopped = True
         if not self.is_image and hasattr(self, "cap") and self.cap:

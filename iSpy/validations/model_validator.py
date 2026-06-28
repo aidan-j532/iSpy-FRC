@@ -150,9 +150,6 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
 
         # For OpenVINO, check for .xml and .bin pair
         if fmt == "openvino":
-            xml_path = model_path.parent / model_path.stem / ".xml"
-            bin_path = model_path.parent / model_path.stem / ".bin"
-
             if ext == ".xml":
                 expected_bin = model_path.with_suffix(".bin")
                 if not expected_bin.exists():

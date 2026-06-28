@@ -103,6 +103,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
         self._last_frame: np.ndarray | None = None
         self.last_time = time.perf_counter()
         self._pipeline_timeout = 0.1
+        self._last_objects: list[Object] = []
         
         if self._use_pipeline:
             threading.Thread(
@@ -328,7 +329,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
         data, frame = self.get_yolo_data()
         if data is None or frame is None:
             return [], None
- 
+
         img_h, img_w = frame.shape[:2]
         objects: list[Object] = []
         for box in data.boxes:
@@ -337,6 +338,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
             obj = self._box_to_object(box, img_w, img_h)
             if obj is not None:
                 objects.append(obj)
+        self._last_objects = objects
         return objects, frame
  
     def run_with_supplied_data(self, data: Results) -> list[Object]:
@@ -354,7 +356,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
     def get_data_for_subsystem(self, target: str):
         if self.subsystem != target:
             return None
-        positions, _ = self.run()
+        positions = self._last_objects
         if self.subsystem == "hopper":
             return len(positions) > 0
         return positions

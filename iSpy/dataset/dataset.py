@@ -428,13 +428,13 @@ def _download_images(
     folder: Path,
     count: int = _CALIB_COUNT,
     boot: bool = False,
+    start_index: int = 0,          # <-- new: offset filenames past what's already on disk
 ) -> list[Path]:
     images_dir = folder / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
     downloaded: list[Path] = []
 
     all_urls, dl_headers_base, sess = _collect_urls(keywords, count)
-
     logger.info("Collected %d image URLs, attempting to download %d", len(all_urls), count)
 
     for url in all_urls:
@@ -465,7 +465,7 @@ def _download_images(
             if len(resp.content) < 256:
                 continue
 
-            dest = images_dir / f"img_{len(downloaded):03d}{ext}"
+            dest = images_dir / f"img_{start_index + len(downloaded):03d}{ext}"
             with open(dest, "wb") as f:
                 f.write(resp.content)
 
@@ -486,7 +486,6 @@ def _download_images(
 
     logger.info("Downloaded %d images", len(downloaded))
     return downloaded
-
 
 def _find_images(folder: Path):
     imgs = []
@@ -535,9 +534,13 @@ def prepare_quantization_dataset(
     existing = _find_images(ds)
 
     if keywords and len(existing) < count:
-        for f in existing:
-            f.unlink()
-        _download_images(keywords, ds, count, boot=boot)
+        remaining = count - len(existing)
+        logger.info(
+            "Have %d/%d calibration images from release download; "
+            "fetching %d more via keyword search (%s) instead of discarding them.",
+            len(existing), count, remaining, ", ".join(keywords),
+        )
+        _download_images(keywords, ds, remaining, boot=boot, start_index=len(existing))
 
     existing = _find_images(ds)
     if len(existing) < count:

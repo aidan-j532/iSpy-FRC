@@ -65,9 +65,34 @@ _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
 _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
-keywords = ["car"]
+keywords = ["frc game piece", "frc 2025 REBUILT", "frc 2025 fuel"]
 
 _RKNN_QUANTIZE = True
+
+_BOOT_MANAGED_VISION_FIELDS = {
+    "file_path", "task", "num_classes", "input_size",
+    "output", "input", "frame_batches", "device",
+}
+
+
+def _strip_boot_managed_fields(cfg: dict) -> dict:
+    cfg = json.loads(json.dumps(cfg))  # deep copy, don't mutate caller's dict
+    vm = cfg.get("vision_model")
+    if isinstance(vm, dict):
+        for key in _BOOT_MANAGED_VISION_FIELDS:
+            vm.pop(key, None)
+    return cfg
+
+
+def _default_config_dict() -> dict:
+    root = logging.getLogger()
+    saved_handlers = root.handlers[:]
+    saved_level = root.level
+    try:
+        return iSpyConfig().default_config
+    finally:
+        root.handlers = saved_handlers
+        root.setLevel(saved_level)
 
 def _find_lite_wheel_dir() -> Path:
     local = _PACKAGE_ROOT.parent / "rknn_wheels"
@@ -798,10 +823,25 @@ def setup_files(first_boot: bool = False):
             try:
                 with open(str(config_path)) as f:
                     existing_config = json.load(f)
-                default_cfg = iSpyConfig().default_config
-                if existing_config != default_cfg:
-                    saved_config = existing_config
+
+                default_cfg = _default_config_dict()
+                comparable_existing = _strip_boot_managed_fields(existing_config)
+                comparable_default = _strip_boot_managed_fields(default_cfg)
+
+                if comparable_existing != comparable_default:
+                    # Real user customization (camera geometry, NT settings,
+                    # thresholds, plugins, min_conf, etc.) - keep it, but
+                    # reset the boot-derived vision_model fields to fresh
+                    # defaults since YoloModels (and the artifacts file_path/
+                    # task/output/input describe) is about to be deleted.
+                    saved_config = comparable_existing
+                    saved_config["vision_model"] = {
+                        **default_cfg.get("vision_model", {}),
+                        **comparable_existing.get("vision_model", {}),
+                    }
                     logger.info("Preserving user config (differs from default)")
+                else:
+                    logger.info("Existing config matches defaults - nothing to preserve")
             except Exception as e:
                 logger.warning("Could not read existing config: %s", e)
 
@@ -822,7 +862,7 @@ def setup_files(first_boot: bool = False):
         config_path = config_dir / "config.json"
         with open(str(config_path), "w") as f:
             json.dump(saved_config, f, indent=4)
-        logger.info("Restored user config")
+        logger.info("Restored user config (vision_model artifact paths reset for fresh conversion)")
 
     pytorch_dir = yolo_dir / "pytorch"
     _SKIP_DIRS = {
@@ -1054,12 +1094,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
 
     vision_cfg = config.get("vision_model", {})
     filled = fill_missing_config(vision_cfg)
-    config.set("vision_model", {
-        "file_path": filled.get("file_path"),
-        "source_pt": filled.get("source_pt"),
-        "min_conf": filled.get("min_conf", 0.5),
-        "margin": filled.get("margin", 0),
-    })
+    config.set("vision_model", filled)
     config.save(quiet=True)
     logger.info("Model config auto-filled and saved.")
     logger.info(

@@ -664,11 +664,10 @@ class GenericYolo:
     def _dequantize_tensor(self, tensor: np.ndarray) -> np.ndarray:
         if tensor.dtype == np.float32:
             return tensor
-        if tensor.dtype == np.uint8:
-            return tensor.astype(np.float32) / 255.0
-        if tensor.dtype == np.int8:
-            return tensor.astype(np.float32) / 127.0
-        scale = float(self.output["quant_scale"])
+
+        default_scale = 255.0 if tensor.dtype == np.uint8 else 127.0
+        scale = float(self.output.get("quant_scale", default_scale))
+
         return tensor.astype(np.float32) / scale
 
     def _run_rknn(self, preprocessed: np.ndarray, orig_shape) -> Results:
