@@ -42,11 +42,15 @@ class ObjectDetectionCamera(Camera, VisionBase):
         except KeyError as e:
             raise ValueError(f"Missing camera config key: {e}")
 
-        self.margin = config["vision_model"].get("margin", 0)
-        self.min_confidence = config["vision_model"].get("min_conf", 0.5)
-        self.yolo_model_file = config["vision_model"]["file_path"]
-        self.input_size = tuple(config["vision_model"]["input_size"])
-        self.quantized = config["vision_model"].get("quantized", False)
+        # Model architecture fields come exclusively from metadata sidecars,
+        # not from config.  Config holds only user-preference fields.
+        from iSpy.vision.ModelInspector import fill_missing_config
+        vm_filled = fill_missing_config(dict(config["vision_model"]))
+        self.margin = vm_filled.get("margin", config["vision_model"].get("margin", 0))
+        self.min_confidence = float(vm_filled.get("min_conf", config["vision_model"].get("min_conf", 0.5)))
+        self.yolo_model_file = vm_filled["file_path"]
+        self.input_size = tuple(vm_filled["input_size"])
+        self.quantized = vm_filled.get("quantized", config["vision_model"].get("quantized", False))
         self.frame_sync = config.get("frame_sync", False)
         self.core_mask = core_mask
         self.unit = config["unit"]
@@ -80,18 +84,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         super().__init__(camera_config, self.input_size, self.grayscale)
 
-        model_config = dict(config["vision_model"])
-        if "file_path" not in model_config:
-            model_config["file_path"] = self.yolo_model_file
-        if "input_size" not in model_config:
-            model_config["input_size"] = self.input_size
-        if "min_conf" not in model_config:
-            model_config["min_conf"] = self.min_confidence
-        if "quantized" not in model_config:
-            model_config["quantized"] = self.quantized
-
         self.model = GenericYolo(
-            model_config,
+            vm_filled,
             self.core_mask,
             iSpy_config=config,
         )

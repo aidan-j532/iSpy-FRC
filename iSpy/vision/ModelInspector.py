@@ -224,17 +224,6 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
             "output.quant_scale  (required for int8/uint8 - check your quantization params)"
         )
 
-    # Save metadata sidecar so future loads can be metadata-first
-    try:
-        from iSpy.vision.metadata import metadata_path_for, write_metadata
-        meta_path = metadata_path_for(Path(model_path))
-        if not meta_path.exists():
-            flat = _flatten_config_to_metadata(cfg)
-            write_metadata(meta_path, flat)
-            logger.info("Auto-saved metadata to %s", meta_path.name)
-    except Exception:
-        logger.debug("Could not auto-save metadata for %s", model_path)
-
     return cfg
 
 
@@ -733,17 +722,6 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
         "_manual_fields": manual + ["min_conf", "output.nms_iou", "output.scores_are_logits"],
         "_warnings": warnings,
     }
-
-    # Auto-save metadata sidecar for future loads
-    try:
-        from iSpy.vision.metadata import metadata_path_for, write_metadata
-        meta_path = metadata_path_for(Path(model_path))
-        if not meta_path.exists():
-            flat = _flatten_config_to_metadata(cfg)
-            write_metadata(meta_path, flat)
-            logger.info("Auto-saved metadata to %s", meta_path.name)
-    except Exception:
-        logger.debug("Could not auto-save metadata for %s", model_path)
 
     return cfg
 

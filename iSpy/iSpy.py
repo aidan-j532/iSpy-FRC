@@ -20,7 +20,6 @@ from iSpy.validations.model_validator import (
 from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import TrackerBase, UtilityBase
 from wpimath.geometry import Pose2d
-from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.plugins.utilities.BuiltIn.NetworkHandler import NetworkTableHandler
 from iSpy.plugins.utilities.BuiltIn.HealthReporter import HealthReporter
 

@@ -74,6 +74,11 @@ _BOOT_MANAGED_VISION_FIELDS = {
     "output", "input", "frame_batches", "device",
 }
 
+# Fields that must come from metadata, never stored in config.
+_METADATA_ONLY_FIELDS = {
+    "task", "num_classes", "input_size", "output", "input", "frame_batches",
+}
+
 _MANUAL_POSTPROCESS_FORMATS = {"onnx", "tflite"}
 
 
@@ -813,25 +818,6 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
             except Exception as e:
                 logger.warning("Could not write metadata for converted %s: %s", result_path.name, e)
 
-            # Post-conversion: run ModelInspector silently on the exported model to verify and update metadata
-            try:
-                from iSpy.vision.ModelInspector import inspect_model, _flatten_config_to_metadata
-                inspected = inspect_model(str(result_path))
-                if inspected:
-                    inspected_meta = _flatten_config_to_metadata(inspected)
-                    meta_path = metadata_path_for(result_path)
-                    existing = read_metadata(result_path) or {}
-                    updated = dict(existing)
-                    changed = False
-                    for k, v in inspected_meta.items():
-                        if v is not None and (k not in existing or v != existing[k]):
-                            updated[k] = v
-                            changed = True
-                    if changed:
-                        write_metadata(meta_path, updated)
-                        logger.info("ModelInspector updated metadata for %s", result_path.name)
-            except Exception:
-                pass
             return str(result_path)
 
     logger.warning("Conversion to %s failed, falling back to .pt", target_format)
@@ -939,38 +925,6 @@ def setup_files(first_boot: bool = False):
                     logger.info("Wrote metadata %s", meta_path.name)
                 except Exception as e:
                     logger.warning("Could not generate metadata for %s: %s", pt_file.name, e)
-    except Exception:
-        pass
-
-    # Run ModelInspector silently on each .pt to enrich metadata
-    try:
-        from iSpy.vision.ModelInspector import inspect_model, _flatten_config_to_metadata
-        for pt_file in pytorch_dir.glob("*.pt"):
-            meta_path = metadata_path_for(pt_file)
-            if not meta_path.exists():
-                continue
-            try:
-                inspected = inspect_model(str(pt_file))
-                if not inspected:
-                    continue
-                inspected_meta = _flatten_config_to_metadata(inspected)
-                existing = read_metadata(pt_file) or {}
-                updated = dict(existing)
-                changed = False
-                for k, v in inspected_meta.items():
-                    if v is None:
-                        continue
-                    if k not in existing:
-                        updated[k] = v
-                        changed = True
-                    elif v != existing[k]:
-                        updated[k] = v
-                        changed = True
-                if changed:
-                    write_metadata(meta_path, updated)
-                    logger.info("ModelInspector updated metadata for %s", pt_file.name)
-            except Exception:
-                pass
     except Exception:
         pass
 
@@ -1122,9 +1076,24 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
 
     vision_cfg = config.get("vision_model", {})
     filled = fill_missing_config(vision_cfg)
-    config.set("vision_model", filled)
+    # Save only user-facing fields to config; model architecture (task, input_size,
+    # output.*, input.*, num_classes) lives exclusively in metadata sidecars.
+    minimal = {
+        "file_path": filled.get("file_path", vision_cfg.get("file_path", "")),
+        "min_conf": filled.get("min_conf", vision_cfg.get("min_conf", 0.25)),
+        "margin": filled.get("margin", vision_cfg.get("margin", 0)),
+    }
+    for key in ("device", "quantized"):
+        val = filled.get(key, vision_cfg.get(key))
+        if val is not None:
+            minimal[key] = val
+    # Preserve any unknown user-defined fields from original config
+    for key in vision_cfg:
+        if key not in _METADATA_ONLY_FIELDS and key not in minimal:
+            minimal[key] = vision_cfg[key]
+    config.set("vision_model", minimal)
     config.save(quiet=True)
-    logger.info("Model config auto-filled and saved.")
+    logger.info("Minimal model config saved to config (architecture in metadata only).")
     logger.info(
         "Boot sequence complete. Final model path: %s",
         config.get("vision_model", {}).get("file_path"),
