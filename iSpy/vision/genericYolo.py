@@ -4,6 +4,7 @@ import math
 import cv2
 import numpy as np
 from ultralytics import YOLO
+from iSpy.plugins import frame
 from iSpy.vision.ModelInspector import fill_missing_config
 import threading
 import queue
@@ -237,6 +238,8 @@ class Results:
 
     def plot(self, frame):
         for box in self.boxes:
+            if not all(math.isfinite(v) for v in box.xyxy):
+                continue
             x1, y1, x2, y2 = map(int, box.xyxy)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             if box.rotation is not None:
@@ -331,6 +334,7 @@ class GenericYolo:
                 )
             self._require_input_block()
             self.model_type = "rknn"
+            self._rknn_fmt_checked = False
             self.model = RKNNLite(verbose=False)
             if self.model.load_rknn(self.model_file) != 0:
                 raise ValueError(f"Failed to load RKNN model: {self.model_file}")
@@ -682,21 +686,24 @@ class GenericYolo:
         )
         tensor = self._dequantize_tensor(raw_outputs[0])
 
-        if not hasattr(self, '_rknn_fmt_verified'):
-            self._rknn_fmt_verified = True
+        if not self._rknn_fmt_checked:
+            self._rknn_fmt_checked = True
             t = tensor[0] if tensor.ndim == 3 else tensor
             smaller = min(t.shape[0], t.shape[-1])
             larger = max(t.shape[0], t.shape[-1])
             actual_fmt = "hardware_nms" if (smaller == 6 and larger < 1000) else "raw"
 
             if actual_fmt != self.output["format"]:
-                self.logger.warning(
-                    "RKNN output shape %s says format should be %r but config has %r "
-                    "- correcting.",
-                    tensor.shape, actual_fmt, self.output["format"],
+                raise ValueError(
+                    f"RKNN model output shape {tensor.shape} indicates "
+                    f"output.format should be {actual_fmt!r}, but the metadata "
+                    f"sidecar says {self.output['format']!r}. The _metadata.yaml "
+                    f"for this .rknn model is wrong or stale (likely re-exported "
+                    f"without re-running boot.py conversion). Re-run boot.py to "
+                    f"regenerate the sidecar - vision_model output fields are "
+                    f"metadata-only and should never be hand-edited or "
+                    f"auto-corrected at runtime."
                 )
-                self.output["format"] = actual_fmt
-                self.has_hardware_nms = actual_fmt == "hardware_nms"
 
         return self.postprocess([tensor], orig_shape)
 
@@ -869,7 +876,14 @@ class GenericYolo:
         orig_shape,
         kpts_raw: np.ndarray | None = None,
     ) -> Results:
-        mask = confs >= self.min_conf
+        finite = np.isfinite(boxes_xyxy).all(axis=1)
+        dropped = int((~finite).sum())
+        if dropped:
+            self.logger.debug(
+                "Dropped %d/%d raw anchor(s) with non-finite (NaN/Inf) box "
+                "coordinates before NMS.", dropped, len(boxes_xyxy),
+            )
+        mask = (confs >= self.min_conf) & finite
         boxes_xyxy = boxes_xyxy[mask]
         confs = confs[mask]
         class_ids = class_ids[mask]
@@ -948,21 +962,28 @@ class GenericYolo:
         )
         
     def _parse_hardware_nms(self, tensor: np.ndarray, orig_shape) -> Results:
-        # Defensive: hardware_nms output is expected as (N, 6) anchors-first.
-        # If the model actually emits (6, N) features-first, fix the orientation.
         if tensor.ndim == 2 and tensor.shape[0] == 6 and tensor.shape[1] != 6:
             tensor = tensor.T
         if tensor.shape[1] < 6:
             return Results([], orig_shape)
+
         confs = tensor[:, 4]
-        valid = tensor[confs >= self.min_conf]
+        finite = np.isfinite(tensor[:, :4]).all(axis=1)
+        dropped = int((~finite).sum())
+        if dropped:
+            self.logger.debug(
+                "Dropped %d/%d hardware-NMS detection(s) with non-finite "
+                "(NaN/Inf) box coordinates.", dropped, len(tensor),
+            )
+        valid = tensor[(confs >= self.min_conf) & finite]
+
         boxes = []
         for det in valid:
             xyxy = self._scale_coords(det[:4], orig_shape, is_kpts=False)
             cls_id = int(det[5]) if det.shape[0] > 5 else 0
             boxes.append(Box(xyxy.tolist(), float(det[4]), cls_id))
         return Results(boxes, orig_shape)
-
+    
     def _parse_raw_detect(self, tensor: np.ndarray, orig_shape) -> Results:
         boxes_xyxy = self._boxes_from_encoding(tensor)
         confs, class_ids = self._scores_from_tensor(tensor)

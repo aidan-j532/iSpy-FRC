@@ -1076,6 +1076,18 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
 
     vision_cfg = config.get("vision_model", {})
     filled = fill_missing_config(vision_cfg)
+    
+    try:
+        full_config_path = _PROJECT_ROOT / "Outputs" / "full_config.json"
+        full_config_path.parent.mkdir(parents=True, exist_ok=True)
+        full_resolved = json.loads(json.dumps(config.config))  # deep copy
+        full_resolved["vision_model"] = filled
+        with open(full_config_path, "w") as f:
+            json.dump(full_resolved, f, indent=4)
+        logger.info("Full resolved config (debug only) written to %s", full_config_path)
+    except Exception as e:
+        logger.warning("Could not write full_config.json: %s", e)
+
     # Save only user-facing fields to config; model architecture (task, input_size,
     # output.*, input.*, num_classes) lives exclusively in metadata sidecars.
     minimal = {
