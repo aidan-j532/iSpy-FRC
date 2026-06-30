@@ -201,26 +201,32 @@ def _rknn_wheel_targets() -> list[tuple[str, str]]:
 
 
 def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
+    from iSpy.config.AutoOpt import has_nvidia, has_amd_gpu
+
+    if has_nvidia():
+        onnx_dep = ("onnxruntime", "onnxruntime-gpu")
+    elif platform.system() == "Windows":
+        onnx_dep = ("onnxruntime", "onnxruntime-directml")  # covers AMD/Intel/Nvidia on Windows
+    else:
+        onnx_dep = ("onnxruntime", "onnxruntime")
+        if has_amd_gpu():
+            logger.warning(
+                "AMD GPU on Linux: the standard 'onnxruntime' wheel is CPU-only. "
+                "ROCm onnxruntime builds aren't reliably on PyPI for every ROCm "
+                "version - install one manually matching your ROCm version."
+            )
+
     deps: dict[str, list[tuple[str, str]]] = {
-        "onnx": [("onnxruntime", "onnxruntime")],
+        "onnx": [onnx_dep],
         "engine": [("tensorrt", "tensorrt==10.16.1.11")],
         "openvino": [("openvino", "openvino")],
         "coreml": [("coremltools", "coremltools")],
         "tflite": [("tflite_runtime", "tflite-runtime")],
-        "tpu": [
-            (
-                "torch_xla",
-                "torch_xla[tpu]",
-                ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"],
-            )
-        ],
+        "tpu": [("torch_xla", "torch_xla[tpu]", ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"])],
     }
     rknn_targets = _rknn_wheel_targets()
     if rknn_targets:
-        deps["rknn"] = rknn_targets + [
-            ("onnx", "onnx<1.17"),
-            ("google.protobuf", "protobuf<4.0"),
-        ]
+        deps["rknn"] = rknn_targets + [("onnx", "onnx<1.17"), ("google.protobuf", "protobuf<4.0")]
     return deps
 
 
@@ -400,7 +406,7 @@ def search_for_config():
     return str(chosen)
 
 
-def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
+def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, device=0):
     model = ultralytics.YOLO(model_file)
     has_e2e = _model_supports_end2end(model)
 
@@ -409,7 +415,7 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
         "tflite": dict(format="tflite", imgsz=input_size, int8=True),
         "openvino": dict(format="openvino", imgsz=input_size, half=True),
         "coreml": dict(format="coreml", imgsz=input_size, nms=True),
-        "engine": dict(format="engine", imgsz=input_size, half=True, device=0),
+        "engine": dict(format="engine", imgsz=input_size, half=True, device=device),
     }
 
     kwargs = native_kwargs.get(target_format)
@@ -437,7 +443,7 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None):
         if has_e2e and target_format in _MANUAL_POSTPROCESS_FORMATS:
             kwargs["end2end"] = False
         if target_format == "engine":
-            kwargs["device"] = 0
+            kwargs["device"] = device
             kwargs["half"] = True
 
         logger.info(

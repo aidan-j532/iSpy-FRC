@@ -64,6 +64,14 @@ def has_jetson() -> bool:
             pass
     return False
 
+@lru_cache()
+def has_hailo_npu() -> bool:
+    import glob
+    if glob.glob("/dev/hailo*"):
+        return True
+    if "hailo" in _lsusb_output():
+        return True
+    return _cmd_ok("hailortcli fw-control identify")
 
 @lru_cache()
 def has_nvidia() -> bool:
@@ -170,12 +178,29 @@ def has_rockchip_npu() -> bool:
 
     return False
 
+def resolve_openvino_device(requested_device=None) -> str:
+    if isinstance(requested_device, str) and requested_device.startswith("intel:"):
+        return requested_device
+    try:
+        from openvino import Core
+        available = Core().available_devices
+    except Exception:
+        return "intel:cpu"
+    if "GPU" in available:
+        return "intel:gpu"
+    if "NPU" in available:
+        return "intel:npu"
+    return "intel:cpu"
+
 
 def recommend_format(ignore_dependencies: bool = False) -> str:
     # 1. Dedicated embedded NPUs / TPUs
     if has_rockchip_npu():
         logger.info("Rockchip NPU detected - using RKNN format for hardware acceleration.")
         return "rknn"
+    if has_hailo_npu():
+        logger.info("Hailo NPU detected - using HEF format for hardware acceleration.")
+        return "hef"
     if has_edge_tpu():
         logger.info("Edge TPU detected - using TFLite format for hardware acceleration.")
         return "tflite"
