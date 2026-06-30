@@ -779,6 +779,16 @@ class GenericYolo:
             int((t[:, 4] > 0.5).sum()),
             len(t),
         )
+        
+        t_check = tensor[0] if tensor.ndim == 3 else tensor
+        if t_check.shape[0] < t_check.shape[-1]:
+            t_check = t_check.T  # now (8400, 5)
+        for col_idx in range(t_check.shape[1]):
+            col = t_check[:, col_idx]
+            self.logger.info(
+                "col[%d]: min=%.4f max=%.4f mean=%.4f nonzero=%d",
+                col_idx, col.min(), col.max(), col.mean(), int((col != 0).sum())
+            )
         # END TEMP DEBUG
 
         if not self._rknn_fmt_checked:
