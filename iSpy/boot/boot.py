@@ -630,15 +630,14 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
     try:
         config_kwargs = dict(
             mean_values=[[0, 0, 0]],
-            std_values=[[255.0, 255.0, 255.0]],
+            std_values=[[255, 255, 255]],
             target_platform="rk3588",
+            disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
+            quantized_algorithm="normal",
+            quantized_hybrid_level=3
         )
         if quantize:
-            config_kwargs.update(
-                quantized_dtype="asymmetric_quantized-u8",
-                quantize_input_node=True,
-                merge_dequant_layer_and_output_node=True,
-            )
+            config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
         rknn.config(**config_kwargs)
         ret = rknn.load_onnx(model=str(onnx_path))
         if ret != 0:
