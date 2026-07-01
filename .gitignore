@@ -39,3 +39,4 @@ runs/
 iSpy/assets/*.yaml
 iSpy/assets/*.onnx
 *frame_work_laptop_boot.txt
+rknn_log.txt

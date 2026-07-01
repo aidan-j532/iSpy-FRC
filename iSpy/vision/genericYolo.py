@@ -758,6 +758,14 @@ class GenericYolo:
         raw_outputs = self.model.inference(inputs=[preprocessed])
         if raw_outputs is None:
             return Results([], orig_shape)
+        
+        self.logger.info("RKNN num outputs: %d", len(raw_outputs))
+        for i, out in enumerate(raw_outputs):
+            self.logger.info(
+                "  output[%d]: shape=%s dtype=%s min=%.4f max=%.4f nonzero=%d",
+                i, out.shape, out.dtype,
+                float(out.min()), float(out.max()), int((out != 0).sum())
+            )
 
         tensor = self._dequantize_tensor(raw_outputs[0])
 
