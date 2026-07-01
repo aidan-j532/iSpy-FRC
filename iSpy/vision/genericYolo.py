@@ -892,9 +892,28 @@ class GenericYolo:
 
     def _boxes_from_encoding(self, tensor: np.ndarray) -> np.ndarray:
         if self.output["box_format"] == "xyxy":
-            return tensor[:, :4].astype(np.float32)
-        cx, cy, w, h = tensor[:, 0], tensor[:, 1], tensor[:, 2], tensor[:, 3]
-        return np.column_stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2])
+            boxes = tensor[:, :4].astype(np.float32)
+            return np.where(np.isfinite(boxes), boxes, np.nan)
+
+        cx = tensor[:, 0].astype(np.float32)
+        cy = tensor[:, 1].astype(np.float32)
+        w = tensor[:, 2].astype(np.float32)
+        h = tensor[:, 3].astype(np.float32)
+
+        boxes = np.full((tensor.shape[0], 4), np.nan, dtype=np.float32)
+        finite = np.isfinite(cx) & np.isfinite(cy) & np.isfinite(w) & np.isfinite(h)
+        if np.any(finite):
+            half_w = np.empty_like(w, dtype=np.float32)
+            half_h = np.empty_like(h, dtype=np.float32)
+            np.divide(w, 2.0, out=half_w, where=np.isfinite(w))
+            np.divide(h, 2.0, out=half_h, where=np.isfinite(h))
+
+            np.subtract(cx, half_w, out=boxes[:, 0], where=finite)
+            np.subtract(cy, half_h, out=boxes[:, 1], where=finite)
+            np.add(cx, half_w, out=boxes[:, 2], where=finite)
+            np.add(cy, half_h, out=boxes[:, 3], where=finite)
+
+        return boxes
 
     def _scores_from_tensor(self, tensor: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         out = self.output
@@ -989,12 +1008,12 @@ class GenericYolo:
         orig_shape,
         kpts_raw: np.ndarray | None = None,
     ) -> Results:
-        finite = np.isfinite(boxes_xyxy).all(axis=1)
+        finite = np.isfinite(boxes_xyxy).all(axis=1) & np.isfinite(confs)
         dropped = int((~finite).sum())
         if dropped:
             self.logger.debug(
-                "Dropped %d/%d raw anchor(s) with non-finite (NaN/Inf) box "
-                "coordinates before NMS.", dropped, len(boxes_xyxy),
+                "Dropped %d/%d raw anchor(s) with non-finite (NaN/Inf) "
+                "box coordinates or confidence before NMS.", dropped, len(boxes_xyxy),
             )
         mask = (confs >= self.min_conf) & finite
         boxes_xyxy = boxes_xyxy[mask]
@@ -1081,12 +1100,12 @@ class GenericYolo:
             return Results([], orig_shape)
 
         confs = tensor[:, 4]
-        finite = np.isfinite(tensor[:, :4]).all(axis=1)
+        finite = np.isfinite(tensor[:, :4]).all(axis=1) & np.isfinite(confs)
         dropped = int((~finite).sum())
         if dropped:
             self.logger.debug(
                 "Dropped %d/%d hardware-NMS detection(s) with non-finite "
-                "(NaN/Inf) box coordinates.", dropped, len(tensor),
+                "(NaN/Inf) box coordinates or confidence.", dropped, len(tensor),
             )
         valid = tensor[(confs >= self.min_conf) & finite]
 
