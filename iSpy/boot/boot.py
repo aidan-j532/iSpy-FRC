@@ -633,11 +633,12 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
             std_values=[[255, 255, 255]],
             target_platform="rk3588",
             disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
-            quantized_algorithm="normal",
             quantized_hybrid_level=3
         )
         if quantize:
             config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
+            config_kwargs["quantized_method"] = "channel"   # per-channel instead of per-layer scale
+            config_kwargs["quantized_algorithm"] = "mmse"   # slower, iterative, higher precision than 'normal'
         rknn.config(**config_kwargs)
         ret = rknn.load_onnx(model=str(onnx_path))
         if ret != 0:
