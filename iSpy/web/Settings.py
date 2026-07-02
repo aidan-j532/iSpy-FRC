@@ -1,0 +1,1 @@
+# This is gonna contorl all the settings (mostly config.json)
