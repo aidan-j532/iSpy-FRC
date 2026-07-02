@@ -758,46 +758,8 @@ class GenericYolo:
         raw_outputs = self.model.inference(inputs=[preprocessed])
         if raw_outputs is None:
             return Results([], orig_shape)
-        
-        self.logger.info("RKNN num outputs: %d", len(raw_outputs))
-        for i, out in enumerate(raw_outputs):
-            self.logger.info(
-                "  output[%d]: shape=%s dtype=%s min=%.4f max=%.4f nonzero=%d",
-                i, out.shape, out.dtype,
-                float(out.min()), float(out.max()), int((out != 0).sum())
-            )
 
         tensor = self._dequantize_tensor(raw_outputs[0])
-
-        # TEMP DEBUG - remove after diagnosis
-        t = tensor[0] if tensor.ndim == 3 else tensor
-        if self.output.get("layout") == "features_first":
-            if t.shape[0] < t.shape[-1]:
-                t = t.T
-        self.logger.info(
-            "RKNN raw tensor shape=%s dtype=%s | "
-            "col0 (cx): min=%.3f max=%.3f | "
-            "col4 (conf): min=%.4f max=%.4f mean=%.4f | "
-            "above_0.1=%d above_0.3=%d above_0.5=%d / %d anchors",
-            tensor.shape, raw_outputs[0].dtype,
-            float(t[:, 0].min()), float(t[:, 0].max()),
-            float(t[:, 4].min()), float(t[:, 4].max()), float(t[:, 4].mean()),
-            int((t[:, 4] > 0.1).sum()),
-            int((t[:, 4] > 0.3).sum()),
-            int((t[:, 4] > 0.5).sum()),
-            len(t),
-        )
-        
-        t_check = tensor[0] if tensor.ndim == 3 else tensor
-        if t_check.shape[0] < t_check.shape[-1]:
-            t_check = t_check.T  # now (8400, 5)
-        for col_idx in range(t_check.shape[1]):
-            col = t_check[:, col_idx]
-            self.logger.info(
-                "col[%d]: min=%.4f max=%.4f mean=%.4f nonzero=%d",
-                col_idx, col.min(), col.max(), col.mean(), int((col != 0).sum())
-            )
-        # END TEMP DEBUG
 
         if not self._rknn_fmt_checked:
             self._rknn_fmt_checked = True
