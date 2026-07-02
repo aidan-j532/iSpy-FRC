@@ -746,8 +746,8 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
         )
         if quantize:
             config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
-            config_kwargs["quantized_method"] = "channel"   # per-channel instead of per-layer scale
-            config_kwargs["quantized_algorithm"] = "mmse"   # slower, iterative, higher precision than 'normal'
+            config_kwargs["quantized_algorithm"] = "kl_divergence"
+            
         rknn.config(**config_kwargs)
         ret = rknn.load_onnx(model=str(onnx_path_for_build))
         if ret != 0:
