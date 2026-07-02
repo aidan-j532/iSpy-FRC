@@ -891,14 +891,22 @@ class GenericYolo:
         return 1.0 / (1.0 + np.exp(-np.clip(scores, -88.0, 88.0)))
 
     def _boxes_from_encoding(self, tensor: np.ndarray) -> np.ndarray:
+        box_coord_scale = self.output.get("box_coord_scale")
         if self.output["box_format"] == "xyxy":
             boxes = tensor[:, :4].astype(np.float32)
+            if box_coord_scale is not None:
+                boxes = boxes * box_coord_scale
             return np.where(np.isfinite(boxes), boxes, np.nan)
 
         cx = tensor[:, 0].astype(np.float32)
         cy = tensor[:, 1].astype(np.float32)
         w = tensor[:, 2].astype(np.float32)
         h = tensor[:, 3].astype(np.float32)
+        if box_coord_scale is not None:
+            cx = cx * box_coord_scale
+            cy = cy * box_coord_scale
+            w = w * box_coord_scale
+            h = h * box_coord_scale
 
         boxes = np.full((tensor.shape[0], 4), np.nan, dtype=np.float32)
         finite = np.isfinite(cx) & np.isfinite(cy) & np.isfinite(w) & np.isfinite(h)

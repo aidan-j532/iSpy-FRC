@@ -471,6 +471,97 @@ def _silent_fd():
         os.close(old_err)
 
 
+def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> float:
+    """Insert a Div node before the final box/confidence Concat to keep box coords
+    in the same order of magnitude as confidence before RKNN quantizes the tensor.
+    """
+    import numpy as np
+    import onnx
+    import onnx.numpy_helper
+    import onnx.shape_inference
+
+    model = onnx.load(onnx_path)
+    inferred = onnx.shape_inference.infer_shapes(model)
+    inferred_graph = inferred.graph
+
+    output_names = {output.name for output in inferred_graph.output}
+    concat_node = None
+    for node in inferred_graph.node:
+        if node.op_type == "Concat" and any(out_name in output_names for out_name in node.output):
+            concat_node = node
+            break
+    if concat_node is None:
+        raise RuntimeError(
+            f"No Concat node feeding a graph output found in {onnx_path}."
+        )
+
+    value_info = {
+        vi.name: vi
+        for vi in list(inferred_graph.value_info) + list(inferred_graph.input) + list(inferred_graph.output)
+    }
+
+    def _has_dim(name: str, target: int):
+        value = value_info.get(name)
+        if value is None:
+            return False
+        dims = value.type.tensor_type.shape.dim
+        return any(int(dim.dim_value) == target for dim in dims if dim.dim_value > 0)
+
+    box_input_name = None
+    for input_name in concat_node.input:
+        if _has_dim(input_name, 4):
+            box_input_name = input_name
+            break
+    if box_input_name is None:
+        raise RuntimeError(
+            f"Could not identify the 4-channel box input for Concat '{concat_node.name}'."
+        )
+
+    if hasattr(input_size, "__iter__"):
+        divisor = float(input_size[0] if len(input_size) > 0 else 640)
+    else:
+        divisor = float(input_size)
+
+    scale_name = "iSpy_box_coord_scale"
+    if not any(init.name == scale_name for init in model.graph.initializer):
+        scale_tensor = onnx.numpy_helper.from_array(np.array(divisor, dtype=np.float32), name=scale_name)
+        model.graph.initializer.append(scale_tensor)
+
+    normalized_name = f"{box_input_name}_iSpy_normalized"
+    div_node = onnx.helper.make_node(
+        "Div",
+        inputs=[box_input_name, scale_name],
+        outputs=[normalized_name],
+        name="iSpy_Div_box_normalize",
+    )
+
+    nodes = list(model.graph.node)
+    target_idx = next(
+        idx
+        for idx, node in enumerate(nodes)
+        if node.op_type == "Concat" and list(node.output) == list(concat_node.output)
+    )
+    nodes.insert(target_idx, div_node)
+    target_concat = nodes[target_idx + 1]
+    for idx, input_name in enumerate(target_concat.input):
+        if input_name == box_input_name:
+            target_concat.input[idx] = normalized_name
+            break
+
+    del model.graph.node[:]
+    model.graph.node.extend(nodes)
+
+    onnx.checker.check_model(model)
+    onnx.save(model, output_path)
+    logger.info(
+        "Box-coordinate normalization applied: divided '%s' by %.1f before Concat '%s'",
+        box_input_name,
+        divisor,
+        concat_node.name,
+    )
+    return divisor
+
+
 def _export_rknn_metadata(
     pt_file: str,
     rknn_output,
@@ -480,6 +571,7 @@ def _export_rknn_metadata(
     output_layout=None,
     box_format=None,
     quantize=None,
+    box_coord_scale=None,
 ) -> None:
     try:
         pt_path = Path(pt_file)
@@ -499,6 +591,8 @@ def _export_rknn_metadata(
             meta["quant_scale"] = 255.0 if quantize else 1.0
             meta["input_dtype"] = "uint8" if quantize else "float32"
             meta["quantize"] = quantize
+        if box_coord_scale is not None:
+            meta["box_coord_scale"] = float(box_coord_scale)
         if input_size is not None:
             if hasattr(input_size, "__iter__"):
                 meta["input_size"] = [int(x) for x in input_size]
@@ -623,6 +717,21 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
     rknn_output = _desired_output_path(pt_path, "rknn")
     logger.info("Converting ONNX -> RKNN with dataset=%s", dataset_txt)
 
+    box_coord_scale = None
+    onnx_path_for_build = onnx_path
+    surgery_path = onnx_path.parent / f"{onnx_path.stem}_rknn_ready.onnx"
+    try:
+        box_coord_scale = _normalize_box_coords_for_quantization(
+            str(onnx_path), str(surgery_path), input_size
+        )
+        onnx_path_for_build = surgery_path
+    except Exception as exc:
+        logger.warning(
+            "Box-coordinate normalization for RKNN quantization failed: %s. "
+            "Proceeding without it; confidence may collapse to zero.",
+            exc,
+        )
+
     rknn = RKNN(verbose=False)
     detected_format = None
     detected_layout = None
@@ -640,7 +749,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
             config_kwargs["quantized_method"] = "channel"   # per-channel instead of per-layer scale
             config_kwargs["quantized_algorithm"] = "mmse"   # slower, iterative, higher precision than 'normal'
         rknn.config(**config_kwargs)
-        ret = rknn.load_onnx(model=str(onnx_path))
+        ret = rknn.load_onnx(model=str(onnx_path_for_build))
         if ret != 0:
             raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
         ret = rknn.build(do_quantization=quantize, dataset=str(dataset_txt))
@@ -687,6 +796,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
         output_layout=detected_layout,
         box_format=detected_box_format,
         quantize=quantize,
+        box_coord_scale=box_coord_scale,
     )
     return str(rknn_output)
 

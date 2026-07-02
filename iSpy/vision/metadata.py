@@ -17,6 +17,7 @@ METADATA_SCHEMA = {
     "nms_iou": float,
     "quantization": str,
     "quant_scale": float,
+    "box_coord_scale": float,
 
     "input_layout": str,
     "input_dtype": str,
