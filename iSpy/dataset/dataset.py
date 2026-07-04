@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import warnings
 from pathlib import Path
@@ -11,21 +12,32 @@ _IMAGE_EXTS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
 _CALIB_COUNT = 200
 _IMGSZ = 640
 _CALIBRATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/releases/download/RKNN_Quantization/200.Robotics.Images.zip"
+_VALIDATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/releases/download/RKNN_Quantization/Validation.Images.zip"
+_VALIDATION_KEYWORDS = [
+    "robotics validation images",
+    "robotics test images",
+    "machine vision calibration",
+]
 
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 # Github release -> web search - > synthetic
 # Synthetic is a fallback, one of them will work, then you can quatnize
 
-def _download_release_images(folder: Path, count: int = _CALIB_COUNT) -> list[Path]:
+def _download_release_images(
+    folder: Path,
+    count: int = _CALIB_COUNT,
+    release_url: str | None = None,
+    target_dir: str = "images",
+) -> list[Path]:
     import zipfile
     import io
 
     downloaded: list[Path] = []
-    images_dir = folder / "images"
+    images_dir = folder / target_dir
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    url = _CALIBRATION_RELEASE_URL
+    url = release_url or _CALIBRATION_RELEASE_URL
     logger.info("Trying release calibration images: %s", url)
     try:
         sess = _session()
@@ -47,6 +59,8 @@ def _download_release_images(folder: Path, count: int = _CALIB_COUNT) -> list[Pa
                 with zf.open(member) as src, open(dest, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 downloaded.append(dest)
+                if len(downloaded) >= count:
+                    break
     except Exception as e:
         logger.warning("Failed to download release calibration images: %s", e)
         return []
@@ -334,7 +348,12 @@ def _validate_image(image_path: Path) -> bool:
         return False
 
 
-def _generate_synthetic_images(folder: Path, count: int, imgsz: int = _IMGSZ) -> list[Path]:
+def _generate_synthetic_images(
+    folder: Path,
+    count: int,
+    imgsz: int = _IMGSZ,
+    target_dir: str = "images",
+) -> list[Path]:
     import numpy as np
     try:
         import cv2
@@ -344,10 +363,10 @@ def _generate_synthetic_images(folder: Path, count: int, imgsz: int = _IMGSZ) ->
         except ImportError:
             logger.error("Cannot generate synthetic images: neither OpenCV nor Pillow available")
             return []
-        return _generate_synthetic_images_pil(folder, count, imgsz)
+        return _generate_synthetic_images_pil(folder, count, imgsz, target_dir=target_dir)
 
     generated: list[Path] = []
-    images_dir = folder / "images"
+    images_dir = folder / target_dir
     images_dir.mkdir(parents=True, exist_ok=True)
 
     existing = len(list(images_dir.glob("*")))
@@ -392,12 +411,17 @@ def _generate_synthetic_images(folder: Path, count: int, imgsz: int = _IMGSZ) ->
     return generated
 
 
-def _generate_synthetic_images_pil(folder: Path, count: int, imgsz: int = _IMGSZ) -> list[Path]:
+def _generate_synthetic_images_pil(
+    folder: Path,
+    count: int,
+    imgsz: int = _IMGSZ,
+    target_dir: str = "images",
+) -> list[Path]:
     from PIL import Image, ImageDraw
     import random
 
     generated: list[Path] = []
-    images_dir = folder / "images"
+    images_dir = folder / target_dir
     images_dir.mkdir(parents=True, exist_ok=True)
 
     existing = len(list(images_dir.glob("*")))
@@ -431,9 +455,10 @@ def _download_images(
     folder: Path,
     count: int = _CALIB_COUNT,
     boot: bool = False,
-    start_index: int = 0,          # <-- new: offset filenames past what's already on disk
+    start_index: int = 0,
+    target_dir: str = "images",
 ) -> list[Path]:
-    images_dir = folder / "images"
+    images_dir = folder / target_dir
     images_dir.mkdir(parents=True, exist_ok=True)
     downloaded: list[Path] = []
 
@@ -483,7 +508,7 @@ def _download_images(
     if len(downloaded) < count:
         needed = count - len(downloaded)
         logger.warning("Only downloaded %d / %d real images. Generating %d synthetic calibration images...", len(downloaded), count, needed)
-        synthetic = _generate_synthetic_images(folder, needed, _IMGSZ)
+        synthetic = _generate_synthetic_images(folder, needed, _IMGSZ, target_dir=target_dir)
         downloaded.extend(synthetic)
         logger.info("Total calibration images: %d (%d real + %d synthetic)", len(downloaded), len(downloaded) - len(synthetic), len(synthetic))
 
@@ -497,14 +522,80 @@ def _find_images(folder: Path):
     return sorted(imgs)
 
 
-def _rebuild_dataset_txt(ds: Path):
-    imgs = _find_images(ds)
+def _rebuild_dataset_txt(ds: Path, root: Path | None = None):
+    search_root = root or ds
+    imgs = _find_images(search_root)
     if imgs:
         (ds / "dataset.txt").write_text(
             "\n".join(str(img.relative_to(ds)) for img in imgs) + "\n"
         )
         return True
     return False
+
+
+def add_validate_images(
+    dataset_path: str | Path,
+    count: int = _CALIB_COUNT,
+    imgsz: int = _IMGSZ,
+    boot: bool = False,
+    keywords: list[str] | None = None,
+) -> Path:
+    ds = Path(dataset_path)
+    validation_dir = ds / "valid" / "images"
+    validation_dir.mkdir(parents=True, exist_ok=True)
+
+    validation_count = max(1, math.ceil(count / 10))
+    existing = _find_images(validation_dir)
+    if len(existing) >= validation_count:
+        return validation_dir
+
+    logger.info("Preparing %d validation images under %s", validation_count, validation_dir)
+    _download_release_images(
+        ds,
+        validation_count,
+        release_url=_VALIDATION_RELEASE_URL,
+        target_dir="valid/images",
+    )
+    existing = _find_images(validation_dir)
+
+    fallback_keywords = list(keywords or _VALIDATION_KEYWORDS)
+    if fallback_keywords and len(existing) < validation_count:
+        remaining = validation_count - len(existing)
+        logger.info(
+            "Have %d/%d validation images from release download; fetching %d more via keyword search (%s)",
+            len(existing),
+            validation_count,
+            remaining,
+            ", ".join(fallback_keywords),
+        )
+        _download_images(
+            fallback_keywords,
+            ds,
+            remaining,
+            boot=boot,
+            start_index=len(existing),
+            target_dir="valid/images",
+        )
+
+    existing = _find_images(validation_dir)
+    if len(existing) < validation_count:
+        logger.warning(
+            "Only have %d / %d validation images. Generating %d synthetic fallback images...",
+            len(existing),
+            validation_count,
+            validation_count - len(existing),
+        )
+        _generate_synthetic_images(
+            ds,
+            validation_count - len(existing),
+            imgsz,
+            target_dir="valid/images",
+        )
+
+    if not (ds / "valid" / "dataset.txt").exists():
+        _rebuild_dataset_txt(ds / "valid", root=validation_dir)
+
+    return validation_dir
 
 
 def prepare_quantization_dataset(
@@ -517,45 +608,47 @@ def prepare_quantization_dataset(
     ds = Path(dataset_path)
     for sub in _REQUIRED_DIRS:
         (ds / sub).mkdir(parents=True, exist_ok=True)
+    (ds / "valid" / "images").mkdir(parents=True, exist_ok=True)
 
     data_yaml = ds / "data.yaml"
-    if not data_yaml.exists():
-        data_yaml.write_text(
-            "train: images\n"
-            "val: images\n"
-            "nc: 1\n"
-            "names: ['object']\n"
-        )
+    data_yaml.write_text(
+        "train: images\n"
+        "val: valid/images\n"
+        "nc: 1\n"
+        "names: ['object']\n"
+    )
 
-    existing = _find_images(ds)
+    images_dir = ds / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    existing = _find_images(images_dir)
     if len(existing) >= count:
         logger.info("Dataset already has %d images, skipping download", len(existing))
-        _rebuild_dataset_txt(ds)
-        return ds
+        _rebuild_dataset_txt(ds, root=images_dir)
+    else:
+        _download_release_images(ds, count, target_dir="images")
+        existing = _find_images(images_dir)
 
-    release = _download_release_images(ds, count)
-    existing = _find_images(ds)
+        if keywords and len(existing) < count:
+            remaining = count - len(existing)
+            logger.info(
+                "Have %d/%d calibration images from release download; "
+                "fetching %d more via keyword search (%s) instead of discarding them.",
+                len(existing), count, remaining, ", ".join(keywords),
+            )
+            _download_images(keywords, ds, remaining, boot=boot, start_index=len(existing), target_dir="images")
 
-    if keywords and len(existing) < count:
-        remaining = count - len(existing)
-        logger.info(
-            "Have %d/%d calibration images from release download; "
-            "fetching %d more via keyword search (%s) instead of discarding them.",
-            len(existing), count, remaining, ", ".join(keywords),
-        )
-        _download_images(keywords, ds, remaining, boot=boot, start_index=len(existing))
+        existing = _find_images(images_dir)
+        if len(existing) < count:
+            logger.warning("Only have %d / %d images. Generating synthetic fallback...", len(existing), count)
+            _generate_synthetic_images(ds, count - len(existing), imgsz, target_dir="images")
 
-    existing = _find_images(ds)
-    if len(existing) < count:
-        logger.warning("Only have %d / %d images. Generating synthetic fallback...", len(existing), count)
-        _generate_synthetic_images(ds, count - len(existing), imgsz)
+        _rebuild_dataset_txt(ds, root=images_dir)
 
-    _rebuild_dataset_txt(ds)
+    add_validate_images(ds, count=count, imgsz=imgsz, boot=boot, keywords=keywords)
 
-    final_count = len(_find_images(ds))
+    final_count = len(_find_images(images_dir))
     logger.info("Quantization dataset ready at %s (%d images)", ds.resolve(), final_count)
     return ds
-
 
 def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
     ds = Path(dataset_path)
