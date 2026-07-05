@@ -12,7 +12,7 @@ _IMAGE_EXTS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
 _CALIB_COUNT = 200
 _IMGSZ = 640
 _CALIBRATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/releases/download/RKNN_Quantization/200.Robotics.Images.zip"
-_VALIDATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/releases/download/RKNN_Quantization/Validation.Images.zip"
+_VALIDATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/releases/download/Test_Images/valid.zip"
 _VALIDATION_KEYWORDS = [
     "robotics validation images",
     "robotics test images",

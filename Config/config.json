@@ -1,9 +1,9 @@
 {
     "vision_model": {
         "file_path": "C:\\Users\\Aidan\\Documents\\Vscode\\iSpy-FRC\\iSpy-FRC\\YoloModels\\openvino\\_default_v26_detect_for_fuel_openvino_model",
-        "source_pt": "C:\\Users\\Aidan\\Documents\\Vscode\\iSpy-FRC\\iSpy-FRC\\YoloModels\\pytorch\\_default_v26_detect_for_fuel.pt",
         "min_conf": 0.5,
-        "margin": 10
+        "margin": 10,
+        "source_pt": "C:\\Users\\Aidan\\Documents\\Vscode\\iSpy-FRC\\iSpy-FRC\\YoloModels\\pytorch\\_default_v26_detect_for_fuel.pt"
     },
     "num_gpus": "auto",
     "device": 0,

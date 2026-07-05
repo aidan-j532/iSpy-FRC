@@ -1,14 +1,4 @@
 ### This was causing to much troubles, and wasn't really solving anything. Later regenerate with copilot or something.
-### Simple placeholder test for now
-import unittest
-
-class PlaceholderTest(unittest.TestCase):
-    def test_nothing(self):
-        self.assertTrue(True)
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
 # import sys
 # import types
 # import numpy as np

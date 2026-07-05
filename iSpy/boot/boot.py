@@ -39,6 +39,7 @@ from iSpy.config.AutoOpt import recommend_format, has_jetson
 import argparse
 from iSpy.config.AutoOpt import has_jetson
 from iSpy.boot.opencv_fix import ensure_csi_capable_opencv
+from iSpy.validations.tests.test_optimized_model import compare_models
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -284,6 +285,50 @@ def _check_version_constraint(package_name: str, constraint: str) -> bool:
         pass
     return True
 
+def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None:
+    converted_path = Path(converted_result)
+    if converted_path == Path(pt_file) or converted_path.suffix.lower() == ".pt":
+        # Conversion failed / fell back to the source .pt - nothing to compare.
+        return
+
+    valid_dir = _PROJECT_ROOT / "QuantizeDataset" / "valid"
+    if not valid_dir.exists():
+        logger.info(
+            "Skipping optimized-model comparison for %s - no QuantizeDataset/valid/ found.",
+            converted_path.name,
+        )
+        return
+
+    logger.info("Running optimized-model comparison for %s...", converted_path.name)
+    try:
+        results = compare_models(
+            base_path=str(pt_file),
+            optimized_path=str(converted_path),
+            images_dir=str(valid_dir),
+            quiet=True,  # keep boot's console output clean; full report still goes to disk
+        )
+    except (Exception, SystemExit) as e:
+        logger.warning("Optimized-model comparison failed for %s: %s", converted_path.name, e)
+        return
+
+    if results is None:
+        return  # compare_models already logged why it skipped
+
+    if results.overall_verdict == "NOT READY":
+        logger.warning(
+            "Optimized model %s scored NOT READY vs its base .pt: %s. "
+            "Conversion is still being used - review Outputs/optimized_model_report.json.",
+            converted_path.name,
+            "; ".join(results.verdict_reasons),
+        )
+    elif results.overall_verdict == "REVIEW RECOMMENDED":
+        logger.info(
+            "Optimized model %s: REVIEW RECOMMENDED (%s). See Outputs/optimized_model_report.json.",
+            converted_path.name,
+            "; ".join(results.verdict_reasons),
+        )
+    else:
+        logger.info("Optimized model %s: READY.", converted_path.name)
 
 def _pip_install(
     install_target: str,
@@ -835,13 +880,15 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
                     )
                     rknn_path.unlink()
                     meta_path.unlink()
-                    return _convert_rknn(
+                    rknn_result = _convert_rknn(
                         pt_file=model_file,
                         input_size=input_size,
                         dataset_path=str(_PROJECT_ROOT / "QuantizeDataset"),
                         quantize=quantize,
                         kw=kw,
                     )
+                    _run_optimized_model_comparison(model_file, rknn_result)
+                    return rknn_result
             logger.info("Cached rknn model found: %s", rknn_path)
             return str(rknn_path)
         if force and rknn_path.exists():
@@ -929,18 +976,17 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
             try:
                 pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
                 format_meta = derive_format_metadata(pt_meta, target_format)
-                # Ensure input_size is recorded as the actual size used
                 format_meta["input_size"] = list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)]
                 write_metadata(metadata_path_for(result_path), format_meta)
                 logger.info("Wrote metadata for converted %s", result_path.name)
             except Exception as e:
                 logger.warning("Could not write metadata for converted %s: %s", result_path.name, e)
 
+            _run_optimized_model_comparison(model_file, str(result_path))
             return str(result_path)
 
     logger.warning("Conversion to %s failed, falling back to .pt", target_format)
     return model_file
-
 
 def setup_files(first_boot: bool = False):
     yolo_dir = _PROJECT_ROOT / "YoloModels"
