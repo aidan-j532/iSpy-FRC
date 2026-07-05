@@ -1,5 +1,7 @@
 # iSpy
 
+This is outdated, will be updated soon.
+
 > FRC vision pipeline for object detection and field mapping - runs on Orange Pi with Rockchip NPU, supports RKNN, ONNX, OpenVINO, TFLite, and CoreML backends.
 
 ---
