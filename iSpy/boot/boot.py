@@ -305,7 +305,7 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
             base_path=str(pt_file),
             optimized_path=str(converted_path),
             images_dir=str(valid_dir),
-            quiet=True,  # keep boot's console output clean; full report still goes to disk
+            quiet=False,
         )
     except (Exception, SystemExit) as e:
         logger.warning("Optimized-model comparison failed for %s: %s", converted_path.name, e)
