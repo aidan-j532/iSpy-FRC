@@ -39,7 +39,7 @@ from iSpy.config.AutoOpt import recommend_format, has_jetson
 import argparse
 from iSpy.config.AutoOpt import has_jetson
 from iSpy.boot.opencv_fix import ensure_csi_capable_opencv
-from iSpy.validations.tests.test_optimized_model import compare_models
+from iSpy.validations.tests.compare_models import compare_models
 
 logging.getLogger().setLevel(logging.INFO)
 

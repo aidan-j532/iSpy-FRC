@@ -57,11 +57,7 @@ os.environ.setdefault("YOLO_VERBOSE", "False")
 # production - not re-implemented here.
 from iSpy.vision.genericYolo import GenericYolo, Box  # noqa: E402
 
-logging.basicConfig(level=logging.WARNING, format="%(message)s", force=True)
-for _name in list(logging.root.manager.loggerDict):
-    if not _name.startswith("iSpy") and _name != "opt-test":
-        logging.getLogger(_name).setLevel(logging.CRITICAL + 1)
-logger = logging.getLogger("opt-test")
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
@@ -308,15 +304,19 @@ def run_comparison(
     subline("Optimized", optimized_path)
 
     try:
-        with _quiet_native():
-            base_model = GenericYolo({"file_path": base_path}, core_mask=None)
+        logger.info("Loading base model (this may take a few seconds): %s", base_path)
+        # with _quiet_native():
+        base_model = GenericYolo({"file_path": base_path}, core_mask=None)
+        logger.info("Loaded base model: %s", getattr(base_model, "model_type", "<unknown>"))
     except Exception as e:
         logger.error("Failed to load base model: %s", e)
         sys.exit(1)
 
     try:
-        with _quiet_native():
-            optimized_model = GenericYolo({"file_path": optimized_path}, core_mask=core_mask)
+        logger.info("Loading optimized model (this may take a while on some backends): %s", optimized_path)
+        # with _quiet_native():
+        optimized_model = GenericYolo({"file_path": optimized_path}, core_mask=core_mask)
+        logger.info("Loaded optimized model: %s", getattr(optimized_model, "model_type", "<unknown>"))
     except Exception as e:
         logger.error("Failed to load optimized model: %s", e)
         try:
@@ -352,6 +352,15 @@ def run_comparison(
     if not loaded:
         logger.error("No readable images among the selected test set.")
         sys.exit(1)
+
+    # Warm up optimized model once so the first real inference delay is visible
+    try:
+        logger.info("Warming optimized model with one inference (may take several seconds)...")
+        with _quiet_native():
+            _ = optimized_model.predict(loaded[0][1], orig_shape=loaded[0][1].shape)
+        logger.info("Optimized model warmup complete.")
+    except Exception as e:
+        logger.warning("Optimized model warmup failed: %s", e)
 
     # ── 1. detection agreement ──
     section("1. DETECTION AGREEMENT  -  optimized vs base (.pt) ground truth")
