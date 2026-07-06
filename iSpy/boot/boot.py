@@ -1,10 +1,14 @@
 import sys
 import os
+import contextlib
 
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 import logging
 from pathlib import Path
+
+_REAL_STDOUT_FD = os.dup(1)
+_REAL_STDOUT = os.fdopen(_REAL_STDOUT_FD, "w", buffering=1)
 
 
 def _close_logging_handlers() -> None:
@@ -31,7 +35,11 @@ def _configure_quiet_logging() -> None:
             return name == "root" or name.startswith("iSpy")
 
     formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-    stream_handler = logging.StreamHandler(sys.stdout)
+
+    # Write to our own preserved fd, NOT sys.stdout - so fd-1 redirects used to
+    # silence third-party libs (nncf, ultralytics export, RKNN toolkit) can't
+    # take iSpy's own logging down with them.
+    stream_handler = logging.StreamHandler(_REAL_STDOUT)
     stream_handler.setLevel(logging.INFO)
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(_iSpyLogFilter())
@@ -50,8 +58,22 @@ def _configure_quiet_logging() -> None:
         if not name.startswith("iSpy"):
             logging.getLogger(name).setLevel(logging.WARNING)
 
-
-_configure_quiet_logging()
+@contextlib.contextmanager
+def _silence_third_party():
+    devnull = "nul" if os.name == "nt" else "/dev/null"
+    fd = os.open(devnull, os.O_WRONLY)
+    old_out = os.dup(1)
+    old_err = os.dup(2)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.close(fd)
+    try:
+        yield
+    finally:
+        os.dup2(old_out, 1)
+        os.dup2(old_err, 2)
+        os.close(old_out)
+        os.close(old_err)
 
 logger = logging.getLogger(__name__)
 os.environ["YOLO_VERBOSE"] = "False"
@@ -59,7 +81,6 @@ import json
 import shutil
 import subprocess
 import platform
-import contextlib
 import importlib.util
 import importlib.metadata
 import ultralytics
@@ -536,8 +557,9 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
         )
 
     logger.info("Exporting %s -> %s with kwargs: %s", model_file, target_format, kwargs)
-    return model.export(**kwargs)
-
+    with _silence_third_party():
+        return model.export(**kwargs)
+    
 @contextlib.contextmanager
 def _silent_fd():
     devnull = "nul" if os.name == "nt" else "/dev/null"
@@ -557,9 +579,6 @@ def _silent_fd():
 
 
 def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> float:
-    """Insert a Div node before the final box/confidence Concat to keep box coords
-    in the same order of magnitude as confidence before RKNN quantizes the tensor.
-    """
     import numpy as np
     import onnx
     import onnx.numpy_helper
@@ -827,27 +846,28 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
     detected_layout = None
     detected_box_format = None
     try:
-        config_kwargs = dict(
-            mean_values=[[0, 0, 0]],
-            std_values=[[255, 255, 255]],
-            target_platform="rk3588",
-            disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
-            quantized_hybrid_level=3
-        )
-        if quantize:
-            config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
-            config_kwargs["quantized_algorithm"] = "kl_divergence"
-            
-        rknn.config(**config_kwargs)
-        ret = rknn.load_onnx(model=str(onnx_path_for_build))
-        if ret != 0:
-            raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
-        ret = rknn.build(do_quantization=quantize, dataset=str(dataset_txt))
-        if ret != 0:
-            raise RuntimeError(f"RKNN build failed with code {ret}")
-        ret = rknn.export_rknn(str(rknn_output))
-        if ret != 0:
-            raise RuntimeError(f"RKNN export failed with code {ret}")
+        with _silence_third_party():
+            config_kwargs = dict(
+                mean_values=[[0, 0, 0]],
+                std_values=[[255, 255, 255]],
+                target_platform="rk3588",
+                disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
+                quantized_hybrid_level=3
+            )
+            if quantize:
+                config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
+                config_kwargs["quantized_algorithm"] = "kl_divergence"
+                
+            rknn.config(**config_kwargs)
+            ret = rknn.load_onnx(model=str(onnx_path_for_build))
+            if ret != 0:
+                raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
+            ret = rknn.build(do_quantization=quantize, dataset=str(dataset_txt))
+            if ret != 0:
+                raise RuntimeError(f"RKNN build failed with code {ret}")
+            ret = rknn.export_rknn(str(rknn_output))
+            if ret != 0:
+                raise RuntimeError(f"RKNN export failed with code {ret}")
 
         # Detect actual output format by running a quick inference
         try:
