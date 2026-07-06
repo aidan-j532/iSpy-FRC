@@ -273,6 +273,20 @@ def _path_size(path: Path) -> int:
     return path.stat().st_size
 
 
+def _summarize_detection_quality(tp: int, fp: int, fn: int) -> dict:
+    precision = tp / (tp + fp) if (tp + fp) else 1.0 if tp == 0 and fp == 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 1.0 if tp == 0 and fn == 0 else 0.0
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+    return {
+        "true_positives": tp,
+        "false_positives": fp,
+        "false_negatives": fn,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+    }
+
+
 # ─── Results container ────────────────────────────────────────────────────────
 
 @dataclass
@@ -283,6 +297,7 @@ class ComparisonResults:
     aggregate: dict = field(default_factory=dict)
     speed: dict = field(default_factory=dict)
     file_size: dict = field(default_factory=dict)
+    quality: dict = field(default_factory=dict)
     overall_verdict: str = "UNKNOWN"
     verdict_reasons: list = field(default_factory=list)
 
@@ -422,6 +437,9 @@ def run_comparison(
     box_count_diff_pct = (
         abs(total_opt_boxes - total_base_boxes) / total_base_boxes * 100 if total_base_boxes else 0.0
     )
+    false_positives = max(total_opt_boxes - total_matched, 0)
+    false_negatives = max(total_base_boxes - total_matched, 0)
+    quality_metrics = _summarize_detection_quality(total_matched, false_positives, false_negatives)
 
     print()
     subline("Images tested", str(len(per_image)))
@@ -437,6 +455,12 @@ def run_comparison(
         f"{overlap_pct:.1f}%",
         "PASS" if overlap_pct >= 85 else ("WARN" if overlap_pct >= 70 else "FAIL"),
     )
+    subline("True positives", str(total_matched))
+    subline("False positives", str(false_positives), "PASS" if false_positives == 0 else "WARN")
+    subline("False negatives", str(false_negatives), "PASS" if false_negatives == 0 else "WARN")
+    subline("Precision", f"{quality_metrics['precision']:.1%}", "PASS" if quality_metrics['precision'] >= 0.85 else "WARN")
+    subline("Recall", f"{quality_metrics['recall']:.1%}", "PASS" if quality_metrics['recall'] >= 0.85 else "WARN")
+    subline("F1 score", f"{quality_metrics['f1']:.3f}", "PASS" if quality_metrics['f1'] >= 0.8 else "WARN")
     subline("Mean IoU on matched boxes", f"{mean_iou:.3f}", "PASS" if mean_iou >= 0.75 else "WARN")
     subline("Mean confidence delta", f"{mean_conf_delta:.3f}", "PASS" if mean_conf_delta <= 0.1 else "WARN")
     subline(
@@ -456,7 +480,13 @@ def run_comparison(
         "class_agreement_pct": class_agreement_pct,
         "box_count_diff_pct": box_count_diff_pct,
         "iou_threshold": iou_thresh,
+        "precision": quality_metrics["precision"],
+        "recall": quality_metrics["recall"],
+        "f1": quality_metrics["f1"],
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
     }
+    results.quality = quality_metrics
 
     # ── 2. speed ──
     section("2. SPEED  -  base (.pt) vs optimized")
@@ -510,12 +540,16 @@ def _verdict(results: ComparisonResults) -> None:
     verdict = "READY"
 
     overlap = agg.get("box_overlap_pct", 0)
-    if overlap < 70:
+    precision = agg.get("precision", 0.0)
+    recall = agg.get("recall", 0.0)
+    f1 = agg.get("f1", 0.0)
+
+    if f1 < 0.6 or recall < 0.7:
         verdict = "NOT READY"
-        reasons.append(f"Bounding box overlap too low ({overlap:.1f}%)")
-    elif overlap < 85:
+        reasons.append(f"Detection quality is weak (F1={f1:.2f}, recall={recall:.2%})")
+    elif f1 < 0.8 or overlap < 70:
         verdict = "REVIEW RECOMMENDED"
-        reasons.append(f"Bounding box overlap marginal ({overlap:.1f}%)")
+        reasons.append(f"Detection quality is borderline (F1={f1:.2f}, overlap={overlap:.1f}%)")
 
     if agg.get("total_matched", 0) > 0 and agg.get("mean_iou", 0) < 0.6:
         verdict = "NOT READY"
@@ -570,6 +604,7 @@ def _result_to_entry(results: ComparisonResults) -> dict:
             "per_image": results.per_image,
             "speed": results.speed,
             "file_size": results.file_size,
+            "quality": results.quality,
         }
     )
 

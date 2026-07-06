@@ -6,12 +6,52 @@ os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 import logging
 from pathlib import Path
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-    force=True,
-)
+
+def _close_logging_handlers() -> None:
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        try:
+            root.removeHandler(handler)
+            handler.flush()
+            handler.close()
+        except Exception:
+            pass
+
+
+def _configure_quiet_logging() -> None:
+    _close_logging_handlers()
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.propagate = False
+
+    class _iSpyLogFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            name = record.name or ""
+            return name == "root" or name.startswith("iSpy")
+
+    formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setLevel(logging.INFO)
+    stream_handler.setFormatter(formatter)
+    stream_handler.addFilter(_iSpyLogFilter())
+    root.addHandler(stream_handler)
+
+    log_path = Path.cwd() / "Outputs" / "log.txt"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    file_handler = logging.FileHandler(log_path, mode="a")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    file_handler.addFilter(_iSpyLogFilter())
+    root.addHandler(file_handler)
+
+    logging.getLogger("iSpy").setLevel(logging.INFO)
+    for name in list(logging.Logger.manager.loggerDict):
+        if not name.startswith("iSpy"):
+            logging.getLogger(name).setLevel(logging.WARNING)
+
+
+_configure_quiet_logging()
 
 logger = logging.getLogger(__name__)
 os.environ["YOLO_VERBOSE"] = "False"
@@ -681,6 +721,17 @@ def _desired_output_path(pt_path: Path, target_format: str) -> Path:
     return out_dir / f"{stem}.{target_format}"
  
  
+def _remove_path_for_cleanup(path: Path) -> None:
+    if not path.exists():
+        return
+    _close_logging_handlers()
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    _configure_quiet_logging()
+
+
 def _organize_exported_output(result_path: Path, desired_path: Path) -> Path:
     if not result_path.exists():
         return result_path
@@ -689,10 +740,7 @@ def _organize_exported_output(result_path: Path, desired_path: Path) -> Path:
  
     desired_path.parent.mkdir(parents=True, exist_ok=True)
     if desired_path.exists():
-        if desired_path.is_dir():
-            shutil.rmtree(desired_path)
-        else:
-            desired_path.unlink()
+        _remove_path_for_cleanup(desired_path)
  
     if result_path.is_dir():
         shutil.move(str(result_path), str(desired_path))
@@ -729,10 +777,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
         if raw_onnx != onnx_path:
             onnx_path.parent.mkdir(parents=True, exist_ok=True)
             if onnx_path.exists():
-                if onnx_path.is_dir():
-                    shutil.rmtree(onnx_path)
-                else:
-                    onnx_path.unlink()
+                _remove_path_for_cleanup(onnx_path)
             shutil.move(str(raw_onnx), str(onnx_path))
         pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
         format_meta = derive_format_metadata(pt_meta, "onnx")
@@ -878,8 +923,8 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
                         "Cached rknn model %s has quantize=%s but config says %s. Re-converting.",
                         rknn_path.name, stored_quantize, quantize,
                     )
-                    rknn_path.unlink()
-                    meta_path.unlink()
+                    _remove_path_for_cleanup(rknn_path)
+                    _remove_path_for_cleanup(meta_path)
                     rknn_result = _convert_rknn(
                         pt_file=model_file,
                         input_size=input_size,
@@ -893,10 +938,10 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
             return str(rknn_path)
         if force and rknn_path.exists():
             logger.info("Fresh conversion forced for %s", rknn_path.name)
-            rknn_path.unlink()
+            _remove_path_for_cleanup(rknn_path)
             meta = metadata_path_for(rknn_path)
             if meta.exists():
-                meta.unlink()
+                _remove_path_for_cleanup(meta)
         return _convert_rknn(
             pt_file=model_file,
             input_size=input_size,
@@ -958,16 +1003,13 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
                         desired_path = desired_path
                         desired_path.parent.mkdir(parents=True, exist_ok=True)
                         if desired_path.exists():
-                            desired_path.unlink()
+                            _remove_path_for_cleanup(desired_path)
                         shutil.move(str(result_path), str(desired_path))
                         result_path = desired_path
             else:
                 if result_path != desired_path:
                     if desired_path.exists():
-                        if desired_path.is_dir():
-                            shutil.rmtree(desired_path)
-                        else:
-                            desired_path.unlink()
+                        _remove_path_for_cleanup(desired_path)
                     shutil.move(str(result_path), str(desired_path))
                     result_path = desired_path
  
@@ -1025,7 +1067,7 @@ def setup_files(first_boot: bool = False):
 
         for d in [yolo_dir, config_dir, outputs_dir, dataset_dir]:
             if d.exists():
-                shutil.rmtree(d)
+                _remove_path_for_cleanup(d)
                 logger.info("Deleted %s", d)
 
     yolo_dir.mkdir(parents=True, exist_ok=True)
