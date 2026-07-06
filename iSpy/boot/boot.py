@@ -7,8 +7,17 @@ os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 import logging
 from pathlib import Path
 
-_REAL_STDOUT_FD = os.dup(1)
-_REAL_STDOUT = os.fdopen(_REAL_STDOUT_FD, "w", buffering=1)
+import io
+
+_REAL_STDOUT = sys.stdout
+_REAL_STDERR = sys.stderr
+
+
+class _NullWriter(io.TextIOBase):
+    def write(self, s):
+        return len(s)
+    def flush(self):
+        pass
 
 
 def _close_logging_handlers() -> None:
@@ -36,9 +45,9 @@ def _configure_quiet_logging() -> None:
 
     formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
-    # Write to our own preserved fd, NOT sys.stdout - so fd-1 redirects used to
-    # silence third-party libs (nncf, ultralytics export, RKNN toolkit) can't
-    # take iSpy's own logging down with them.
+    # Bind directly to the real stdout object (captured before anything ever
+    # swaps sys.stdout) so silencing third-party libs later can't take
+    # iSpy's own logging down with it - no fd tricks, works on every OS.
     stream_handler = logging.StreamHandler(_REAL_STDOUT)
     stream_handler.setLevel(logging.INFO)
     stream_handler.setFormatter(formatter)
@@ -58,22 +67,73 @@ def _configure_quiet_logging() -> None:
         if not name.startswith("iSpy"):
             logging.getLogger(name).setLevel(logging.WARNING)
 
+import threading
+import time as _time
+
 @contextlib.contextmanager
-def _silence_third_party():
-    devnull = "nul" if os.name == "nt" else "/dev/null"
-    fd = os.open(devnull, os.O_WRONLY)
-    old_out = os.dup(1)
-    old_err = os.dup(2)
-    os.dup2(fd, 1)
-    os.dup2(fd, 2)
-    os.close(fd)
+def _progress_spinner(label: str):
+    stop = threading.Event()
+    def _spin():
+        frames = "|/-\\"
+        i = 0
+        start = _time.time()
+        while not stop.is_set():
+            elapsed = _time.time() - start
+            print(f"\r  {label} {frames[i % 4]} ({elapsed:.0f}s)", end="", file=_REAL_STDOUT, flush=True)
+            i += 1
+            stop.wait(0.2)
+        print(f"\r  {label} done ({_time.time() - start:.0f}s)" + " " * 10, file=_REAL_STDOUT)
+    t = threading.Thread(target=_spin, daemon=True)
+    t.start()
     try:
         yield
     finally:
-        os.dup2(old_out, 1)
-        os.dup2(old_err, 2)
-        os.close(old_out)
-        os.close(old_err)
+        stop.set()
+        t.join()
+
+@contextlib.contextmanager
+@contextlib.contextmanager
+def _silence_third_party():
+    """Swap sys.stdout/sys.stderr to a null sink AND mute third-party loggers
+    (ultralytics, nncf) whose handlers are bound to a stream reference
+    captured at import time - stdout swapping alone can't reach those."""
+    old_out, old_err = sys.stdout, sys.stderr
+    sys.stdout = _NullWriter()
+    sys.stderr = _NullWriter()
+
+    _muted_loggers = ("ultralytics", "nncf")
+    _saved_levels = {}
+    _saved_disabled = {}
+    for name in _muted_loggers:
+        lg = logging.getLogger(name)
+        _saved_levels[name] = lg.level
+        _saved_disabled[name] = lg.disabled
+        lg.setLevel(logging.CRITICAL + 1)
+        lg.disabled = True
+
+    try:
+        yield
+    finally:
+        sys.stdout = old_out
+        sys.stderr = old_err
+        for name in _muted_loggers:
+            lg = logging.getLogger(name)
+            lg.setLevel(_saved_levels[name])
+            lg.disabled = _saved_disabled[name]
+            
+@contextlib.contextmanager
+def _quiet_ispy_logging():
+    """Suppress iSpy's own INFO-level logging for the duration of a
+    comparison run, so only the clean section()/subline() print output
+    shows - no interleaved '[iSpy] INFO:...' lines from GenericYolo,
+    ModelInspector, etc."""
+    ispy_logger = logging.getLogger("iSpy")
+    old_level = ispy_logger.level
+    ispy_logger.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        ispy_logger.setLevel(old_level)
 
 logger = logging.getLogger(__name__)
 os.environ["YOLO_VERBOSE"] = "False"
@@ -840,64 +900,66 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
             "Proceeding without it; confidence may collapse to zero.",
             exc,
         )
-
-    rknn = RKNN(verbose=False)
-    detected_format = None
-    detected_layout = None
-    detected_box_format = None
-    try:
+        
+    with _progress_spinner("RKNN build"), _silence_third_party():
         with _silence_third_party():
-            config_kwargs = dict(
-                mean_values=[[0, 0, 0]],
-                std_values=[[255, 255, 255]],
-                target_platform="rk3588",
-                disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
-                quantized_hybrid_level=3
-            )
-            if quantize:
-                config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
-                config_kwargs["quantized_algorithm"] = "kl_divergence"
-                
-            rknn.config(**config_kwargs)
-            ret = rknn.load_onnx(model=str(onnx_path_for_build))
-            if ret != 0:
-                raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
-            ret = rknn.build(do_quantization=quantize, dataset=str(dataset_txt))
-            if ret != 0:
-                raise RuntimeError(f"RKNN build failed with code {ret}")
-            ret = rknn.export_rknn(str(rknn_output))
-            if ret != 0:
-                raise RuntimeError(f"RKNN export failed with code {ret}")
-
-        # Detect actual output format by running a quick inference
+            rknn = RKNN(verbose=False)
+        detected_format = None
+        detected_layout = None
+        detected_box_format = None
         try:
-            import numpy as np
-            rknn.init_runtime()
-            if isinstance(input_size, int):
-                h = w = input_size
-            elif isinstance(input_size, (list, tuple)):
-                h, w = int(input_size[0]), int(input_size[1]) if len(input_size) > 1 else int(input_size[0])
-            else:
-                h = w = 640
-            dummy = np.zeros((1, h, w, 3), dtype=np.uint8)
-            outputs = rknn.inference(inputs=[dummy])
-            if outputs and len(outputs) > 0:
-                tensor = outputs[0]
-                t = tensor[0] if tensor.ndim == 3 else tensor
-                smaller = min(t.shape[0], t.shape[-1])
-                larger = max(t.shape[0], t.shape[-1])
-                is_nms = (smaller == 6 and larger < 1000)
-                detected_format = "hardware_nms" if is_nms else "raw"
-                detected_layout = "anchors_first" if is_nms else "features_first"
-                detected_box_format = "xyxy" if is_nms else "cxcywh"
-                logger.info(
-                    "RKNN output shape %s -> detected format: %s",
-                    tensor.shape, detected_format,
+            with _silence_third_party():
+                config_kwargs = dict(
+                    mean_values=[[0, 0, 0]],
+                    std_values=[[255, 255, 255]],
+                    target_platform="rk3588",
+                    disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
+                    quantized_hybrid_level=3
                 )
-        except Exception as e:
-            logger.debug("RKNN inference for format detection failed: %s", e)
-    finally:
-        rknn.release()
+                if quantize:
+                    config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
+                    config_kwargs["quantized_algorithm"] = "kl_divergence"
+                    
+                rknn.config(**config_kwargs)
+                ret = rknn.load_onnx(model=str(onnx_path_for_build))
+                if ret != 0:
+                    raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
+                ret = rknn.build(do_quantization=quantize, dataset=str(dataset_txt))
+                if ret != 0:
+                    raise RuntimeError(f"RKNN build failed with code {ret}")
+                ret = rknn.export_rknn(str(rknn_output))
+                if ret != 0:
+                    raise RuntimeError(f"RKNN export failed with code {ret}")
+
+            # Detect actual output format by running a quick inference
+            try:
+                import numpy as np
+                rknn.init_runtime()
+                if isinstance(input_size, int):
+                    h = w = input_size
+                elif isinstance(input_size, (list, tuple)):
+                    h, w = int(input_size[0]), int(input_size[1]) if len(input_size) > 1 else int(input_size[0])
+                else:
+                    h = w = 640
+                dummy = np.zeros((1, h, w, 3), dtype=np.uint8)
+                outputs = rknn.inference(inputs=[dummy])
+                if outputs and len(outputs) > 0:
+                    tensor = outputs[0]
+                    t = tensor[0] if tensor.ndim == 3 else tensor
+                    smaller = min(t.shape[0], t.shape[-1])
+                    larger = max(t.shape[0], t.shape[-1])
+                    is_nms = (smaller == 6 and larger < 1000)
+                    detected_format = "hardware_nms" if is_nms else "raw"
+                    detected_layout = "anchors_first" if is_nms else "features_first"
+                    detected_box_format = "xyxy" if is_nms else "cxcywh"
+                    logger.info(
+                        "RKNN output shape %s -> detected format: %s",
+                        tensor.shape, detected_format,
+                    )
+            except Exception as e:
+                logger.debug("RKNN inference for format detection failed: %s", e)
+        finally:
+            rknn.release()
 
     logger.info("RKNN conversion successful: %s", rknn_output)
     _export_rknn_metadata(

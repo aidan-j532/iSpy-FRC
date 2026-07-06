@@ -60,6 +60,19 @@ from iSpy.vision.genericYolo import GenericYolo, Box  # noqa: E402
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+@contextlib.contextmanager
+def _quiet_ispy_logging():
+    """Suppress iSpy's own INFO-level logging for the duration of a
+    comparison run, so only the clean section()/subline() print output
+    shows - no interleaved '[iSpy] INFO:...' lines from GenericYolo,
+    ModelInspector, etc."""
+    ispy_logger = logging.getLogger("iSpy")
+    old_level = ispy_logger.level
+    ispy_logger.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        ispy_logger.setLevel(old_level)
 
 # ─── Console formatting ───────────────────────────────────────────────────────
 
@@ -303,8 +316,20 @@ class ComparisonResults:
 
 
 # ─── Main comparison ──────────────────────────────────────────────────────────
-
 def run_comparison(
+    base_path: str,
+    optimized_path: str,
+    images: list[Path],
+    core_mask: int | None,
+    speed_duration: float,
+    iou_thresh: float,
+) -> ComparisonResults:
+    with _quiet_ispy_logging():
+        return _run_comparison_body(
+            base_path, optimized_path, images, core_mask, speed_duration, iou_thresh
+        )
+
+def _run_comparison_body(
     base_path: str,
     optimized_path: str,
     images: list[Path],
