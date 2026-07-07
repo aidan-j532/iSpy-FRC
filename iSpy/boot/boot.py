@@ -409,7 +409,11 @@ def _check_version_constraint(package_name: str, constraint: str) -> bool:
 def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None:
     converted_path = Path(converted_result)
     if converted_path == Path(pt_file) or converted_path.suffix.lower() == ".pt":
-        # Conversion failed / fell back to the source .pt - nothing to compare.
+        logger.info(
+            "Skipping optimized-model comparison for %s - conversion fell back "
+            "to the source .pt (no optimized artifact was produced).",
+            Path(pt_file).name,
+        )
         return
 
     valid_dir = _PROJECT_ROOT / "QuantizeDataset" / "valid"
