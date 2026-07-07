@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ispy-frc"
-version = "1.1.13"
+version = "1.2.13"
 description = "FRC vision pipeline for custom, hardware accelerated object detection."
 readme = "readme.md"
 requires-python = ">=3.10"
@@ -61,6 +61,7 @@ dev = [
 ispy-run  = "iSpy.core.game_loop:main"
 ispy-boot = "iSpy.boot.boot:main"
 ispy-bench = "iSpy.validations.benchmarking:main"
+ispy-stats = "iSpy.validations.tests.compare_models:main"
 
 [project.urls]
 Homepage = "https://github.com/aidan-j532/iSpy-FRC"

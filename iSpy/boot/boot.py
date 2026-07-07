@@ -578,7 +578,8 @@ def search_for_config():
 def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, device=0):
     model = ultralytics.YOLO(model_file)
     has_e2e = _model_supports_end2end(model)
-
+    task = getattr(model, "task", None) or "detect"
+    
     native_kwargs = {
         "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=17, dynamic=False),
         "tflite": dict(format="tflite", imgsz=input_size, int8=True),
@@ -608,7 +609,24 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
         )
 
     if data_yaml and target_format in ("tflite", "openvino", "engine"):
-        kwargs = dict(format=target_format, imgsz=input_size, int8=True, data=data_yaml)
+        effective_data_yaml = data_yaml
+        if task == "pose":
+            try:
+                kpt_shape = model.model.model[-1].kpt_shape
+            except Exception:
+                kpt_shape = [17, 3]
+            pose_yaml = Path(data_yaml).parent / "data_pose.yaml"
+            pose_yaml.write_text(
+                "train: images\n"
+                "val: valid/images\n"
+                "nc: 1\n"
+                "names: ['object']\n"
+                f"kpt_shape: {list(kpt_shape)}\n"
+            )
+            effective_data_yaml = str(pose_yaml)
+            logger.info("Pose task detected - using kpt_shape-aware data.yaml: %s", pose_yaml)
+
+        kwargs = dict(format=target_format, imgsz=input_size, int8=True, data=effective_data_yaml)
         if has_e2e and target_format in _MANUAL_POSTPROCESS_FORMATS:
             kwargs["end2end"] = False
         if target_format == "engine":
@@ -616,7 +634,7 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
             kwargs["half"] = True
 
         logger.info(
-            "Dataset-aware %s quantization enabled (data=%s)", target_format, data_yaml
+            "Dataset-aware %s quantization enabled (data=%s)", target_format, effective_data_yaml
         )
 
     logger.info("Exporting %s -> %s with kwargs: %s", model_file, target_format, kwargs)
