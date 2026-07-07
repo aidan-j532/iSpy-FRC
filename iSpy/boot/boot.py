@@ -92,7 +92,6 @@ def _progress_spinner(label: str):
         t.join()
 
 @contextlib.contextmanager
-@contextlib.contextmanager
 def _silence_third_party():
     """Swap sys.stdout/sys.stderr to a null sink AND mute third-party loggers
     (ultralytics, nncf) whose handlers are bound to a stream reference
