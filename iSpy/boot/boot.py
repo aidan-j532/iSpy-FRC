@@ -922,35 +922,34 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
             exc,
         )
         
-    with _progress_spinner("RKNN build"), _silence_third_party():
-        with _silence_third_party():
-            rknn = RKNN(verbose=False)
+    with _progress_spinner("RKNN build"):
+        with _silent_fd():
+            rknn = RKNN(verbose=False, )
         detected_format = None
         detected_layout = None
         detected_box_format = None
         try:
-            with _silence_third_party():
-                config_kwargs = dict(
-                    mean_values=[[0, 0, 0]],
-                    std_values=[[255, 255, 255]],
-                    target_platform="rk3588",
-                    disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
-                    quantized_hybrid_level=3
-                )
-                if quantize:
-                    config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
-                    config_kwargs["quantized_algorithm"] = "kl_divergence"
-                    
-                rknn.config(**config_kwargs)
-                ret = rknn.load_onnx(model=str(onnx_path_for_build))
-                if ret != 0:
-                    raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
-                ret = rknn.build(do_quantization=quantize, dataset=str(dataset_txt))
-                if ret != 0:
-                    raise RuntimeError(f"RKNN build failed with code {ret}")
-                ret = rknn.export_rknn(str(rknn_output))
-                if ret != 0:
-                    raise RuntimeError(f"RKNN export failed with code {ret}")
+            config_kwargs = dict(
+                mean_values=[[0, 0, 0]],
+                std_values=[[255, 255, 255]],
+                target_platform="rk3588",
+                disable_rules=["fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"],
+                quantized_hybrid_level=3
+            )
+            if quantize:
+                config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
+                config_kwargs["quantized_algorithm"] = "kl_divergence"
+                
+            rknn.config(**config_kwargs)
+            ret = rknn.load_onnx(model=str(onnx_path_for_build))
+            if ret != 0:
+                raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
+            ret = rknn.build(do_quantization=quantize, dataset=str(dataset_txt))
+            if ret != 0:
+                raise RuntimeError(f"RKNN build failed with code {ret}")
+            ret = rknn.export_rknn(str(rknn_output))
+            if ret != 0:
+                raise RuntimeError(f"RKNN export failed with code {ret}")
 
             # Detect actual output format by running a quick inference
             try:

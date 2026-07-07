@@ -52,6 +52,8 @@ def print_detected_config(result: dict) -> None:
 def _inspect_onnx(model_path: str, task: str) -> dict:
     try:
         import onnxruntime as ort
+        
+        ort.set_default_logger_severity(4)
     except ImportError:
         raise ImportError(
             "onnxruntime is required for ONNX inspection. "

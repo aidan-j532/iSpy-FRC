@@ -11,7 +11,10 @@ def unit_tests(verbosity: int = 2) -> bool:
     test_dir = str(Path(__file__).parent)
     loader   = unittest.TestLoader()
     suite    = loader.discover(start_dir=test_dir, pattern="unit_tests.py")
-    runner   = unittest.TextTestRunner(verbosity=verbosity)
+    runner = unittest.TextTestRunner(
+        verbosity=verbosity,
+        stream=open(os.devnull, "w"),
+    )
     result   = runner.run(suite)
     return result.wasSuccessful()
 

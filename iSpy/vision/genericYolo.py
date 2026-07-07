@@ -69,6 +69,8 @@ class _ONNXInferencePool:
 
     def _worker(self, model_file, device, providers_template):
         import onnxruntime as ort
+        
+        ort.set_default_logger_severity(4)
         providers = [(ep, {**opts, "device_id": device}) if opts else ep
                      for ep, opts in providers_template]
         session = ort.InferenceSession(model_file, providers=providers)
@@ -518,6 +520,8 @@ class GenericYolo:
     def _load_onnx(self, model_file: str) -> None:
         try:
             import onnxruntime as ort
+            
+            ort.set_default_logger_severity(4)
         except ImportError as exc:
             raise ImportError("onnxruntime is required for .onnx models.") from exc
 
