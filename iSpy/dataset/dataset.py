@@ -19,10 +19,21 @@ _VALIDATION_KEYWORDS = [
     "machine vision calibration",
 ]
 
+_FORMAT_CALIB_COUNTS = {
+    "rknn": 300,      # KL-divergence quantization wants broader coverage
+    "tflite": 100,     # simpler min/max calibration, converges faster
+    "openvino": 300,
+    "engine": 500,     # TensorRT entropy calibration benefits most from more samples
+    "coreml": 0,       # float16, no calibration needed
+}
+
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 # Github release -> web search - > synthetic
 # Synthetic is a fallback, one of them will work, then you can quatnize
+
+def calib_count_for_format(target_format: str, default: int = _CALIB_COUNT) -> int:
+    return _FORMAT_CALIB_COUNTS.get(target_format, default)
 
 def _download_release_images(
     folder: Path,

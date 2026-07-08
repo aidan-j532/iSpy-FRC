@@ -270,20 +270,44 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
     return output
 
 def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset") -> bool:
-    result = validate_quantization_dataset(dataset_path)
-    if result["valid"]:
-        logger.info(
-            "Quantization dataset valid: %d images, rknn=%s, ultralytics=%s",
-            result["image_count"],
-            result["rknn_ready"],
-            result["ultralytics_ready"],
-        )
-    else:
-        logger.warning("Quantization dataset issues (%s):", dataset_path)
-        for issue in result["issues"]:
-            logger.warning("  - %s", issue)
-    return result["valid"]
+    root = Path(dataset_path)
 
+    # Per-model datasets live at QuantizeDataset/<pt_stem>/. If any exist,
+    # validate those instead of (or in addition to) the flat root, since
+    # that's what conversions actually use now.
+    per_model_dirs = [
+        d for d in root.iterdir()
+        if d.is_dir() and d.name not in ("valid",) and (d / "dataset.txt").exists()
+    ] if root.exists() else []
+
+    if not per_model_dirs:
+        result = validate_quantization_dataset(dataset_path)
+        if result["valid"]:
+            logger.info(
+                "Quantization dataset valid: %d images, rknn=%s, ultralytics=%s",
+                result["image_count"], result["rknn_ready"], result["ultralytics_ready"],
+            )
+        else:
+            logger.warning("Quantization dataset issues (%s):", dataset_path)
+            for issue in result["issues"]:
+                logger.warning("  - %s", issue)
+        return result["valid"]
+
+    all_valid = True
+    for model_dir in per_model_dirs:
+        result = validate_quantization_dataset(str(model_dir))
+        if result["valid"]:
+            logger.info(
+                "Quantization dataset valid for %s: %d images, rknn=%s, ultralytics=%s",
+                model_dir.name, result["image_count"], result["rknn_ready"], result["ultralytics_ready"],
+            )
+        else:
+            logger.warning("Quantization dataset issues (%s):", model_dir)
+            for issue in result["issues"]:
+                logger.warning("  - %s", issue)
+            all_valid = False
+
+    return all_valid
 
 def validate_system(first_boot: bool = False) -> bool:
     try:

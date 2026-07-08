@@ -153,6 +153,7 @@ import importlib.metadata
 import ultralytics
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.metadata import (
+    get_calibration_keywords,
     metadata_path_for,
     metadata_from_pt,
     write_metadata,
@@ -162,7 +163,7 @@ from iSpy.vision.metadata import (
 from iSpy.config.AutoOpt import recommend_format
 from iSpy.validations.validate_system import validate_system
 from iSpy.config.iSpyConfig import iSpyConfig
-from iSpy.dataset.dataset import prepare_quantization_dataset
+from iSpy.dataset.dataset import calib_count_for_format, prepare_quantization_dataset
 from iSpy.config.AutoOpt import recommend_format, has_jetson
 import argparse
 from iSpy.config.AutoOpt import has_jetson
@@ -423,15 +424,17 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
         )
         return
 
-    valid_dir = _PROJECT_ROOT / "QuantizeDataset" / "valid"
+    valid_dir = _dataset_dir_for(Path(pt_file)) / "valid"
     if not valid_dir.exists():
         logger.info(
-            "Skipping optimized-model comparison for %s - no QuantizeDataset/valid/ found.",
+            "Skipping optimized-model comparison for %s - no %s found.",
             converted_path.name,
+            valid_dir,
         )
         return
 
     logger.info("Running optimized-model comparison for %s...", converted_path.name)
+
     try:
         results = compare_models(
             base_path=str(pt_file),
@@ -762,6 +765,8 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     )
     return divisor
 
+def _dataset_dir_for(pt_path: Path) -> Path:
+    return _PROJECT_ROOT / "QuantizeDataset" / pt_path.stem
 
 def _export_rknn_metadata(
     pt_file: str,
@@ -877,12 +882,13 @@ def _find_tflite_artifact(saved_path: Path) -> Path | None:
 
 
 
-def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=None, kw=None):
+def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None):
     if quantize is None:
         quantize = _RKNN_QUANTIZE
-    if kw is None:
-        kw = keywords
     pt_path = Path(pt_file)
+    if dataset_path is None:
+        dataset_path = str(_dataset_dir_for(pt_path))
+
     raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
     if not raw_onnx.exists():
         raise RuntimeError(f"Intermediate ONNX export failed: {raw_onnx}")
@@ -909,16 +915,15 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
     try:
         from rknn.api import RKNN
     except ImportError:
-        raise ImportError(
-            "RKNN Toolkit not found. Install it to convert to RKNN format."
-        )
+        raise ImportError("RKNN Toolkit not found. Install it to convert to RKNN format.")
 
-    prepare_quantization_dataset(dataset_path, boot=True, keywords=kw)
+    effective_kw = kw if kw is not None else get_calibration_keywords(pt_path, default=keywords)
+    count = calib_count_for_format("rknn")
+    prepare_quantization_dataset(dataset_path, boot=True, keywords=effective_kw, count=count)
     dataset_txt = Path(dataset_path) / "dataset.txt"
     if not dataset_txt.exists() or not dataset_txt.read_text().strip():
-        raise FileNotFoundError(
-            f"RKNN calibration dataset could not be prepared at: {dataset_txt}"
-        )
+        raise FileNotFoundError(f"RKNN calibration dataset could not be prepared at: {dataset_txt}")
+    
 
     rknn_output = _desired_output_path(pt_path, "rknn")
     logger.info("Converting ONNX -> RKNN with dataset=%s", dataset_txt)
@@ -1022,9 +1027,17 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
         )
         return model_file
 
+    if target_format == "tpu":
+        logger.info(
+            "TPU backend uses the .pt directly via torch_xla at runtime - "
+            "no export/conversion step needed for %s.",
+            Path(model_file).name,
+        )
+        return model_file
+
     pt_path = Path(model_file)
     stem = pt_path.stem
-
+    
     if target_format == "rknn":
         if quantize is None:
             quantize = _RKNN_QUANTIZE
@@ -1049,7 +1062,6 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
                     rknn_result = _convert_rknn(
                         pt_file=model_file,
                         input_size=input_size,
-                        dataset_path=str(_PROJECT_ROOT / "QuantizeDataset"),
                         quantize=quantize,
                         kw=kw,
                     )
@@ -1066,7 +1078,6 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
         return _convert_rknn(
             pt_file=model_file,
             input_size=input_size,
-            dataset_path=str(_PROJECT_ROOT / "QuantizeDataset"),
             quantize=quantize,
             kw=kw,
         )
@@ -1085,7 +1096,10 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
     dataset_root = str(_PROJECT_ROOT / "QuantizeDataset")
     data_yaml = None
     if quantize:
-        prepare_quantization_dataset(dataset_root, boot=True, keywords=kw if kw is not None else keywords)
+        kw = get_calibration_keywords(pt_path, default=keywords)
+        ds_dir = _dataset_dir_for(pt_path)
+        count = calib_count_for_format(target_format)
+        prepare_quantization_dataset(str(ds_dir), boot=True, keywords=kw, count=count)
         data_yaml = str(Path(dataset_root) / "data.yaml")
     else:
         Path(dataset_root).mkdir(parents=True, exist_ok=True)
@@ -1198,7 +1212,6 @@ def setup_files(first_boot: bool = False):
     for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml", "engine"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
     prepare_quantization_dataset(str(dataset_dir), boot=True, keywords=keywords)
-
     if saved_config is not None:
         config_path = config_dir / "config.json"
         with open(str(config_path), "w") as f:
@@ -1282,8 +1295,6 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
         logger.info("Auto-opt enabled. Recommended format: %s", best_format)
 
         def _cached_output(pt_path: Path) -> Path | None:
-            if best_format == "tpu":
-                return pt_path if pt_path.exists() else None
             desired = _desired_output_path(pt_path, best_format)
             if desired.exists():
                 if best_format == "rknn":

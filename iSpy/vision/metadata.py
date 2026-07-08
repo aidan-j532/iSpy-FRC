@@ -25,6 +25,7 @@ METADATA_SCHEMA = {
     "input_pad_value": int,
     "input_normalize": bool,
     "input_scale": float,
+    "calibration_keywords": list,
 }
 
 
@@ -52,7 +53,17 @@ def read_metadata(model_path: Path) -> Dict[str, Any] | None:
         return YAML(typ="safe").load(mp) or {}
     except Exception:
         return None
+    
+def get_calibration_keywords(pt_path: Path, default: list[str] | None = None) -> list[str]:
+    meta = read_metadata(pt_path)
+    if meta and meta.get("calibration_keywords"):
+        return list(meta["calibration_keywords"])
+    return list(default) if default else []
 
+def set_calibration_keywords(pt_path: Path, keywords: list[str]) -> None:
+    meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
+    meta["calibration_keywords"] = list(keywords)
+    write_metadata(metadata_path_for(pt_path), meta)
 
 def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
     from ultralytics import YOLO
