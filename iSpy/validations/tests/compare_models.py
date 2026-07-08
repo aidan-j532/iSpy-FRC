@@ -345,8 +345,8 @@ def _run_comparison_body(
 
     try:
         logger.info("Loading base model (this may take a few seconds): %s", base_path)
-        # with _quiet_native():
-        base_model = GenericYolo({"file_path": base_path}, core_mask=None)
+        with _quiet_native():
+            base_model = GenericYolo({"file_path": base_path}, core_mask=None)
         logger.info("Loaded base model: %s", getattr(base_model, "model_type", "<unknown>"))
     except Exception as e:
         logger.error("Failed to load base model: %s", e)
@@ -354,8 +354,8 @@ def _run_comparison_body(
 
     try:
         logger.info("Loading optimized model (this may take a while on some backends): %s", optimized_path)
-        # with _quiet_native():
-        optimized_model = GenericYolo({"file_path": optimized_path}, core_mask=core_mask)
+        with _quiet_native():
+            optimized_model = GenericYolo({"file_path": optimized_path}, core_mask=core_mask)
         logger.info("Loaded optimized model: %s", getattr(optimized_model, "model_type", "<unknown>"))
     except Exception as e:
         logger.error("Failed to load optimized model: %s", e)

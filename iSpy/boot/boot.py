@@ -9,9 +9,10 @@ from pathlib import Path
 
 import io
 
-_REAL_STDOUT = sys.stdout
-_REAL_STDERR = sys.stderr
-
+_REAL_STDOUT_FD = os.dup(1)
+_REAL_STDERR_FD = os.dup(2)
+_REAL_STDOUT = os.fdopen(_REAL_STDOUT_FD, "w", buffering=1, closefd=False)
+_REAL_STDERR = os.fdopen(_REAL_STDERR_FD, "w", buffering=1, closefd=False)
 
 class _NullWriter(io.TextIOBase):
     def write(self, s):
@@ -93,16 +94,20 @@ def _progress_spinner(label: str):
 
 @contextlib.contextmanager
 def _silence_third_party():
-    """Swap sys.stdout/sys.stderr to a null sink AND mute third-party loggers
-    (ultralytics, nncf) whose handlers are bound to a stream reference
-    captured at import time - stdout swapping alone can't reach those."""
+    devnull = "nul" if os.name == "nt" else "/dev/null"
+    fd = os.open(devnull, os.O_WRONLY)
+    old_out_fd = os.dup(1)
+    old_err_fd = os.dup(2)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.close(fd)
+
     old_out, old_err = sys.stdout, sys.stderr
     sys.stdout = _NullWriter()
     sys.stderr = _NullWriter()
 
     _muted_loggers = ("ultralytics", "nncf")
-    _saved_levels = {}
-    _saved_disabled = {}
+    _saved_levels, _saved_disabled = {}, {}
     for name in _muted_loggers:
         lg = logging.getLogger(name)
         _saved_levels[name] = lg.level
@@ -113,8 +118,11 @@ def _silence_third_party():
     try:
         yield
     finally:
-        sys.stdout = old_out
-        sys.stderr = old_err
+        sys.stdout, sys.stderr = old_out, old_err
+        os.dup2(old_out_fd, 1)
+        os.dup2(old_err_fd, 2)
+        os.close(old_out_fd)
+        os.close(old_err_fd)
         for name in _muted_loggers:
             lg = logging.getLogger(name)
             lg.setLevel(_saved_levels[name])
@@ -640,24 +648,30 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
     logger.info("Exporting %s -> %s with kwargs: %s", model_file, target_format, kwargs)
     with _silence_third_party():
         return model.export(**kwargs)
-    
-@contextlib.contextmanager
-def _silent_fd():
-    devnull = "nul" if os.name == "nt" else "/dev/null"
-    fd = os.open(devnull, os.O_WRONLY)
-    old_out = os.dup(1)
-    old_err = os.dup(2)
-    os.dup2(fd, 1)
-    os.dup2(fd, 2)
-    os.close(fd)
-    try:
-        yield
-    finally:
-        os.dup2(old_out, 1)
-        os.dup2(old_err, 2)
-        os.close(old_out)
-        os.close(old_err)
 
+def _find_box_tensor(graph, value_info, start_names, max_depth=4):
+    node_by_output = {out: n for n in graph.node for out in n.output}
+
+    def has_dim(name, target):
+        vi = value_info.get(name)
+        if vi is None:
+            return False
+        dims = vi.type.tensor_type.shape.dim
+        return any(int(d.dim_value) == target for d in dims if d.dim_value > 0)
+
+    frontier = list(start_names)
+    depth = 0
+    while frontier and depth < max_depth:
+        next_frontier = []
+        for name in frontier:
+            if has_dim(name, 4):
+                return name
+            producer = node_by_output.get(name)
+            if producer is not None and producer.op_type in ("Concat", "Reshape", "Slice"):
+                next_frontier.extend(producer.input)
+        frontier = next_frontier
+        depth += 1
+    return None
 
 def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> float:
     import numpy as np
@@ -691,12 +705,14 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
             return False
         dims = value.type.tensor_type.shape.dim
         return any(int(dim.dim_value) == target for dim in dims if dim.dim_value > 0)
-
+    
     box_input_name = None
     for input_name in concat_node.input:
         if _has_dim(input_name, 4):
             box_input_name = input_name
             break
+    if box_input_name is None:
+        box_input_name = _find_box_tensor(inferred_graph, value_info, list(concat_node.input))
     if box_input_name is None:
         raise RuntimeError(
             f"Could not identify the 4-channel box input for Concat '{concat_node.name}'."
@@ -923,7 +939,7 @@ def _convert_rknn(pt_file, input_size, dataset_path, task="detect", quantize=Non
         )
         
     with _progress_spinner("RKNN build"):
-        with _silent_fd():
+        with _silence_third_party():
             rknn = RKNN(verbose=False, )
         detected_format = None
         detected_layout = None
