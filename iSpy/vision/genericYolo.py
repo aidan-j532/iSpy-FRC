@@ -1,6 +1,6 @@
 import logging
 import math
-
+import os
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -373,8 +373,9 @@ class GenericYolo:
         self.output = cfg["output"]
         self.pnp_config = cfg.get("pnp")
         self.input = cfg.get("input")
-        self._preprocess_buf: np.ndarray | None = None
-
+        self._preprocess_bufs: list[np.ndarray | None] = [None, None]
+        self._preprocess_buf_idx = 0
+        
         self.has_hardware_nms = self.output["format"] == "hardware_nms"
         self.model_type = None
 
@@ -516,11 +517,17 @@ class GenericYolo:
             return 4 + score_cols + out["num_keypoints"] * out["keypoint_dims"]
         score_cols = 1 if out["score_mode"] == "objectness" else self.num_classes
         return 4 + score_cols
+    
+    def _next_preprocess_buffer(self) -> np.ndarray:
+        idx = self._preprocess_buf_idx
+        self._preprocess_buf_idx = 1 - idx
+        if self._preprocess_bufs[idx] is None:
+            self._preprocess_bufs[idx] = self._alloc_preprocess_buffer()
+        return self._preprocess_bufs[idx]
 
     def _load_onnx(self, model_file: str) -> None:
         try:
             import onnxruntime as ort
-            
             ort.set_default_logger_severity(4)
         except ImportError as exc:
             raise ImportError("onnxruntime is required for .onnx models.") from exc
@@ -544,12 +551,23 @@ class GenericYolo:
         if not providers:
             providers = ["CPUExecutionProvider"]
 
-        self.model = ort.InferenceSession(model_file, providers=providers)
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        cpu_count = os.cpu_count() or 4
+        # Leave a core free for the camera reader / preprocess threads instead of
+        # letting ORT claim every logical core for intra-op parallelism.
+        sess_options.intra_op_num_threads = max(1, cpu_count - 1)
+        sess_options.inter_op_num_threads = 1
+        sess_options.enable_mem_pattern = True
+        sess_options.enable_cpu_mem_arena = True
+
+        self.model = ort.InferenceSession(model_file, sess_options=sess_options, providers=providers)
         self._onnx_inp_name = self.model.get_inputs()[0].name
         self._onnx_out_names = [o.name for o in self.model.get_outputs()]
-        self.logger.info("ONNX providers: %s", self.model.get_providers())
+        self.logger.info("ONNX providers: %s (intra_op_threads=%d)", self.model.get_providers(), sess_options.intra_op_num_threads)
         
     def _load_tflite(self, model_file: str):
+        num_threads = max(1, (os.cpu_count() or 4) - 1)
         try:
             from tflite_runtime.interpreter import Interpreter, load_delegate
 
@@ -558,19 +576,20 @@ class GenericYolo:
                 delegates = [load_delegate("libedgetpu.so.1")]
                 self.logger.info("Coral Edge TPU delegate loaded.")
             except Exception:
-                self.logger.info("No Edge TPU delegate - running TFLite on CPU.")
+                self.logger.info("No Edge TPU delegate - running TFLite on CPU (%d threads).", num_threads)
             self.model = Interpreter(
-                model_path=model_file, experimental_delegates=delegates
+                model_path=model_file,
+                experimental_delegates=delegates,
+                num_threads=num_threads,
             )
         except ImportError:
             from tensorflow.lite.python.interpreter import Interpreter
-
-            self.model = Interpreter(model_path=model_file)
+            self.model = Interpreter(model_path=model_file, num_threads=num_threads)
 
         self.model.allocate_tensors()
         self._tflite_inp = self.model.get_input_details()[0]
         self._tflite_out = self.model.get_output_details()
-
+        
     def _letterbox_into(self, img, dst, target_size, pad_value=114):
         h, w = img.shape[:2]
         target_w, target_h = target_size
@@ -598,18 +617,15 @@ class GenericYolo:
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         if inp["letterbox"]:
-            if self._preprocess_buf is None:
-                self._preprocess_buf = self._alloc_preprocess_buffer()
+            buf = self._next_preprocess_buffer()
             pad_value = int(inp["pad_value"])
             if inp["layout"] == "nhwc":
-                self._letterbox_into(
-                    img_rgb, self._preprocess_buf[0], self.input_size, pad_value
-                )
+                self._letterbox_into(img_rgb, buf[0], self.input_size, pad_value)
             else:
                 nhwc = np.empty((target_h, target_w, 3), dtype=np.uint8)
                 self._letterbox_into(img_rgb, nhwc, self.input_size, pad_value)
-                self._preprocess_buf[0][:] = np.transpose(nhwc, (2, 0, 1))
-            tensor = self._preprocess_buf
+                buf[0][:] = np.transpose(nhwc, (2, 0, 1))
+            tensor = buf
         else:
             resized = cv2.resize(img_rgb, (target_w, target_h))
             tensor = (
@@ -627,11 +643,6 @@ class GenericYolo:
         if tensor.dtype != np.uint8:
             return np.clip(tensor, 0, 255).astype(np.uint8)
         return tensor
-
-    def predict_preprocessed(self, preprocessed: np.ndarray, orig_shape) -> Results:
-        if self.model_type != "rknn":
-            raise RuntimeError("predict_preprocessed is only valid for RKNN models.")
-        return self._run_rknn(preprocessed, orig_shape)
 
     def predict(self, frame_or_frames, orig_shape=None) -> "Results | list[Results]":
         is_list = isinstance(frame_or_frames, list)
@@ -787,19 +798,35 @@ class GenericYolo:
         return self.postprocess([tensor], orig_shape)
 
     def _run_onnx(self, frame: np.ndarray, orig_shape) -> Results:
-        inp = self._preprocess_frame(frame)
+        return self._infer_onnx(self._preprocess_frame(frame), orig_shape)
+
+    def _infer_onnx(self, inp: np.ndarray, orig_shape) -> Results:
         raw = self.model.run(self._onnx_out_names, {self._onnx_inp_name: inp})
         raw[0] = self._dequantize_tensor(raw[0])
         return self.postprocess(raw, orig_shape)
 
     def _run_tflite(self, frame: np.ndarray, orig_shape) -> Results:
-        inp = self._preprocess_frame(frame)
+        return self._infer_tflite(self._preprocess_frame(frame), orig_shape)
+
+    def _infer_tflite(self, inp: np.ndarray, orig_shape) -> Results:
         self.model.set_tensor(self._tflite_inp["index"], inp)
         self.model.invoke()
         raw = [self.model.get_tensor(d["index"]) for d in self._tflite_out]
         raw[0] = self._dequantize_tensor(raw[0])
         return self.postprocess(raw, orig_shape)
 
+    def predict_preprocessed(self, preprocessed: np.ndarray, orig_shape) -> Results:
+        if self.model_type == "rknn":
+            return self._run_rknn(preprocessed, orig_shape)
+        if self.model_type == "onnx":
+            return self._infer_onnx(preprocessed, orig_shape)
+        if self.model_type == "tflite":
+            return self._infer_tflite(preprocessed, orig_shape)
+        raise RuntimeError(
+            f"predict_preprocessed is not supported for model_type={self.model_type!r} "
+            "- engine/openvino/coreml/.pt models run through Ultralytics' own "
+            "internal preprocessing and can't accept an externally preprocessed tensor."
+        )
     def postprocess(self, raw_outputs, orig_shape) -> Results:
         tensor = raw_outputs[0]
         tensor = self._prepare_output_tensor(tensor)

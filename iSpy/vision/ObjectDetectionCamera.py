@@ -91,7 +91,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
         )
 
         self._preproc_q: queue.Queue = queue.Queue(maxsize=1)
-        self._use_pipeline = (self.model.model_type == "rknn")
+        self._use_pipeline = self.model.model_type in ("rknn", "onnx", "tflite")
 
         self._last_result: Results | None = None
         self._last_frame: np.ndarray | None = None
@@ -143,22 +143,14 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
     def _preprocess_worker(self):
         last_ts = None
-        h, w = self.input_size[1], self.input_size[0]
-        bufs = [
-            np.empty((1, h, w, 3), dtype=np.uint8),
-            np.empty((1, h, w, 3), dtype=np.uint8),
-        ]
-        buf_idx = 0
-
         while not self.stopped:
             if self.is_image:
                 frame = self.get_frame()
-                ts = 0  # placeholder has no timestamp
+                ts = 0
             else:
                 with self.frame_lock:
                     frame = self.frame
                     ts = self.frame_timestamp
-
                 if frame is None or ts == last_ts:
                     self._frame_event.wait(timeout=0.05)
                     self._frame_event.clear()
@@ -170,15 +162,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
             last_ts = ts
             orig_shape = frame.shape
-            img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            if self.grayscale:
-                gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
-                img_rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-
-            self._letterbox_into(img_rgb, bufs[buf_idx][0], self.input_size)
-            self._preproc_q.put((bufs[buf_idx], frame, orig_shape))
-            buf_idx = 1 - buf_idx
+            preprocessed = self.model._preprocess_frame(frame)
+            self._preproc_q.put((preprocessed, frame, orig_shape))
 
     def _filter_box(self, box: Box, img_w: int, img_h: int) -> bool:
         x1, y1, x2, y2 = box.xyxy
