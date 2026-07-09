@@ -197,7 +197,7 @@ _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
 keywords = ["frc game piece", "frc 2025 REBUILT", "frc 2025 fuel"]
 
-_RKNN_QUANTIZE = False
+_RKNN_QUANTIZE = True
 _RKNN_KNOWN_CHIPS = (
     "rk3588", "rk3576", "rk3399", "rk3568", "rk3566",
     "rk3562", "rk3528", "rv1103", "rv1106",
