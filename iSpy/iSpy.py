@@ -273,7 +273,7 @@ class iSpy:
 
         for tracker in self.trackers.values():
             fuel_list = tracker.update(
-                fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
+                fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), pose.Z()
             )
 
         loop_s = time.perf_counter() - t0
@@ -314,7 +314,7 @@ class iSpy:
 
         for tracker in self.trackers.values():
             fuel_list = tracker.update(
-                fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
+                fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), pose.Z()
             )
 
         loop_s = time.perf_counter() - t0

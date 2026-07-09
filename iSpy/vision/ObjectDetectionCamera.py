@@ -149,6 +149,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
             if self.is_image:
                 frame = self.get_frame()
                 ts = 0
+                
+                time.sleep(1 / 100) # Simulate a 100 fps camera
             else:
                 with self.frame_lock:
                     frame = self.frame

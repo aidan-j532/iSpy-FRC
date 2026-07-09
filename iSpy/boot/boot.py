@@ -197,7 +197,7 @@ _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
 keywords = ["frc game piece", "frc 2025 REBUILT", "frc 2025 fuel"]
 
-_RKNN_QUANTIZE = True
+_RKNN_QUANTIZE = False
 
 _BOOT_MANAGED_VISION_FIELDS = {
     "file_path", "task", "num_classes", "input_size",
@@ -1204,6 +1204,14 @@ def setup_files(first_boot: bool = False):
             if d.exists():
                 _remove_path_for_cleanup(d)
                 logger.info("Deleted %s", d)
+                
+    keywords_path = _ASSETS_DIR / "keywords.json"
+
+    try:
+        with open(keywords_path, "r") as f:
+            default_keywords = json.load(f)
+    except FileNotFoundError:
+        default_keywords = {}
 
     yolo_dir.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -1257,14 +1265,22 @@ def setup_files(first_boot: bool = False):
     try:
         for pt_file in pytorch_dir.glob("*.pt"):
             meta_path = metadata_path_for(pt_file)
-            if not meta_path.exists():
-                try:
+            try:
+                if meta_path.exists():
+                    meta = read_metadata(meta_path)
+                else:
                     logger.info("Generating metadata for %s", pt_file.name)
                     meta = metadata_from_pt(pt_file)
-                    write_metadata(meta_path, meta)
-                    logger.info("Wrote metadata %s", meta_path.name)
-                except Exception as e:
-                    logger.warning("Could not generate metadata for %s: %s", pt_file.name, e)
+
+                # Apply bundled keyword overrides
+                if pt_file.stem in default_keywords:
+                    meta["keywords"] = default_keywords[pt_file.stem]
+
+                write_metadata(meta_path, meta)
+                logger.info("Wrote metadata %s", meta_path.name)
+
+            except Exception as e:
+                logger.warning("Could not generate metadata for %s: %s", pt_file.name, e)
     except Exception:
         pass
 
@@ -1350,9 +1366,9 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                 pt_full = candidates[0]
                 logger.info("Using default model: %s", pt_full.name)
             else:
-                logger.warning("No .pt found, copying bundled _default_pose.pt")
-                bundled = _ASSETS_DIR / "_default_pose.pt"
-                pt_full = pytorch_dir / "_default_pose.pt"
+                logger.warning("No .pt found, copying bundled _default_v26_detect_for_fuel.pt")
+                bundled = _ASSETS_DIR / "_default_v26_detect_for_fuel.pt"
+                pt_full = pytorch_dir / "_default_v26_detect_for_fuel.pt"
                 pt_full.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(bundled, pt_full)
             config.set("vision_model", "source_pt", str(pt_full))
