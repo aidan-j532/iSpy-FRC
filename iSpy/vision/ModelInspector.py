@@ -319,11 +319,13 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
  
                 # output format fields written by _export_rknn_metadata
                 for meta_key, cfg_path in (
-                    ("output_format",  "output.format"),
-                    ("output_layout",  "output.layout"),
-                    ("box_format",     "output.box_format"),
-                    ("quantization",   "output.quantization"),
-                    ("quant_scale",    "output.quant_scale"),
+                    ("output_format",   "output.format"),
+                    ("output_layout",   "output.layout"),
+                    ("box_format",      "output.box_format"),
+                    ("quantization",    "output.quantization"),
+                    ("quant_scale",     "output.quant_scale"),
+                    ("box_coord_scale", "output.box_coord_scale"),
+                    ("kpt_coord_scale", "output.kpt_coord_scale"),
                 ):
                     val = meta.get(meta_key)
                     if val is not None:

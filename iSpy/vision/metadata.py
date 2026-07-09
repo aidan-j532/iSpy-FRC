@@ -26,6 +26,8 @@ METADATA_SCHEMA = {
     "input_normalize": bool,
     "input_scale": float,
     "calibration_keywords": list,
+    "box_coord_scale": float,
+    "kpt_coord_scale": float,
 }
 
 

@@ -1137,6 +1137,15 @@ class GenericYolo:
                 f"Pose keypoint columns {kpts_raw.shape[1]} != expected {expected}."
             )
 
+        kpt_coord_scale = self.output.get("kpt_coord_scale")
+        if kpt_coord_scale is not None:
+            kd = self.output["keypoint_dims"]
+            kpts_raw = kpts_raw.astype(np.float32, copy=True)
+            for k in range(0, kpts_raw.shape[1], kd):
+                kpts_raw[:, k] *= kpt_coord_scale       # x
+                kpts_raw[:, k + 1] *= kpt_coord_scale   # y
+                # k+2 (confidence) intentionally left unscaled
+
         if self.output["keypoint_scores_are_logits"]:
             kd = self.output["keypoint_dims"]
             for k in range(2, kpts_raw.shape[1], kd):

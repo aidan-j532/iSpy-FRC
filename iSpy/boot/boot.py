@@ -6,7 +6,7 @@ os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 import logging
 from pathlib import Path
-
+from functools import lru_cache
 import io
 
 _REAL_STDOUT_FD = os.dup(1)
@@ -198,6 +198,10 @@ _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 keywords = ["frc game piece", "frc 2025 REBUILT", "frc 2025 fuel"]
 
 _RKNN_QUANTIZE = False
+_RKNN_KNOWN_CHIPS = (
+    "rk3588", "rk3576", "rk3399", "rk3568", "rk3566",
+    "rk3562", "rk3528", "rv1103", "rv1106",
+)
 
 _BOOT_MANAGED_VISION_FIELDS = {
     "file_path", "task", "num_classes", "input_size",
@@ -302,6 +306,41 @@ _RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
     ): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
 }
 
+
+@lru_cache()
+def _detect_rknn_target_platform() -> str:
+    for path in (
+        "/proc/device-tree/compatible",
+        "/proc/device-tree/model",
+        "/sys/firmware/devicetree/base/model",
+    ):
+        try:
+            content = open(path, "rb").read().decode(errors="ignore").lower()
+            for chip in _RKNN_KNOWN_CHIPS:
+                if chip in content:
+                    logger.info("Detected RKNN target_platform: %s (from %s)", chip, path)
+                    return chip
+        except Exception:
+            continue
+
+    try:
+        cpuinfo = open("/proc/cpuinfo").read().lower()
+        for chip in _RKNN_KNOWN_CHIPS:
+            if chip in cpuinfo:
+                logger.info("Detected RKNN target_platform: %s (from /proc/cpuinfo)", chip)
+                return chip
+    except Exception:
+        pass
+
+    logger.warning(
+        "Could not detect Rockchip SoC from device-tree or /proc/cpuinfo - "
+        "defaulting RKNN target_platform to 'rk3588'. If converting for a "
+        "different board (rk3566, rk3576, etc.), run boot.py directly on "
+        "that board so detection can find it - conversion on non-Rockchip "
+        "hardware (e.g. your dev laptop) can't determine the real target "
+        "and will silently default."
+    )
+    return "rk3588"
 
 def _rknn_wheel_targets() -> list[tuple[str, str]]:
     key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
@@ -676,7 +715,7 @@ def _find_box_tensor(graph, value_info, start_names, max_depth=4):
         depth += 1
     return None
 
-def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> float:
+def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> tuple[float, float | None]:
     import numpy as np
     import onnx
     import onnx.numpy_helper
@@ -708,7 +747,7 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
             return False
         dims = value.type.tensor_type.shape.dim
         return any(int(dim.dim_value) == target for dim in dims if dim.dim_value > 0)
-    
+
     box_input_name = None
     for input_name in concat_node.input:
         if _has_dim(input_name, 4):
@@ -755,15 +794,69 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     del model.graph.node[:]
     model.graph.node.extend(nodes)
 
-    onnx.checker.check_model(model)
-    onnx.save(model, output_path)
     logger.info(
         "Box-coordinate normalization applied: divided '%s' by %.1f before Concat '%s'",
         box_input_name,
         divisor,
         concat_node.name,
     )
-    return divisor
+
+    # ── keypoints (pose only) ──────────────────────────────────────────
+    # Same problem as boxes: x/y kpt coords sit in pixel range (0-640) while
+    # kpt confidence sits in 0-1, so they collapse to zero under per-tensor
+    # INT8 quantization unless normalized the same way box coords are.
+    kpt_coord_scale = None
+    kpt_input_name, kpt_channels = _find_keypoint_tensor(
+        inferred_graph, value_info, list(concat_node.input), box_input_name
+    )
+    if kpt_input_name is not None:
+        kpt_coord_scale = divisor
+
+        scale_vec = np.ones((kpt_channels,), dtype=np.float32)
+        scale_vec[0::3] = divisor  # x
+        scale_vec[1::3] = divisor  # y
+        # 2::3 (confidence) stays 1.0 - unscaled, same reasoning as objectness
+
+        vec_name = "iSpy_kpt_coord_scale"
+        if not any(init.name == vec_name for init in model.graph.initializer):
+            vec_tensor = onnx.numpy_helper.from_array(
+                scale_vec.reshape(1, kpt_channels, 1), name=vec_name
+            )
+            model.graph.initializer.append(vec_tensor)
+
+        kpt_normalized_name = f"{kpt_input_name}_iSpy_normalized"
+        kpt_div_node = onnx.helper.make_node(
+            "Div",
+            inputs=[kpt_input_name, vec_name],
+            outputs=[kpt_normalized_name],
+            name="iSpy_Div_kpt_normalize",
+        )
+
+        nodes = list(model.graph.node)
+        target_idx = next(
+            idx for idx, node in enumerate(nodes)
+            if node.op_type == "Concat" and list(node.output) == list(concat_node.output)
+        )
+        nodes.insert(target_idx, kpt_div_node)
+        target_concat = nodes[target_idx + 1]
+        for idx, input_name in enumerate(target_concat.input):
+            if input_name == kpt_input_name:
+                target_concat.input[idx] = kpt_normalized_name
+                break
+        del model.graph.node[:]
+        model.graph.node.extend(nodes)
+
+        logger.info(
+            "Keypoint-coordinate normalization applied: divided x/y channels of '%s' "
+            "by %.1f before Concat '%s' (confidence channel left unscaled)",
+            kpt_input_name, divisor, concat_node.name,
+        )
+    else:
+        logger.debug("No keypoint tensor found feeding Concat '%s' - assuming detect-only model.", concat_node.name)
+
+    onnx.checker.check_model(model)
+    onnx.save(model, output_path)
+    return divisor, kpt_coord_scale
 
 def _dataset_dir_for(pt_path: Path) -> Path:
     return _PROJECT_ROOT / "QuantizeDataset" / pt_path.stem
@@ -778,6 +871,7 @@ def _export_rknn_metadata(
     box_format=None,
     quantize=None,
     box_coord_scale=None,
+    kpt_coord_scale=None,
 ) -> None:
     try:
         pt_path = Path(pt_file)
@@ -785,7 +879,6 @@ def _export_rknn_metadata(
         pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
         meta = derive_format_metadata(pt_meta, "rknn")
 
-        # Override detected fields from RKNN inference probe
         if output_format is not None:
             meta["output_format"] = output_format
         if output_layout is not None:
@@ -799,6 +892,8 @@ def _export_rknn_metadata(
             meta["quantize"] = quantize
         if box_coord_scale is not None:
             meta["box_coord_scale"] = float(box_coord_scale)
+        if kpt_coord_scale is not None:
+            meta["kpt_coord_scale"] = float(kpt_coord_scale)
         if input_size is not None:
             if hasattr(input_size, "__iter__"):
                 meta["input_size"] = [int(x) for x in input_size]
@@ -810,7 +905,6 @@ def _export_rknn_metadata(
         logger.info("Exported RKNN metadata: %s", meta_path)
     except Exception as e:
         logger.warning("Failed to export RKNN metadata: %s", e)
- 
  
 def _yolo_models_dir() -> Path:
     return _PROJECT_ROOT / "YoloModels"
@@ -878,9 +972,31 @@ def _find_tflite_artifact(saved_path: Path) -> Path | None:
         return candidates[0] if candidates else None
     return None
  
- 
+def _find_keypoint_tensor(graph, value_info, concat_inputs, box_input_name, max_depth=4):
+    node_by_output = {out: n for n in graph.node for out in n.output}
 
+    def channel_dims(name):
+        vi = value_info.get(name)
+        if vi is None:
+            return []
+        return [d.dim_value for d in vi.type.tensor_type.shape.dim if d.dim_value > 0]
 
+    frontier = list(concat_inputs)
+    depth = 0
+    while frontier and depth < max_depth:
+        next_frontier = []
+        for name in frontier:
+            if name == box_input_name:
+                continue
+            for d in channel_dims(name):
+                if d > 4 and d % 3 == 0:
+                    return name, d
+            producer = node_by_output.get(name)
+            if producer is not None and producer.op_type in ("Concat", "Reshape", "Slice"):
+                next_frontier.extend(producer.input)
+        frontier = next_frontier
+        depth += 1
+    return None, None
 
 def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None):
     if quantize is None:
@@ -929,16 +1045,17 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
     logger.info("Converting ONNX -> RKNN with dataset=%s", dataset_txt)
 
     box_coord_scale = None
+    kpt_coord_scale = None
     onnx_path_for_build = onnx_path
     surgery_path = onnx_path.parent / f"{onnx_path.stem}_rknn_ready.onnx"
     try:
-        box_coord_scale = _normalize_box_coords_for_quantization(
+        box_coord_scale, kpt_coord_scale = _normalize_box_coords_for_quantization(
             str(onnx_path), str(surgery_path), input_size
         )
         onnx_path_for_build = surgery_path
     except Exception as exc:
         logger.warning(
-            "Box-coordinate normalization for RKNN quantization failed: %s. "
+            "Box/keypoint-coordinate normalization for RKNN quantization failed: %s. "
             "Proceeding without it; confidence may collapse to zero.",
             exc,
         )
@@ -953,7 +1070,7 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
             config_kwargs = dict(
                 mean_values=[[0, 0, 0]],
                 std_values=[[255, 255, 255]],
-                target_platform="rk3588",
+                target_platform=_detect_rknn_target_platform(),
                 disable_rules=[
                     "fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"
                 ],
@@ -1013,6 +1130,7 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
         box_format=detected_box_format,
         quantize=quantize,
         box_coord_scale=box_coord_scale,
+        kpt_coord_scale=kpt_coord_scale,
     )
     return str(rknn_output)
 
