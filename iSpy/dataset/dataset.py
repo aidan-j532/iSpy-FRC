@@ -20,7 +20,7 @@ _VALIDATION_KEYWORDS = [
 ]
 
 _FORMAT_CALIB_COUNTS = {
-    "rknn": 300,      # KL-divergence quantization wants broader coverage
+    "rknn": 200,      # KL-divergence quantization wants broader coverage
     "tflite": 100,     # simpler min/max calibration, converges faster
     "openvino": 300,
     "engine": 500,     # TensorRT entropy calibration benefits most from more samples

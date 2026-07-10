@@ -42,3 +42,4 @@ iSpy/assets/*.onnx
 rknn_log.txt
 *config.json
 Config/config.json
+prompt.txt
