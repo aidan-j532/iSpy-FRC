@@ -79,6 +79,13 @@ def _download_release_images(
     logger.info("Got %d calibration images from release", len(downloaded))
     return downloaded
 
+def _extract_release_url(keywords: list[str] | None) -> str | None:
+    if not keywords:
+        return None
+    for kw in keywords:
+        if isinstance(kw, str) and kw.startswith(("http://", "https://")):
+            return kw
+    return None
 
 def _session():
     import requests as _requests
@@ -561,16 +568,18 @@ def add_validate_images(
         return validation_dir
 
     logger.info("Preparing %d validation images under %s", validation_count, validation_dir)
+    release_url = _extract_release_url(keywords) or _VALIDATION_RELEASE_URL
     _download_release_images(
         ds,
         validation_count,
-        release_url=_VALIDATION_RELEASE_URL,
+        release_url=release_url,
         target_dir="valid/images",
     )
     existing = _find_images(validation_dir)
 
     fallback_keywords = list(keywords or _VALIDATION_KEYWORDS)
-    if fallback_keywords and len(existing) < validation_count:
+    is_url_only = _extract_release_url(keywords) is not None
+    if not is_url_only and fallback_keywords and len(existing) < validation_count:
         remaining = validation_count - len(existing)
         logger.info(
             "Have %d/%d validation images from release download; fetching %d more via keyword search (%s)",
@@ -636,19 +645,25 @@ def prepare_quantization_dataset(
         logger.info("Dataset already has %d images, skipping download", len(existing))
         _rebuild_dataset_txt(ds, root=images_dir)
     else:
-        _download_release_images(ds, count, target_dir="images")
-        existing = _find_images(images_dir)
+        release_url = _extract_release_url(keywords)
+        if release_url:
+            logger.info("Keyword is a release URL - downloading calibration images from %s", release_url)
+            _download_release_images(ds, count, release_url=release_url, target_dir="images")
+            existing = _find_images(images_dir)
+        else:
+            _download_release_images(ds, count, target_dir="images")
+            existing = _find_images(images_dir)
 
-        if keywords and len(existing) < count:
-            remaining = count - len(existing)
-            logger.info(
-                "Have %d/%d calibration images from release download; "
-                "fetching %d more via keyword search (%s) instead of discarding them.",
-                len(existing), count, remaining, ", ".join(keywords),
-            )
-            _download_images(keywords, ds, remaining, boot=boot, start_index=len(existing), target_dir="images")
+            if keywords and len(existing) < count:
+                remaining = count - len(existing)
+                logger.info(
+                    "Have %d/%d calibration images from release download; "
+                    "fetching %d more via keyword search (%s) instead of discarding them.",
+                    len(existing), count, remaining, ", ".join(keywords),
+                )
+                _download_images(keywords, ds, remaining, boot=boot, start_index=len(existing), target_dir="images")
+                existing = _find_images(images_dir)
 
-        existing = _find_images(images_dir)
         if len(existing) < count:
             logger.warning("Only have %d / %d images. Generating synthetic fallback...", len(existing), count)
             _generate_synthetic_images(ds, count - len(existing), imgsz, target_dir="images")

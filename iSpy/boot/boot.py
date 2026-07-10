@@ -1392,8 +1392,7 @@ def setup_files(first_boot: bool = False):
 
                 # Apply bundled keyword overrides
                 if pt_file.stem in default_keywords:
-                    meta["keywords"] = default_keywords[pt_file.stem]
-
+                    meta["calibration_keywords"] = default_keywords[pt_file.stem]
                 write_metadata(meta_path, meta)
                 logger.info("Wrote metadata %s", meta_path.name)
 
