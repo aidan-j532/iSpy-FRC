@@ -1,0 +1,3 @@
+sudo apt install avahi-daemon
+sudo hostnamectl set-hostname ispy
+sudo systemctl enable --now avahi-daemon

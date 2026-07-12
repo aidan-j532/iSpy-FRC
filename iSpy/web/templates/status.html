@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}iSpy - Status{% endblock %}
+{% block content %}
+
+<div class="ispy-card ispy-row">
+    <h1 style="margin:0">System Status</h1>
+    <span id="overall-pill" class="ispy-pill">...</span>
+</div>
+
+<div class="ispy-card">
+    <h2>Vision Loop</h2>
+    <table class="ispy-table">
+        <tr><th>FPS</th><td id="fps">-</td></tr>
+        <tr><th>Inference</th><td><span id="vision">-</span> ms</td></tr>
+        <tr><th>Detections</th><td id="detections">-</td></tr>
+        <tr><th>Loop stale</th><td><span id="stale">-</span> s</td></tr>
+        <tr><th>Uptime</th><td><span id="uptime">-</span> s</td></tr>
+        <tr><th>Loop count</th><td id="loop_count">-</td></tr>
+    </table>
+</div>
+
+<div class="ispy-card">
+    <h2>Cameras</h2>
+    <div id="cameras-list" class="ispy-dim">Loading...</div>
+</div>
+
+{% endblock %}
+{% block extra_js %}
+<script>
+ISPY_LIVE.poll('/status/api/status', 500, (data) => {
+    document.getElementById('fps').textContent = data.fps;
+    document.getElementById('vision').textContent = data.vision_ms;
+    document.getElementById('detections').textContent = data.detections;
+    document.getElementById('stale').textContent = data.loop_stale_s;
+    document.getElementById('uptime').textContent = data.uptime_s;
+    document.getElementById('loop_count').textContent = data.loop_count;
+
+    const overall = document.getElementById('overall-pill');
+    overall.className = 'ispy-pill ' + (data.status === 'ok' ? 'ok' : 'bad');
+    overall.textContent = data.status.toUpperCase();
+
+    const list = document.getElementById('cameras-list');
+    if (data.cameras && data.cameras.length) {
+        list.innerHTML = data.cameras.map(cam =>
+            ISPY.statusPillHTML(cam.ok ? 'ok' : 'bad', `${cam.name} - ${cam.frame_age_ms ?? 'N/A'} ms`)
+        ).join(' ');
+    } else {
+        list.textContent = 'No cameras configured.';
+    }
+});
+</script>
+{% endblock %}
