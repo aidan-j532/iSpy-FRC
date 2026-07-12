@@ -23,6 +23,5 @@ def main():
         kw=args.get("kw"),
     )
 
-    # print(f"ISPY_RESULT:{result
 if __name__ == "__main__":
     main()
