@@ -1344,6 +1344,56 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
     logger.warning("Conversion to %s failed, falling back to .pt", target_format)
     return model_file
 
+def _convert_model_subprocess(model_file, target_format, input_size, quantize=None, force=False, kw=None) -> Path:
+    import tempfile
+
+    args = {
+        "model_file": str(model_file),
+        "target_format": target_format,
+        "input_size": list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)],
+        "quantize": quantize,
+        "force": force,
+        "kw": kw,
+    }
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(args, f)
+        args_path = f.name
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "iSpy.boot._convert_worker", args_path],
+            cwd=str(_PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        result_line = None
+        for line in proc.stdout.splitlines():
+            if line.startswith("ISPY_RESULT:"):
+                result_line = line[len("ISPY_RESULT:"):]
+
+        # Surface the worker's own logging - it just runs in a subprocess,
+        # it shouldn't run silently.
+        if proc.stdout:
+            print(proc.stdout, file=_REAL_STDOUT, end="")
+        if proc.stderr:
+            print(proc.stderr, file=_REAL_STDERR, end="")
+
+        if proc.returncode != 0 or result_line is None:
+            logger.error(
+                "Conversion subprocess for %s -> %s failed (exit code %s). Falling back to .pt.",
+                Path(model_file).name, target_format, proc.returncode,
+            )
+            return Path(model_file)
+
+        return Path(result_line)
+    finally:
+        try:
+            os.unlink(args_path)
+        except OSError:
+            pass
+
 def setup_files(first_boot: bool = False):
     yolo_dir = _PROJECT_ROOT / "YoloModels"
     config_dir = _PROJECT_ROOT / "Config"
@@ -1554,14 +1604,12 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
 
         if need_conversion:
             input_size = config.get("input_size") or [640, 640]
-            converted = Path(
-                convert_model(
-                    str(pt_full),
-                    best_format,
-                    input_size,
-                    quantize=_RKNN_QUANTIZE,
-                    force=first_boot,
-                )
+            converted = _convert_model_subprocess(
+                str(pt_full),
+                best_format,
+                input_size,
+                quantize=_RKNN_QUANTIZE,
+                force=first_boot,
             )
             if converted != pt_full:
                 logger.info("Conversion successful: %s", converted)
@@ -1579,7 +1627,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
                 if pt_full and other.resolve() == pt_full.resolve():
                     continue
                 try:
-                    convert_model(
+                    _convert_model_subprocess(
                         str(other),
                         best_format,
                         other_input_size,
