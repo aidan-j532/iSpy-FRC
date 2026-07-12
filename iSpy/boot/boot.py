@@ -342,6 +342,61 @@ def _detect_rknn_target_platform() -> str:
     )
     return "rk3588"
 
+
+_CALIB_DOWNSCALE_SIZE = 320
+
+
+def _downscale_calib_images(dataset_path: Path, calib_size: int = _CALIB_DOWNSCALE_SIZE) -> Path:
+    import tempfile
+    import cv2
+
+    orig_txt = dataset_path / "dataset.txt"
+    if not orig_txt.exists():
+        return dataset_path
+
+    lines = [l.strip() for l in orig_txt.read_text().splitlines() if l.strip()]
+    if not lines:
+        return dataset_path
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ispy_rknn_calib_"))
+    resized_dir = tmp_dir / "images"
+    resized_dir.mkdir(parents=True, exist_ok=True)
+
+    resized_lines = []
+    resized_count = 0
+    for line in lines:
+        img_path = dataset_path / line if not Path(line).is_absolute() else Path(line)
+        if not img_path.exists():
+            continue
+        try:
+            img = cv2.imread(str(img_path))
+            if img is None:
+                continue
+            h, w = img.shape[:2]
+            if h == calib_size and w == calib_size:
+                dest = resized_dir / img_path.name
+                shutil.copy2(str(img_path), str(dest))
+            else:
+                resized = cv2.resize(img, (calib_size, calib_size), interpolation=cv2.INTER_LINEAR)
+                dest = resized_dir / f"{img_path.stem}_{calib_size}.jpg"
+                cv2.imwrite(str(dest), resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            resized_lines.append(f"images/{dest.name}")
+            resized_count += 1
+        except Exception:
+            continue
+
+    if resized_count == 0:
+        shutil.rmtree(str(tmp_dir), ignore_errors=True)
+        return dataset_path
+
+    (tmp_dir / "dataset.txt").write_text("\n".join(resized_lines) + "\n")
+    logger.info(
+        "Downscaled %d calibration images from original to %dx%d (saves ~4x RAM during RKNN build)",
+        resized_count, calib_size, calib_size,
+    )
+    return tmp_dir
+
+
 def _rknn_wheel_targets() -> list[tuple[str, str]]:
     key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
     targets: list[tuple[str, str]] = []
@@ -1040,9 +1095,11 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
     if not dataset_txt.exists() or not dataset_txt.read_text().strip():
         raise FileNotFoundError(f"RKNN calibration dataset could not be prepared at: {dataset_txt}")
     
+    calib_dir = _downscale_calib_images(Path(dataset_path))
+    calib_txt = calib_dir / "dataset.txt" if calib_dir != Path(dataset_path) else dataset_txt
 
     rknn_output = _desired_output_path(pt_path, "rknn")
-    logger.info("Converting ONNX -> RKNN with dataset=%s", dataset_txt)
+    logger.info("Converting ONNX -> RKNN with dataset=%s", calib_txt)
 
     box_coord_scale = None
     kpt_coord_scale = None
@@ -1059,68 +1116,72 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
             "Proceeding without it; confidence may collapse to zero.",
             exc,
         )
-        
-    with _progress_spinner("RKNN build"):
-        with _silence_third_party():
-            rknn = RKNN(verbose=False, )
-        detected_format = None
-        detected_layout = None
-        detected_box_format = None
-        try:
-            config_kwargs = dict(
-                mean_values=[[0, 0, 0]],
-                std_values=[[255, 255, 255]],
-                target_platform=_detect_rknn_target_platform(),
-                disable_rules=[
-                    "fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"
-                ],
-            )
 
-            if quantize:
-                config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
-                config_kwargs["quantized_algorithm"] = "kl_divergence"
-                config_kwargs["quantized_hybrid_level"] = 3
-                
-            rknn.config(**config_kwargs)
-            ret = rknn.load_onnx(model=str(onnx_path_for_build))
-            if ret != 0:
-                raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
-            ret = rknn.build(do_quantization=quantize, dataset=str(dataset_txt))
-            if ret != 0:
-                raise RuntimeError(f"RKNN build failed with code {ret}")
-            ret = rknn.export_rknn(str(rknn_output))
-            if ret != 0:
-                raise RuntimeError(f"RKNN export failed with code {ret}")
-
-            # Detect actual output format by running a quick inference
+    try:
+        with _progress_spinner("RKNN build"):
+            with _silence_third_party():
+                rknn = RKNN(verbose=False, )
+            detected_format = None
+            detected_layout = None
+            detected_box_format = None
             try:
-                import numpy as np
-                rknn.init_runtime()
-                if isinstance(input_size, int):
-                    h = w = input_size
-                elif isinstance(input_size, (list, tuple)):
-                    h, w = int(input_size[0]), int(input_size[1]) if len(input_size) > 1 else int(input_size[0])
-                else:
-                    h = w = 640
-                dummy = np.zeros((1, h, w, 3), dtype=np.uint8)
-                outputs = rknn.inference(inputs=[dummy])
-                if outputs and len(outputs) > 0:
-                    tensor = outputs[0]
-                    t = tensor[0] if tensor.ndim == 3 else tensor
-                    smaller = min(t.shape[0], t.shape[-1])
-                    larger = max(t.shape[0], t.shape[-1])
-                    is_nms = (smaller == 6 and larger < 1000)
-                    detected_format = "hardware_nms" if is_nms else "raw"
-                    detected_layout = "anchors_first" if is_nms else "features_first"
-                    detected_box_format = "xyxy" if is_nms else "cxcywh"
-                    logger.info(
-                        "RKNN output shape %s -> detected format: %s",
-                        tensor.shape, detected_format,
-                    )
-            except Exception as e:
-                logger.debug("RKNN inference for format detection failed: %s", e)
-        finally:
-            rknn.release()
+                config_kwargs = dict(
+                    mean_values=[[0, 0, 0]],
+                    std_values=[[255, 255, 255]],
+                    target_platform=_detect_rknn_target_platform(),
+                    disable_rules=[
+                        "fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"
+                    ],
+                )
+
+                if quantize:
+                    config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
+                    config_kwargs["quantized_algorithm"] = "kl_divergence"
+                    config_kwargs["quantized_hybrid_level"] = 3
+                    
+                rknn.config(**config_kwargs)
+                ret = rknn.load_onnx(model=str(onnx_path_for_build))
+                if ret != 0:
+                    raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
+                ret = rknn.build(do_quantization=quantize, dataset=str(calib_txt))
+                if ret != 0:
+                    raise RuntimeError(f"RKNN build failed with code {ret}")
+                ret = rknn.export_rknn(str(rknn_output))
+                if ret != 0:
+                    raise RuntimeError(f"RKNN export failed with code {ret}")
+
+                # Detect actual output format by running a quick inference
+                try:
+                    import numpy as np
+                    rknn.init_runtime()
+                    if isinstance(input_size, int):
+                        h = w = input_size
+                    elif isinstance(input_size, (list, tuple)):
+                        h, w = int(input_size[0]), int(input_size[1]) if len(input_size) > 1 else int(input_size[0])
+                    else:
+                        h = w = 640
+                    dummy = np.zeros((1, h, w, 3), dtype=np.uint8)
+                    outputs = rknn.inference(inputs=[dummy])
+                    if outputs and len(outputs) > 0:
+                        tensor = outputs[0]
+                        t = tensor[0] if tensor.ndim == 3 else tensor
+                        smaller = min(t.shape[0], t.shape[-1])
+                        larger = max(t.shape[0], t.shape[-1])
+                        is_nms = (smaller == 6 and larger < 1000)
+                        detected_format = "hardware_nms" if is_nms else "raw"
+                        detected_layout = "anchors_first" if is_nms else "features_first"
+                        detected_box_format = "xyxy" if is_nms else "cxcywh"
+                        logger.info(
+                            "RKNN output shape %s -> detected format: %s",
+                            tensor.shape, detected_format,
+                        )
+                except Exception as e:
+                    logger.debug("RKNN inference for format detection failed: %s", e)
+            finally:
+                rknn.release()
+    finally:
+        if calib_dir != Path(dataset_path):
+            shutil.rmtree(str(calib_dir), ignore_errors=True)
 
     logger.info("RKNN conversion successful: %s", rknn_output)
     _export_rknn_metadata(
