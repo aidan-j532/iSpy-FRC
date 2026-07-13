@@ -44,3 +44,4 @@ rknn_log.txt
 Config/config.json
 prompt.txt
 *.zip
+repopack-output.txt
