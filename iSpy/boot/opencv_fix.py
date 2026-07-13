@@ -20,8 +20,10 @@ def cv2_has_gstreamer() -> bool:
 
 
 def _system_python() -> str:
-    # The interpreter this venv was created FROM, not whatever "python3"
-    # resolves to on PATH (a venv puts its own python3 first on PATH).
+    # CROSS-PLATFORM FIX: Windows uses python.exe in the base directory, 
+    # while Unix-like environments use bin/python3
+    if sys.platform == "win32":
+        return str(Path(sys.base_prefix) / "python.exe")
     return str(Path(sys.base_prefix) / "bin" / "python3")
 
 
@@ -53,15 +55,13 @@ def _find_system_cv2_path() -> Path | None:
         path = Path(result.stdout.strip())
         if path.name == "cv2" and (path / "__init__.py").exists():
             return path  # package-style install
-        candidates = list(path.glob("cv2*.so"))
-        return candidates[0] if candidates else None  # flat .so-style install
+        candidates = list(path.glob("cv2*.so")) + list(path.glob("cv2*.pyd")) # Added .pyd for Windows safety
+        return candidates[0] if candidates else None
     except Exception:
         return None
 
 
 def _current_cv2_targets() -> tuple[Path, list[Path]]:
-    """Site-packages dir this interpreter resolves cv2 from, plus any existing
-    cv2/opencv_python artifacts there to remove before vendoring the new one."""
     purelib = Path(sysconfig.get_paths()["purelib"])
     search_dirs = {purelib}
     if hasattr(site, "getsitepackages"):
@@ -76,14 +76,19 @@ def _current_cv2_targets() -> tuple[Path, list[Path]]:
         if (d / "cv2").exists():
             existing.append(d / "cv2")
         existing.extend(d.glob("cv2*.so"))
+        existing.extend(d.glob("cv2*.pyd")) # Added .pyd for Windows safety
         existing.extend(d.glob("opencv_python*"))
     return purelib, existing
 
 
 def ensure_csi_capable_opencv(auto_fix: bool = True) -> bool:
     """Ensures the running interpreter's cv2 has GStreamer support (required
-    for nvarguscamerasrc CSI capture). Returns True if a fix was applied —
-    caller must re-exec the process for the change to take effect."""
+    for nvarguscamerasrc CSI capture). Returns True if a fix was applied."""
+    # CROSS-PLATFORM FIX: Instantly return False if not on Linux since 
+    # CSI cameras and apt-get are Linux-specific features.
+    if sys.platform != "linux":
+        return False
+
     if cv2_has_gstreamer():
         return False
 

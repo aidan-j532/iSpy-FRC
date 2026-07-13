@@ -102,9 +102,12 @@ class Camera:
         return frame
 
     def _open_camera(self):
-        is_windows = platform.system() == "Windows"
+        sys_platform = platform.system()
+        is_windows = sys_platform == "Windows"
+        is_linux = sys_platform == "Linux"
 
-        if not is_windows:
+        # CROSS-PLATFORM FIX: Only run v4l2-ctl configurations if specifically on Linux
+        if is_linux:
             device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
 
             _fmt_resolutions = [
@@ -152,10 +155,14 @@ class Camera:
 
             time.sleep(0.15)
 
+        # CROSS-PLATFORM FIX: Map proper backends explicitly by OS type
         if is_windows:
             self.cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
-        else:
+        elif is_linux:
             self.cap = cv2.VideoCapture(self.source, cv2.CAP_V4L2)
+        else:
+            # Fallback backend (e.g. AVFoundation on macOS, or generic CAP_ANY)
+            self.cap = cv2.VideoCapture(self.source, cv2.CAP_ANY)
 
         if not self.cap.isOpened():
             raise ValueError(f"Camera failed to open: {self.source}")
@@ -163,7 +170,13 @@ class Camera:
         for _ in range(10):
             self.cap.grab()
 
-        if not is_windows:
+        # CROSS-PLATFORM FIX: Safely assign parameters based on platform capabilities
+        if is_windows:
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+        elif is_linux:
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -171,7 +184,7 @@ class Camera:
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             self.cap.set(cv2.CAP_PROP_FPS, 30)
         else:
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            # Fallback configuration for macOS/other systems
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             self.cap.set(cv2.CAP_PROP_FPS, 30)

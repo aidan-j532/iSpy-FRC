@@ -10,22 +10,31 @@ import contextlib
 import re
 import ctypes
 from pathlib import Path
+import ctypes
+from pathlib import Path
 
 # Load libc for fflush() - used by _quiet() to flush C stdio buffers
 _libc = None
-for _libname in ("libc.so.6", "libc.so", "libc.musl.so"):
+if sys.platform == "win32":
     try:
-        _libc = ctypes.CDLL(_libname, use_errno=False)
-        _libc.fflush(None)  # verify the function exists
-        break
+        _libc = ctypes.cdll.msvcrt
+        _libc.fflush(None)
     except Exception:
         _libc = None
+else:
+    for _libname in ("libc.so.6", "libc.so", "libc.musl.so"):
+        try:
+            _libc = ctypes.CDLL(_libname, use_errno=False)
+            _libc.fflush(None)  # verify the function exists
+            break
+        except Exception:
+            _libc = None
+
 if _libc is not None:
     _fflush = _libc.fflush
 else:
     def _fflush(_) -> None:
         pass
-
 import numpy as np
 import cv2
 
