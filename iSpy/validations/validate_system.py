@@ -59,7 +59,7 @@ def run_unit_tests() -> None:
         pattern="unit_tests.py",
     )
     with open(os.devnull, "w") as devnull:
-        runner = unittest.TextTestRunner(verbosity=verbosity, stream=devnull)
+        runner = unittest.TextTestRunner(verbosity=2, stream=devnull)
         result = runner.run(suite)
     return result.wasSuccessful()
     result = runner.run(suite)
