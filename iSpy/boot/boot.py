@@ -840,11 +840,27 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
         if node.op_type == "Concat" and list(node.output) == list(concat_node.output)
     )
     nodes.insert(target_idx, div_node)
-    target_concat = nodes[target_idx + 1]
-    for idx, input_name in enumerate(target_concat.input):
-        if input_name == box_input_name:
-            target_concat.input[idx] = normalized_name
-            break
+
+    # Rewire EVERY consumer of box_input_name to use the normalized tensor,
+    # not just the outer/top-level Concat. In pose graphs box_input_name is
+    # buried inside a nested Concat(boxes, conf), so the outer concat's own
+    # `input` list never contains it directly - searching only target_concat
+    # silently no-ops in that case (Div node gets inserted but nothing reads
+    # it), leaving box coords unnormalized going into quantization.
+    rewired = False
+    for node in nodes:
+        if node is div_node:
+            continue
+        for idx, input_name in enumerate(node.input):
+            if input_name == box_input_name:
+                node.input[idx] = normalized_name
+                rewired = True
+
+    if not rewired:
+        raise RuntimeError(
+            f"Box tensor '{box_input_name}' has no consumers in the graph - "
+            "normalization Div node would be orphaned. This should not happen."
+        )
 
     del model.graph.node[:]
     model.graph.node.extend(nodes)
@@ -929,11 +945,26 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
             if node.op_type == "Concat" and list(node.output) == list(concat_node.output)
         )
         nodes.insert(target_idx, kpt_div_node)
-        target_concat = nodes[target_idx + 1]
-        for idx, input_name in enumerate(target_concat.input):
-            if input_name == kpt_input_name:
-                target_concat.input[idx] = kpt_normalized_name
-                break
+
+        # Same fix as the box path: rewire EVERY consumer of kpt_input_name,
+        # not just the outer/top-level Concat. In this graph kpts happens to
+        # be a direct input of the outer Concat, so the old code worked by
+        # coincidence - but don't rely on that holding for other exports.
+        kpt_rewired = False
+        for node in nodes:
+            if node is kpt_div_node:
+                continue
+            for idx, input_name in enumerate(node.input):
+                if input_name == kpt_input_name:
+                    node.input[idx] = kpt_normalized_name
+                    kpt_rewired = True
+
+        if not kpt_rewired:
+            raise RuntimeError(
+                f"Keypoint tensor '{kpt_input_name}' has no consumers in the graph - "
+                "normalization Div node would be orphaned."
+            )
+
         del model.graph.node[:]
         model.graph.node.extend(nodes)
 
