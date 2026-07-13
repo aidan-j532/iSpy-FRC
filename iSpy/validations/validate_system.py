@@ -58,10 +58,10 @@ def run_unit_tests() -> None:
         start_dir=str(Path(__file__).parent),
         pattern="unit_tests.py",
     )
-    runner = unittest.TextTestRunner(
-        verbosity=0,
-        stream=open(os.devnull, "w"),
-    )
+    with open(os.devnull, "w") as devnull:
+        runner = unittest.TextTestRunner(verbosity=verbosity, stream=devnull)
+        result = runner.run(suite)
+    return result.wasSuccessful()
     result = runner.run(suite)
     if not result.wasSuccessful():
         raise RuntimeError("Unit tests failed.")

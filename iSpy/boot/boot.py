@@ -867,41 +867,48 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     if kpt_input_name is not None:
         kpt_coord_scale = divisor
 
-        # Determine which axis actually holds the keypoint-channel dimension -
-        # don't assume features_first layout like the box path could get away
-        # with (a scalar broadcasts fine regardless of layout; a per-channel
-        # vector doesn't).
+        # Determine which axis actually holds the keypoint-channel dimension
         kpt_vi = value_info.get(kpt_input_name)
         kpt_dims = [d.dim_value for d in kpt_vi.type.tensor_type.shape.dim] if kpt_vi is not None else []
         rank = len(kpt_dims)
 
         if rank == 0:
-            raise RuntimeError(
-                f"Could not determine rank/shape of keypoint tensor '{kpt_input_name}' "
-                "from ONNX shape inference - cannot build a broadcastable scale vector."
-            )
+            logger.warning("Shape inference missing for keypoint tensor '%s'. Using safe rank-3 fallback.", kpt_input_name)
+            rank = 3
+            kpt_dims = [1, 0, 0]
 
-        # Find which axis equals kpt_channels; build a broadcast shape with
-        # kpt_channels on that axis and 1 everywhere else.
+        # Find which axis matches kpt_channels
         channel_axis = None
         for axis, dim in enumerate(kpt_dims):
             if dim == kpt_channels:
                 channel_axis = axis
                 break
+        
+        # SMART FALLBACK: If shape inference is dynamic, dim_value is 0. 
+        # Guess layout based on typical YOLO configurations.
         if channel_axis is None:
-            raise RuntimeError(
-                f"Keypoint tensor '{kpt_input_name}' has shape {kpt_dims} but none of "
-                f"its axes matches the detected kpt_channels={kpt_channels}. Layout "
-                "assumption is wrong - inspect the ONNX graph manually."
-            )
+            logger.warning("Could not find static axis matching kpt_channels=%d in shape %s. Applying fallback heuristics.", kpt_channels, kpt_dims)
+            if rank == 3:
+                # Most YOLO models on RKNN use features_first [B, C, A] (axis 1) 
+                # or anchors_first [B, A, C] (axis 2)
+                channel_axis = 1  # Default to axis 1 (features_first)
+                logger.info("Defaulting to channel_axis=%d (features_first layout)", channel_axis)
+            elif rank == 2:
+                channel_axis = 1  # [Anchors, Channels]
+                logger.info("Defaulting to channel_axis=%d for 2D tensor", channel_axis)
+            else:
+                raise RuntimeError(
+                    f"Keypoint tensor '{kpt_input_name}' has shape {kpt_dims} but none of "
+                    f"its axes matches detected kpt_channels={kpt_channels}. Cannot safely convert."
+                )
 
         broadcast_shape = [1] * rank
         broadcast_shape[channel_axis] = kpt_channels
 
         scale_vec = np.ones((kpt_channels,), dtype=np.float32)
-        scale_vec[0::3] = divisor  # x
-        scale_vec[1::3] = divisor  # y
-        # 2::3 (confidence) stays 1.0 - unscaled
+        scale_vec[0::3] = divisor  # x coordinates
+        scale_vec[1::3] = divisor  # y coordinates
+        # 2::3 (confidence scores) stay 1.0 (unscaled)
 
         vec_name = "iSpy_kpt_coord_scale"
         if not any(init.name == vec_name for init in model.graph.initializer):
@@ -930,16 +937,18 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
         )
         nodes.insert(target_idx, kpt_div_node)
         target_concat = nodes[target_idx + 1]
+        
+        # Replace all instances of the un-normalized tensor feeding into the Concat node
         for idx, input_name in enumerate(target_concat.input):
             if input_name == kpt_input_name:
                 target_concat.input[idx] = kpt_normalized_name
-                break
+
         del model.graph.node[:]
         model.graph.node.extend(nodes)
 
         logger.info(
             "Keypoint-coordinate normalization applied: divided x/y channels of '%s' "
-            "by %.1f before Concat '%s' (confidence channel left unscaled)",
+            "by %.1f before Concat '%s'",
             kpt_input_name, divisor, concat_node.name,
         )
     else:

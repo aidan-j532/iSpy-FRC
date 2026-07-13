@@ -7,8 +7,11 @@ from ultralytics import YOLO
 from iSpy.vision.ModelInspector import fill_missing_config
 import threading
 import queue
-import torch
-
+try:
+    import torch
+except ImportError:
+    torch = None
+    
 try:
     from rknnlite.api import RKNNLite
 
@@ -1137,13 +1140,15 @@ class GenericYolo:
                 f"Pose keypoint columns {kpts_raw.shape[1]} != expected {expected}."
             )
 
+        # k+2 (confidence) intentionally left unscaled
         kpt_coord_scale = self.output.get("kpt_coord_scale")
+
         if kpt_coord_scale is not None:
             kd = self.output["keypoint_dims"]
             kpts_raw = kpts_raw.astype(np.float32, copy=True)
             for k in range(0, kpts_raw.shape[1], kd):
-                kpts_raw[:, k] *= kpt_coord_scale       # x
-                kpts_raw[:, k + 1] *= kpt_coord_scale   # y
+                kpts_raw[:, k] *= kpt_coord_scale       # Re-scale x
+                kpts_raw[:, k + 1] *= kpt_coord_scale   # Re-scale y
                 # k+2 (confidence) intentionally left unscaled
 
         if self.output["keypoint_scores_are_logits"]:
@@ -1190,9 +1195,15 @@ class GenericYolo:
 
         return Results(boxes, ultralytics_result.orig_shape, keypoints_list or None)
 
-    def release(self):
-        if self.model_type == "rknn":
-            self.model.release()
-        pool = getattr(self, "_pool", None)
-        if pool is not None:
-            pool.stop()
+def release(self):
+    if self.model_type == "rknn":
+        self.model.release()
+    elif self.model_type == "onnx":
+        del self.model  # ORT session has no explicit close; drop the ref
+        if self._onnx_pool is not None:
+            self._onnx_pool.stop()
+    elif self.model_type == "tflite":
+        del self.model
+    pool = getattr(self, "_pool", None)
+    if pool is not None:
+        pool.stop()

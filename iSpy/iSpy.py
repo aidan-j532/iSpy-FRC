@@ -34,8 +34,9 @@ except ImportError:
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve()
-
 while not (PROJECT_ROOT / "plugins").exists():
+    if PROJECT_ROOT.parent == PROJECT_ROOT:
+        raise RuntimeError("Could not locate 'plugins' directory above iSpy.py")
     PROJECT_ROOT = PROJECT_ROOT.parent
 
 _PLUGIN_ROOT = PROJECT_ROOT / "plugins"
@@ -273,7 +274,7 @@ class iSpy:
 
         for tracker in self.trackers.values():
             fuel_list = tracker.update(
-                fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), pose.Z()
+                fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), 0.0
             )
 
         loop_s = time.perf_counter() - t0
@@ -314,7 +315,7 @@ class iSpy:
 
         for tracker in self.trackers.values():
             fuel_list = tracker.update(
-                fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), pose.Z()
+                fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), 0.0
             )
 
         loop_s = time.perf_counter() - t0

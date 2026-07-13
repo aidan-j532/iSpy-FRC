@@ -57,7 +57,8 @@ def has_jetson() -> bool:
         return True
     for path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
         try:
-            model = open(path, "rb").read().decode(errors="ignore").lower()
+            with open(path, "rb") as f:
+                model = f.read().decode(errors="ignore").lower()
             if "jetson" in model or "tegra" in model:
                 return True
         except Exception:
@@ -160,7 +161,8 @@ def has_rockchip_npu() -> bool:
 
     rockchip_indicators = ("rk3588", "rk3576", "rk3399", "rk3568", "rk3566", "rk3528", "rv1103", "rv1106")
     try:
-        cpuinfo = open("/proc/cpuinfo").read().lower()
+        with open("/proc/cpuinfo") as f:
+            cpuinfo = f.read().lower()
         if any(s in cpuinfo for s in rockchip_indicators):
             return True
     except Exception:
@@ -168,7 +170,8 @@ def has_rockchip_npu() -> bool:
 
     for path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
         try:
-            model = open(path).read().lower()
+            with open(path, "rb") as f:
+                model = f.read().decode(errors="ignore").lower()
             if any(s in model for s in rockchip_indicators):
                 return True
             if "orange pi" in model or "rockchip" in model:
