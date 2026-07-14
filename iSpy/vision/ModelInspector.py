@@ -561,6 +561,8 @@ def _apply_metadata_to_config(sidecar: dict, model_config: dict) -> dict:
         from_sidecar["output"]["quant_scale"] = sidecar["quant_scale"]
     if "box_coord_scale" in sidecar:
         from_sidecar["output"]["box_coord_scale"] = sidecar["box_coord_scale"]
+    if "kpt_coord_scale" in sidecar:
+        from_sidecar["output"]["kpt_coord_scale"] = sidecar["kpt_coord_scale"]
     if sidecar.get("input_normalize") and "input_scale" in sidecar:
         from_sidecar["input"]["scale"] = sidecar["input_scale"]
     if sidecar.get("task") == "pose" and "kpt_shape" in sidecar:

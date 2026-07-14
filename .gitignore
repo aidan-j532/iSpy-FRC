@@ -44,4 +44,5 @@ rknn_log.txt
 Config/config.json
 prompt.txt
 *.zip
-repopack-output.txt
+repomix-output.txt
+repomix-output.xml
