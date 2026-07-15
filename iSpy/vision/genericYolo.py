@@ -780,9 +780,13 @@ class GenericYolo:
         tensor = self._dequantize_tensor(raw_outputs[0])
         _t = tensor[0] if tensor.ndim == 3 else tensor
         self.logger.info(
-            "DEBUG raw rknn tensor shape=%s dtype_in=%s row0_first12=%s",
-            _t.shape, raw_outputs[0].dtype,
-            (_t[0][:12].tolist() if _t.shape[0] < _t.shape[1] else _t[:12, 0].tolist()),
+            "DEBUG raw rknn tensor shape=%s overall min=%.4f max=%.4f nonzero=%d/%d "
+            "row4(conf) min=%.4f max=%.4f mean=%.4f nonzero=%d",
+            _t.shape,
+            float(_t.min()), float(_t.max()),
+            int(np.count_nonzero(_t)), _t.size,
+            float(_t[4].min()), float(_t[4].max()), float(_t[4].mean()),
+            int(np.count_nonzero(_t[4])),
         )
         if not self._rknn_fmt_checked:
             self._rknn_fmt_checked = True
