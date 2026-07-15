@@ -778,7 +778,12 @@ class GenericYolo:
             return Results([], orig_shape)
 
         tensor = self._dequantize_tensor(raw_outputs[0])
-
+        _t = tensor[0] if tensor.ndim == 3 else tensor
+        self.logger.info(
+            "DEBUG raw rknn tensor shape=%s dtype_in=%s row0_first12=%s",
+            _t.shape, raw_outputs[0].dtype,
+            (_t[0][:12].tolist() if _t.shape[0] < _t.shape[1] else _t[:12, 0].tolist()),
+        )
         if not self._rknn_fmt_checked:
             self._rknn_fmt_checked = True
             t = tensor[0] if tensor.ndim == 3 else tensor
