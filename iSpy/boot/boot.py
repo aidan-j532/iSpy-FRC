@@ -774,56 +774,57 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     import numpy as np
     import onnx
     import onnx.numpy_helper
-    import onnx.shape_inference
 
     model = onnx.load(onnx_path)
-    inferred = onnx.shape_inference.infer_shapes(model)
-    inferred_graph = inferred.graph
+    graph = model.graph
 
-    output_names = {output.name for output in inferred_graph.output}
+    output_names = {output.name for output in graph.output}
     concat_node = None
-    for node in inferred_graph.node:
+    for node in graph.node:
         if node.op_type == "Concat" and any(out_name in output_names for out_name in node.output):
             concat_node = node
             break
     if concat_node is None:
+        raise RuntimeError(f"No Concat node feeding a graph output found in {onnx_path}.")
+
+    inputs = list(concat_node.input)
+    if len(inputs) < 2:
         raise RuntimeError(
-            f"No Concat node feeding a graph output found in {onnx_path}."
+            f"Output Concat '{concat_node.name}' has {len(inputs)} input(s), "
+            "expected at least 2 (boxes, scores[, keypoints]) - "
+            "Ultralytics export structure may have changed."
         )
 
-    value_info = {
-        vi.name: vi
-        for vi in list(inferred_graph.value_info) + list(inferred_graph.input) + list(inferred_graph.output)
-    }
+    # Structural identification instead of dimension-guessing: Ultralytics'
+    # detect/pose export always concatenates [boxes, scores, (keypoints)] in
+    # that fixed order into the final output Concat. Boxes are the output of
+    # a Mul node (stride-scaling the DFL-decoded distances into pixel space);
+    # scores are already sigmoid-activated and don't need normalization.
+    node_by_output = {out: n for n in graph.node for out in n.output}
 
-    def _has_dim(name: str, target: int):
-        value = value_info.get(name)
-        if value is None:
-            return False
-        dims = value.type.tensor_type.shape.dim
-        return any(int(dim.dim_value) == target for dim in dims if dim.dim_value > 0)
-
-    box_input_name = None
-    for input_name in concat_node.input:
-        if _has_dim(input_name, 4):
-            box_input_name = input_name
-            break
-    if box_input_name is None:
-        box_input_name = _find_box_tensor(inferred_graph, value_info, list(concat_node.input))
-    if box_input_name is None:
+    box_input_name = inputs[0]
+    box_producer = node_by_output.get(box_input_name)
+    if box_producer is None or box_producer.op_type != "Mul":
         raise RuntimeError(
-            f"Could not identify the 4-channel box input for Concat '{concat_node.name}'."
+            f"Expected box tensor '{box_input_name}' (Concat input 0) to be "
+            f"produced by a Mul node (stride scaling), got "
+            f"{box_producer.op_type if box_producer else 'unknown producer'}. "
+            "Ultralytics export structure may have changed - inspect the ONNX "
+            "graph manually before trusting this conversion."
         )
+
+    kpt_input_name = inputs[2] if len(inputs) > 2 else None
 
     if hasattr(input_size, "__iter__"):
         divisor = float(input_size[0] if len(input_size) > 0 else 640)
     else:
         divisor = float(input_size)
 
+    # ── box coordinates ──────────────────────────────────────────────
     scale_name = "iSpy_box_coord_scale"
-    if not any(init.name == scale_name for init in model.graph.initializer):
+    if not any(init.name == scale_name for init in graph.initializer):
         scale_tensor = onnx.numpy_helper.from_array(np.array(divisor, dtype=np.float32), name=scale_name)
-        model.graph.initializer.append(scale_tensor)
+        graph.initializer.append(scale_tensor)
 
     normalized_name = f"{box_input_name}_iSpy_normalized"
     div_node = onnx.helper.make_node(
@@ -833,20 +834,13 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
         name="iSpy_Div_box_normalize",
     )
 
-    nodes = list(model.graph.node)
+    nodes = list(graph.node)
     target_idx = next(
-        idx
-        for idx, node in enumerate(nodes)
+        idx for idx, node in enumerate(nodes)
         if node.op_type == "Concat" and list(node.output) == list(concat_node.output)
     )
     nodes.insert(target_idx, div_node)
 
-    # Rewire EVERY consumer of box_input_name to use the normalized tensor,
-    # not just the outer/top-level Concat. In pose graphs box_input_name is
-    # buried inside a nested Concat(boxes, conf), so the outer concat's own
-    # `input` list never contains it directly - searching only target_concat
-    # silently no-ops in that case (Div node gets inserted but nothing reads
-    # it), leaving box coords unnormalized going into quantization.
     rewired = False
     for node in nodes:
         if node is div_node:
@@ -862,53 +856,51 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
             "normalization Div node would be orphaned. This should not happen."
         )
 
-    del model.graph.node[:]
-    model.graph.node.extend(nodes)
+    del graph.node[:]
+    graph.node.extend(nodes)
 
     logger.info(
-        "Box-coordinate normalization applied: divided '%s' by %.1f before Concat '%s'",
-        box_input_name,
-        divisor,
-        concat_node.name,
+        "Box-coordinate normalization applied: divided '%s' (Mul/stride output) by %.1f before Concat '%s'",
+        box_input_name, divisor, concat_node.name,
     )
 
-    # ── keypoints (pose only) ──────────────────────────────────────────
-    # Same problem as boxes: x/y kpt coords sit in pixel range (0-640) while
-    # kpt confidence sits in 0-1, so they collapse to zero under per-tensor
-    # INT8 quantization unless normalized the same way box coords are.
+    # ── keypoints (pose only) ────────────────────────────────────────
     kpt_coord_scale = None
-    kpt_input_name, kpt_channels = _find_keypoint_tensor(
-        inferred_graph, value_info, list(concat_node.input), box_input_name
-    )
     if kpt_input_name is not None:
-        kpt_coord_scale = divisor
+        kpt_producer = node_by_output.get(kpt_input_name)
+        if kpt_producer is None:
+            raise RuntimeError(
+                f"Keypoint tensor '{kpt_input_name}' (Concat input 2) has no producer node."
+            )
 
-        # Determine which axis actually holds the keypoint-channel dimension -
-        # don't assume features_first layout like the box path could get away
-        # with (a scalar broadcasts fine regardless of layout; a per-channel
-        # vector doesn't).
+        # Need the tensor's channel count to know which slots are x/y (scale)
+        # vs confidence (leave alone). Run shape inference just for this.
+        inferred = onnx.shape_inference.infer_shapes(model)
+        value_info = {
+            vi.name: vi
+            for vi in list(inferred.graph.value_info) + list(inferred.graph.input) + list(inferred.graph.output)
+        }
         kpt_vi = value_info.get(kpt_input_name)
         kpt_dims = [d.dim_value for d in kpt_vi.type.tensor_type.shape.dim] if kpt_vi is not None else []
         rank = len(kpt_dims)
-
         if rank == 0:
             raise RuntimeError(
-                f"Could not determine rank/shape of keypoint tensor '{kpt_input_name}' "
-                "from ONNX shape inference - cannot build a broadcastable scale vector."
+                f"Could not determine shape of keypoint tensor '{kpt_input_name}' "
+                "via shape inference - cannot build a broadcastable scale vector."
             )
 
-        # Find which axis equals kpt_channels; build a broadcast shape with
-        # kpt_channels on that axis and 1 everywhere else.
+        # kpt_shape is [num_keypoints, 3] (x, y, conf) flattened to
+        # num_keypoints*3 channels. Find that channel axis.
+        kpt_channels = None
         channel_axis = None
         for axis, dim in enumerate(kpt_dims):
-            if dim == kpt_channels:
-                channel_axis = axis
+            if dim > 4 and dim % 3 == 0:
+                kpt_channels, channel_axis = dim, axis
                 break
-        if channel_axis is None:
+        if kpt_channels is None:
             raise RuntimeError(
-                f"Keypoint tensor '{kpt_input_name}' has shape {kpt_dims} but none of "
-                f"its axes matches the detected kpt_channels={kpt_channels}. Layout "
-                "assumption is wrong - inspect the ONNX graph manually."
+                f"Keypoint tensor '{kpt_input_name}' has shape {kpt_dims} - "
+                "couldn't find a channel axis divisible by 3 (x,y,conf per keypoint)."
             )
 
         broadcast_shape = [1] * rank
@@ -920,11 +912,9 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
         # 2::3 (confidence) stays 1.0 - unscaled
 
         vec_name = "iSpy_kpt_coord_scale"
-        if not any(init.name == vec_name for init in model.graph.initializer):
-            vec_tensor = onnx.numpy_helper.from_array(
-                scale_vec.reshape(broadcast_shape), name=vec_name
-            )
-            model.graph.initializer.append(vec_tensor)
+        if not any(init.name == vec_name for init in graph.initializer):
+            vec_tensor = onnx.numpy_helper.from_array(scale_vec.reshape(broadcast_shape), name=vec_name)
+            graph.initializer.append(vec_tensor)
 
         logger.info(
             "Keypoint tensor '%s' shape=%s, channel axis=%d, broadcast shape=%s",
@@ -939,17 +929,13 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
             name="iSpy_Div_kpt_normalize",
         )
 
-        nodes = list(model.graph.node)
+        nodes = list(graph.node)
         target_idx = next(
             idx for idx, node in enumerate(nodes)
             if node.op_type == "Concat" and list(node.output) == list(concat_node.output)
         )
         nodes.insert(target_idx, kpt_div_node)
 
-        # Same fix as the box path: rewire EVERY consumer of kpt_input_name,
-        # not just the outer/top-level Concat. In this graph kpts happens to
-        # be a direct input of the outer Concat, so the old code worked by
-        # coincidence - but don't rely on that holding for other exports.
         kpt_rewired = False
         for node in nodes:
             if node is kpt_div_node:
@@ -965,16 +951,17 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
                 "normalization Div node would be orphaned."
             )
 
-        del model.graph.node[:]
-        model.graph.node.extend(nodes)
+        del graph.node[:]
+        graph.node.extend(nodes)
 
+        kpt_coord_scale = divisor
         logger.info(
             "Keypoint-coordinate normalization applied: divided x/y channels of '%s' "
             "by %.1f before Concat '%s' (confidence channel left unscaled)",
             kpt_input_name, divisor, concat_node.name,
         )
     else:
-        logger.debug("No keypoint tensor found feeding Concat '%s' - assuming detect-only model.", concat_node.name)
+        logger.debug("Output Concat '%s' has no third input - assuming detect-only model.", concat_node.name)
 
     onnx.checker.check_model(model)
     onnx.save(model, output_path)
@@ -1262,6 +1249,26 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
     )
     return str(rknn_output)
 
+def _find_pose_output_tensors(graph, concat_node):
+    """Identify box/conf/kpt tensors feeding the final output Concat by
+    structural role (Ultralytics export pattern), not by dimension guessing.
+    concat_node.input is [boxes, scores, keypoints] for pose,
+    or [boxes, scores] for detect - in that fixed order."""
+    node_by_output = {out: n for n in graph.node for out in n.output}
+    inputs = list(concat_node.input)
+
+    box_name = inputs[0]   # always first: decoded+stride-scaled boxes
+    conf_name = inputs[1]  # always second: sigmoid'd confidence/class scores
+    kpt_name = inputs[2] if len(inputs) > 2 else None  # pose only
+
+    box_producer = node_by_output.get(box_name)
+    if box_producer is None or box_producer.op_type != "Mul":
+        raise RuntimeError(
+            f"Expected box tensor '{box_name}' to be produced by a Mul node "
+            f"(stride scaling), got {box_producer.op_type if box_producer else 'unknown'}. "
+            "Ultralytics export structure may have changed - verify manually."
+        )
+    return box_name, conf_name, kpt_name
 
 def convert_model(model_file, target_format, input_size, quantize=None, force=False, kw=None):
     if not os.path.exists(model_file):
