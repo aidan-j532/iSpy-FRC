@@ -1020,6 +1020,12 @@ class GenericYolo:
                 "box coordinates or confidence before NMS.", dropped, len(boxes_xyxy),
             )
         mask = (confs >= self.min_conf) & finite
+        if confs.size > 0:
+            self.logger.info(
+                "DEBUG pose confs: max=%.4f mean=%.4f min=%.4f n=%d n_passing=%d",
+                float(confs.max()), float(confs.mean()), float(confs.min()),
+                confs.size, int(mask.sum()),
+            )
         boxes_xyxy = boxes_xyxy[mask]
         confs = confs[mask]
         class_ids = class_ids[mask]
