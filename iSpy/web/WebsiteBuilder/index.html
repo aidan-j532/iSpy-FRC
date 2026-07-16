@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>GrapesJS</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/grapesjs/dist/css/grapes.min.css">
+    <script src="https://unpkg.com/grapesjs"></script>
+
+    <style>
+        html, body {
+            margin: 0;
+            height: 100%;
+        }
+
+        #gjs {
+            height: 100vh;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="gjs">
+        <h1>Hello iSpy!</h1>
+    </div>
+
+    <script>
+        const editor = grapesjs.init({
+            container: '#gjs',
+            height: '100%',
+            storageManager: {
+                type: 'local'
+            }
+        });
+    </script>
+</body>
+</html>
