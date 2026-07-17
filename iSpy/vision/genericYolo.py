@@ -772,25 +772,75 @@ class GenericYolo:
 
         return tensor.astype(np.float32) / scale
 
+    def _merge_rknn_outputs(self, raw_outputs: list) -> np.ndarray:
+        """Rejoin RKNN outputs when quantization splits the final Concat.
+
+        Quantized pose models often return separate tensors (e.g. boxes 4ch +
+        conf/kpts remainder) instead of one fused output. Ultralytics postprocess
+        expects a single features-first (C, N) tensor.
+        """
+        if not raw_outputs:
+            return np.empty((0,), dtype=np.float32)
+
+        if len(raw_outputs) == 1:
+            return self._dequantize_tensor(raw_outputs[0])
+
+        if not getattr(self, "_rknn_split_logged", False):
+            self._rknn_split_logged = True
+            shapes = [o.shape for o in raw_outputs]
+            self.logger.info(
+                "RKNN returned %d split output(s) %s — merging before postprocess",
+                len(raw_outputs),
+                shapes,
+            )
+
+        parts: list[np.ndarray] = []
+        for raw in raw_outputs:
+            t = self._dequantize_tensor(raw)
+            if t.ndim == 3:
+                t = t[0]
+            if t.ndim != 2:
+                raise ValueError(f"Expected 2D RKNN output slice, got shape {t.shape}.")
+            # Normalize to features_first (C, N).
+            if t.shape[0] > t.shape[1]:
+                t = t.T
+            parts.append(t)
+
+        box_parts = [p for p in parts if p.shape[0] == 4]
+        other_parts = [p for p in parts if p.shape[0] != 4]
+        ordered = (box_parts + other_parts) if len(box_parts) == 1 else parts
+
+        anchor_counts = {p.shape[1] for p in ordered}
+        if len(anchor_counts) != 1:
+            raise ValueError(
+                f"RKNN split outputs disagree on anchor count: "
+                f"{[p.shape for p in ordered]}"
+            )
+
+        merged = np.concatenate(ordered, axis=0)
+        expected = self._feature_width()
+        if merged.shape[0] > expected:
+            self.logger.debug(
+                "RKNN split outputs merged to %d channels, trimming to expected %d",
+                merged.shape[0],
+                expected,
+            )
+            merged = merged[:expected]
+        elif merged.shape[0] < expected:
+            self.logger.warning(
+                "RKNN split outputs merged to %d channels but expected %d",
+                merged.shape[0],
+                expected,
+            )
+
+        return merged[np.newaxis, ...]
+
     def _run_rknn(self, preprocessed: np.ndarray, orig_shape) -> Results:
         raw_outputs = self.model.inference(inputs=[preprocessed])
-        print("num outputs:", len(raw_outputs))
-        for i, o in enumerate(raw_outputs):
-            print(f"  output[{i}] shape={o.shape} dtype={o.dtype}")
         if raw_outputs is None:
             return Results([], orig_shape)
 
-        tensor = self._dequantize_tensor(raw_outputs[0])
-        _t = tensor[0] if tensor.ndim == 3 else tensor
-        self.logger.info(
-            "DEBUG raw rknn tensor shape=%s overall min=%.4f max=%.4f nonzero=%d/%d "
-            "row4(conf) min=%.4f max=%.4f mean=%.4f nonzero=%d",
-            _t.shape,
-            float(_t.min()), float(_t.max()),
-            int(np.count_nonzero(_t)), _t.size,
-            float(_t[4].min()), float(_t[4].max()), float(_t[4].mean()),
-            int(np.count_nonzero(_t[4])),
-        )
+        tensor = self._merge_rknn_outputs(raw_outputs)
         if not self._rknn_fmt_checked:
             self._rknn_fmt_checked = True
             t = tensor[0] if tensor.ndim == 3 else tensor
@@ -1032,12 +1082,6 @@ class GenericYolo:
                 "box coordinates or confidence before NMS.", dropped, len(boxes_xyxy),
             )
         mask = (confs >= self.min_conf) & finite
-        if confs.size > 0:
-            self.logger.info(
-                "DEBUG pose confs: max=%.4f mean=%.4f min=%.4f n=%d n_passing=%d",
-                float(confs.max()), float(confs.mean()), float(confs.min()),
-                confs.size, int(mask.sum()),
-            )
         boxes_xyxy = boxes_xyxy[mask]
         confs = confs[mask]
         class_ids = class_ids[mask]

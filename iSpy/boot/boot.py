@@ -1107,6 +1107,30 @@ def _find_keypoint_tensor(graph, value_info, concat_inputs, box_input_name, max_
         depth += 1
     return None, None
 
+def _merge_rknn_build_outputs(outputs: list) -> "np.ndarray":
+    """Merge split RKNN inference outputs for format detection during build."""
+    import numpy as np
+
+    if not outputs:
+        return np.empty((0,), dtype=np.float32)
+    if len(outputs) == 1:
+        return outputs[0]
+
+    parts: list[np.ndarray] = []
+    for raw in outputs:
+        t = raw[0] if raw.ndim == 3 else raw
+        if t.ndim != 2:
+            return outputs[0]
+        if t.shape[0] > t.shape[1]:
+            t = t.T
+        parts.append(t)
+
+    box_parts = [p for p in parts if p.shape[0] == 4]
+    other_parts = [p for p in parts if p.shape[0] != 4]
+    ordered = (box_parts + other_parts) if len(box_parts) == 1 else parts
+    merged = np.concatenate(ordered, axis=0)
+    return merged[np.newaxis, ...]
+
 def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None):
     if quantize is None:
         quantize = _RKNN_QUANTIZE
@@ -1217,7 +1241,14 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
                     dummy = np.zeros((1, h, w, 3), dtype=np.uint8)
                     outputs = rknn.inference(inputs=[dummy])
                     if outputs and len(outputs) > 0:
-                        tensor = outputs[0]
+                        tensor = _merge_rknn_build_outputs(outputs)
+                        if len(outputs) > 1:
+                            logger.info(
+                                "RKNN build returned %d split output(s) %s -> merged shape %s",
+                                len(outputs),
+                                [o.shape for o in outputs],
+                                tensor.shape,
+                            )
                         t = tensor[0] if tensor.ndim == 3 else tensor
                         smaller = min(t.shape[0], t.shape[-1])
                         larger = max(t.shape[0], t.shape[-1])
