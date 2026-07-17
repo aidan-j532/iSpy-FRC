@@ -774,6 +774,9 @@ class GenericYolo:
 
     def _run_rknn(self, preprocessed: np.ndarray, orig_shape) -> Results:
         raw_outputs = self.model.inference(inputs=[preprocessed])
+        print("num outputs:", len(raw_outputs))
+        for i, o in enumerate(raw_outputs):
+            print(f"  output[{i}] shape={o.shape} dtype={o.dtype}")
         if raw_outputs is None:
             return Results([], orig_shape)
 
