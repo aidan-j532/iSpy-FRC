@@ -795,11 +795,6 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
             "Ultralytics export structure may have changed."
         )
 
-    # Structural identification instead of dimension-guessing: Ultralytics'
-    # detect/pose export always concatenates [boxes, scores, (keypoints)] in
-    # that fixed order into the final output Concat. Boxes are the output of
-    # a Mul node (stride-scaling the DFL-decoded distances into pixel space);
-    # scores are already sigmoid-activated and don't need normalization.
     node_by_output = {out: n for n in graph.node for out in n.output}
 
     box_input_name = inputs[0]
@@ -841,30 +836,31 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     )
     nodes.insert(target_idx, div_node)
 
+    # CRITICAL: only rewire this Concat's OWN input slot(s), never scan
+    # other nodes in the graph. The box Mul output may be consumed by
+    # other branches (e.g. keypoint decode uses box center coords) - those
+    # consumers must keep reading the UNNORMALIZED tensor. Rewiring every
+    # consumer by name match is what corrupted Concat_1 previously.
+    target_concat = nodes[target_idx]
     rewired = False
-    concat_inputs = list(concat_node.input)
-    if box_input_name not in concat_inputs:
-        raise RuntimeError(
-            f"Box tensor '{box_input_name}' not found among Concat "
-            f"'{concat_node.name}' inputs {concat_inputs} — cannot rewire safely."
-        )
-    for idx, name in enumerate(concat_node.input):
-        if name == box_input_name:
-            concat_node.input[idx] = normalized_name
-    rewired = True
+    for idx, input_name in enumerate(target_concat.input):
+        if input_name == box_input_name:
+            target_concat.input[idx] = normalized_name
+            rewired = True
 
     if not rewired:
         raise RuntimeError(
-            f"Box tensor '{box_input_name}' has no consumers in the graph - "
-            "normalization Div node would be orphaned. This should not happen."
+            f"Box tensor '{box_input_name}' not found in Concat '{concat_node.name}' "
+            f"inputs {list(target_concat.input)} - normalization Div node would be orphaned."
         )
 
     del graph.node[:]
     graph.node.extend(nodes)
+    concat_node = target_concat  # keep reference valid for the keypoint block below
 
     logger.info(
-        "Box-coordinate normalization applied: divided '%s' (Mul/stride output) by %.1f before Concat '%s'",
-        box_input_name, divisor, concat_node.name,
+        "Box-coordinate normalization applied: divided '%s' (Mul/stride output) by %.1f before Concat '%s' (Concat's own input only - other consumers of '%s' left untouched)",
+        box_input_name, divisor, concat_node.name, box_input_name,
     )
 
     # ── keypoints (pose only) ────────────────────────────────────────
@@ -876,8 +872,6 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
                 f"Keypoint tensor '{kpt_input_name}' (Concat input 2) has no producer node."
             )
 
-        # Need the tensor's channel count to know which slots are x/y (scale)
-        # vs confidence (leave alone). Run shape inference just for this.
         inferred = onnx.shape_inference.infer_shapes(model)
         value_info = {
             vi.name: vi
@@ -892,8 +886,6 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
                 "via shape inference - cannot build a broadcastable scale vector."
             )
 
-        # kpt_shape is [num_keypoints, 3] (x, y, conf) flattened to
-        # num_keypoints*3 channels. Find that channel axis.
         kpt_channels = None
         channel_axis = None
         for axis, dim in enumerate(kpt_dims):
@@ -939,19 +931,19 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
         )
         nodes.insert(target_idx, kpt_div_node)
 
+        # Same rule: only rewire this Concat's own input slot(s) for the
+        # keypoint tensor - never scan other nodes in the graph.
+        target_concat = nodes[target_idx]
         kpt_rewired = False
-        for node in nodes:
-            if node is kpt_div_node:
-                continue
-            for idx, input_name in enumerate(node.input):
-                if input_name == kpt_input_name:
-                    node.input[idx] = kpt_normalized_name
-                    kpt_rewired = True
+        for idx, input_name in enumerate(target_concat.input):
+            if input_name == kpt_input_name:
+                target_concat.input[idx] = kpt_normalized_name
+                kpt_rewired = True
 
         if not kpt_rewired:
             raise RuntimeError(
-                f"Keypoint tensor '{kpt_input_name}' has no consumers in the graph - "
-                "normalization Div node would be orphaned."
+                f"Keypoint tensor '{kpt_input_name}' not found in Concat '{concat_node.name}' "
+                f"inputs {list(target_concat.input)} - normalization Div node would be orphaned."
             )
 
         del graph.node[:]
@@ -960,7 +952,7 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
         kpt_coord_scale = divisor
         logger.info(
             "Keypoint-coordinate normalization applied: divided x/y channels of '%s' "
-            "by %.1f before Concat '%s' (confidence channel left unscaled)",
+            "by %.1f before Concat '%s' (confidence channel left unscaled, Concat's own input only)",
             kpt_input_name, divisor, concat_node.name,
         )
     else:
