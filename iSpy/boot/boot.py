@@ -962,39 +962,39 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     onnx.save(model, output_path)
     return divisor, kpt_coord_scale
 
-def decode_multibranch(branches: dict[str, list[np.ndarray]], reg_max, strides, num_classes, kpt_shape=None):
-    """branches = {'box': [P3,P4,P5], 'cls': [P3,P4,P5], 'kpt': [P3,P4,P5] or None}
-    Each Pn is the raw per-scale conv output, already dequantized to float."""
-    all_boxes, all_scores, all_kpts = [], [], []
-    for i, stride in enumerate(strides):
-        box_raw = branches["box"][i]          # (1, 4*reg_max, H, W)
-        cls_raw = branches["cls"][i]           # (1, nc, H, W)
-        H, W = box_raw.shape[-2:]
+# def decode_multibranch(branches: dict[str, list[np.ndarray]], reg_max, strides, num_classes, kpt_shape=None):
+#     """branches = {'box': [P3,P4,P5], 'cls': [P3,P4,P5], 'kpt': [P3,P4,P5] or None}
+#     Each Pn is the raw per-scale conv output, already dequantized to float."""
+#     all_boxes, all_scores, all_kpts = [], [], []
+#     for i, stride in enumerate(strides):
+#         box_raw = branches["box"][i]          # (1, 4*reg_max, H, W)
+#         cls_raw = branches["cls"][i]           # (1, nc, H, W)
+#         H, W = box_raw.shape[-2:]
 
-        # DFL integral decode (done on CPU, exactly what RKOPT models expect)
-        box = box_raw.reshape(4, reg_max, H * W).transpose(2, 0, 1)   # (HW, 4, reg_max)
-        box = _softmax(box, axis=-1) @ np.arange(reg_max, dtype=np.float32)  # (HW, 4)
+#         # DFL integral decode (done on CPU, exactly what RKOPT models expect)
+#         box = box_raw.reshape(4, reg_max, H * W).transpose(2, 0, 1)   # (HW, 4, reg_max)
+#         box = _softmax(box, axis=-1) @ np.arange(reg_max, dtype=np.float32)  # (HW, 4)
 
-        gy, gx = np.mgrid[0:H, 0:W]
-        anchor = np.stack([gx.ravel(), gy.ravel()], axis=1) + 0.5      # (HW, 2)
-        x1y1 = anchor - box[:, :2]
-        x2y2 = anchor + box[:, 2:]
-        all_boxes.append(np.concatenate([x1y1, x2y2], axis=1) * stride)
+#         gy, gx = np.mgrid[0:H, 0:W]
+#         anchor = np.stack([gx.ravel(), gy.ravel()], axis=1) + 0.5      # (HW, 2)
+#         x1y1 = anchor - box[:, :2]
+#         x2y2 = anchor + box[:, 2:]
+#         all_boxes.append(np.concatenate([x1y1, x2y2], axis=1) * stride)
 
-        scores = 1.0 / (1.0 + np.exp(-cls_raw.reshape(num_classes, -1).T))
-        all_scores.append(scores)
+#         scores = 1.0 / (1.0 + np.exp(-cls_raw.reshape(num_classes, -1).T))
+#         all_scores.append(scores)
 
-        if kpt_shape and branches.get("kpt"):
-            k = branches["kpt"][i].reshape(*kpt_shape, H * W).transpose(2, 0, 1)
-            kx = (k[..., 0] * 2.0 + (anchor[:, None, 0] - 0.5)) * stride
-            ky = (k[..., 1] * 2.0 + (anchor[:, None, 1] - 0.5)) * stride
-            kconf = 1.0 / (1.0 + np.exp(-k[..., 2]))
-            all_kpts.append(np.stack([kx, ky, kconf], axis=-1))
+#         if kpt_shape and branches.get("kpt"):
+#             k = branches["kpt"][i].reshape(*kpt_shape, H * W).transpose(2, 0, 1)
+#             kx = (k[..., 0] * 2.0 + (anchor[:, None, 0] - 0.5)) * stride
+#             ky = (k[..., 1] * 2.0 + (anchor[:, None, 1] - 0.5)) * stride
+#             kconf = 1.0 / (1.0 + np.exp(-k[..., 2]))
+#             all_kpts.append(np.stack([kx, ky, kconf], axis=-1))
 
-    boxes = np.concatenate(all_boxes, axis=0)
-    scores = np.concatenate(all_scores, axis=0)
-    kpts = np.concatenate(all_kpts, axis=0) if all_kpts else None
-    return boxes, scores, kpts
+#     boxes = np.concatenate(all_boxes, axis=0)
+#     scores = np.concatenate(all_scores, axis=0)
+#     kpts = np.concatenate(all_kpts, axis=0) if all_kpts else None
+#     return boxes, scores, kpts
 
 def _dataset_dir_for(pt_path: Path) -> Path:
     return _PROJECT_ROOT / "QuantizeDataset" / pt_path.stem
