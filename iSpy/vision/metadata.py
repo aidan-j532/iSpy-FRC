@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict
-
+#TODO: This needs to actuall change depending on the YOLO version, type, etc
 METADATA_SCHEMA = {
     "task": str,
     "nc": int,
