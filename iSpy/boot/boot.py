@@ -842,13 +842,16 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     nodes.insert(target_idx, div_node)
 
     rewired = False
-    for node in nodes:
-        if node is div_node:
-            continue
-        for idx, input_name in enumerate(node.input):
-            if input_name == box_input_name:
-                node.input[idx] = normalized_name
-                rewired = True
+    concat_inputs = list(concat_node.input)
+    if box_input_name not in concat_inputs:
+        raise RuntimeError(
+            f"Box tensor '{box_input_name}' not found among Concat "
+            f"'{concat_node.name}' inputs {concat_inputs} — cannot rewire safely."
+        )
+    for idx, name in enumerate(concat_node.input):
+        if name == box_input_name:
+            concat_node.input[idx] = normalized_name
+    rewired = True
 
     if not rewired:
         raise RuntimeError(
