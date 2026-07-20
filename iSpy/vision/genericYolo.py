@@ -840,6 +840,14 @@ class GenericYolo:
         if raw_outputs is None:
             return Results([], orig_shape)
 
+        if os.environ.get("ISPY_DEBUG_RKNN_OUTPUTS"):
+            print(f"\n=== RKNN raw_outputs debug ({self.model_file}) ===")
+            print(f"count: {len(raw_outputs)}")
+            for i, o in enumerate(raw_outputs):
+                print(f"  [{i}] shape={o.shape} dtype={o.dtype} "
+                    f"min={o.min():.3f} max={o.max():.3f}")
+            print("=" * 50)
+
         tensor = self._merge_rknn_outputs(raw_outputs)
         if not self._rknn_fmt_checked:
             self._rknn_fmt_checked = True
