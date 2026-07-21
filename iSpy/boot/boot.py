@@ -787,6 +787,15 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     if concat_node is None:
         raise RuntimeError(f"No Concat node feeding a graph output found in {onnx_path}.")
 
+    # Capture everything we need as plain strings/values NOW, before any graph
+    # mutation. Never hold a live reference to a graph.node/graph.initializer
+    # message across a del/extend cycle - protobuf does not guarantee those
+    # references stay valid, and doing two separate mutate-then-rebuild passes
+    # (one for box, one for keypoints) is what caused the StopIteration /
+    # "not topologically sorted" failures - the second pass was dereferencing
+    # a node object that got invalidated by the first pass's `del graph.node[:]`.
+    concat_output_name = concat_node.output[0]
+
     inputs = list(concat_node.input)
     if len(inputs) < 2:
         raise RuntimeError(
@@ -815,56 +824,11 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     else:
         divisor = float(input_size)
 
-    # ── box coordinates ──────────────────────────────────────────────
-    scale_name = "iSpy_box_coord_scale"
-    if not any(init.name == scale_name for init in graph.initializer):
-        scale_tensor = onnx.numpy_helper.from_array(np.array(divisor, dtype=np.float32), name=scale_name)
-        graph.initializer.append(scale_tensor)
-
-    normalized_name = f"{box_input_name}_iSpy_normalized"
-    div_node = onnx.helper.make_node(
-        "Div",
-        inputs=[box_input_name, scale_name],
-        outputs=[normalized_name],
-        name="iSpy_Div_box_normalize",
-    )
-
-    nodes = list(graph.node)
-    target_idx = next(
-        idx for idx, node in enumerate(nodes)
-        if node.op_type == "Concat" and list(node.output) == list(concat_node.output)
-    )
-    nodes.insert(target_idx, div_node)
-
-    # CRITICAL: only rewire this Concat's OWN input slot(s), never scan
-    # other nodes in the graph. The box Mul output may be consumed by
-    # other branches (e.g. keypoint decode uses box center coords) - those
-    # consumers must keep reading the UNNORMALIZED tensor. Rewiring every
-    # consumer by name match is what corrupted Concat_1 previously.
-    target_concat = nodes[target_idx]
-    rewired = False
-    for idx, input_name in enumerate(target_concat.input):
-        if input_name == box_input_name:
-            target_concat.input[idx] = normalized_name
-            rewired = True
-
-    if not rewired:
-        raise RuntimeError(
-            f"Box tensor '{box_input_name}' not found in Concat '{concat_node.name}' "
-            f"inputs {list(target_concat.input)} - normalization Div node would be orphaned."
-        )
-
-    del graph.node[:]
-    graph.node.extend(nodes)
-    concat_node = target_concat  # keep reference valid for the keypoint block below
-
-    logger.info(
-        "Box-coordinate normalization applied: divided '%s' (Mul/stride output) by %.1f before Concat '%s' (Concat's own input only - other consumers of '%s' left untouched)",
-        box_input_name, divisor, concat_node.name, box_input_name,
-    )
-
-    # ── keypoints (pose only) ────────────────────────────────────────
-    kpt_coord_scale = None
+    # ── Resolve keypoint tensor shape via shape inference ONCE, on the
+    # unmodified graph, before any mutation happens. ────────────────────────
+    kpt_dims: list[int] | None = None
+    kpt_channels: int | None = None
+    channel_axis: int | None = None
     if kpt_input_name is not None:
         kpt_producer = node_by_output.get(kpt_input_name)
         if kpt_producer is None:
@@ -878,27 +842,44 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
             for vi in list(inferred.graph.value_info) + list(inferred.graph.input) + list(inferred.graph.output)
         }
         kpt_vi = value_info.get(kpt_input_name)
-        kpt_dims = [d.dim_value for d in kpt_vi.type.tensor_type.shape.dim] if kpt_vi is not None else []
-        rank = len(kpt_dims)
-        if rank == 0:
+        dims = [d.dim_value for d in kpt_vi.type.tensor_type.shape.dim] if kpt_vi is not None else []
+        if not dims:
             raise RuntimeError(
                 f"Could not determine shape of keypoint tensor '{kpt_input_name}' "
                 "via shape inference - cannot build a broadcastable scale vector."
             )
-
-        kpt_channels = None
-        channel_axis = None
-        for axis, dim in enumerate(kpt_dims):
+        for axis, dim in enumerate(dims):
             if dim > 4 and dim % 3 == 0:
                 kpt_channels, channel_axis = dim, axis
                 break
         if kpt_channels is None:
             raise RuntimeError(
-                f"Keypoint tensor '{kpt_input_name}' has shape {kpt_dims} - "
+                f"Keypoint tensor '{kpt_input_name}' has shape {dims} - "
                 "couldn't find a channel axis divisible by 3 (x,y,conf per keypoint)."
             )
+        kpt_dims = dims
 
-        broadcast_shape = [1] * rank
+    # ── Build every new node/initializer up front. Nothing here touches
+    # graph.node yet. ────────────────────────────────────────────────────────
+    new_nodes: list = []
+    rewire_map: dict[str, str] = {}
+
+    scale_name = "iSpy_box_coord_scale"
+    if not any(init.name == scale_name for init in graph.initializer):
+        graph.initializer.append(
+            onnx.numpy_helper.from_array(np.array(divisor, dtype=np.float32), name=scale_name)
+        )
+    box_normalized_name = f"{box_input_name}_iSpy_normalized"
+    box_div_node = onnx.helper.make_node(
+        "Div", inputs=[box_input_name, scale_name], outputs=[box_normalized_name],
+        name="iSpy_Div_box_normalize",
+    )
+    new_nodes.append(box_div_node)
+    rewire_map[box_input_name] = box_normalized_name
+
+    kpt_coord_scale: float | None = None
+    if kpt_input_name is not None:
+        broadcast_shape = [1] * len(kpt_dims)
         broadcast_shape[channel_axis] = kpt_channels
 
         scale_vec = np.ones((kpt_channels,), dtype=np.float32)
@@ -908,60 +889,66 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
 
         vec_name = "iSpy_kpt_coord_scale"
         if not any(init.name == vec_name for init in graph.initializer):
-            vec_tensor = onnx.numpy_helper.from_array(scale_vec.reshape(broadcast_shape), name=vec_name)
-            graph.initializer.append(vec_tensor)
+            graph.initializer.append(
+                onnx.numpy_helper.from_array(scale_vec.reshape(broadcast_shape), name=vec_name)
+            )
+        kpt_normalized_name = f"{kpt_input_name}_iSpy_normalized"
+        kpt_div_node = onnx.helper.make_node(
+            "Div", inputs=[kpt_input_name, vec_name], outputs=[kpt_normalized_name],
+            name="iSpy_Div_kpt_normalize",
+        )
+        new_nodes.append(kpt_div_node)
+        rewire_map[kpt_input_name] = kpt_normalized_name
+        kpt_coord_scale = divisor
 
         logger.info(
             "Keypoint tensor '%s' shape=%s, channel axis=%d, broadcast shape=%s",
             kpt_input_name, kpt_dims, channel_axis, broadcast_shape,
         )
-
-        kpt_normalized_name = f"{kpt_input_name}_iSpy_normalized"
-        kpt_div_node = onnx.helper.make_node(
-            "Div",
-            inputs=[kpt_input_name, vec_name],
-            outputs=[kpt_normalized_name],
-            name="iSpy_Div_kpt_normalize",
-        )
-
-        nodes = list(graph.node)
-        target_idx = next(
-            idx for idx, node in enumerate(nodes)
-            if node.op_type == "Concat" and list(node.output) == list(concat_node.output)
-        )
-        nodes.insert(target_idx, kpt_div_node)
-
-        # Same rule: only rewire this Concat's own input slot(s) for the
-        # keypoint tensor - never scan other nodes in the graph.
-        target_concat = nodes[target_idx]
-        kpt_rewired = False
-        for idx, input_name in enumerate(target_concat.input):
-            if input_name == kpt_input_name:
-                target_concat.input[idx] = kpt_normalized_name
-                kpt_rewired = True
-
-        if not kpt_rewired:
-            raise RuntimeError(
-                f"Keypoint tensor '{kpt_input_name}' not found in Concat '{concat_node.name}' "
-                f"inputs {list(target_concat.input)} - normalization Div node would be orphaned."
-            )
-
-        del graph.node[:]
-        graph.node.extend(nodes)
-
-        kpt_coord_scale = divisor
-        logger.info(
-            "Keypoint-coordinate normalization applied: divided x/y channels of '%s' "
-            "by %.1f before Concat '%s' (confidence channel left unscaled, Concat's own input only)",
-            kpt_input_name, divisor, concat_node.name,
-        )
     else:
-        logger.debug("Output Concat '%s' has no third input - assuming detect-only model.", concat_node.name)
+        logger.debug("Output Concat has no third input - assuming detect-only model.")
+
+    # ── SINGLE mutation pass: find the target Concat by name (a plain str,
+    # immune to reference invalidation), insert both Div nodes immediately
+    # before it, rewire its inputs, and commit ONCE. ────────────────────────
+    nodes = list(graph.node)
+    target_idx = next(
+        idx for idx, n in enumerate(nodes)
+        if n.op_type == "Concat" and len(n.output) > 0 and n.output[0] == concat_output_name
+    )
+
+    for offset, new_node in enumerate(new_nodes):
+        nodes.insert(target_idx + offset, new_node)
+    target_concat = nodes[target_idx + len(new_nodes)]
+
+    rewired = set()
+    for idx, input_name in enumerate(target_concat.input):
+        if input_name in rewire_map:
+            target_concat.input[idx] = rewire_map[input_name]
+            rewired.add(input_name)
+
+    missing = set(rewire_map) - rewired
+    if missing:
+        raise RuntimeError(
+            f"Expected concat input(s) {missing} not found on target Concat "
+            f"'{concat_output_name}' inputs {list(target_concat.input)} - "
+            "normalization Div node(s) would be orphaned."
+        )
+
+    del graph.node[:]
+    graph.node.extend(nodes)
+
+    logger.info(
+        "Box-coordinate normalization applied: divided '%s' (Mul/stride output) by %.1f "
+        "before Concat '%s'.%s",
+        box_input_name, divisor, concat_output_name,
+        f" Keypoint x/y channels of '{kpt_input_name}' also divided by {divisor} "
+        f"(confidence channel unscaled)." if kpt_input_name else "",
+    )
 
     onnx.checker.check_model(model)
     onnx.save(model, output_path)
     return divisor, kpt_coord_scale
-
 # def decode_multibranch(branches: dict[str, list[np.ndarray]], reg_max, strides, num_classes, kpt_shape=None):
 #     """branches = {'box': [P3,P4,P5], 'cls': [P3,P4,P5], 'kpt': [P3,P4,P5] or None}
 #     Each Pn is the raw per-scale conv output, already dequantized to float."""
