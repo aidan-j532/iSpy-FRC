@@ -1232,7 +1232,7 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
                 if quantize:
                     config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
                     config_kwargs["quantized_algorithm"] = "kl_divergence"
-                    config_kwargs["quantized_hybrid_level"] = 1
+                    # config_kwargs["quantized_hybrid_level"] = 1
                     
                 rknn.config(**config_kwargs)
                 ret = rknn.load_onnx(model=str(onnx_path_for_build))
