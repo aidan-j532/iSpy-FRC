@@ -770,185 +770,6 @@ def _find_box_tensor(graph, value_info, start_names, max_depth=4):
         depth += 1
     return None
 
-def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> tuple[float, float | None]:
-    import numpy as np
-    import onnx
-    import onnx.numpy_helper
-
-    model = onnx.load(onnx_path)
-    graph = model.graph
-
-    output_names = {output.name for output in graph.output}
-    concat_node = None
-    for node in graph.node:
-        if node.op_type == "Concat" and any(out_name in output_names for out_name in node.output):
-            concat_node = node
-            break
-    if concat_node is None:
-        raise RuntimeError(f"No Concat node feeding a graph output found in {onnx_path}.")
-
-    # Capture everything we need as plain strings/values NOW, before any graph
-    # mutation. Never hold a live reference to a graph.node/graph.initializer
-    # message across a del/extend cycle - protobuf does not guarantee those
-    # references stay valid, and doing two separate mutate-then-rebuild passes
-    # (one for box, one for keypoints) is what caused the StopIteration /
-    # "not topologically sorted" failures - the second pass was dereferencing
-    # a node object that got invalidated by the first pass's `del graph.node[:]`.
-    concat_output_name = concat_node.output[0]
-
-    inputs = list(concat_node.input)
-    if len(inputs) < 2:
-        raise RuntimeError(
-            f"Output Concat '{concat_node.name}' has {len(inputs)} input(s), "
-            "expected at least 2 (boxes, scores[, keypoints]) - "
-            "Ultralytics export structure may have changed."
-        )
-
-    node_by_output = {out: n for n in graph.node for out in n.output}
-
-    box_input_name = inputs[0]
-    box_producer = node_by_output.get(box_input_name)
-    if box_producer is None or box_producer.op_type != "Mul":
-        raise RuntimeError(
-            f"Expected box tensor '{box_input_name}' (Concat input 0) to be "
-            f"produced by a Mul node (stride scaling), got "
-            f"{box_producer.op_type if box_producer else 'unknown producer'}. "
-            "Ultralytics export structure may have changed - inspect the ONNX "
-            "graph manually before trusting this conversion."
-        )
-
-    kpt_input_name = inputs[2] if len(inputs) > 2 else None
-
-    if hasattr(input_size, "__iter__"):
-        divisor = float(input_size[0] if len(input_size) > 0 else 640)
-    else:
-        divisor = float(input_size)
-
-    # ── Resolve keypoint tensor shape via shape inference ONCE, on the
-    # unmodified graph, before any mutation happens. ────────────────────────
-    kpt_dims: list[int] | None = None
-    kpt_channels: int | None = None
-    channel_axis: int | None = None
-    if kpt_input_name is not None:
-        kpt_producer = node_by_output.get(kpt_input_name)
-        if kpt_producer is None:
-            raise RuntimeError(
-                f"Keypoint tensor '{kpt_input_name}' (Concat input 2) has no producer node."
-            )
-
-        inferred = onnx.shape_inference.infer_shapes(model)
-        value_info = {
-            vi.name: vi
-            for vi in list(inferred.graph.value_info) + list(inferred.graph.input) + list(inferred.graph.output)
-        }
-        kpt_vi = value_info.get(kpt_input_name)
-        dims = [d.dim_value for d in kpt_vi.type.tensor_type.shape.dim] if kpt_vi is not None else []
-        if not dims:
-            raise RuntimeError(
-                f"Could not determine shape of keypoint tensor '{kpt_input_name}' "
-                "via shape inference - cannot build a broadcastable scale vector."
-            )
-        for axis, dim in enumerate(dims):
-            if dim > 4 and dim % 3 == 0:
-                kpt_channels, channel_axis = dim, axis
-                break
-        if kpt_channels is None:
-            raise RuntimeError(
-                f"Keypoint tensor '{kpt_input_name}' has shape {dims} - "
-                "couldn't find a channel axis divisible by 3 (x,y,conf per keypoint)."
-            )
-        kpt_dims = dims
-
-    # ── Build every new node/initializer up front. Nothing here touches
-    # graph.node yet. ────────────────────────────────────────────────────────
-    new_nodes: list = []
-    rewire_map: dict[str, str] = {}
-
-    scale_name = "iSpy_box_coord_scale"
-    if not any(init.name == scale_name for init in graph.initializer):
-        graph.initializer.append(
-            onnx.numpy_helper.from_array(np.array(divisor, dtype=np.float32), name=scale_name)
-        )
-    box_normalized_name = f"{box_input_name}_iSpy_normalized"
-    box_div_node = onnx.helper.make_node(
-        "Div", inputs=[box_input_name, scale_name], outputs=[box_normalized_name],
-        name="iSpy_Div_box_normalize",
-    )
-    new_nodes.append(box_div_node)
-    rewire_map[box_input_name] = box_normalized_name
-
-    kpt_coord_scale: float | None = None
-    if kpt_input_name is not None:
-        broadcast_shape = [1] * len(kpt_dims)
-        broadcast_shape[channel_axis] = kpt_channels
-
-        scale_vec = np.ones((kpt_channels,), dtype=np.float32)
-        scale_vec[0::3] = divisor  # x
-        scale_vec[1::3] = divisor  # y
-        # 2::3 (confidence) stays 1.0 - unscaled
-
-        vec_name = "iSpy_kpt_coord_scale"
-        if not any(init.name == vec_name for init in graph.initializer):
-            graph.initializer.append(
-                onnx.numpy_helper.from_array(scale_vec.reshape(broadcast_shape), name=vec_name)
-            )
-        kpt_normalized_name = f"{kpt_input_name}_iSpy_normalized"
-        kpt_div_node = onnx.helper.make_node(
-            "Div", inputs=[kpt_input_name, vec_name], outputs=[kpt_normalized_name],
-            name="iSpy_Div_kpt_normalize",
-        )
-        new_nodes.append(kpt_div_node)
-        rewire_map[kpt_input_name] = kpt_normalized_name
-        kpt_coord_scale = divisor
-
-        logger.info(
-            "Keypoint tensor '%s' shape=%s, channel axis=%d, broadcast shape=%s",
-            kpt_input_name, kpt_dims, channel_axis, broadcast_shape,
-        )
-    else:
-        logger.debug("Output Concat has no third input - assuming detect-only model.")
-
-    # ── SINGLE mutation pass: find the target Concat by name (a plain str,
-    # immune to reference invalidation), insert both Div nodes immediately
-    # before it, rewire its inputs, and commit ONCE. ────────────────────────
-    nodes = list(graph.node)
-    target_idx = next(
-        idx for idx, n in enumerate(nodes)
-        if n.op_type == "Concat" and len(n.output) > 0 and n.output[0] == concat_output_name
-    )
-
-    for offset, new_node in enumerate(new_nodes):
-        nodes.insert(target_idx + offset, new_node)
-    target_concat = nodes[target_idx + len(new_nodes)]
-
-    rewired = set()
-    for idx, input_name in enumerate(target_concat.input):
-        if input_name in rewire_map:
-            target_concat.input[idx] = rewire_map[input_name]
-            rewired.add(input_name)
-
-    missing = set(rewire_map) - rewired
-    if missing:
-        raise RuntimeError(
-            f"Expected concat input(s) {missing} not found on target Concat "
-            f"'{concat_output_name}' inputs {list(target_concat.input)} - "
-            "normalization Div node(s) would be orphaned."
-        )
-
-    del graph.node[:]
-    graph.node.extend(nodes)
-
-    logger.info(
-        "Box-coordinate normalization applied: divided '%s' (Mul/stride output) by %.1f "
-        "before Concat '%s'.%s",
-        box_input_name, divisor, concat_output_name,
-        f" Keypoint x/y channels of '{kpt_input_name}' also divided by {divisor} "
-        f"(confidence channel unscaled)." if kpt_input_name else "",
-    )
-
-    onnx.checker.check_model(model)
-    onnx.save(model, output_path)
-    return divisor, kpt_coord_scale
 # def decode_multibranch(branches: dict[str, list[np.ndarray]], reg_max, strides, num_classes, kpt_shape=None):
 #     """branches = {'box': [P3,P4,P5], 'cls': [P3,P4,P5], 'kpt': [P3,P4,P5] or None}
 #     Each Pn is the raw per-scale conv output, already dequantized to float."""
@@ -1146,6 +967,177 @@ def _merge_rknn_build_outputs(outputs: list) -> "np.ndarray":
     ordered = (box_parts + other_parts) if len(box_parts) == 1 else parts
     merged = np.concatenate(ordered, axis=0)
     return merged[np.newaxis, ...]
+
+def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
+    """Divide the constant (initializer) input of `node` by `divisor`, in place.
+
+    If that initializer is shared by other nodes (RKNN toolkit's weight-sharing
+    means the same const tensor can feed multiple ops - confirmed in the layer
+    dump, e.g. onnx::Split_244 reused 3x), it is cloned under a new name first
+    so only `node` sees the scaled value and every other consumer is untouched.
+    """
+    import numpy as np
+    import onnx
+    import onnx.numpy_helper
+
+    initializer_map = {init.name: init for init in graph.initializer}
+    const_name = None
+    for inp in node.input:
+        if inp in initializer_map:
+            const_name = inp
+            break
+    if const_name is None:
+        raise RuntimeError(
+            f"Node '{node.name}' ({node.op_type}) has no constant/initializer "
+            f"input among {list(node.input)} - cannot fold a scale factor into it. "
+            "Ultralytics export structure may have changed - inspect manually."
+        )
+
+    other_consumers = [
+        n for n in graph.node if n is not node and const_name in n.input
+    ]
+    init = initializer_map[const_name]
+    arr = onnx.numpy_helper.to_array(init).astype(np.float32) / float(divisor)
+
+    if other_consumers:
+        new_name = f"{const_name}_iSpy_scaled"
+        new_init = onnx.numpy_helper.from_array(arr, name=new_name)
+        graph.initializer.append(new_init)
+        for idx, inp in enumerate(node.input):
+            if inp == const_name:
+                node.input[idx] = new_name
+        logger.info(
+            "Cloned shared constant '%s' -> '%s' (scaled by 1/%.1f) so only node "
+            "'%s' is affected (%d other consumer(s) left untouched).",
+            const_name, new_name, divisor, node.name, len(other_consumers),
+        )
+        return new_name
+
+    new_init = onnx.numpy_helper.from_array(arr, name=const_name)
+    for idx, ini in enumerate(graph.initializer):
+        if ini.name == const_name:
+            graph.initializer[idx].CopyFrom(new_init)
+            break
+    logger.info(
+        "Scaled constant '%s' by 1/%.1f in place (sole consumer: node '%s').",
+        const_name, divisor, node.name,
+    )
+    return const_name
+
+
+def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> tuple[float, float | None]:
+    import numpy as np
+    import onnx
+    import onnx.numpy_helper
+
+    model = onnx.load(onnx_path)
+    graph = model.graph
+
+    output_names = {output.name for output in graph.output}
+    concat_node = None
+    for node in graph.node:
+        if node.op_type == "Concat" and any(out_name in output_names for out_name in node.output):
+            concat_node = node
+            break
+    if concat_node is None:
+        raise RuntimeError(f"No Concat node feeding a graph output found in {onnx_path}.")
+
+    inputs = list(concat_node.input)
+    if len(inputs) < 2:
+        raise RuntimeError(
+            f"Output Concat '{concat_node.name}' has {len(inputs)} input(s), "
+            "expected at least 2 (boxes, scores[, keypoints]) - "
+            "Ultralytics export structure may have changed."
+        )
+
+    node_by_output = {out: n for n in graph.node for out in n.output}
+
+    box_input_name = inputs[0]
+    box_producer = node_by_output.get(box_input_name)
+    if box_producer is None or box_producer.op_type != "Mul":
+        raise RuntimeError(
+            f"Expected box tensor '{box_input_name}' (Concat input 0) to be "
+            f"produced by a Mul node (stride scaling), got "
+            f"{box_producer.op_type if box_producer else 'unknown producer'}. "
+            "Ultralytics export structure may have changed - inspect the ONNX "
+            "graph manually before trusting this conversion."
+        )
+
+    if hasattr(input_size, "__iter__"):
+        divisor = float(input_size[0] if len(input_size) > 0 else 640)
+    else:
+        divisor = float(input_size)
+
+    # Fold the scale into the box branch's EXISTING stride-multiply constant
+    # instead of inserting a new Div/Mul node. Inserting new nodes immediately
+    # upstream of the output Concat changed the NC1HWC2 layout/tiling RKNN
+    # chose for that region and corrupted the task submitted for the concat at
+    # runtime (confirmed: pose model's Concat_5 failed with new nodes present,
+    # built and ran clean with the exact same op count as an unmodified export
+    # once nodes were removed). Folding into an existing constant keeps graph
+    # topology identical to an unmodified export - only the constant's VALUES
+    # change - so RKNN's layout decisions for this region are unaffected.
+    _fold_scale_into_constant_input(graph, box_producer, divisor, node_by_output)
+    logger.info(
+        "Box-coordinate normalization applied: folded /%.1f into the existing "
+        "stride constant feeding '%s' (Mul producing the box tensor) - no new "
+        "nodes inserted, graph topology unchanged from an unmodified export.",
+        divisor, box_producer.name,
+    )
+
+    kpt_input_name = inputs[2] if len(inputs) > 2 else None
+    kpt_coord_scale = None
+    if kpt_input_name is not None:
+        # Walk back from the keypoint tensor to the Mul that scales x/y by
+        # stride, mirroring the box branch. Expected chain (Ultralytics
+        # kpts_decode): Reshape(kpt_input_name) <- Concat(xy_mul, conf_sigmoid)
+        # <- Mul(xy). Confidence is a separate branch and is never touched.
+        kpt_reshape = node_by_output.get(kpt_input_name)
+        if kpt_reshape is None or kpt_reshape.op_type != "Reshape":
+            raise RuntimeError(
+                f"Expected keypoint tensor '{kpt_input_name}' (Concat input 2) to "
+                f"be produced by a Reshape node, got "
+                f"{kpt_reshape.op_type if kpt_reshape else 'unknown'}. "
+                "Ultralytics export structure may have changed - inspect manually."
+            )
+
+        kpt_concat_input = kpt_reshape.input[0]
+        kpt_concat = node_by_output.get(kpt_concat_input)
+        if kpt_concat is None or kpt_concat.op_type != "Concat" or len(kpt_concat.input) < 2:
+            raise RuntimeError(
+                f"Expected '{kpt_concat_input}' (feeding the keypoint Reshape) to "
+                f"be produced by a Concat node with >=2 inputs (xy, confidence), "
+                f"got {kpt_concat.op_type if kpt_concat else 'unknown'}."
+            )
+
+        xy_tensor_name = kpt_concat.input[0]  # [xy, confidence] order
+        xy_producer = node_by_output.get(xy_tensor_name)
+        if xy_producer is None or xy_producer.op_type != "Mul":
+            raise RuntimeError(
+                f"Expected keypoint xy tensor '{xy_tensor_name}' (inner Concat "
+                f"input 0) to be produced by a Mul node (stride scaling), got "
+                f"{xy_producer.op_type if xy_producer else 'unknown'}. "
+                "Ultralytics export structure may have changed - inspect manually."
+            )
+
+        _fold_scale_into_constant_input(graph, xy_producer, divisor, node_by_output)
+        kpt_coord_scale = divisor
+        conf_input = kpt_concat.input[1] if len(kpt_concat.input) > 1 else "?"
+        logger.info(
+            "Keypoint-coordinate normalization applied: folded /%.1f into the "
+            "existing stride constant feeding '%s' (Mul producing keypoint x/y) "
+            "- confidence branch ('%s') left untouched, no new nodes inserted.",
+            divisor, xy_producer.name, conf_input,
+        )
+    else:
+        logger.debug(
+            "Output Concat '%s' has no third input - assuming detect-only model.",
+            concat_node.name,
+        )
+
+    onnx.checker.check_model(model)
+    onnx.save(model, output_path)
+    return divisor, kpt_coord_scale
 
 def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None):
     if quantize is None:
