@@ -1222,6 +1222,7 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
             "Box/keypoint-coordinate normalization for RKNN quantization failed: %s. "
             "Proceeding without it; confidence may collapse to zero.",
             exc,
+            exc_info=True,   # <-- add this: prints the full traceback, not just str(exc)
         )
 
     try:
