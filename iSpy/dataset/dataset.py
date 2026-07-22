@@ -211,8 +211,8 @@ def _search_urls_bing(sess, keyword: str, count: int, headers: dict) -> list[str
                 if len(found) >= count:
                     break
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Bing image search failed for %r: %s", keyword, e)
 
     return found
 
@@ -256,8 +256,8 @@ def _search_urls_google(sess, keyword: str, count: int, headers: dict) -> list[s
                 if len(found) >= count:
                     break
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Google image search failed for %r: %s", keyword, e)
 
     return found
 
@@ -267,9 +267,9 @@ def _is_host_reachable(host: str, timeout: int = 3) -> bool:
         sess = _session()
         sess.get(f"https://{host}", timeout=timeout)
         return True
-    except Exception:
+    except Exception as e:
+        logger.debug("Host %s unreachable: %s", host, e)
         return False
-
 
 def _collect_urls(keywords: list[str], count: int) -> tuple[list[str], dict, object]:
     sess = _session()
