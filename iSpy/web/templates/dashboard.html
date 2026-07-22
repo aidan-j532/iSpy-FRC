@@ -1,0 +1,27 @@
+<!-- iSpy/web/templates/dashboard.html -->
+{% extends "base.html" %}
+{% block title %}Dashboard - iSpy{% endblock %}
+{% block content %}
+<h1>Mission Control</h1>
+<div class="grid" id="stats"></div>
+<div class="card">
+  <h3>Cameras</h3>
+  <div id="camera-list"></div>
+</div>
+<script>
+async function refresh() {
+  const data = await fetch('/api/status').then(r => r.json());
+  document.getElementById('stats').innerHTML = `
+    <div class="card"><div class="stat-label">FPS</div><div class="stat-value">${data.fps}</div></div>
+    <div class="card"><div class="stat-label">Vision (ms)</div><div class="stat-value">${data.vision_ms}</div></div>
+    <div class="card"><div class="stat-label">Detections</div><div class="stat-value">${data.detections}</div></div>
+    <div class="card"><div class="stat-label">Uptime (s)</div><div class="stat-value">${data.uptime_s}</div></div>
+  `;
+  document.getElementById('camera-list').innerHTML = (data.cameras || []).map(c =>
+    `<div><span class="status-dot ${c.ok ? 'status-ok' : 'status-bad'}"></span>${c.name} - ${c.frame_age_ms}ms</div>`
+  ).join('');
+}
+setInterval(refresh, 500);
+refresh();
+</script>
+{% endblock %}

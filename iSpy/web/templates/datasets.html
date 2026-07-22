@@ -1,0 +1,16 @@
+<!-- iSpy/web/templates/datasets.html -->
+{% extends "base.html" %}
+{% block title %}Datasets - iSpy{% endblock %}
+{% block content %}
+<h1>Dataset Manager</h1>
+<table>
+  <thead><tr><th>Name</th><th>Images</th></tr></thead>
+  <tbody id="datasets-body"></tbody>
+</table>
+<script>
+fetch('/api/datasets').then(r => r.json()).then(data => {
+  document.getElementById('datasets-body').innerHTML = data.datasets.map(d =>
+    `<tr><td>${d.name}</td><td>${d.image_count}</td></tr>`).join('');
+});
+</script>
+{% endblock %}

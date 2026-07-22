@@ -1,27 +1,39 @@
-# iSpy/web/WebApp.py
 import logging
-from flask import Flask
-from iSpy.web.CameraApp import CameraApp
-from iSpy.web.Backend.YOLOHandler import YOLOHandler
-from iSpy.web.DatasetManager import DatasetManager
-from iSpy.web.Backend.Settings import Settings
-from iSpy.web.Backend.Status import Status
-from iSpy.web.Backend.SetupWizard import SetupWizard
+from pathlib import Path
+from flask import Flask, render_template
+
+from iSpy.web.modules.dashboard import DashboardModule
+from iSpy.web.modules.cameras import CamerasModule
+from iSpy.web.modules.models import ModelsModule
+from iSpy.web.modules.datasets import DatasetsModule
+from iSpy.web.modules.viewer3d import Viewer3DModule
+from iSpy.web.modules.logs import LogsModule
+
+_WEB_ROOT = Path(__file__).resolve().parent
+
 
 class iSpyWebApp:
     def __init__(self, cameras, config):
         self.logger = logging.getLogger(__name__)
-        self.flask_app = Flask(__name__)
         self.config = config
 
-        # Every module below implements WebModule (register_routes/update/stop)
-        self.modules = {
-            "cameras": CameraApp(cameras=cameras, config=config),
-            "models": YOLOHandler(config=config),
-            "datasets": DatasetManager(config=config),
-            "settings": Settings(config=config),
-            "status": Status(config=config, cameras=cameras),
-            "setup": SetupWizard(config=config),
+        self.flask_app = Flask(
+            __name__,
+            template_folder=str(_WEB_ROOT / "templates"),
+            static_folder=str(_WEB_ROOT / "static"),
+        )
+
+        context = {"config": config, "cameras": cameras, "flask_app": self.flask_app}
+
+        # Add new pages here - this is the only place a new module needs
+        # to be registered to show up everywhere (nav, routes, updates).
+        self.modules: dict[str, "WebModule"] = {
+            "cameras": CamerasModule(context),
+            "models": ModelsModule(context),
+            "datasets": DatasetsModule(context),
+            "viewer3d": Viewer3DModule(context),
+            "dashboard": DashboardModule(context, other_modules_ref=self),
+            "logs": LogsModule(context),
         }
 
         for name, mod in self.modules.items():
@@ -30,7 +42,18 @@ class iSpyWebApp:
             except Exception:
                 self.logger.exception("Failed to register routes for web module '%s'", name)
 
+        self.flask_app.add_url_rule("/", "root", lambda: render_template("dashboard.html"))
+
+        try:
+            import werkzeug.serving
+            werkzeug.serving.show_server_banner = lambda *a, **kw: None
+        except Exception:
+            pass
+
     def update(self, frame_data: dict):
+        """The ONE call the game loop makes. Every web module gets the
+        same frame_data every tick - nobody has to remember to call
+        camera_app.set_frame() or yolo_app.update() separately again."""
         for name, mod in self.modules.items():
             try:
                 mod.update(frame_data)
@@ -46,3 +69,7 @@ class iSpyWebApp:
                 mod.stop()
             except Exception:
                 self.logger.exception("Error stopping web module")
+
+
+def create_app(cameras, config) -> iSpyWebApp:
+    return iSpyWebApp(cameras, config)

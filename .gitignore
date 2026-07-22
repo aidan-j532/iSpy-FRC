@@ -13,7 +13,6 @@ OfflineInstall/
 *.mp4
 VideoRecordings/
 *.log
-metrics.html
 rknn_env/
 rknn-toolkit2/
 ultralytics_env/

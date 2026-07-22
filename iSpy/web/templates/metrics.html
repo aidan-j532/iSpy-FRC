@@ -1,0 +1,38 @@
+<!-- iSpy/web/templates/metrics.html -->
+{% extends "base.html" %}
+{% block title %}Metrics - iSpy{% endblock %}
+{% block content %}
+<h1>Metrics</h1>
+<div class="grid">
+  <div class="card"><canvas id="chart-fps"></canvas></div>
+  <div class="card"><canvas id="chart-loop_s"></canvas></div>
+  <div class="card"><canvas id="chart-vision_s"></canvas></div>
+  <div class="card"><canvas id="chart-camera_lag_s"></canvas></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>
+const charts = {};
+function ensureChart(id, label, unit) {
+  if (charts[id]) return charts[id];
+  const ctx = document.getElementById(`chart-${id}`);
+  charts[id] = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ label: `${label} (${unit})`, data: [], borderColor: '#4c8bf5', pointRadius: 0 }] },
+    options: { animation: false, scales: { x: { display: false } } },
+  });
+  return charts[id];
+}
+async function refresh() {
+  const data = await fetch('/api/metrics').then(r => r.json());
+  for (const key in data) {
+    const s = data[key];
+    const c = ensureChart(key, s.label, s.unit);
+    c.data.labels = s.x.map(v => v.toFixed(1));
+    c.data.datasets[0].data = s.y;
+    c.update('none');
+  }
+}
+setInterval(refresh, 1000);
+refresh();
+</script>
+{% endblock %}

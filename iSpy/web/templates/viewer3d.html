@@ -1,0 +1,56 @@
+<!-- iSpy/web/templates/viewer3d.html -->
+{% extends "base.html" %}
+{% block title %}3D Viewer - iSpy{% endblock %}
+{% block content %}
+<h1>3D Detection Viewer</h1>
+<p style="color: var(--text-dim)">Cubes stand in for real models until per-model asset upload is wired up.</p>
+<div id="scene" style="width:100%; height:600px; background:#000; border-radius:8px;"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const container = document.getElementById('scene');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 100);
+camera.position.set(0, 3, 6);
+camera.lookAt(0, 0, 0);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
+container.appendChild(renderer.domElement);
+scene.add(new THREE.GridHelper(10, 10));
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const light = new THREE.DirectionalLight(0xffffff, 0.6);
+light.position.set(2, 4, 2);
+scene.add(light);
+
+const boxes = {};  // id -> mesh
+function sync(objects) {
+  const seen = new Set();
+  for (const o of objects) {
+    seen.add(o.id);
+    if (!boxes[o.id]) {
+      const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x4c8bf5 });
+      boxes[o.id] = new THREE.Mesh(geo, mat);
+      scene.add(boxes[o.id]);
+    }
+    boxes[o.id].position.set(o.x, o.z, o.y); // flip y/z: iSpy uses field XY, three.js uses XZ ground plane
+    boxes[o.id].rotation.set(o.roll, o.yaw, o.pitch);
+  }
+  for (const id in boxes) {
+    if (!seen.has(Number(id)) && !seen.has(id)) {
+      scene.remove(boxes[id]);
+      delete boxes[id];
+    }
+  }
+}
+async function poll() {
+  const data = await fetch('/api/detections/latest').then(r => r.json());
+  sync(data.objects);
+}
+setInterval(poll, 200);
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+{% endblock %}

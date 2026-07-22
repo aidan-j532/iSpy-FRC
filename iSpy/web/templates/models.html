@@ -1,0 +1,39 @@
+<!-- iSpy/web/templates/models.html -->
+{% extends "base.html" %}
+{% block title %}Models - iSpy{% endblock %}
+{% block content %}
+<h1>Model Manager</h1>
+<div class="card">
+  <input type="file" id="file-input" accept=".pt">
+  <button onclick="upload()">Upload</button>
+</div>
+<table id="models-table">
+  <thead><tr><th>Name</th><th>Task</th><th>Classes</th><th>Input</th><th>Size (MB)</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+<script>
+async function loadModels() {
+  const data = await fetch('/api/models').then(r => r.json());
+  document.querySelector('#models-table tbody').innerHTML = data.models.map(m => `
+    <tr>
+      <td>${m.name}</td><td>${m.task}</td><td>${m.nc ?? '-'}</td>
+      <td>${m.input_size ? m.input_size.join('x') : '-'}</td>
+      <td>${m.size_mb}</td>
+      <td><button onclick="del('${m.name}')">Delete</button></td>
+    </tr>`).join('');
+}
+async function upload() {
+  const f = document.getElementById('file-input').files[0];
+  if (!f) return;
+  const form = new FormData();
+  form.append('file', f);
+  await fetch('/api/models/upload', { method: 'POST', body: form });
+  loadModels();
+}
+async function del(name) {
+  await fetch(`/api/models/${name}`, { method: 'DELETE' });
+  loadModels();
+}
+loadModels();
+</script>
+{% endblock %}

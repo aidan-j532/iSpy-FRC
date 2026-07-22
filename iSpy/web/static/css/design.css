@@ -1,0 +1,43 @@
+/* iSpy/web/static/css/design.css - the "centralized design system" */
+:root {
+  --bg: #111318;
+  --bg-elevated: #1a1d24;
+  --border: #2a2e38;
+  --text: #e8e8ea;
+  --text-dim: #8b8f9a;
+  --accent: #4c8bf5;
+  --ok: #4caf50;
+  --bad: #f44336;
+  --radius: 8px;
+  --font: -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); }
+.app-shell { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 200px; background: var(--bg-elevated); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: 16px;
+}
+.sidebar .brand { font-weight: 700; font-size: 1.2rem; margin-bottom: 24px; }
+.sidebar a {
+  color: var(--text-dim); text-decoration: none; padding: 8px 12px;
+  border-radius: var(--radius); margin-bottom: 4px;
+}
+.sidebar a:hover { background: var(--border); color: var(--text); }
+.content { flex: 1; padding: 24px; }
+.card {
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+}
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.stat-label { color: var(--text-dim); font-size: 0.85rem; }
+.stat-value { font-size: 1.6rem; font-weight: 600; }
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.status-ok { background: var(--ok); }
+.status-bad { background: var(--bad); }
+button {
+  background: var(--accent); color: white; border: none; padding: 8px 14px;
+  border-radius: var(--radius); cursor: pointer;
+}
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }

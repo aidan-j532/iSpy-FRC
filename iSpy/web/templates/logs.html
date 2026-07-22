@@ -1,0 +1,55 @@
+<!-- iSpy/web/templates/logs.html -->
+{% extends "base.html" %}
+{% block title %}Logs - iSpy{% endblock %}
+{% block content %}
+<h1>Logs</h1>
+<div class="card" style="display:flex; gap:12px; align-items:center; margin-bottom:12px;">
+  <label style="display:flex; align-items:center; gap:6px; color:var(--text-dim);">
+    <input type="checkbox" id="autoscroll" checked> Auto-scroll
+  </label>
+  <label style="display:flex; align-items:center; gap:6px; color:var(--text-dim);">
+    <input type="checkbox" id="paused"> Pause
+  </label>
+  <button onclick="clearView()">Clear view</button>
+</div>
+<pre id="log-view" class="card" style="
+  height: 65vh;
+  overflow-y: auto;
+  margin: 0;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+"></pre>
+<script>
+const view = document.getElementById('log-view');
+const autoscroll = document.getElementById('autoscroll');
+const paused = document.getElementById('paused');
+
+function colorize(line) {
+  const esc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (/\bERROR\b|\bCRITICAL\b/.test(line)) return `<span style="color:var(--bad)">${esc}</span>`;
+  if (/\bWARNING\b/.test(line)) return `<span style="color:#e0a63c">${esc}</span>`;
+  if (/\bINFO\b/.test(line)) return `<span style="color:var(--text)">${esc}</span>`;
+  return `<span style="color:var(--text-dim)">${esc}</span>`;
+}
+
+function clearView() {
+  view.innerHTML = '';
+}
+
+async function refresh() {
+  if (paused.checked) return;
+  try {
+    const data = await fetch('/api/logs').then(r => r.json());
+    view.innerHTML = data.lines.map(colorize).join('');
+    if (autoscroll.checked) view.scrollTop = view.scrollHeight;
+  } catch (e) {
+    console.error('Log refresh failed', e);
+  }
+}
+setInterval(refresh, 2000);
+refresh();
+</script>
+{% endblock %}

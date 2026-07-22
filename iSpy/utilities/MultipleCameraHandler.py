@@ -81,6 +81,19 @@ class MultipleCameraHandler:
             )
         return f
 
+    def get_camera_frames(self) -> dict[str, np.ndarray]:
+        """Named per-camera frames for the web layer - lets CamerasModule
+        serve individual feeds instead of only the stitched combined view."""
+        result = {}
+        for i, cam in enumerate(self.cameras):
+            with self._locks[i]:
+                f = self._frames[i]
+            if f is None:
+                continue
+            name = cam.config.get("name", f"Camera {i+1}") if hasattr(cam, "config") else f"Camera {i+1}"
+            result[name] = f.copy()
+        return result
+
     def destroy(self):
         self._stopped = True
         for cam in self.cameras:

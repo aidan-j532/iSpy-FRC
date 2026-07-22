@@ -73,3 +73,6 @@ include = ["iSpy", "iSpy.*"]
 
 [tool.setuptools.package-data]
 "iSpy" = ["assets/*", "rknn_wheels/*.whl"]
+
+[project.scripts]
+ispy-test-web = "iSpy.web.test_web:main"
