@@ -22,9 +22,9 @@ from iSpy.plugins.bases import TrackerBase, UtilityBase
 from wpimath.geometry import Pose2d
 from iSpy.plugins.utilities.BuiltIn.NetworkHandler import NetworkTableHandler
 from iSpy.plugins.utilities.BuiltIn.HealthReporter import HealthReporter
-from iSpy.web.app import create_app
-from iSpy.web.Status import record_frame_data
-from iSpy.web.Camera import set_frame
+from iSpy.web.Backend.app import create_app
+from iSpy.web.Backend.Status import record_frame_data
+from iSpy.web.Backend.Camera import set_frame
 
 try:
     from rknnlite.api import RKNNLite
