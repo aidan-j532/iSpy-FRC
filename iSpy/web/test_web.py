@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
-from iSpy.web.WebApp import create_app
+from iSpy.web.Backend.WebApp import create_app
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ispy-test-web")
