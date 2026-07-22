@@ -128,11 +128,7 @@ class iSpy:
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
         if config["app_mode"]:
-            threading.Thread(
-                target=self.web_app.run,
-                kwargs={"host": "0.0.0.0", "port": 5000},
-                daemon=True,
-            ).start()
+            threading.Thread(target=self.web_app.run, daemon=True).start()
 
         self._silence_external_loggers()
         
@@ -188,6 +184,10 @@ class iSpy:
                 util.update(frame_data)
             except Exception:
                 self.logger.exception("Utility update failed")
+
+    def _update_web(self, frame_data: dict):
+        if self.web_app:
+            self.web_app.update(frame_data)
 
     def _update_camera_app(self, frame, camera=None, handler=None):
         if not self.camera_app or frame is None:
