@@ -24,7 +24,7 @@ from iSpy.plugins.utilities.BuiltIn.HealthReporter import HealthReporter
 # from iSpy.web.Backend.app import create_app
 # from iSpy.web.Backend.Status import record_frame_data
 # from iSpy.web.Backend.Camera import set_frame
-from iSpy.web.WebApp import create_app
+from iSpy.web.Backend.WebApp import create_app
 
 
 try:

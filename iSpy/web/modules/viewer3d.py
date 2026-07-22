@@ -1,5 +1,5 @@
 from flask import jsonify, render_template
-from iSpy.web.WebModule import WebModule
+from iSpy.web.Backend.WebModule import WebModule
 
 
 class Viewer3DModule(WebModule):

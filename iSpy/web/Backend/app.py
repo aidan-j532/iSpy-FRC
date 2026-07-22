@@ -34,11 +34,11 @@ def create_app(cameras=None, config=None) -> Flask:
     # Each of these files defines `bp = Blueprint("name", __name__)` and its
     # own routes. Import here (not at module load time) so a missing/broken
     # page can't take the whole app down - log and skip instead.
-    _register(app, "iSpy.web.Status")
-    _register(app, "iSpy.web.Settings")
-    _register(app, "iSpy.web.SetupWizard")
-    _register(app, "iSpy.web.YOLOHandler")
-    _register(app, "iSpy.web.Camera")
+    _register(app, "iSpy.web.Backend.Status")
+    _register(app, "iSpy.web.Backend.Settings")
+    _register(app, "iSpy.web.Backend.SetupWizard")
+    _register(app, "iSpy.web.Backend.YOLOHandler")
+    _register(app, "iSpy.web.Backend.Camera")
 
     @app.route("/")
     def index():

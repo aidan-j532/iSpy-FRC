@@ -2,7 +2,8 @@ import threading
 import cv2
 import time
 from flask import Response, jsonify
-from iSpy.web.WebModule import WebModule
+import numpy as np
+from iSpy.web.Backend.WebModule import WebModule
 
 
 class CamerasModule(WebModule):

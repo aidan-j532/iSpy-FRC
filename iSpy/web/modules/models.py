@@ -1,7 +1,7 @@
 from pathlib import Path
 from flask import jsonify, render_template, request
 from werkzeug.utils import secure_filename
-from iSpy.web.WebModule import WebModule
+from iSpy.web.Backend.WebModule import WebModule
 from iSpy.vision.metadata import read_metadata, metadata_from_pt, write_metadata, metadata_path_for
 
 

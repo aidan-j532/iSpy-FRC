@@ -2,8 +2,7 @@
 import time
 from collections import deque
 from flask import jsonify, render_template
-from iSpy.web.WebModule import WebModule
-
+from iSpy.web.Backend.WebModule import WebModule
 
 class MetricsModule(WebModule):
     plugin_name = "metrics"
