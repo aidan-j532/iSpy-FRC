@@ -8,9 +8,10 @@ from iSpy.web.modules.models import ModelsModule
 from iSpy.web.modules.datasets import DatasetsModule
 from iSpy.web.modules.viewer3d import Viewer3DModule
 from iSpy.web.modules.logs import LogsModule
+from iSpy.web.modules.metrics import MetricsModule
+from pathlib import Path
 
-_WEB_ROOT = Path(__file__).resolve().parent
-
+_WEB_ROOT = Path(__file__).resolve().parent.parent
 
 class iSpyWebApp:
     def __init__(self, cameras, config):
@@ -27,7 +28,7 @@ class iSpyWebApp:
 
         # Add new pages here - this is the only place a new module needs
         # to be registered to show up everywhere (nav, routes, updates).
-        self.modules: dict[str, "WebModule"] = {
+        self.modules: dict[str, "iSpy.web.Backend.WebModule"] = {
             "cameras": CamerasModule(context),
             "models": ModelsModule(context),
             "datasets": DatasetsModule(context),
@@ -42,7 +43,7 @@ class iSpyWebApp:
             except Exception:
                 self.logger.exception("Failed to register routes for web module '%s'", name)
 
-        self.flask_app.add_url_rule("/", "root", lambda: render_template("dashboard.html"))
+        self.flask_app.add_url_rule("/", "root", lambda: render_template("templates/dashboard.html"))
 
         try:
             import werkzeug.serving
