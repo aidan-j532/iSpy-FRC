@@ -43,7 +43,7 @@ class iSpyWebApp:
             except Exception:
                 self.logger.exception("Failed to register routes for web module '%s'", name)
 
-        self.flask_app.add_url_rule("/", "root", lambda: render_template("templates/dashboard.html"))
+        self.flask_app.add_url_rule("/", "root", lambda: render_template("dashboard.html"))
 
         try:
             import werkzeug.serving
