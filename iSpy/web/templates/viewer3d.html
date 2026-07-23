@@ -1,39 +1,179 @@
 <!-- iSpy/web/templates/viewer3d.html -->
 {% extends "base.html" %}
 {% block title %}3D Viewer - iSpy{% endblock %}
+{% block head %}
+<style>
+  #scene-container { width:100%; height:65vh; background:#0a0a0f; border-radius:8px; position:relative; overflow:hidden; }
+  #scene-container canvas { display:block; }
+  .viewer-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+  .viewer-toolbar label { color:var(--text-dim); font-size:0.85rem; display:flex; align-items:center; gap:6px; }
+  .viewer-toolbar select, .viewer-toolbar input[type=file] { background:var(--bg); color:var(--text); border:1px solid var(--border); padding:4px 8px; border-radius:var(--radius); }
+  #object-list { max-height:200px; overflow-y:auto; }
+  #object-list table { width:100%; }
+  .obj-row td { font-size:0.82rem; }
+</style>
+{% endblock %}
 {% block content %}
 <h1>3D Detection Viewer</h1>
-<p style="color: var(--text-dim)">Cubes stand in for real models until per-model asset upload is wired up.</p>
-<div id="scene" style="width:100%; height:600px; background:#000; border-radius:8px;"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>
-const container = document.getElementById('scene');
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 100);
-camera.position.set(0, 3, 6);
-camera.lookAt(0, 0, 0);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(container.clientWidth, container.clientHeight);
-container.appendChild(renderer.domElement);
-scene.add(new THREE.GridHelper(10, 10));
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const light = new THREE.DirectionalLight(0xffffff, 0.6);
-light.position.set(2, 4, 2);
-scene.add(light);
+<div class="viewer-toolbar">
+  <label>Camera
+    <select id="view-preset" onchange="setViewPreset()">
+      <option value="default">Default</option>
+      <option value="top">Top-down</option>
+      <option value="front">Front</option>
+      <option value="side">Side</option>
+    </select>
+  </label>
+  <label>Load .glb/.gltf model
+    <input type="file" id="model-file" accept=".glb,.gltf" onchange="loadUserModel(event)">
+  </label>
+  <button onclick="clearUserModel()">Clear model</button>
+  <label style="margin-left:auto;">
+    <input type="checkbox" id="show-grid" checked onchange="toggleGrid()"> Grid
+  </label>
+  <label>
+    <input type="checkbox" id="show-axes" checked onchange="toggleAxes()"> Axes
+  </label>
+</div>
+<div id="scene-container"></div>
+<div class="card" style="margin-top:12px;">
+  <h3>Detections</h3>
+  <div id="object-list">
+    <table>
+      <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th><th>Yaw</th></tr></thead>
+      <tbody id="obj-tbody"></tbody>
+    </table>
+  </div>
+</div>
 
-const boxes = {};  // id -> mesh
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const container = document.getElementById('scene-container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a0f);
+scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
+
+const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 200);
+camera.position.set(0, 5, 8);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.shadowMap.enabled = true;
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 0, 0);
+controls.update();
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(5, 10, 5);
+dirLight.castShadow = true;
+scene.add(dirLight);
+const hemiLight = new THREE.HemisphereLight(0x4c8bf5, 0x111318, 0.3);
+scene.add(hemiLight);
+
+const gridHelper = new THREE.GridHelper(20, 20, 0x2a2e38, 0x1a1d24);
+scene.add(gridHelper);
+const axesHelper = new THREE.AxesHelper(3);
+scene.add(axesHelper);
+
+window.toggleGrid = function() {
+  gridHelper.visible = document.getElementById('show-grid').checked;
+};
+window.toggleAxes = function() {
+  axesHelper.visible = document.getElementById('show-axes').checked;
+};
+
+// Camera presets
+const PRESETS = {
+  default: { pos: [0, 5, 8], target: [0, 0, 0] },
+  top: { pos: [0, 15, 0.01], target: [0, 0, 0] },
+  front: { pos: [0, 2, 12], target: [0, 0, 0] },
+  side: { pos: [12, 2, 0], target: [0, 0, 0] },
+};
+window.setViewPreset = function() {
+  const p = PRESETS[document.getElementById('view-preset').value] || PRESETS.default;
+  camera.position.set(...p.pos);
+  controls.target.set(...p.target);
+  controls.update();
+};
+
+// User-loaded model
+let userModel = null;
+const gltfLoader = new GLTFLoader();
+window.loadUserModel = function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  gltfLoader.load(url, (gltf) => {
+    if (userModel) scene.remove(userModel);
+    userModel = gltf.scene;
+    // Center and scale
+    const box = new THREE.Box3().setFromObject(userModel);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale = 2 / maxDim;
+    userModel.scale.setScalar(scale);
+    userModel.position.sub(center.multiplyScalar(scale));
+    scene.add(userModel);
+    URL.revokeObjectURL(url);
+  }, undefined, (err) => {
+    console.error('Failed to load model:', err);
+    URL.revokeObjectURL(url);
+  });
+};
+window.clearUserModel = function() {
+  if (userModel) { scene.remove(userModel); userModel = null; }
+  document.getElementById('model-file').value = '';
+};
+
+// Detection boxes
+const boxes = {};
+const BOX_COLORS = [0x4c8bf5, 0x4caf50, 0xf44336, 0xff9800, 0x9c27b0, 0x00bcd4];
+
+function getColor(id) {
+  return BOX_COLORS[id % BOX_COLORS.length];
+}
+
 function sync(objects) {
   const seen = new Set();
+  const tbody = document.getElementById('obj-tbody');
+  let rows = '';
   for (const o of objects) {
     seen.add(o.id);
     if (!boxes[o.id]) {
       const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-      const mat = new THREE.MeshStandardMaterial({ color: 0x4c8bf5 });
-      boxes[o.id] = new THREE.Mesh(geo, mat);
-      scene.add(boxes[o.id]);
+      const mat = new THREE.MeshStandardMaterial({ color: getColor(o.id), transparent: true, opacity: 0.85 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      boxes[o.id] = mesh;
+      scene.add(mesh);
+      // Add wireframe
+      const wireGeo = new THREE.EdgesGeometry(geo);
+      const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
+      mesh.add(new THREE.LineSegments(wireGeo, wireMat));
     }
-    boxes[o.id].position.set(o.x, o.z, o.y); // flip y/z: iSpy uses field XY, three.js uses XZ ground plane
+    boxes[o.id].position.set(o.x, o.z, o.y);
     boxes[o.id].rotation.set(o.roll, o.yaw, o.pitch);
+    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}°</td></tr>`;
   }
   for (const id in boxes) {
     if (!seen.has(Number(id)) && !seen.has(id)) {
@@ -41,14 +181,29 @@ function sync(objects) {
       delete boxes[id];
     }
   }
+  tbody.innerHTML = rows || '<tr><td colspan="5" style="color:var(--text-dim)">No detections</td></tr>';
 }
+
+// Poll for detections
 async function poll() {
-  const data = await fetch('/api/detections/latest').then(r => r.json());
-  sync(data.objects);
+  try {
+    const data = await fetch('/api/detections/latest').then(r => r.json());
+    sync(data.objects || []);
+  } catch (e) { /* ignore */ }
 }
 setInterval(poll, 200);
+
+// Resize handler
+window.addEventListener('resize', () => {
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+});
+
+// Render loop
 function animate() {
   requestAnimationFrame(animate);
+  controls.update();
   renderer.render(scene, camera);
 }
 animate();

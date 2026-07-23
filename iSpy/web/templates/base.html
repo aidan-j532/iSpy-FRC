@@ -12,15 +12,23 @@
     <nav class="sidebar">
       <div class="brand">iSpy</div>
       <a href="/dashboard">Dashboard</a>
+      <a href="/cameras">Cameras</a>
+      <a href="/metrics">Metrics</a>
       <a href="/models">Models</a>
       <a href="/datasets">Datasets</a>
       <a href="/viewer3d">3D Viewer</a>
       <a href="/logs">Logs</a>
+      <a href="/settings">Settings</a>
     </nav>
     <main class="content">
       {% block content %}{% endblock %}
     </main>
   </div>
   {% block scripts %}{% endblock %}
+  <script>
+    document.querySelectorAll('.sidebar a').forEach(a => {
+      if (a.pathname === location.pathname) a.classList.add('active');
+    });
+  </script>
 </body>
 </html>

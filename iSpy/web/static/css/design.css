@@ -1,4 +1,4 @@
-/* iSpy/web/static/css/design.css - the "centralized design system" */
+/* iSpy/web/static/css/design.css */
 :root {
   --bg: #111318;
   --bg-elevated: #1a1d24;
@@ -8,36 +8,98 @@
   --accent: #4c8bf5;
   --ok: #4caf50;
   --bad: #f44336;
+  --warn: #e0a63c;
   --radius: 8px;
   --font: -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); }
+
+/* Shell layout */
 .app-shell { display: flex; min-height: 100vh; }
+
+/* Sidebar */
 .sidebar {
-  width: 200px; background: var(--bg-elevated); border-right: 1px solid var(--border);
+  width: 200px; min-width: 200px; background: var(--bg-elevated); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; padding: 16px;
 }
-.sidebar .brand { font-weight: 700; font-size: 1.2rem; margin-bottom: 24px; }
+.sidebar .brand { font-weight: 700; font-size: 1.2rem; margin-bottom: 24px; letter-spacing: 0.5px; }
 .sidebar a {
   color: var(--text-dim); text-decoration: none; padding: 8px 12px;
-  border-radius: var(--radius); margin-bottom: 4px;
+  border-radius: var(--radius); margin-bottom: 4px; font-size: 0.9rem;
+  transition: background 0.15s, color 0.15s;
 }
 .sidebar a:hover { background: var(--border); color: var(--text); }
-.content { flex: 1; padding: 24px; }
+.sidebar a.active { background: var(--accent); color: white; }
+
+/* Content area */
+.content { flex: 1; padding: 24px; overflow-x: auto; }
+
+/* Cards */
 .card {
   background: var(--bg-elevated); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
 }
+.card h3 { margin: 0 0 8px 0; font-size: 1rem; color: var(--text-dim); }
+
+/* Grid */
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+
+/* Stats */
 .stat-label { color: var(--text-dim); font-size: 0.85rem; }
-.stat-value { font-size: 1.6rem; font-weight: 600; }
+.stat-value { font-size: 1.6rem; font-weight: 600; margin-top: 4px; }
+
+/* Status dots */
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .status-ok { background: var(--ok); }
 .status-bad { background: var(--bad); }
+
+/* Buttons */
 button {
   background: var(--accent); color: white; border: none; padding: 8px 14px;
-  border-radius: var(--radius); cursor: pointer;
+  border-radius: var(--radius); cursor: pointer; font-size: 0.85rem;
+  transition: opacity 0.15s;
 }
+button:hover { opacity: 0.85; }
+button:active { opacity: 0.7; }
+
+/* Tables */
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--text-dim); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+td { font-size: 0.9rem; }
+
+/* Inputs */
+input, select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  padding: 6px 10px; border-radius: var(--radius); font-size: 0.85rem;
+  font-family: var(--font);
+}
+input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+/* Camera cards */
+.camera-card { overflow: hidden; }
+.camera-header { display: flex; align-items: center; margin-bottom: 8px; }
+.camera-feed-wrap {
+  width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 4px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.camera-feed { width: 100%; height: 100%; object-fit: contain; }
+.camera-feed.feed-error { display: none; }
+.camera-feed-wrap::after {
+  content: 'No signal';
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  position: absolute;
+}
+.camera-feed:not(.feed-error) + .camera-feed-wrap::after { display: none; }
+
+/* Headings */
+h1 { font-size: 1.4rem; font-weight: 600; margin: 0 0 16px 0; }
+
+/* Pre/code blocks */
+pre {
+  font-family: var(--mono); font-size: 0.82rem; line-height: 1.4;
+  white-space: pre-wrap; word-break: break-word;
+}

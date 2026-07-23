@@ -17,8 +17,8 @@ function ensureChart(id, label, unit) {
   const ctx = document.getElementById(`chart-${id}`);
   charts[id] = new Chart(ctx, {
     type: 'line',
-    data: { labels: [], datasets: [{ label: `${label} (${unit})`, data: [], borderColor: '#4c8bf5', pointRadius: 0 }] },
-    options: { animation: false, scales: { x: { display: false } } },
+    data: { labels: [], datasets: [{ label: `${label} (${unit})`, data: [], borderColor: '#4c8bf5', pointRadius: 0, borderWidth: 2, tension: 0.1 }] },
+    options: { animation: false, scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { labels: { color: '#8b8f9a' } } } },
   });
   return charts[id];
 }
@@ -34,5 +34,10 @@ async function refresh() {
 }
 setInterval(refresh, 1000);
 refresh();
+
+// Save metrics when browser tab is closed
+window.addEventListener('beforeunload', () => {
+  navigator.sendBeacon('/api/metrics/save');
+});
 </script>
 {% endblock %}

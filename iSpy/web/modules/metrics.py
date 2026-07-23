@@ -26,6 +26,7 @@ class MetricsModule(WebModule):
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/metrics", "metrics_page", lambda: render_template("metrics.html"))
         flask_app.add_url_rule("/api/metrics", "api_metrics", self._api_metrics)
+        flask_app.add_url_rule("/api/metrics/save", "api_metrics_save", self._save, methods=["POST"])
 
     def update(self, frame_data: dict):
         t = time.perf_counter() - self._start
@@ -51,9 +52,18 @@ class MetricsModule(WebModule):
         return jsonify(out)
 
     def stop(self):
+        self._save()
+
+    def _save(self):
         os.makedirs("Outputs", exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         filepath = os.path.join("Outputs", f"metrics_{timestamp}.json")
+        data = self._build_data()
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
+        return jsonify({"success": True, "path": filepath})
+
+    def _build_data(self):
         data = {}
         for key, (label, unit, scale) in self.SERIES.items():
             pts = list(self._timeline[key])
@@ -64,5 +74,4 @@ class MetricsModule(WebModule):
             "x": [p[0] for p in self._fps_timeline],
             "y": [p[1] for p in self._fps_timeline],
         }
-        with open(filepath, "w") as f:
-            json.dump(data, f, indent=2)
+        return data

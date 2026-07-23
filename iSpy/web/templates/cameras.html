@@ -1,0 +1,56 @@
+<!-- iSpy/web/templates/cameras.html -->
+{% extends "base.html" %}
+{% block title %}Cameras - iSpy{% endblock %}
+{% block content %}
+<h1>Cameras</h1>
+<div id="camera-controls" class="card" style="display:flex; gap:12px; align-items:center; margin-bottom:16px;">
+  <label style="display:flex; align-items:center; gap:6px; color:var(--text-dim);">
+    Refresh interval
+    <select id="refresh-rate" onchange="setRefreshRate()">
+      <option value="500">500ms</option>
+      <option value="1000" selected>1s</option>
+      <option value="2000">2s</option>
+      <option value="5000">5s</option>
+    </select>
+  </label>
+  <button onclick="refreshCameras()">Refresh</button>
+</div>
+<div id="camera-grid" class="grid"></div>
+<script>
+let refreshTimer = null;
+let currentRate = 1000;
+
+function setRefreshRate() {
+  currentRate = Number(document.getElementById('refresh-rate').value);
+  clearInterval(refreshTimer);
+  refreshTimer = setInterval(refreshCameras, currentRate);
+}
+
+async function refreshCameras() {
+  try {
+    const data = await fetch('/api/cameras').then(r => r.json());
+    const grid = document.getElementById('camera-grid');
+    if (!data.cameras || data.cameras.length === 0) {
+      grid.innerHTML = '<div class="card" style="color:var(--text-dim)">No cameras detected. Connect a camera and restart iSpy.</div>';
+      return;
+    }
+    grid.innerHTML = data.cameras.map(c => `
+      <div class="card camera-card">
+        <div class="camera-header">
+          <span class="status-dot status-ok"></span>
+          <strong>${c.name}</strong>
+        </div>
+        <div class="camera-feed-wrap">
+          <img class="camera-feed" src="/video/${c.name}" alt="${c.name}" onerror="this.classList.add('feed-error')">
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    console.error('Camera refresh failed', e);
+  }
+}
+
+refreshCameras();
+refreshTimer = setInterval(refreshCameras, currentRate);
+</script>
+{% endblock %}

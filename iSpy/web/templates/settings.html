@@ -1,0 +1,42 @@
+<!-- iSpy/web/templates/settings.html -->
+{% extends "base.html" %}
+{% block title %}Settings - iSpy{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<div class="card">
+  <p style="color:var(--text-dim); margin:0 0 12px 0; font-size:0.9rem;">
+    Edit the raw config.json below. Click Save when done.
+  </p>
+  <textarea id="cfg" style="
+    width:100%; height:60vh; background:var(--bg); color:var(--ok);
+    font-family:var(--mono); font-size:13px; border:1px solid var(--border);
+    border-radius:var(--radius); padding:12px; resize:vertical;
+  "></textarea>
+  <div style="display:flex; align-items:center; gap:12px; margin-top:12px;">
+    <button onclick="save()">Save</button>
+    <span id="msg" style="font-size:0.85rem;"></span>
+  </div>
+</div>
+<script>
+async function load() {
+  document.getElementById('cfg').value = JSON.stringify(await (await fetch('/api/settings')).json(), null, 2);
+}
+async function save() {
+  const msg = document.getElementById('msg');
+  try {
+    const data = JSON.parse(document.getElementById('cfg').value);
+    const r = await fetch('/api/settings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    const j = await r.json();
+    msg.textContent = r.ok ? 'Saved. Restart iSpy to apply.' : ('Error: ' + j.error);
+    msg.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+  } catch(e) {
+    msg.textContent = 'Invalid JSON: ' + e.message;
+    msg.style.color = 'var(--bad)';
+  }
+}
+load();
+</script>
+{% endblock %}

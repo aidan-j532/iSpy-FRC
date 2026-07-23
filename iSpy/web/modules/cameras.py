@@ -1,7 +1,7 @@
 import threading
 import cv2
 import time
-from flask import Response, jsonify
+from flask import Response, jsonify, render_template
 import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
 
@@ -16,6 +16,7 @@ class CamerasModule(WebModule):
         self.dims: dict[str, tuple[int, int]] = {}
 
     def register_routes(self, flask_app):
+        flask_app.add_url_rule("/cameras", "cameras_page", lambda: render_template("cameras.html"))
         flask_app.add_url_rule("/api/cameras", "api_cameras", self._api_cameras)
         flask_app.add_url_rule("/video/<camera_name>", "video_feed", self._video_feed)
 
