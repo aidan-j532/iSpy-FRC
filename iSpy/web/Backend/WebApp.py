@@ -23,9 +23,12 @@ class iSpyWebApp:
             template_folder=str(_WEB_ROOT / "templates"),
             static_folder=str(_WEB_ROOT / "static"),
         )
-        print("Template folder:", self.flask_app.template_folder)
-        print("Jinja search path:", self.flask_app.jinja_loader.searchpath)
-        context = {"config": config, "cameras": cameras, "flask_app": self.flask_app}
+        try:
+            t = self.flask_app.jinja_env.get_template("dashboard.html")
+            print("SUCCESS:", t.filename)
+        except Exception as e:
+            print("FAILED:", repr(e))
+            context = {"config": config, "cameras": cameras, "flask_app": self.flask_app}
 
         # Add new pages here - this is the only place a new module needs
         # to be registered to show up everywhere (nav, routes, updates).
