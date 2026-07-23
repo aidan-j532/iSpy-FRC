@@ -10,6 +10,8 @@ from iSpy.web.modules.viewer3d import Viewer3DModule
 from iSpy.web.modules.logs import LogsModule
 from iSpy.web.modules.metrics import MetricsModule
 from iSpy.web.Backend.WebModule import WebModule
+from iSpy.web.Backend.Settings import SettingsModule
+from iSpy.web.Backend.SetupWizard import SetupWizardModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
 
@@ -28,7 +30,7 @@ class iSpyWebApp:
             print("SUCCESS:", t.filename)
         except Exception as e:
             print("FAILED:", repr(e))
-            context = {"config": config, "cameras": cameras, "flask_app": self.flask_app}
+        context = {"config": config, "cameras": cameras, "flask_app": self.flask_app}
 
         # Add new pages here - this is the only place a new module needs
         # to be registered to show up everywhere (nav, routes, updates).
@@ -40,6 +42,8 @@ class iSpyWebApp:
             "dashboard": DashboardModule(context, other_modules_ref=self),
             "logs": LogsModule(context),
             "metrics": MetricsModule(context),
+            "settings": SettingsModule(context),
+            "setup_wizard": SetupWizardModule(context),
         }
 
         for name, mod in self.modules.items():

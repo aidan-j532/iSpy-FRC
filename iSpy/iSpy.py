@@ -25,7 +25,12 @@ from iSpy.plugins.utilities.BuiltIn.HealthReporter import HealthReporter
 # from iSpy.web.Backend.Status import record_frame_data
 # from iSpy.web.Backend.Camera import set_frame
 from iSpy.web.Backend.WebApp import create_app
-
+from iSpy.web.Backend.Status import StatusReporter
+from iSpy.web.Backend.Settings import SettingsManager
+from iSpy.web.Backend.YOLOHandler import YOLOHandler
+from iSpy.web.Backend.DatasetManager import DatasetManager
+from iSpy.web.Backend.SetupWizard import SetupWizard
+from iSpy.web.Backend.WebApp import create_app
 
 try:
     from rknnlite.api import RKNNLite
@@ -57,9 +62,6 @@ class iSpy:
 
         self.metrics = Metrics() if config["metrics"] else None
         
-        
-        self.web_app = create_app(cameras=cameras, config=config) if config["app_mode"] else None
-
         if len(cameras) == 0:
             self.logger.warning("No cameras provided - vision will not run.")
             self.camera_handler = None
@@ -83,7 +85,6 @@ class iSpy:
         # self._detection_cleanup = self.trackers.get("path_planner")
 
         self.web_app = create_app(cameras=cameras, config=config) if config["app_mode"] else None
-
         context = {
             "config": config,
             "cameras": self.cameras,
@@ -98,14 +99,17 @@ class iSpy:
         #     except Exception:
         #         self.logger.exception("Failed to initialize built-in utility: %s", name)
 
-        for name in config.get_nested("plugins", "utilities", default=[]):
-            if name in utility_classes:
-                try:
-                    self.utilities[name] = utility_classes[name](context)
-                except Exception:
-                    self.logger.exception("Failed to initialize utility: %s", name)
-            else:
-                self.logger.warning("Unknown utility: %s", name)
+        for name, cls in (
+            ("status_reporter", StatusReporter),
+            ("settings_manager", SettingsManager),
+            ("yolo_handler", YOLOHandler),
+            ("dataset_manager", DatasetManager),
+            ("setup_wizard", SetupWizard),
+        ):
+            try:
+                self.utilities[name] = cls(context)
+            except Exception:
+                self.logger.exception("Failed to initialize built-in utility: %s", name)
 
         frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", UtilityBase)
         self.frame_processors = {}
@@ -192,13 +196,13 @@ class iSpy:
             self.web_app.update(frame_data)
 
     def _update_camera_app(self, frame, camera=None, handler=None):
-        if not self.camera_app or frame is None:
+        if not self.web_app or frame is None:
             return
         if camera:
             cam_name = camera.config.get("name", "Camera 1") if hasattr(camera, "config") else "Camera 1"
-            self.camera_app.set_frame(frame, camera_name=cam_name)
+            self.web_app.set_frame(frame, camera_name=cam_name)
         else:
-            self.camera_app.set_frame(frame)
+            self.web_app.set_frame(frame)
         if handler:
             for i, cam in enumerate(handler.cameras):
                 cam_name = (
@@ -209,7 +213,7 @@ class iSpy:
                 with handler._locks[i]:
                     cached = handler._frames[i]
                 if cached is not None:
-                    self.camera_app.set_frame(cached.copy(), camera_name=cam_name)
+                    self.web_app.set_frame(cached.copy(), camera_name=cam_name)
 
     def run_multi_vision(self, handler):
         try:
