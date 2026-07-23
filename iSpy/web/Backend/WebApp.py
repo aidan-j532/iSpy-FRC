@@ -24,7 +24,7 @@ class iSpyWebApp:
             static_folder=str(_WEB_ROOT / "static"),
         )
         print("Template folder:", self.flask_app.template_folder)
-
+        print("Jinja search path:", self.flask_app.jinja_loader.searchpath)
         context = {"config": config, "cameras": cameras, "flask_app": self.flask_app}
 
         # Add new pages here - this is the only place a new module needs
