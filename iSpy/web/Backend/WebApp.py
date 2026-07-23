@@ -9,7 +9,7 @@ from iSpy.web.modules.datasets import DatasetsModule
 from iSpy.web.modules.viewer3d import Viewer3DModule
 from iSpy.web.modules.logs import LogsModule
 from iSpy.web.modules.metrics import MetricsModule
-from pathlib import Path
+from iSpy.web.Backend.WebModule import WebModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
 
@@ -28,13 +28,14 @@ class iSpyWebApp:
 
         # Add new pages here - this is the only place a new module needs
         # to be registered to show up everywhere (nav, routes, updates).
-        self.modules: dict[str, "iSpy.web.Backend.WebModule"] = {
+        self.modules: dict[str, WebModule] = {
             "cameras": CamerasModule(context),
             "models": ModelsModule(context),
             "datasets": DatasetsModule(context),
             "viewer3d": Viewer3DModule(context),
             "dashboard": DashboardModule(context, other_modules_ref=self),
             "logs": LogsModule(context),
+            "metrics": MetricsModule(context),
         }
 
         for name, mod in self.modules.items():
