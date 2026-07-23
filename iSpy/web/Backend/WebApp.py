@@ -23,6 +23,7 @@ class iSpyWebApp:
             template_folder=str(_WEB_ROOT / "templates"),
             static_folder=str(_WEB_ROOT / "static"),
         )
+        print("Template folder:", self.flask_app.template_folder)
 
         context = {"config": config, "cameras": cameras, "flask_app": self.flask_app}
 
