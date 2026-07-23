@@ -7,7 +7,6 @@ import threading
 import logging
 import os
 import numpy as np
-from iSpy.web_old.Metrics import Metrics
 from iSpy.config.iSpyConfig import iSpyConfig
 import signal
 from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
@@ -21,16 +20,12 @@ from iSpy.plugins.bases import TrackerBase, UtilityBase
 from wpimath.geometry import Pose2d
 from iSpy.plugins.utilities.BuiltIn.NetworkHandler import NetworkTableHandler
 from iSpy.plugins.utilities.BuiltIn.HealthReporter import HealthReporter
-# from iSpy.web.Backend.app import create_app
-# from iSpy.web.Backend.Status import record_frame_data
-# from iSpy.web.Backend.Camera import set_frame
 from iSpy.web.Backend.WebApp import create_app
 from iSpy.web.Backend.Status import StatusReporter
-from iSpy.web.Backend.Settings import SettingsManager
+from iSpy.web.Backend.Settings import SettingsModule
 from iSpy.web.Backend.YOLOHandler import YOLOHandler
 from iSpy.web.Backend.DatasetManager import DatasetManager
-from iSpy.web.Backend.SetupWizard import SetupWizard
-from iSpy.web.Backend.WebApp import create_app
+from iSpy.web.Backend.SetupWizard import SetupWizardModule
 
 try:
     from rknnlite.api import RKNNLite
@@ -38,8 +33,6 @@ try:
     RKNN_FOUND = True
 except ImportError:
     RKNN_FOUND = False
-
-from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve()
 
@@ -59,8 +52,6 @@ class iSpy:
 
         signal.signal(signal.SIGINT, lambda *_: self._handle_shutdown())
         signal.signal(signal.SIGTERM, lambda *_: self._handle_shutdown())
-
-        self.metrics = Metrics() if config["metrics"] else None
         
         if len(cameras) == 0:
             self.logger.warning("No cameras provided - vision will not run.")
@@ -101,10 +92,8 @@ class iSpy:
 
         for name, cls in (
             ("status_reporter", StatusReporter),
-            ("settings_manager", SettingsManager),
             ("yolo_handler", YOLOHandler),
             ("dataset_manager", DatasetManager),
-            ("setup_wizard", SetupWizard),
         ):
             try:
                 self.utilities[name] = cls(context)
@@ -165,18 +154,6 @@ class iSpy:
                 except Exception:
                     self.logger.exception("Error stopping plugin '%s'", name)
 
-    def _record_metrics(self, **kwargs):
-        if self.metrics:
-            self.metrics.record(**kwargs)
-
-    def _tick_metrics(self):
-        if self.metrics:
-            self.metrics.tick()
-
-    def _destroy_metrics(self):
-        if self.metrics:
-            self.metrics.destroy()
-
     def _get_pose(self) -> Pose2d:
         for util in self.utilities.values():
             pose = util.get_robot_pose()
@@ -194,26 +171,6 @@ class iSpy:
     def _update_web(self, frame_data: dict):
         if self.web_app:
             self.web_app.update(frame_data)
-
-    def _update_camera_app(self, frame, camera=None, handler=None):
-        if not self.web_app or frame is None:
-            return
-        if camera:
-            cam_name = camera.config.get("name", "Camera 1") if hasattr(camera, "config") else "Camera 1"
-            self.web_app.set_frame(frame, camera_name=cam_name)
-        else:
-            self.web_app.set_frame(frame)
-        if handler:
-            for i, cam in enumerate(handler.cameras):
-                cam_name = (
-                    cam.config.get("name", f"Camera {i+1}")
-                    if hasattr(cam, "config")
-                    else f"Camera {i+1}"
-                )
-                with handler._locks[i]:
-                    cached = handler._frames[i]
-                if cached is not None:
-                    self.web_app.set_frame(cached.copy(), camera_name=cam_name)
 
     def run_multi_vision(self, handler):
         try:
@@ -269,16 +226,6 @@ class iSpy:
         vision_s = time.perf_counter() - t_vis
 
         pose = self._get_pose()
-        # fuel_list = (
-        #     self._fuel_tracker.update(
-        #         fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
-        #     )
-        #     if self._fuel_tracker
-        #     else fuel_list
-        # )
-
-        # if self._detection_cleanup and fuel_list:
-        #     _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
 
         for tracker in self.trackers.values():
             fuel_list = tracker.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), 0.0)
@@ -302,18 +249,6 @@ class iSpy:
         vision_s = time.perf_counter() - t_vis
 
         pose = self._get_pose()
-        # fuel_list = (
-        #     self._fuel_tracker.update(
-        #         fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
-        #     )
-        #     if self._fuel_tracker
-        #     else fuel_list
-        # )
-
-        self._update_camera_app(frame, handler=handler)
-
-        # if self._detection_cleanup and fuel_list:
-        #     _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
 
         for tracker in self.trackers.values():
             fuel_list = tracker.update(
@@ -334,12 +269,6 @@ class iSpy:
             "camera_frames": handler.get_camera_frames(),
         }
 
-        record_frame_data(frame_data)
-        if frame is not None:
-            for i, camera in enumerate(handler.cameras):
-                cam_name = camera.config.get("name", f"Camera {i+1}") if hasattr(camera, "config") else f"Camera {i+1}"
-                set_frame(cam_name, frame)
-
         return frame_data
 
     def run_solo_mode(self):
@@ -355,19 +284,14 @@ class iSpy:
                 frame_data = self._run_loop_body_solo(camera)
                 self._update_utilities(frame_data)
                 self._update_web(frame_data)
-                self._record_metrics(
-                    loop_s=frame_data["loop_s"],
-                    vision_s=frame_data["vision_s"],
-                    camera_lag_s=frame_data["camera_lag_s"],
-                )
-                self._tick_metrics()
                 print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")
 
         finally:
             print()
             self._stop_all_plugins()
+            if self.web_app:
+                self.web_app.stop()
             camera.destroy()
-            self._destroy_metrics()
 
     def run_multi_mode(self):
         handler = self.camera_handler
@@ -383,16 +307,11 @@ class iSpy:
                 frame_data = self._run_loop_body_multi(handler)
                 self._update_utilities(frame_data)
                 self._update_web(frame_data)
-                self._record_metrics(
-                    loop_s=frame_data["loop_s"],
-                    vision_s=frame_data["vision_s"],
-                    camera_lag_s=frame_data["camera_lag_s"],
-                )
-                self._tick_metrics()
                 print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")
 
         finally:
             print()
             self._stop_all_plugins()
+            if self.web_app:
+                self.web_app.stop()
             handler.destroy()
-            self._destroy_metrics()

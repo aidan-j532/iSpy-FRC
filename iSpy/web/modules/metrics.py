@@ -1,5 +1,8 @@
 # iSpy/web/modules/metrics.py
+import json
+import os
 import time
+from datetime import datetime
 from collections import deque
 from flask import jsonify, render_template
 from iSpy.web.Backend.WebModule import WebModule
@@ -46,3 +49,20 @@ class MetricsModule(WebModule):
             "y": [p[1] for p in self._fps_timeline],
         }
         return jsonify(out)
+
+    def stop(self):
+        os.makedirs("Outputs", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filepath = os.path.join("Outputs", f"metrics_{timestamp}.json")
+        data = {}
+        for key, (label, unit, scale) in self.SERIES.items():
+            pts = list(self._timeline[key])
+            data[key] = {"label": label, "unit": unit,
+                         "x": [p[0] for p in pts], "y": [p[1] * scale for p in pts]}
+        data["fps"] = {
+            "label": "FPS", "unit": "fps",
+            "x": [p[0] for p in self._fps_timeline],
+            "y": [p[1] for p in self._fps_timeline],
+        }
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)

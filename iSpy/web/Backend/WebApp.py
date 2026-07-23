@@ -25,11 +25,6 @@ class iSpyWebApp:
             template_folder=str(_WEB_ROOT / "templates"),
             static_folder=str(_WEB_ROOT / "static"),
         )
-        try:
-            t = self.flask_app.jinja_env.get_template("dashboard.html")
-            print("SUCCESS:", t.filename)
-        except Exception as e:
-            print("FAILED:", repr(e))
         context = {"config": config, "cameras": cameras, "flask_app": self.flask_app}
 
         # Add new pages here - this is the only place a new module needs
