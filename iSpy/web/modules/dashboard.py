@@ -1,4 +1,3 @@
-import os
 import time
 import json
 import logging
@@ -15,8 +14,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_LOG_PATH = Path.cwd() / "Outputs" / "log.txt"
-
 
 class DashboardModule(WebModule):
     plugin_name = "dashboard"
@@ -32,14 +29,13 @@ class DashboardModule(WebModule):
         self._model_info: dict = {}
         self._plugin_info: dict = {"trackers": [], "utilities": [], "frame_processors": []}
         self._detection_classes: dict = {}
-        self._standalone = context.get("standalone", False)
-        self._process_manager = context.get("process_manager")
         self._sse_lock = threading.Lock()
         self._sse_clients: list = []
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/dashboard", "dashboard_page", lambda: render_template("dashboard.html"))
         flask_app.add_url_rule("/api/status", "api_status", self._api_status)
+        flask_app.add_url_rule("/api/system", "api_system", self._api_system)
         flask_app.add_url_rule("/api/events", "api_events", self._sse_stream)
 
     def update(self, frame_data: dict):
@@ -61,7 +57,11 @@ class DashboardModule(WebModule):
         if not self._model_info:
             self._refresh_model_info()
 
-        self._push_sse(self._build_status_payload())
+        self._push_sse({
+            "type": "tick",
+            **self._latest,
+            "detection_classes": self._detection_classes,
+        })
 
     def _refresh_model_info(self):
         try:
@@ -95,7 +95,7 @@ class DashboardModule(WebModule):
                     "memory_total_mb": None, "temperature": None}
 
         try:
-            cpu = psutil.cpu_percent(interval=0.1)
+            cpu = psutil.cpu_percent(interval=0.05)
         except Exception:
             cpu = None
 
@@ -159,32 +159,28 @@ class DashboardModule(WebModule):
                                    "frame_age_ms": None, "resolution": None})
         return cam_status
 
-    def _build_status_payload(self) -> dict:
-        service_status = None
-        if self._standalone and self._process_manager:
-            service_status = self._process_manager.status()
-
+    def _build_full_payload(self) -> dict:
         vision_running = (time.perf_counter() - self._vision_last_tick) < 5.0 if self._vision_last_tick else False
-
-        cameras = self._get_camera_status()
-        system = self._get_system_metrics()
-        uptime_s = round(time.perf_counter() - self._start_time, 1)
-
         return {
             **self._latest,
             "vision_running": vision_running,
-            "uptime_s": uptime_s,
-            "cameras": cameras,
-            "system": system,
+            "uptime_s": round(time.perf_counter() - self._start_time, 1),
+            "cameras": self._get_camera_status(),
+            "system": self._get_system_metrics(),
             "model": self._model_info,
             "detection_classes": self._detection_classes,
             "plugins": self._plugin_info,
-            "standalone": self._standalone,
-            "service": service_status,
         }
 
     def _api_status(self):
-        return jsonify(self._build_status_payload())
+        return jsonify(self._build_full_payload())
+
+    def _api_system(self):
+        return jsonify({
+            "system": self._get_system_metrics(),
+            "cameras": self._get_camera_status(),
+            "uptime_s": round(time.perf_counter() - self._start_time, 1),
+        })
 
     def _sse_stream(self):
         def generate():
@@ -192,7 +188,7 @@ class DashboardModule(WebModule):
             with self._sse_lock:
                 self._sse_clients.append(q)
             try:
-                yield f"data: {json.dumps(self._build_status_payload())}\n\n"
+                yield f"data: {json.dumps(self._build_full_payload())}\n\n"
                 while True:
                     while q:
                         payload = q.pop(0)

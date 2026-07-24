@@ -155,15 +155,12 @@
 
 <div class="settings-actions">
   <button onclick="saveSettings()" id="save-btn">Save</button>
-  <button onclick="restartSpy()" id="restart-btn" class="btn-warn" style="display:none;">Apply &amp; Restart</button>
   <span id="msg" class="settings-msg"></span>
 </div>
 
 <script>
 let configData = {};
 let defaultsData = {};
-let needsRestart = false;
-
 const BOOL_KEYS = new Set(["auto_opt", "record_mode", "frame_sync", "use_network_tables", "metrics", "debug_mode", "grayscale"]);
 
 function parseValue(val) {
@@ -267,10 +264,8 @@ async function saveSettings() {
     });
     const j = await r.json();
     if (r.ok) {
-      needsRestart = j.needs_restart;
-      msg.textContent = needsRestart ? 'Saved. Restart required to apply changes.' : 'Saved successfully.';
-      msg.className = needsRestart ? 'settings-msg msg-warn' : 'settings-msg msg-ok';
-      document.getElementById('restart-btn').style.display = needsRestart ? '' : 'none';
+      msg.textContent = j.needs_restart ? 'Saved. Restart required to apply changes.' : 'Saved successfully.';
+      msg.className = j.needs_restart ? 'settings-msg msg-warn' : 'settings-msg msg-ok';
       showToast('Settings saved', 'success');
     } else {
       msg.textContent = 'Error: ' + (j.error || 'Unknown error');
@@ -280,28 +275,6 @@ async function saveSettings() {
     msg.textContent = 'Save failed: ' + e.message;
     msg.className = 'settings-msg msg-error';
   }
-}
-
-async function restartSpy() {
-  const btn = document.getElementById('restart-btn');
-  btn.disabled = true;
-  btn.textContent = 'Restarting...';
-  try {
-    const resp = await fetch('/api/service/restart', { method: 'POST' });
-    const data = await resp.json();
-    if (data.ok) {
-      document.getElementById('msg').textContent = 'Restarting iSpy...';
-      document.getElementById('msg').className = 'settings-msg msg-warn';
-      showToast('iSpy is restarting', 'info');
-    } else {
-      document.getElementById('msg').textContent = 'Restart failed: ' + (data.error || 'Unknown error');
-      document.getElementById('msg').className = 'settings-msg msg-error';
-    }
-  } catch(e) {
-    document.getElementById('msg').textContent = 'Restart failed. Please restart manually.';
-    document.getElementById('msg').className = 'settings-msg msg-error';
-  }
-  setTimeout(() => { btn.disabled = false; btn.textContent = 'Apply & Restart'; }, 3000);
 }
 
 async function load() {
