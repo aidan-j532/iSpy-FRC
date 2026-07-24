@@ -8,10 +8,10 @@
 </div>
 
 <div id="dataset-detail" style="display:none;">
-  <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+  <div class="controls-bar" style="margin-bottom:16px;">
     <button onclick="backToList()" style="background:var(--border);">&larr; Back</button>
     <h2 id="detail-title" style="margin:0;"></h2>
-    <span id="detail-count" style="color:var(--text-dim);"></span>
+    <span id="detail-count" class="text-dim"></span>
     <button id="select-active-btn" onclick="selectActive()" style="margin-left:auto;">Set as Active</button>
   </div>
 
@@ -52,7 +52,7 @@ async function loadDatasets() {
 
   grid.innerHTML = datasets.map(d => `
     <div class="card dataset-card" onclick="openDataset('${d.name}')">
-      <div class="dataset-name">${d.name} ${d.active ? '<span style="color:var(--ok); font-size:0.75rem; margin-left:6px;">ACTIVE</span>' : ''}</div>
+      <div class="dataset-name">${d.name} ${d.active ? '<span class="badge-ok">ACTIVE</span>' : ''}</div>
       <div class="dataset-count">${d.image_count} image${d.image_count !== 1 ? 's' : ''}</div>
     </div>
   `).join('');

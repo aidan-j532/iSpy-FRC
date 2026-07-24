@@ -4,11 +4,11 @@
 <h1>Settings</h1>
 
 <div class="settings-tabs" id="tabs">
-  <button class="settings-tab active" onclick="switchTab('vision')">Vision</button>
-  <button class="settings-tab" onclick="switchTab('camera')">Camera</button>
-  <button class="settings-tab" onclick="switchTab('network')">Network</button>
-  <button class="settings-tab" onclick="switchTab('advanced')">Advanced</button>
-  <button class="settings-tab" onclick="switchTab('raw')">Raw JSON</button>
+  <button class="settings-tab active" onclick="switchTab('vision', this)">Vision</button>
+  <button class="settings-tab" onclick="switchTab('camera', this)">Camera</button>
+  <button class="settings-tab" onclick="switchTab('network', this)">Network</button>
+  <button class="settings-tab" onclick="switchTab('advanced', this)">Advanced</button>
+  <button class="settings-tab" onclick="switchTab('raw', this)">Raw JSON</button>
 </div>
 
 <div id="tab-vision" class="settings-tab-content">
@@ -86,7 +86,7 @@
 
   <div class="settings-section">
     <h3>Camera Configs</h3>
-    <p style="color:var(--text-dim); font-size:0.85rem;">Camera configurations are managed via the raw JSON editor below or through the setup wizard.</p>
+    <p class="text-dim text-sm">Camera configurations are managed via the raw JSON editor below or through the setup wizard.</p>
   </div>
 </div>
 
@@ -146,21 +146,17 @@
 
 <div id="tab-raw" class="settings-tab-content" style="display:none;">
   <div class="card">
-    <p style="color:var(--text-dim); margin:0 0 12px 0; font-size:0.9rem;">
-      Edit the raw config.json directly. Click Save when done. WARNING: Invalid JSON will NOT be handled gracefully. 
+    <p class="text-dim text-sm" style="margin:0 0 12px 0;">
+      Edit the raw config.json directly. Click Save when done.
     </p>
-    <textarea id="cfg" style="
-      width:100%; height:60vh; background:var(--bg); color:var(--ok);
-      font-family:var(--mono); font-size:13px; border:1px solid var(--border);
-      border-radius:var(--radius); padding:12px; resize:vertical;
-    "></textarea>
+    <textarea id="cfg" class="raw-editor"></textarea>
   </div>
 </div>
 
-<div style="display:flex; align-items:center; gap:12px; margin-top:16px;">
+<div class="settings-actions">
   <button onclick="saveSettings()" id="save-btn">Save</button>
-  <button onclick="restartSpy()" id="restart-btn" class="btn-warn" style="display:none;">Apply & Restart</button>
-  <span id="msg" style="font-size:0.85rem;"></span>
+  <button onclick="restartSpy()" id="restart-btn" class="btn-warn" style="display:none;">Apply &amp; Restart</button>
+  <span id="msg" class="settings-msg"></span>
 </div>
 
 <script>
@@ -236,11 +232,11 @@ function collectFormValues() {
   return { data, restartKeys };
 }
 
-function switchTab(name) {
+function switchTab(name, btn) {
   document.querySelectorAll('.settings-tab-content').forEach(el => el.style.display = 'none');
   document.querySelectorAll('.settings-tab').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + name).style.display = '';
-  event.target.classList.add('active');
+  btn.classList.add('active');
 }
 
 async function saveSettings() {
@@ -254,7 +250,7 @@ async function saveSettings() {
       data = JSON.parse(document.getElementById('cfg').value);
     } catch(e) {
       msg.textContent = 'Invalid JSON: ' + e.message;
-      msg.style.color = 'var(--bad)';
+      msg.className = 'settings-msg msg-error';
       return;
     }
   } else {
@@ -273,27 +269,39 @@ async function saveSettings() {
     if (r.ok) {
       needsRestart = j.needs_restart;
       msg.textContent = needsRestart ? 'Saved. Restart required to apply changes.' : 'Saved successfully.';
-      msg.style.color = needsRestart ? 'var(--warn)' : 'var(--ok)';
+      msg.className = needsRestart ? 'settings-msg msg-warn' : 'settings-msg msg-ok';
       document.getElementById('restart-btn').style.display = needsRestart ? '' : 'none';
+      showToast('Settings saved', 'success');
     } else {
       msg.textContent = 'Error: ' + (j.error || 'Unknown error');
-      msg.style.color = 'var(--bad)';
+      msg.className = 'settings-msg msg-error';
     }
   } catch(e) {
     msg.textContent = 'Save failed: ' + e.message;
-    msg.style.color = 'var(--bad)';
+    msg.className = 'settings-msg msg-error';
   }
 }
 
 async function restartSpy() {
+  const btn = document.getElementById('restart-btn');
+  btn.disabled = true;
+  btn.textContent = 'Restarting...';
   try {
-    await fetch('/api/service/restart', { method: 'POST' });
-    document.getElementById('msg').textContent = 'Restarting iSpy...';
-    document.getElementById('msg').style.color = 'var(--warn)';
+    const resp = await fetch('/api/service/restart', { method: 'POST' });
+    const data = await resp.json();
+    if (data.ok) {
+      document.getElementById('msg').textContent = 'Restarting iSpy...';
+      document.getElementById('msg').className = 'settings-msg msg-warn';
+      showToast('iSpy is restarting', 'info');
+    } else {
+      document.getElementById('msg').textContent = 'Restart failed: ' + (data.error || 'Unknown error');
+      document.getElementById('msg').className = 'settings-msg msg-error';
+    }
   } catch(e) {
     document.getElementById('msg').textContent = 'Restart failed. Please restart manually.';
-    document.getElementById('msg').style.color = 'var(--bad)';
+    document.getElementById('msg').className = 'settings-msg msg-error';
   }
+  setTimeout(() => { btn.disabled = false; btn.textContent = 'Apply & Restart'; }, 3000);
 }
 
 async function load() {

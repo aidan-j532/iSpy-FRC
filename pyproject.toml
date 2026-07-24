@@ -56,6 +56,10 @@ dev = [
     "tensorboard",
     "tensorrt>=10.0.0"
 ]
+# Production WSGI server for the web interface (recommended for FRC deployments).
+web = [
+    "waitress>=3.0.0",
+]
 
 [project.scripts]
 ispy-run  = "iSpy.core.game_loop:main"

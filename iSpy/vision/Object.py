@@ -14,6 +14,8 @@ class Object:
         roll: float = 0.0,
         pitch: float = 0.0,
         yaw: float = 0.0,
+        name: str = "unknown",
+        confidence: float = 0.0,
     ):
         self.x = x
         self.y = y
@@ -22,6 +24,8 @@ class Object:
         self.roll = roll
         self.pitch = pitch
         self.yaw = yaw
+        self.name = name
+        self.confidence = confidence
 
         self.start_time = time.perf_counter()
         self.alive = 0

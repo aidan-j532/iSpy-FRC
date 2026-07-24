@@ -2,8 +2,9 @@ import os
 import time
 import json
 import logging
+import threading
 from pathlib import Path
-from flask import jsonify, render_template
+from flask import jsonify, render_template, Response
 from iSpy.web.Backend.WebModule import WebModule
 
 try:
@@ -33,10 +34,13 @@ class DashboardModule(WebModule):
         self._detection_classes: dict = {}
         self._standalone = context.get("standalone", False)
         self._process_manager = context.get("process_manager")
+        self._sse_lock = threading.Lock()
+        self._sse_clients: list = []
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/dashboard", "dashboard_page", lambda: render_template("dashboard.html"))
         flask_app.add_url_rule("/api/status", "api_status", self._api_status)
+        flask_app.add_url_rule("/api/events", "api_events", self._sse_stream)
 
     def update(self, frame_data: dict):
         self._latest = {
@@ -51,11 +55,13 @@ class DashboardModule(WebModule):
         fuel_list = frame_data.get("fuel_list", [])
         self._detection_classes = {}
         for obj in fuel_list:
-            cls_name = getattr(obj, "name", None) or getattr(obj, "class_name", "unknown")
+            cls_name = getattr(obj, "name", None) or "unknown"
             self._detection_classes[cls_name] = self._detection_classes.get(cls_name, 0) + 1
 
         if not self._model_info:
             self._refresh_model_info()
+
+        self._push_sse(self._build_status_payload())
 
     def _refresh_model_info(self):
         try:
@@ -124,15 +130,6 @@ class DashboardModule(WebModule):
             "temperature": temp,
         }
 
-    def _get_recent_logs(self, n=5) -> list[str]:
-        try:
-            if _LOG_PATH.exists():
-                lines = _LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
-                return lines[-n:]
-        except Exception:
-            pass
-        return []
-
     def _get_camera_status(self) -> list[dict]:
         cameras = self.context.get("cameras") or []
         cam_status = []
@@ -162,7 +159,7 @@ class DashboardModule(WebModule):
                                    "frame_age_ms": None, "resolution": None})
         return cam_status
 
-    def _api_status(self):
+    def _build_status_payload(self) -> dict:
         service_status = None
         if self._standalone and self._process_manager:
             service_status = self._process_manager.status()
@@ -171,10 +168,9 @@ class DashboardModule(WebModule):
 
         cameras = self._get_camera_status()
         system = self._get_system_metrics()
-        recent_logs = self._get_recent_logs(5)
         uptime_s = round(time.perf_counter() - self._start_time, 1)
 
-        return jsonify({
+        return {
             **self._latest,
             "vision_running": vision_running,
             "uptime_s": uptime_s,
@@ -183,7 +179,36 @@ class DashboardModule(WebModule):
             "model": self._model_info,
             "detection_classes": self._detection_classes,
             "plugins": self._plugin_info,
-            "recent_logs": recent_logs,
             "standalone": self._standalone,
             "service": service_status,
-        })
+        }
+
+    def _api_status(self):
+        return jsonify(self._build_status_payload())
+
+    def _sse_stream(self):
+        def generate():
+            q: list = []
+            with self._sse_lock:
+                self._sse_clients.append(q)
+            try:
+                yield f"data: {json.dumps(self._build_status_payload())}\n\n"
+                while True:
+                    while q:
+                        payload = q.pop(0)
+                        yield f"data: {json.dumps(payload)}\n\n"
+                    time.sleep(0.05)
+            except GeneratorExit:
+                pass
+            finally:
+                with self._sse_lock:
+                    if q in self._sse_clients:
+                        self._sse_clients.remove(q)
+
+        return Response(generate(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    def _push_sse(self, payload: dict):
+        with self._sse_lock:
+            for q in self._sse_clients:
+                q.append(payload)

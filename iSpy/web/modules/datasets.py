@@ -11,6 +11,19 @@ _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 _ACTIVE_DATASET_FILE = Path.cwd() / "Config" / "active_dataset.json"
 
 
+def _is_safe_path(base: Path, target: Path) -> bool:
+    try:
+        target.resolve().relative_to(base.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_filename(name: str) -> str:
+    cleaned = "".join(c for c in name if c.isalnum() or c in "._- ")
+    return cleaned.strip(". ") or "unnamed"
+
+
 class DatasetsModule(WebModule):
     plugin_name = "datasets"
 
@@ -80,7 +93,9 @@ class DatasetsModule(WebModule):
 
     def _get_image(self, name, filename):
         d = self._images_dir(name)
-        return send_from_directory(str(d), filename)
+        if not _is_safe_path(self.dataset_root, d / filename):
+            return jsonify(error="Invalid path"), 400
+        return send_from_directory(str(d), _validate_filename(filename))
 
     def _upload_image(self, name):
         if "file" not in request.files:
@@ -90,9 +105,12 @@ class DatasetsModule(WebModule):
         if ext not in _IMG_EXTS:
             return jsonify(error=f"Unsupported extension {ext}"), 400
 
+        safe_name = _validate_filename(f.filename)
         d = self._images_dir(name)
+        if not _is_safe_path(self.dataset_root, d):
+            return jsonify(error="Invalid path"), 400
         d.mkdir(parents=True, exist_ok=True)
-        dest = d / Path(f.filename).name
+        dest = d / safe_name
         f.save(str(dest))
 
         ds_root = dest.parent.parent
@@ -102,12 +120,13 @@ class DatasetsModule(WebModule):
 
     def _delete_image(self, name, filename):
         d = self._images_dir(name)
-        target = d / filename
-        if not target.exists():
+        safe_filename = _validate_filename(filename)
+        target = d / safe_filename
+        if not _is_safe_path(self.dataset_root, target) or not target.exists():
             return jsonify(error="Not found"), 404
         target.unlink()
 
         ds_root = d.parent
-        remove_image_from_dataset_txt(ds_root, f"images/{filename}")
+        remove_image_from_dataset_txt(ds_root, f"images/{safe_filename}")
 
         return jsonify(success=True)

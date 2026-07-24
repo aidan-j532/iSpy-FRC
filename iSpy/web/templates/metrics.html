@@ -1,15 +1,14 @@
-<!-- iSpy/web/templates/metrics.html -->
 {% extends "base.html" %}
 {% block title %}Metrics - iSpy{% endblock %}
 {% block content %}
 <h1>Metrics</h1>
 <div class="grid">
-  <div class="card"><canvas id="chart-fps"></canvas></div>
-  <div class="card"><canvas id="chart-loop_s"></canvas></div>
-  <div class="card"><canvas id="chart-vision_s"></canvas></div>
-  <div class="card"><canvas id="chart-camera_lag_s"></canvas></div>
+  <div class="card"><h3>FPS</h3><canvas id="chart-fps"></canvas></div>
+  <div class="card"><h3>Loop Time</h3><canvas id="chart-loop_s"></canvas></div>
+  <div class="card"><h3>Vision Time</h3><canvas id="chart-vision_s"></canvas></div>
+  <div class="card"><h3>Camera Lag</h3><canvas id="chart-camera_lag_s"></canvas></div>
 </div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="/static/vendor/chart.umd.min.js"></script>
 <script>
 const charts = {};
 function ensureChart(id, label, unit) {
@@ -18,24 +17,25 @@ function ensureChart(id, label, unit) {
   charts[id] = new Chart(ctx, {
     type: 'line',
     data: { labels: [], datasets: [{ label: `${label} (${unit})`, data: [], borderColor: '#4c8bf5', pointRadius: 0, borderWidth: 2, tension: 0.1 }] },
-    options: { animation: false, scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { labels: { color: '#8b8f9a' } } } },
+    options: { animation: false, scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { display: false } } },
   });
   return charts[id];
 }
 async function refresh() {
-  const data = await fetch('/api/metrics').then(r => r.json());
-  for (const key in data) {
-    const s = data[key];
-    const c = ensureChart(key, s.label, s.unit);
-    c.data.labels = s.x.map(v => v.toFixed(1));
-    c.data.datasets[0].data = s.y;
-    c.update('none');
-  }
+  try {
+    const data = await fetch('/api/metrics').then(r => r.json());
+    for (const key in data) {
+      const s = data[key];
+      const c = ensureChart(key, s.label, s.unit);
+      c.data.labels = s.x.map(v => v.toFixed(1));
+      c.data.datasets[0].data = s.y;
+      c.update('none');
+    }
+  } catch(e) { console.error('Metrics refresh failed:', e); }
 }
 setInterval(refresh, 1000);
 refresh();
 
-// Save metrics when browser tab is closed
 window.addEventListener('beforeunload', () => {
   navigator.sendBeacon('/api/metrics/save');
 });

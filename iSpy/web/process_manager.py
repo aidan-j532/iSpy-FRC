@@ -33,6 +33,7 @@ class VisionProcessManager:
         self._error_msg: str = ""
         self._lock = threading.Lock()
         self._monitor_thread: threading.Thread | None = None
+        self._generation: int = 0
 
     @property
     def state(self) -> VisionState:
@@ -76,6 +77,8 @@ class VisionProcessManager:
 
             self._state = VisionState.STARTING
             self._error_msg = ""
+            self._generation += 1
+            gen = self._generation
 
         try:
             game_loop_path = Path(__file__).resolve().parent.parent / "core" / "game_loop.py"
@@ -178,9 +181,12 @@ class VisionProcessManager:
         if self._process is None:
             return
 
+        gen = self._generation
         returncode = self._process.wait()
 
         with self._lock:
+            if self._generation != gen:
+                return
             if self._state == VisionState.STOPPING:
                 self._state = VisionState.STOPPED
             elif returncode == 0:

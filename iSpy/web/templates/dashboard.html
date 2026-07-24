@@ -25,7 +25,7 @@
   <div class="card stat-card"><div class="stat-label">Camera Lag</div><div class="stat-value" id="s-lag">--<span class="stat-unit">ms</span></div></div>
   <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value" id="s-up">--</div></div>
 </div>
-<div id="vision-status" style="margin-bottom:16px; padding:10px 16px; border-radius:var(--radius); font-weight:600; font-size:0.9rem;"></div>
+<div id="vision-status" class="vision-banner"></div>
 
 <div class="dash-columns">
   <div class="dash-col-left">
@@ -65,11 +65,6 @@
       <h3>Plugins</h3>
       <div id="plugin-list" class="plugin-list"></div>
     </div>
-
-    <div class="card">
-      <h3>Recent Logs</h3>
-      <pre id="recent-logs" class="recent-logs"></pre>
-    </div>
   </div>
 </div>
 
@@ -93,8 +88,8 @@ function updateServiceBar(svc) {
   const dot = document.getElementById('svc-dot');
   const state = document.getElementById('svc-state');
   state.textContent = svc.state.toUpperCase();
-  dot.className = 'status-dot ' + (svc.state === 'running' ? 'status-ok' : svc.state === 'error' ? 'status-bad' : svc.state === 'paused' ? 'status-warn' : 'status-warn');
-  document.getElementById('btn-start').disabled = svc.state === 'running' || svc.state === 'paused';
+  dot.className = 'status-dot ' + (svc.state === 'running' ? 'status-ok' : svc.state === 'error' ? 'status-bad' : 'status-warn');
+  document.getElementById('btn-start').disabled = svc.state === 'running' || svc.state === 'starting' || svc.state === 'paused';
   document.getElementById('btn-stop').disabled = svc.state !== 'running' && svc.state !== 'paused';
   document.getElementById('btn-restart').disabled = svc.state !== 'running' && svc.state !== 'paused';
   document.getElementById('btn-pause').style.display = svc.state === 'running' ? '' : 'none';
@@ -104,101 +99,114 @@ function updateServiceBar(svc) {
 }
 
 async function serviceAction(action) {
-  const btn = event.target;
+  const btn = document.getElementById('btn-' + action);
+  if (!btn) return;
+  const origText = btn.textContent;
   btn.disabled = true;
+  btn.classList.add('btn-loading');
   btn.textContent = '...';
   try {
-    await fetch(`/api/service/${action}`, {method: 'POST'});
-  } catch(e) { console.error(e); }
-  setTimeout(() => { btn.disabled = false; btn.textContent = action.charAt(0).toUpperCase() + action.slice(1); }, 2000);
+    const resp = await fetch(`/api/service/${action}`, {method: 'POST'});
+    const data = await resp.json();
+    if (!data.ok) {
+      showToast(data.error || `${action} failed`, 'error');
+    }
+  } catch(e) {
+    showToast(`Network error: ${e.message}`, 'error');
+  } finally {
+    btn.classList.remove('btn-loading');
+    btn.textContent = origText;
+    setTimeout(() => { btn.disabled = false; }, 1500);
+  }
 }
 
-async function refresh() {
-  try {
-    const data = await fetch('/api/status').then(r => r.json());
+function applyData(data) {
+  document.getElementById('s-fps').textContent = data.fps ?? '--';
+  document.getElementById('s-vis').innerHTML = (data.vision_ms ?? '--') + '<span class="stat-unit">ms</span>';
+  document.getElementById('s-loop').innerHTML = (data.loop_s ?? '--') + '<span class="stat-unit">ms</span>';
+  document.getElementById('s-det').textContent = data.detections ?? '--';
+  document.getElementById('s-lag').innerHTML = (data.camera_lag_ms ?? '--') + '<span class="stat-unit">ms</span>';
+  document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
 
-    document.getElementById('s-fps').textContent = data.fps ?? '--';
-    document.getElementById('s-vis').innerHTML = (data.vision_ms ?? '--') + '<span class="stat-unit">ms</span>';
-    document.getElementById('s-loop').innerHTML = (data.loop_s ?? '--') + '<span class="stat-unit">ms</span>';
-    document.getElementById('s-det').textContent = data.detections ?? '--';
-    document.getElementById('s-lag').innerHTML = (data.camera_lag_ms ?? '--') + '<span class="stat-unit">ms</span>';
-    document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
+  const visionBanner = document.getElementById('vision-status');
+  if (data.vision_running) {
+    visionBanner.className = 'vision-banner vision-ok';
+    visionBanner.textContent = 'Vision is running';
+  } else {
+    visionBanner.className = 'vision-banner vision-bad';
+    visionBanner.textContent = 'Vision is not running';
+  }
 
-    const visionBanner = document.getElementById('vision-status');
-    if (data.vision_running) {
-      visionBanner.style.background = 'rgba(76,175,80,0.15)';
-      visionBanner.style.color = 'var(--ok)';
-      visionBanner.textContent = 'Vision is running';
-    } else {
-      visionBanner.style.background = 'rgba(244,67,54,0.15)';
-      visionBanner.style.color = 'var(--bad)';
-      visionBanner.textContent = 'Vision is not running';
-    }
+  if (data.service) updateServiceBar(data.service);
 
-    if (data.service) updateServiceBar(data.service);
+  const cams = data.cameras || [];
+  const camHtml = cams.length === 0
+    ? '<div class="empty-state">No cameras configured</div>'
+    : cams.map(c => `
+      <div class="cam-item">
+        <span class="status-dot ${c.ok ? 'status-ok' : c.stale ? 'status-warn' : 'status-bad'}"></span>
+        <span class="cam-name">${c.name}</span>
+        <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}${c.resolution ? ' | ' + c.resolution : ''}</span>
+      </div>`).join('');
+  document.getElementById('camera-list').innerHTML = camHtml;
 
-    const cams = data.cameras || [];
-    const camHtml = cams.length === 0
-      ? '<div class="empty-state">No cameras configured</div>'
-      : cams.map(c => `
-        <div class="cam-item">
-          <span class="status-dot ${c.ok ? 'status-ok' : c.stale ? 'status-warn' : 'status-bad'}"></span>
-          <span class="cam-name">${c.name}</span>
-          <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}${c.resolution ? ' | ' + c.resolution : ''}</span>
-        </div>`).join('');
-    document.getElementById('camera-list').innerHTML = camHtml;
+  const sys = data.system || {};
+  document.getElementById('sys-cpu').textContent = sys.cpu_percent != null ? sys.cpu_percent + '%' : '--';
+  document.getElementById('sys-mem').textContent = sys.memory_percent != null ? `${sys.memory_percent}% (${sys.memory_used_mb}/${sys.memory_total_mb} MB)` : '--';
+  document.getElementById('sys-temp').textContent = sys.temperature != null ? sys.temperature + '\u00B0C' : '--';
 
-    const sys = data.system || {};
-    const cpuText = sys.cpu_percent != null ? sys.cpu_percent + '%' : '--';
-    const memText = sys.memory_percent != null ? `${sys.memory_percent}% (${sys.memory_used_mb}/${sys.memory_total_mb} MB)` : '--';
-    const tempText = sys.temperature != null ? sys.temperature + '°C' : '--';
-    document.getElementById('sys-cpu').textContent = cpuText;
-    document.getElementById('sys-mem').textContent = memText;
-    document.getElementById('sys-temp').textContent = tempText;
+  const cpuBarWrap = document.getElementById('cpu-bar-wrap');
+  const memBarWrap = document.getElementById('mem-bar-wrap');
+  if (sys.cpu_percent != null) {
+    cpuBarWrap.style.display = 'block';
+    const cpuBar = document.getElementById('cpu-bar');
+    cpuBar.style.width = sys.cpu_percent + '%';
+    cpuBar.className = 'progress-bar' + (sys.cpu_percent > 90 ? ' bar-bad' : sys.cpu_percent > 70 ? ' bar-warn' : '');
+  }
+  if (sys.memory_percent != null) {
+    memBarWrap.style.display = 'block';
+    const memBar = document.getElementById('mem-bar');
+    memBar.style.width = sys.memory_percent + '%';
+    memBar.className = 'progress-bar' + (sys.memory_percent > 90 ? ' bar-bad' : sys.memory_percent > 70 ? ' bar-warn' : '');
+  }
 
-    if (sys.cpu_percent != null) {
-      document.getElementById('cpu-bar-wrap').style.display = 'block';
-      document.getElementById('cpu-bar').style.width = sys.cpu_percent + '%';
-      document.getElementById('cpu-bar').className = 'progress-bar' + (sys.cpu_percent > 90 ? ' bar-bad' : sys.cpu_percent > 70 ? ' bar-warn' : '');
-    }
-    if (sys.memory_percent != null) {
-      document.getElementById('mem-bar-wrap').style.display = 'block';
-      document.getElementById('mem-bar').style.width = sys.memory_percent + '%';
-      document.getElementById('mem-bar').className = 'progress-bar' + (sys.memory_percent > 90 ? ' bar-bad' : sys.memory_percent > 70 ? 'bar-warn' : '');
-    }
+  const model = data.model || {};
+  document.getElementById('model-info').innerHTML = model.name
+    ? `<div class="model-name">${model.name}</div><div class="model-meta">${model.format ? model.format.toUpperCase() : ''} ${model.size_mb ? model.size_mb + ' MB' : ''}</div>`
+    : 'No model loaded';
 
-    const model = data.model || {};
-    document.getElementById('model-info').innerHTML = model.name
-      ? `<div class="model-name">${model.name}</div><div class="model-meta">${model.format ? model.format.toUpperCase() : ''} ${model.size_mb ? model.size_mb + ' MB' : ''}</div>`
-      : 'No model loaded';
+  const classes = data.detection_classes || {};
+  const clsEntries = Object.entries(classes);
+  document.getElementById('det-breakdown').innerHTML = clsEntries.length === 0
+    ? '<div class="empty-state">No detections</div>'
+    : clsEntries.map(([name, count]) =>
+      `<div class="det-item"><span class="det-class">${name}</span><span class="det-count">${count}</span></div>`
+    ).join('');
 
-    const classes = data.detection_classes || {};
-    const clsEntries = Object.entries(classes);
-    document.getElementById('det-breakdown').innerHTML = clsEntries.length === 0
-      ? '<div class="empty-state">No detections</div>'
-      : clsEntries.map(([name, count]) =>
-        `<div class="det-item"><span class="det-class">${name}</span><span class="det-count">${count}</span></div>`
-      ).join('');
-
-    const plugins = data.plugins || {};
-    const allPlugins = [
-      ...((plugins.trackers || []).map(n => ({name: n, type: 'tracker'}))),
-      ...((plugins.utilities || []).map(n => ({name: n, type: 'utility'}))),
-      ...((plugins.frame_processors || []).map(n => ({name: n, type: 'frame processor'}))),
-    ];
-    document.getElementById('plugin-list').innerHTML = allPlugins.length === 0
-      ? '<div class="empty-state">No plugins loaded</div>'
-      : allPlugins.map(p =>
-        `<div class="plugin-item"><span class="plugin-pill">${p.type}</span> ${p.name}</div>`
-      ).join('');
-
-    const logs = data.recent_logs || [];
-    document.getElementById('recent-logs').textContent = logs.length ? logs.join('\n') : 'No recent logs';
-
-  } catch(e) { console.error('Dashboard refresh failed:', e); }
+  const plugins = data.plugins || {};
+  const allPlugins = [
+    ...((plugins.trackers || []).map(n => ({name: n, type: 'tracker'}))),
+    ...((plugins.utilities || []).map(n => ({name: n, type: 'utility'}))),
+    ...((plugins.frame_processors || []).map(n => ({name: n, type: 'frame processor'}))),
+  ];
+  document.getElementById('plugin-list').innerHTML = allPlugins.length === 0
+    ? '<div class="empty-state">No plugins loaded</div>'
+    : allPlugins.map(p =>
+      `<div class="plugin-item"><span class="plugin-pill">${p.type}</span> ${p.name}</div>`
+    ).join('');
 }
 
-setInterval(refresh, 1000);
-refresh();
+function connectSSE() {
+  const es = new EventSource('/api/events');
+  es.onmessage = (e) => {
+    try { applyData(JSON.parse(e.data)); } catch(err) { console.error('SSE parse error:', err); }
+  };
+  es.onerror = () => {
+    es.close();
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+connectSSE();
 </script>
 {% endblock %}

@@ -1,17 +1,14 @@
-<!-- iSpy/web/templates/viewer3d.html -->
 {% extends "base.html" %}
 {% block title %}3D Viewer - iSpy{% endblock %}
-{% block head %}
-<style>
-  #scene-container { width:100%; height:65vh; background:#0a0a0f; border-radius:8px; position:relative; overflow:hidden; }
-  #scene-container canvas { display:block; }
-  .viewer-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
-  .viewer-toolbar label { color:var(--text-dim); font-size:0.85rem; display:flex; align-items:center; gap:6px; }
-  .viewer-toolbar select, .viewer-toolbar input[type=file] { background:var(--bg); color:var(--text); border:1px solid var(--border); padding:4px 8px; border-radius:var(--radius); }
-  #object-list { max-height:200px; overflow-y:auto; }
-  #object-list table { width:100%; }
-  .obj-row td { font-size:0.82rem; }
-</style>
+{% block head_css %}
+#scene-container { width:100%; height:65vh; background:#0a0a0f; border-radius:8px; position:relative; overflow:hidden; }
+#scene-container canvas { display:block; }
+.viewer-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+.viewer-toolbar label { color:var(--text-dim); font-size:0.85rem; display:flex; align-items:center; gap:6px; }
+.viewer-toolbar select, .viewer-toolbar input[type=file] { background:var(--bg); color:var(--text); border:1px solid var(--border); padding:4px 8px; border-radius:var(--radius); }
+#object-list { max-height:200px; overflow-y:auto; }
+#object-list table { width:100%; }
+.obj-row td { font-size:0.82rem; }
 {% endblock %}
 {% block content %}
 <h1>3D Detection Viewer</h1>
@@ -49,15 +46,15 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+    "three": "/static/vendor/three.module.js",
+    "three/addons/": "/static/vendor/"
   }
 }
 </script>
 <script type="module">
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/GLTFLoader.js';
 
 const container = document.getElementById('scene-container');
 const scene = new THREE.Scene();
@@ -101,7 +98,6 @@ window.toggleAxes = function() {
   axesHelper.visible = document.getElementById('show-axes').checked;
 };
 
-// Camera presets
 const PRESETS = {
   default: { pos: [0, 5, 8], target: [0, 0, 0] },
   top: { pos: [0, 15, 0.01], target: [0, 0, 0] },
@@ -115,7 +111,6 @@ window.setViewPreset = function() {
   controls.update();
 };
 
-// User-loaded model
 let userModel = null;
 const gltfLoader = new GLTFLoader();
 window.loadUserModel = function(event) {
@@ -125,7 +120,6 @@ window.loadUserModel = function(event) {
   gltfLoader.load(url, (gltf) => {
     if (userModel) scene.remove(userModel);
     userModel = gltf.scene;
-    // Center and scale
     const box = new THREE.Box3().setFromObject(userModel);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -145,7 +139,6 @@ window.clearUserModel = function() {
   document.getElementById('model-file').value = '';
 };
 
-// Detection boxes
 const boxes = {};
 const BOX_COLORS = [0x4c8bf5, 0x4caf50, 0xf44336, 0xff9800, 0x9c27b0, 0x00bcd4];
 
@@ -166,14 +159,13 @@ function sync(objects) {
       mesh.castShadow = true;
       boxes[o.id] = mesh;
       scene.add(mesh);
-      // Add wireframe
       const wireGeo = new THREE.EdgesGeometry(geo);
       const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
       mesh.add(new THREE.LineSegments(wireGeo, wireMat));
     }
     boxes[o.id].position.set(o.x, o.z, o.y);
     boxes[o.id].rotation.set(o.roll, o.yaw, o.pitch);
-    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}°</td></tr>`;
+    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td></tr>`;
   }
   for (const id in boxes) {
     if (!seen.has(Number(id)) && !seen.has(id)) {
@@ -181,10 +173,9 @@ function sync(objects) {
       delete boxes[id];
     }
   }
-  tbody.innerHTML = rows || '<tr><td colspan="5" style="color:var(--text-dim)">No detections</td></tr>';
+  tbody.innerHTML = rows || '<tr><td colspan="5" class="empty-state">No detections</td></tr>';
 }
 
-// Poll for detections
 async function poll() {
   try {
     const data = await fetch('/api/detections/latest').then(r => r.json());
@@ -193,14 +184,12 @@ async function poll() {
 }
 setInterval(poll, 200);
 
-// Resize handler
 window.addEventListener('resize', () => {
   camera.aspect = container.clientWidth / container.clientHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(container.clientWidth, container.clientHeight);
 });
 
-// Render loop
 function animate() {
   requestAnimationFrame(animate);
   controls.update();

@@ -25,6 +25,8 @@ CAM_NAMES = ["camera_1", "camera_2"]
 
 class FakeObject:
     """Stands in for iSpy.vision.Object.Object - same fields the web layer reads."""
+    NAMES = {0: "fuel_cell", 1: "cone", 2: "cube"}
+
     def __init__(self, i: int):
         self.id = i
         self.x = random.uniform(-3, 3)
@@ -33,6 +35,8 @@ class FakeObject:
         self.roll = 0.0
         self.pitch = 0.0
         self.yaw = random.uniform(0, math.tau)
+        self.name = self.NAMES.get(i % len(self.NAMES), "unknown")
+        self.confidence = random.uniform(0.5, 0.99)
 
 
 class FakeCamera:

@@ -8,6 +8,14 @@ from iSpy.vision.metadata import read_metadata, metadata_from_pt, write_metadata
 logger = logging.getLogger(__name__)
 
 
+def _is_safe_path(base: Path, target: Path) -> bool:
+    try:
+        target.resolve().relative_to(base.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 class ModelsModule(WebModule):
     plugin_name = "models"
 
@@ -54,7 +62,7 @@ class ModelsModule(WebModule):
     def _detail(self, name):
         safe_name = secure_filename(name)
         pt = self.pytorch_dir / safe_name
-        if not pt.exists():
+        if not _is_safe_path(self.pytorch_dir, pt) or not pt.exists():
             return jsonify(error="Model not found"), 404
         meta = read_metadata(pt) or {}
         current = self._get_current_model()
@@ -92,6 +100,8 @@ class ModelsModule(WebModule):
             p = Path.cwd() / p
         if not p.exists():
             return jsonify(error=f"Model not found: {p}"), 404
+        if not _is_safe_path(self.pytorch_dir, p) and not _is_safe_path(Path.cwd() / "YoloModels", p):
+            return jsonify(error="Invalid model path"), 403
         config = self.context.get("config")
         if config:
             config.set("vision_model", "source_pt", str(p))
@@ -102,7 +112,7 @@ class ModelsModule(WebModule):
     def _delete(self, name):
         safe_name = secure_filename(name)
         target = self.pytorch_dir / safe_name
-        if not target.exists():
+        if not _is_safe_path(self.pytorch_dir, target) or not target.exists():
             return jsonify(error="Not found"), 404
 
         current = self._get_current_model()

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}iSpy{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/design.css">
+  <style>{% block head_css %}{% endblock %}</style>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -38,7 +39,11 @@
       toast.className = 'toast toast-' + type;
       toast.textContent = message;
       container.appendChild(toast);
-      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
     }
   </script>
 </body>

@@ -1,3 +1,4 @@
+from pathlib import Path
 from iSpy.vision.Object import Object
 import cv2
 import math
@@ -10,7 +11,6 @@ from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
 from iSpy.vision.genericYolo import Box, Results, GenericYolo
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
-import logging
 
 class ObjectDetectionCamera(Camera, VisionBase):
     plugin_name = "object_detection"
@@ -91,6 +91,15 @@ class ObjectDetectionCamera(Camera, VisionBase):
             self.core_mask,
             iSpy_config=config,
         )
+
+        self._class_names: dict[int, str] = {0: "object"}
+        try:
+            from iSpy.vision.metadata import read_metadata
+            meta = read_metadata(Path(self.yolo_model_file))
+            if meta and isinstance(meta.get("names"), dict):
+                self._class_names = {int(k): str(v) for k, v in meta["names"].items()}
+        except Exception:
+            pass
 
         self._preproc_q: queue.Queue = queue.Queue(maxsize=1)
         self._use_pipeline = self.model.model_type in ("rknn", "onnx", "tflite")
@@ -306,7 +315,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
         if box.rotation is not None:
             roll, pitch, yaw = box.rotation
         z = float(pt[2]) if len(pt) > 2 else 0.0
-        return Object(float(pt[0]), float(pt[1]), z=z, roll=roll, pitch=pitch, yaw=yaw)
+        class_name = self._class_names.get(box.cls_id, f"class_{box.cls_id}")
+        return Object(float(pt[0]), float(pt[1]), z=z, roll=roll, pitch=pitch, yaw=yaw, name=class_name, confidence=box.conf)
 
     def run(self):
         data, frame = self.get_yolo_data()

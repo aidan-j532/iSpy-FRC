@@ -9,10 +9,6 @@ import sys
 import logging
 from pathlib import Path
 
-from iSpy.web.Backend.WebApp import iSpyWebApp
-from iSpy.config.iSpyConfig import iSpyConfig
-from iSpy.web.process_manager import VisionProcessManager
-
 logger = logging.getLogger(__name__)
 
 
@@ -24,6 +20,10 @@ def main():
         print(f"Error: config not found at {config_path}")
         print("Run 'ispy-boot' first to set up iSpy.")
         sys.exit(1)
+
+    from iSpy.config.iSpyConfig import iSpyConfig
+    from iSpy.web.process_manager import VisionProcessManager
+    from iSpy.web.Backend.WebApp import iSpyWebApp
 
     config = iSpyConfig(str(config_path))
 
@@ -37,10 +37,17 @@ def main():
     )
 
     port = config.get("web_port", 5000)
-    logger.info("Starting iSpy web service on http://0.0.0.0:%d", port)
+    host = "0.0.0.0"
+
     print(f"iSpy web interface: http://localhost:{port}/")
 
-    web_app.run(host="0.0.0.0", port=port)
+    try:
+        from waitress import serve
+        logger.info("Starting iSpy web service with Waitress on http://%s:%d", host, port)
+        serve(web_app.flask_app, host=host, port=port, threads=4)
+    except ImportError:
+        logger.info("Waitress not available, using Flask dev server (not recommended for production)")
+        web_app.flask_app.run(host=host, port=port, threaded=True, use_reloader=False)
 
 
 if __name__ == "__main__":
