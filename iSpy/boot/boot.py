@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from functools import lru_cache
 import io
+from iSpy.dataset.dataset import get_active_dataset_dir
 
 _REAL_STDOUT_FD = os.dup(1)
 _REAL_STDERR_FD = os.dup(2)
@@ -1434,8 +1435,7 @@ def setup_files(first_boot: bool = False):
     yolo_dir = _PROJECT_ROOT / "YoloModels"
     config_dir = _PROJECT_ROOT / "Config"
     outputs_dir = _PROJECT_ROOT / "Outputs"
-    dataset_dir = _PROJECT_ROOT / "QuantizeDataset"
-
+    dataset_dir = get_active_dataset_dir()
     saved_config = None
     if first_boot:
         config_path = config_dir / "config.json"

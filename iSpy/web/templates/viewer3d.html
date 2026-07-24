@@ -42,6 +42,9 @@
     </table>
   </div>
 </div>
+<label>Upload .glb to Server
+  <input type="file" id="server-model-file" accept=".glb,.gltf" onchange="uploadModelToServer(event)">
+</label>
 
 <script type="importmap">
 {
@@ -146,6 +149,59 @@ function getColor(id) {
   return BOX_COLORS[id % BOX_COLORS.length];
 }
 
+async function uploadModelToServer(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  // 1. Pack the file into a FormData object
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    // 2. Send it to the Python route we just created
+    const response = await fetch('/api/upload_glb', {
+      method: 'POST',
+      body: formData
+    });
+    
+    // 3. Handle the Python function's return value
+    const data = await response.json();
+    
+    if (response.ok) {
+      showToast(data.message, 'success'); // Using your existing toast system!
+    } else {
+      showToast(data.error, 'error');
+    }
+  } catch (error) {
+    showToast('Failed to reach server', 'error');
+  }
+}
+
+function makeMarker(id) {
+  if (userModel) {
+    const clone = userModel.clone(true);
+    clone.traverse(o => { if (o.isMesh) { o.castShadow = true; } });
+    return clone;
+  }
+  const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+  const mat = new THREE.MeshStandardMaterial({ color: getColor(id), transparent: true, opacity: 0.85 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  const wireGeo = new THREE.EdgesGeometry(geo);
+  const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
+  mesh.add(new THREE.LineSegments(wireGeo, wireMat));
+  return mesh;
+}
+
+function rebuildAllMarkers() {
+  for (const id in boxes) {
+    scene.remove(boxes[id]);
+  }
+  const oldIds = Object.keys(boxes);
+  oldIds.forEach(id => delete boxes[id]);
+  // markers will be recreated on next sync() tick from live detection data
+}
+
 function sync(objects) {
   const seen = new Set();
   const tbody = document.getElementById('obj-tbody');
@@ -153,15 +209,8 @@ function sync(objects) {
   for (const o of objects) {
     seen.add(o.id);
     if (!boxes[o.id]) {
-      const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-      const mat = new THREE.MeshStandardMaterial({ color: getColor(o.id), transparent: true, opacity: 0.85 });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.castShadow = true;
-      boxes[o.id] = mesh;
-      scene.add(mesh);
-      const wireGeo = new THREE.EdgesGeometry(geo);
-      const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
-      mesh.add(new THREE.LineSegments(wireGeo, wireMat));
+      boxes[o.id] = makeMarker(o.id);          // CHANGED
+      scene.add(boxes[o.id]);
     }
     boxes[o.id].position.set(o.x, o.z, o.y);
     boxes[o.id].rotation.set(o.roll, o.yaw, o.pitch);
@@ -175,6 +224,33 @@ function sync(objects) {
   }
   tbody.innerHTML = rows || '<tr><td colspan="5" class="empty-state">No detections</td></tr>';
 }
+
+window.loadUserModel = function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  gltfLoader.load(url, (gltf) => {
+    userModel = gltf.scene;
+    // Normalize scale/pivot once on the template so every clone looks right
+    const box = new THREE.Box3().setFromObject(userModel);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const scale = 0.4 / maxDim;   // sized to roughly match old 0.3 box markers
+    userModel.scale.setScalar(scale);
+    userModel.position.sub(center.multiplyScalar(scale));
+    rebuildAllMarkers();          // CHANGED: force existing markers to swap
+    URL.revokeObjectURL(url);
+  }, undefined, (err) => {
+    console.error('Failed to load model:', err);
+    URL.revokeObjectURL(url);
+  });
+};
+window.clearUserModel = function() {
+  userModel = null;
+  rebuildAllMarkers();            // CHANGED: force existing markers to revert to boxes
+  document.getElementById('model-file').value = '';
+};
 
 async function poll() {
   try {

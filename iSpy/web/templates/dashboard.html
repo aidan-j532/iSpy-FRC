@@ -53,8 +53,45 @@
     </div>
   </div>
 </div>
+<div class="dash-service-bar">
+  <span class="service-status" id="svc-status">Checking service…</span>
+  <div class="service-controls">
+    <button onclick="serviceCmd('start')">Start</button>
+    <button onclick="serviceCmd('pause')">Pause</button>
+    <button onclick="serviceCmd('resume')">Resume</button>
+    <button onclick="serviceCmd('restart')">Restart</button>
+    <button class="btn-bad" onclick="serviceCmd('stop')">Stop</button>
+  </div>
+</div>
+<script>
+async function pollServiceStatus() {
+  try {
+    const r = await fetch(`http://${location.hostname}:5050/service/status`);
+    const j = await r.json();
+    document.getElementById('svc-status').textContent =
+      `Vision: ${j.status}${j.pid ? ' (pid ' + j.pid + ')' : ''}`;
+  } catch (e) {
+    document.getElementById('svc-status').textContent = 'Service daemon unreachable';
+  }
+}
+setInterval(pollServiceStatus, 2000);
+pollServiceStatus();
+</script>
 
 <script>
+async function serviceCmd(cmd) {
+  const btn = event.target;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`http://${location.hostname}:5050/service/${cmd}`, { method: 'POST' });
+    const j = await r.json();
+    showToast(j.ok ? `Service ${cmd} sent` : (j.error || 'Failed'), j.ok ? 'success' : 'error');
+  } catch (e) {
+    showToast('Could not reach service daemon on port 5050', 'error');
+  }
+  setTimeout(() => btn.disabled = false, 1000);
+}
+
 function formatUptime(s) {
   if (s == null) return '--';
   const h = Math.floor(s / 3600);

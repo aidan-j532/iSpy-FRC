@@ -78,25 +78,45 @@ class iSpy:
             except Exception:
                 self.logger.exception("Failed to initialize built-in utility: %s", name)
 
+        for name in config.get_nested("plugins", "utilities", default=[]):
+            if name in self.utilities:
+                continue
+            if name in utility_classes:
+                try:
+                    self.utilities[name] = utility_classes[name](context)
+                except Exception:
+                    self.logger.exception("Failed to initialize utility plugin: %s", name)
+            else:
+                self.logger.warning("Unknown utility plugin: %s", name)
+
         frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", UtilityBase)
         self.frame_processors = {}
         for name in config.get_nested("plugins", "frame_processors", default=[]):
             if name in frame_processor_classes:
                 try:
                     self.frame_processors[name] = frame_processor_classes[name](context)
-                    
-
                 except Exception:
                     self.logger.exception("Failed to initialize frame processor: %s", name)
             else:
                 self.logger.warning("Unknown frame processor: %s", name)
-
 
         # Wire health reporter to network handler if both exist
         health = self.utilities.get("health_reporter")
         nt = self.utilities.get("network_table_handler")
         if health and nt:
             health.set_network_handler(nt)
+
+        status = self.utilities.get("status_reporter")
+        if status and hasattr(status, "set_plugins"):
+            status.set_plugins(self.trackers, self.utilities, self.frame_processors)
+
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+        if self.web_app:
+            threading.Thread(target=self.web_app.run, daemon=True).start()
+            dash = self.web_app.modules.get("dashboard")
+            if dash and hasattr(dash, "set_plugins"):
+                dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
 
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 

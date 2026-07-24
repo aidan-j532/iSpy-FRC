@@ -12,7 +12,6 @@ from iSpy.web.Backend.WebModule import WebModule
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
 
-
 class CamerasModule(WebModule):
     plugin_name = "cameras"
 
@@ -22,6 +21,10 @@ class CamerasModule(WebModule):
         self.frames: dict[str, "np.ndarray"] = {}
         self.dims: dict[str, tuple[int, int]] = {}
         self.last_seen: dict[str, float] = {}
+        self.sources: dict[str, str] = {}          # NEW: name -> source path/index
+        self._discover_cache: list = []              # NEW: cache expensive probing
+        self._discover_cache_ts: float = 0.0
+        self._discover_lock = threading.Lock()
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/cameras", "cameras_page", lambda: render_template("cameras.html"))
@@ -38,16 +41,22 @@ class CamerasModule(WebModule):
         now = time.monotonic()
         with self.lock:
             if per_cam:
-                for name, f in per_cam.items():
-                    if f is not None:
-                        self.frames[name] = f
-                        self.dims[name] = f.shape[1], f.shape[0]
-                        self.last_seen[name] = now
+                for i, (name, f) in enumerate(per_cam.items()):
+                    if f is None:
+                        continue
+                    self.frames[name] = f
+                    self.dims[name] = f.shape[1], f.shape[0]
+                    self.last_seen[name] = now
+                    # best-effort: match name back to a camera object for its source
+                    if i < len(cameras) and hasattr(cameras[i], "source"):
+                        self.sources[name] = str(cameras[i].source)
             elif cameras:
-                name = cameras[0].config.get("name", "camera_1") if hasattr(cameras[0], "config") else "camera_1"
+                cam = cameras[0]
+                name = cam.config.get("name", "camera_1") if hasattr(cam, "config") else "camera_1"
                 self.frames[name] = frame
                 self.dims[name] = frame.shape[1], frame.shape[0]
                 self.last_seen[name] = now
+                self.sources[name] = str(getattr(cam, "source", ""))
             else:
                 self.frames["camera_1"] = frame
                 self.dims["camera_1"] = frame.shape[1], frame.shape[0]
@@ -61,18 +70,48 @@ class CamerasModule(WebModule):
             self.frames.pop(n, None)
             self.dims.pop(n, None)
             self.last_seen.pop(n, None)
+            self.sources.pop(n, None)
 
     def _api_cameras(self):
         now = time.monotonic()
         with self.lock:
             self._evict_stale(now)
             cameras = [
-                {"name": n, "w": d[0], "h": d[1], "age_ms": round((now - self.last_seen.get(n, now)) * 1000, 1)}
+                {
+                    "name": n,
+                    "w": d[0],
+                    "h": d[1],
+                    "age_ms": round((now - self.last_seen.get(n, now)) * 1000, 1),
+                    "source": self.sources.get(n),
+                }
                 for n, d in self.dims.items()
             ]
         return jsonify(cameras=cameras)
 
     def _discover(self):
+        now = time.monotonic()
+        with self._discover_lock:
+            if self._discover_cache and (now - self._discover_cache_ts) < 5.0:
+                devices = self._discover_cache
+            else:
+                devices = self._probe_devices()
+                self._discover_cache = devices
+                self._discover_cache_ts = now
+
+        with self.lock:
+            active_sources = {s for s in self.sources.values() if s}
+
+        for dev in devices:
+            dev_path = dev["path"]
+            dev_tail = dev_path.rsplit("/", 1)[-1]
+            dev["active"] = any(
+                dev_path == s or dev_tail == s.rsplit("/", 1)[-1]
+                for s in active_sources
+            )
+
+        return jsonify(devices=devices)
+
+    def _probe_devices(self):
         devices = []
         if platform.system() == "Linux":
             v4l = subprocess.run(
@@ -90,27 +129,24 @@ class CamerasModule(WebModule):
                     elif line.startswith("/dev/video"):
                         devices.append({"path": line, "name": current_name or line})
         else:
+            with self.lock:
+                claimed = {s for s in self.sources.values() if s}
+
             for path in sorted(glob.glob("/dev/video*")):
                 devices.append({"path": path, "name": path})
             if not devices:
                 for i in range(10):
+                    # NEW: don't open indices already claimed by the running pipeline
+                    if str(i) in claimed:
+                        devices.append({"path": str(i), "name": f"Camera {i}"})
+                        continue
                     cap = cv2.VideoCapture(i)
                     if cap.isOpened():
                         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                         devices.append({"path": str(i), "name": f"Camera {i}", "resolution": f"{w}x{h}" if w and h else None})
                         cap.release()
-
-        with self.lock:
-            active = set(self.frames.keys())
-
-        for dev in devices:
-            dev["active"] = any(
-                dev["path"] in n or n in dev["path"]
-                for n in active
-            )
-
-        return jsonify(devices=devices)
+        return devices
 
     def _video_feed(self, camera_name):
         return Response(
@@ -121,21 +157,24 @@ class CamerasModule(WebModule):
     def _generate(self, camera_name):
         target_interval = 1.0 / 20
         last_frame_time = time.monotonic()
-        while True:
-            t0 = time.perf_counter()
-            with self.lock:
-                frame = self.frames.get(camera_name)
-            if frame is None:
-                if time.monotonic() - last_frame_time > _FEED_TIMEOUT_S:
-                    break
-                time.sleep(0.05)
-                continue
-            last_frame_time = time.monotonic()
-            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            if not ok:
-                continue
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
-            elapsed = time.perf_counter() - t0
-            sleep_time = target_interval - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+        try:
+            while True:
+                t0 = time.perf_counter()
+                with self.lock:
+                    frame = self.frames.get(camera_name)
+                if frame is None:
+                    if time.monotonic() - last_frame_time > _FEED_TIMEOUT_S:
+                        break
+                    time.sleep(0.05)
+                    continue
+                last_frame_time = time.monotonic()
+                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if not ok:
+                    continue
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+                elapsed = time.perf_counter() - t0
+                sleep_time = target_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+        except GeneratorExit:
+            pass

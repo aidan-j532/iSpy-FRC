@@ -210,25 +210,28 @@ def setup(script_path: str):
         print("Unsupported platform (no systemd detected). Set up a cron job manually:")
         print(f"  @reboot {sys.executable} {os.path.abspath(script_path)}")
 
+# if __name__ == "__main__":
+#     if len(sys.argv) < 2:
+#         print("Usage: python setup_service.py <script.py>")
+#         sys.exit(1)
+
+#     script = sys.argv[1]
+#     if not os.path.isfile(script):
+#         print(f"File not found: {script}")
+#         sys.exit(1)
+
+#     detected = get_platform()
+#     print(f"Detected platform: {detected}")
+
+#     if detected == "linux_systemd":
+#         setup_systemd(script)
+#     elif detected == "windows":
+#         setup_windows(script)
+#     elif detected == "macos":
+#         setup_macos(script)
+#     else:
+#         print("Unsupported platform (no systemd detected). Set up a cron job manually:")
+#         print(f"  @reboot {sys.executable} {os.path.abspath(script)}")
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python setup_service.py <script.py>")
-        sys.exit(1)
-
-    script = sys.argv[1]
-    if not os.path.isfile(script):
-        print(f"File not found: {script}")
-        sys.exit(1)
-
-    detected = get_platform()
-    print(f"Detected platform: {detected}")
-
-    if detected == "linux_systemd":
-        setup_systemd(script)
-    elif detected == "windows":
-        setup_windows(script)
-    elif detected == "macos":
-        setup_macos(script)
-    else:
-        print("Unsupported platform (no systemd detected). Set up a cron job manually:")
-        print(f"  @reboot {sys.executable} {os.path.abspath(script)}")
+    setup("watchdog.py iSpy/boot/service_daemon.py")

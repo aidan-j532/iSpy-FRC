@@ -261,6 +261,22 @@ def _search_urls_google(sess, keyword: str, count: int, headers: dict) -> list[s
 
     return found
 
+def get_active_dataset_dir(default_root: str = "QuantizeDataset") -> Path:
+    active_file = Path.cwd() / "Config" / "active_dataset.json"
+    root = Path.cwd() / default_root
+    if not active_file.exists():
+        return root
+    try:
+        import json
+        data = json.loads(active_file.read_text())
+        name = data.get("active", "")
+        if name:
+            candidate = root / name
+            if candidate.exists():
+                return candidate
+    except Exception:
+        pass
+    return root
 
 def _is_host_reachable(host: str, timeout: int = 3) -> bool:
     try:

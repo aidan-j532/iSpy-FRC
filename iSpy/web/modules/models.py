@@ -24,15 +24,27 @@ class ModelsModule(WebModule):
         self.pytorch_dir = Path.cwd() / "YoloModels" / "pytorch"
         self.pytorch_dir.mkdir(parents=True, exist_ok=True)
 
+    def _get_protected_model_names(self) -> set[str]:
+        config = self.context.get("config")
+        if not config:
+            return set()
+        model_cfg = config.get("vision_model", {})
+        names = set()
+        for key in ("file_path", "source_pt"):
+            fp = model_cfg.get(key)
+            if fp:
+                names.add(Path(fp).name)
+        return names
+
     def _get_current_model(self) -> str | None:
+        # kept for the "active" badge in the list/detail views - still just
+        # the primary file_path's basename.
         config = self.context.get("config")
         if not config:
             return None
         model_cfg = config.get("vision_model", {})
         file_path = model_cfg.get("file_path") or model_cfg.get("source_pt")
-        if file_path:
-            return Path(file_path).name
-        return None
+        return Path(file_path).name if file_path else None
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/models", "models_page", lambda: render_template("models.html"))
@@ -47,7 +59,8 @@ class ModelsModule(WebModule):
         out = []
         for pt in sorted(self.pytorch_dir.glob("*.pt")):
             meta = read_metadata(pt) or {}
-            is_active = pt.name == current
+            # is_active = pt.name == current
+            protected = self._get_protected_model_names()
             out.append({
                 "name": pt.name,
                 "size_mb": round(pt.stat().st_size / (1024 * 1024), 2),
@@ -55,7 +68,7 @@ class ModelsModule(WebModule):
                 "nc": meta.get("nc"),
                 "names": meta.get("names"),
                 "input_size": meta.get("input_size"),
-                "active": is_active,
+                "active": pt.name in protected,
             })
         return jsonify(models=out, current=current)
 
@@ -65,7 +78,8 @@ class ModelsModule(WebModule):
         if not _is_safe_path(self.pytorch_dir, pt) or not pt.exists():
             return jsonify(error="Model not found"), 404
         meta = read_metadata(pt) or {}
-        current = self._get_current_model()
+        # current = self._get_current_model()
+        protected = self._get_protected_model_names()
         return jsonify(
             name=pt.name,
             size_mb=round(pt.stat().st_size / (1024 * 1024), 2),
@@ -73,7 +87,7 @@ class ModelsModule(WebModule):
             nc=meta.get("nc"),
             names=meta.get("names"),
             input_size=meta.get("input_size"),
-            active=pt.name == current,
+            active=pt.name in protected,
         )
 
     def _upload(self):
@@ -108,16 +122,16 @@ class ModelsModule(WebModule):
             config.set("vision_model", "file_path", str(p))
             config.save()
         return jsonify(success=True, note="Restart iSpy to load this model.")
-
+    
     def _delete(self, name):
         safe_name = secure_filename(name)
         target = self.pytorch_dir / safe_name
         if not _is_safe_path(self.pytorch_dir, target) or not target.exists():
             return jsonify(error="Not found"), 404
 
-        current = self._get_current_model()
-        if safe_name == current:
-            return jsonify(error="Cannot delete the currently active model. Select a different model first."), 400
+        protected = self._get_protected_model_names()
+        if safe_name in protected:
+            return jsonify(error="Cannot delete a model currently referenced by the active config (file_path or source_pt). Select a different model first."), 400
 
         target.unlink()
         meta = metadata_path_for(target)

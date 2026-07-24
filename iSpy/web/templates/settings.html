@@ -136,11 +136,6 @@
       </select>
       <span class="restart-badge" style="display:none;">restart required</span>
     </div>
-    <div class="form-row">
-      <span class="form-label">Device</span>
-      <input class="form-input" type="number" data-key="device" data-restart="true">
-      <span class="restart-badge" style="display:none;">restart required</span>
-    </div>
   </div>
 </div>
 
@@ -163,11 +158,57 @@ let configData = {};
 let defaultsData = {};
 const BOOL_KEYS = new Set(["auto_opt", "record_mode", "frame_sync", "use_network_tables", "metrics", "debug_mode", "grayscale"]);
 
-function parseValue(val) {
+function parseValue(el) {
+  const val = el.value;
   if (val === "true") return true;
   if (val === "false") return false;
-  if (val === "null") return null;
+  if (val === "null" || val === "") return null;
+  if (el.type === "number") {
+    const n = Number(val);
+    return Number.isFinite(n) ? n : val;
+  }
   return val;
+}
+
+async function checkRestartNeeded() {
+  const { data } = collectFormValues();
+  try {
+    const r = await fetch('/api/settings/compare', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ config: data }),
+    });
+    const j = await r.json();
+    document.querySelectorAll('.restart-badge').forEach(b => b.style.display = 'none');
+    if (j.needs_restart) {
+      (j.changed || []).forEach(key => {
+        const el = document.querySelector(`[data-key="${key}"]`);
+        const badge = el && el.parentElement.querySelector('.restart-badge');
+        if (badge) badge.style.display = '';
+      });
+    }
+  } catch (e) { /* non-fatal */ }
+}
+
+document.querySelectorAll('[data-key]').forEach(el => {
+  el.addEventListener('change', checkRestartNeeded);
+});
+
+function collectFormValues() {
+  const data = {};
+  const restartKeys = [];
+  document.querySelectorAll('[data-key]').forEach(el => {
+    const key = el.dataset.key;
+    let val = parseValue(el);
+    if (BOOL_KEYS.has(key.split('.').pop())) {
+      val = val === true || val === "true";
+    }
+    setNestedValue(data, key, val);
+    if (el.dataset.restart) {
+      restartKeys.push(key);
+    }
+  });
+  return { data, restartKeys };
 }
 
 function setNestedValue(obj, path, value) {
