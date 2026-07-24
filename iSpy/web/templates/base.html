@@ -24,11 +24,22 @@
       {% block content %}{% endblock %}
     </main>
   </div>
+  <div class="toast-container" id="toast-container"></div>
   {% block scripts %}{% endblock %}
   <script>
     document.querySelectorAll('.sidebar a').forEach(a => {
       if (a.pathname === location.pathname) a.classList.add('active');
     });
+
+    function showToast(message, type) {
+      type = type || 'info';
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'toast toast-' + type;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+    }
   </script>
 </body>
 </html>

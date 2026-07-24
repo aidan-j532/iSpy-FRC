@@ -52,16 +52,19 @@ class MetricsModule(WebModule):
         return jsonify(out)
 
     def stop(self):
-        self._save()
+        self._save_to_disk()
 
     def _save(self):
+        self._save_to_disk()
+        return jsonify({"success": True})
+
+    def _save_to_disk(self):
         os.makedirs("Outputs", exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         filepath = os.path.join("Outputs", f"metrics_{timestamp}.json")
         data = self._build_data()
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
-        return jsonify({"success": True, "path": filepath})
 
     def _build_data(self):
         data = {}

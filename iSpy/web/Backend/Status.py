@@ -4,62 +4,10 @@ import logging
 from iSpy.plugins.bases import UtilityBase
 
 try:
-    from flask import jsonify, Response, request
+    from flask import jsonify, request
     FLASK_AVAILABLE = True
 except ImportError:
     FLASK_AVAILABLE = False
-
-_HTML = """<!DOCTYPE html>
-<html><head><title>System Status</title>
-<style>
-body{font-family:Arial;background:#111;color:#eee;margin:0;padding:20px}
-h1{text-align:center}
-.card{padding:20px;margin:20px auto;max-width:700px;border-radius:10px;background:#222}
-.ok{color:#4caf50}.bad{color:#f44336;font-weight:bold}
-.pill{display:inline-block;padding:2px 8px;border-radius:10px;background:#333;margin:2px}
-</style></head>
-<body>
-<h1>iSpy System Status</h1>
-<div class="card">
-  <h2>Status: <span id="status_text"></span></h2>
-  <p><b>FPS:</b> <span id="fps"></span></p>
-  <p><b>Inference:</b> <span id="vision"></span> ms</p>
-  <p><b>Detections:</b> <span id="detections"></span></p>
-  <p><b>Loop stale:</b> <span id="stale"></span> s</p>
-  <p><b>Uptime:</b> <span id="uptime"></span> s</p>
-</div>
-<div id="cameras-container"></div>
-<div class="card"><h3>NetworkTables</h3>
-  <p>Enabled: <span id="nt_enabled"></span> Connected: <span id="nt_connected"></span></p>
-</div>
-<div class="card"><h3>Loaded Plugins</h3><div id="plugins"></div></div>
-<script>
-async function refresh(){
-  try{
-    const data = await fetch('/health', {headers:{'Accept':'application/json'}}).then(r=>r.json());
-    fps.textContent = data.fps; vision.textContent = data.vision_ms;
-    detections.textContent = data.detections; stale.textContent = data.loop_stale_s;
-    uptime.textContent = data.uptime_s;
-    const s = status_text; s.textContent = data.status.toUpperCase(); s.className = data.status==='ok'?'ok':'bad';
-    cameras-container.innerHTML='';
-    (data.cameras||[]).forEach(c=>{
-      const d=document.createElement('div'); d.className='card';
-      d.innerHTML = '<h3>'+c.name+'</h3><p>Source: '+c.source+'</p><p>Status: <span class="'+(c.ok?'ok':'bad')+'">'+(c.ok?'OK':'BAD')+'</span></p><p>Frame age: '+(c.frame_age_ms??'N/A')+' ms</p>';
-      cameras-container.appendChild(d);
-    });
-    nt_enabled.textContent = data.network_tables.enabled;
-    nt_connected.textContent = data.network_tables.connected;
-    plugins.innerHTML='';
-    for (const [kind, names] of Object.entries(data.plugins||{})){
-      const row = document.createElement('p');
-      row.innerHTML = '<b>'+kind+':</b> ' + (names.length ? names.map(n=>'<span class="pill">'+n+'</span>').join('') : '<i>none</i>');
-      plugins.appendChild(row);
-    }
-  }catch(e){ console.error(e); }
-}
-setInterval(refresh, 500); refresh();
-</script>
-</body></html>"""
 
 
 class StatusReporter(UtilityBase):
@@ -83,7 +31,6 @@ class StatusReporter(UtilityBase):
 
         if flask_app and FLASK_AVAILABLE:
             flask_app.add_url_rule("/health", "health", self._health_route)
-            flask_app.add_url_rule("/status", "status_page", self._status_page)
         elif not FLASK_AVAILABLE:
             self.logger.warning("Flask not available - /health disabled.")
 
@@ -106,9 +53,6 @@ class StatusReporter(UtilityBase):
 
     def stop(self):
         pass
-
-    def _status_page(self):
-        return Response(_HTML, mimetype="text/html")
 
     def _health_route(self):
         now = time.perf_counter()
@@ -146,6 +90,4 @@ class StatusReporter(UtilityBase):
             "network_tables": {"enabled": self._network_handler is not None, "connected": nt_connected},
             "plugins": self._plugins,
         }
-        if "text/html" in request.headers.get("Accept", ""):
-            return Response(_HTML, mimetype="text/html")
         return jsonify(payload), (200 if healthy else 503)

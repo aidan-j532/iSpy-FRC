@@ -1,4 +1,3 @@
-<!-- iSpy/web/templates/cameras.html -->
 {% extends "base.html" %}
 {% block title %}Cameras - iSpy{% endblock %}
 {% block content %}
@@ -19,6 +18,7 @@
 <script>
 let refreshTimer = null;
 let currentRate = 1000;
+let knownCameras = new Set();
 
 function setRefreshRate() {
   currentRate = Number(document.getElementById('refresh-rate').value);
@@ -26,25 +26,67 @@ function setRefreshRate() {
   refreshTimer = setInterval(refreshCameras, currentRate);
 }
 
+function updateCameraStatuses(cameras) {
+  cameras.forEach(c => {
+    const card = document.querySelector(`[data-camera="${c.name}"]`);
+    if (!card) return;
+    const dot = card.querySelector('.status-dot');
+    if (c.ok) {
+      dot.className = 'status-dot status-ok';
+    } else if (c.stale) {
+      dot.className = 'status-dot status-warn';
+    } else {
+      dot.className = 'status-dot status-bad';
+    }
+    const meta = card.querySelector('.cam-meta');
+    if (meta) {
+      meta.textContent = c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '';
+    }
+  });
+}
+
 async function refreshCameras() {
   try {
     const data = await fetch('/api/cameras').then(r => r.json());
     const grid = document.getElementById('camera-grid');
-    if (!data.cameras || data.cameras.length === 0) {
+    const cameras = data.cameras || [];
+    const newNames = new Set(cameras.map(c => c.name));
+
+    if (cameras.length === 0) {
       grid.innerHTML = '<div class="card" style="color:var(--text-dim)">No cameras detected. Connect a camera and restart iSpy.</div>';
+      knownCameras.clear();
       return;
     }
-    grid.innerHTML = data.cameras.map(c => `
-      <div class="card camera-card">
-        <div class="camera-header">
-          <span class="status-dot status-ok"></span>
-          <strong>${c.name}</strong>
-        </div>
-        <div class="camera-feed-wrap">
-          <img class="camera-feed" src="/video/${c.name}" alt="${c.name}" onerror="this.classList.add('feed-error')">
-        </div>
-      </div>
-    `).join('');
+
+    cameras.forEach(c => {
+      if (!knownCameras.has(c.name)) {
+        const card = document.createElement('div');
+        card.className = 'card camera-card';
+        card.dataset.camera = c.name;
+        card.innerHTML = `
+          <div class="camera-header">
+            <span class="status-dot status-ok"></span>
+            <strong>${c.name}</strong>
+            <span class="cam-meta" style="margin-left:auto; color:var(--text-dim); font-size:0.82rem;"></span>
+          </div>
+          <div class="camera-feed-wrap">
+            <img class="camera-feed" src="/video/${encodeURIComponent(c.name)}" alt="${c.name}" onerror="this.classList.add('feed-error')">
+          </div>
+        `;
+        grid.appendChild(card);
+        knownCameras.add(c.name);
+      }
+    });
+
+    knownCameras.forEach(name => {
+      if (!newNames.has(name)) {
+        const card = grid.querySelector(`[data-camera="${name}"]`);
+        if (card) card.remove();
+        knownCameras.delete(name);
+      }
+    });
+
+    updateCameraStatuses(cameras);
   } catch (e) {
     console.error('Camera refresh failed', e);
   }

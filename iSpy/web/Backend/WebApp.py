@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from flask import Flask, render_template
+from flask import Flask, render_template, jsonify, request
 
 from iSpy.web.modules.dashboard import DashboardModule
 from iSpy.web.modules.cameras import CamerasModule
@@ -15,20 +15,27 @@ from iSpy.web.Backend.SetupWizard import SetupWizardModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
 
+
 class iSpyWebApp:
-    def __init__(self, cameras, config):
+    def __init__(self, cameras, config, standalone=False, process_manager=None):
         self.logger = logging.getLogger(__name__)
         self.config = config
+        self.standalone = standalone
+        self.process_manager = process_manager
 
         self.flask_app = Flask(
             __name__,
             template_folder=str(_WEB_ROOT / "templates"),
             static_folder=str(_WEB_ROOT / "static"),
         )
-        context = {"config": config, "cameras": cameras, "flask_app": self.flask_app}
+        context = {
+            "config": config,
+            "cameras": cameras,
+            "flask_app": self.flask_app,
+            "standalone": standalone,
+            "process_manager": process_manager,
+        }
 
-        # Add new pages here - this is the only place a new module needs
-        # to be registered to show up everywhere (nav, routes, updates).
         self.modules: dict[str, WebModule] = {
             "cameras": CamerasModule(context),
             "models": ModelsModule(context),
@@ -49,16 +56,45 @@ class iSpyWebApp:
 
         self.flask_app.add_url_rule("/", "root", lambda: render_template("dashboard.html"))
 
+        if standalone and process_manager:
+            self._register_service_routes()
+
         try:
             import werkzeug.serving
             werkzeug.serving.show_server_banner = lambda *a, **kw: None
         except Exception:
             pass
 
+    def _register_service_routes(self):
+        pm = self.process_manager
+
+        def _service_status():
+            return jsonify(pm.status())
+
+        def _service_start():
+            return jsonify(pm.start())
+
+        def _service_stop():
+            return jsonify(pm.stop())
+
+        def _service_restart():
+            return jsonify(pm.restart())
+
+        self.flask_app.add_url_rule(
+            "/api/service/status", "service_status", _service_status, methods=["GET"]
+        )
+        self.flask_app.add_url_rule(
+            "/api/service/start", "service_start", _service_start, methods=["POST"]
+        )
+        self.flask_app.add_url_rule(
+            "/api/service/stop", "service_stop", _service_stop, methods=["POST"]
+        )
+        self.flask_app.add_url_rule(
+            "/api/service/restart", "service_restart", _service_restart, methods=["POST"]
+        )
+
     def update(self, frame_data: dict):
-        """The ONE call the game loop makes. Every web module gets the
-        same frame_data every tick - nobody has to remember to call
-        camera_app.set_frame() or yolo_app.update() separately again."""
+        """Called every tick when running inside the vision loop."""
         for name, mod in self.modules.items():
             try:
                 mod.update(frame_data)

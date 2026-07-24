@@ -66,14 +66,6 @@ def main():
     if corrected_model_path:
         config.config["vision_model"]["file_path"] = corrected_model_path
 
-    logger.info("Validating YOLO model organization...")
-    is_valid, corrected_model_path = enforce_model_organization(
-        repo_root, config.config
-    )
-
-    if corrected_model_path:
-        config.config["vision_model"]["file_path"] = corrected_model_path
-
     cameras = []
     for cam_name in config.camera_configs:
         cam_config = config.camera_config(cam_name)

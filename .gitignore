@@ -7,6 +7,7 @@ env/
 *.pyc
 *.pyo
 __pycache__/
+.pytest_cache/
 log.txt
 kernel.errors.txt
 OfflineInstall/

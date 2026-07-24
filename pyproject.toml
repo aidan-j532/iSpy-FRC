@@ -63,6 +63,7 @@ ispy-boot = "iSpy.boot.boot:main"
 ispy-bench = "iSpy.validations.benchmarking:main"
 ispy-stats = "iSpy.validations.tests.compare_models:main"
 ispy-test-web = "iSpy.web.test_web:main"
+ispy-web = "iSpy.web.service:main"
 
 [project.urls]
 Homepage = "https://github.com/aidan-j532/iSpy-FRC"

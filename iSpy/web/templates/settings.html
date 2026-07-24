@@ -1,42 +1,310 @@
-<!-- iSpy/web/templates/settings.html -->
 {% extends "base.html" %}
 {% block title %}Settings - iSpy{% endblock %}
 {% block content %}
 <h1>Settings</h1>
-<div class="card">
-  <p style="color:var(--text-dim); margin:0 0 12px 0; font-size:0.9rem;">
-    Edit the raw config.json below. Click Save when done.
-  </p>
-  <textarea id="cfg" style="
-    width:100%; height:60vh; background:var(--bg); color:var(--ok);
-    font-family:var(--mono); font-size:13px; border:1px solid var(--border);
-    border-radius:var(--radius); padding:12px; resize:vertical;
-  "></textarea>
-  <div style="display:flex; align-items:center; gap:12px; margin-top:12px;">
-    <button onclick="save()">Save</button>
-    <span id="msg" style="font-size:0.85rem;"></span>
+
+<div class="settings-tabs" id="tabs">
+  <button class="settings-tab active" onclick="switchTab('vision')">Vision</button>
+  <button class="settings-tab" onclick="switchTab('camera')">Camera</button>
+  <button class="settings-tab" onclick="switchTab('network')">Network</button>
+  <button class="settings-tab" onclick="switchTab('advanced')">Advanced</button>
+  <button class="settings-tab" onclick="switchTab('raw')">Raw JSON</button>
+</div>
+
+<div id="tab-vision" class="settings-tab-content">
+  <div class="settings-section">
+    <h3>Model</h3>
+    <div class="form-row">
+      <span class="form-label">Min Confidence</span>
+      <input class="form-input" type="number" step="0.05" min="0" max="1" data-key="vision_model.min_conf">
+    </div>
+    <div class="form-row">
+      <span class="form-label">Auto Optimize</span>
+      <select class="form-input" data-key="auto_opt" data-restart="true">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+      <span class="restart-badge" style="display:none;">restart required</span>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Detection</h3>
+    <div class="form-row">
+      <span class="form-label">Distance Threshold</span>
+      <input class="form-input" type="number" step="0.1" data-key="distance_threshold">
+    </div>
+    <div class="form-row">
+      <span class="form-label">Stale Threshold (s)</span>
+      <input class="form-input" type="number" step="0.1" data-key="stale_threshold">
+      <span class="restart-badge" style="display:none;">restart required</span>
+    </div>
+    <div class="form-row">
+      <span class="form-label">DBSCAN Epsilon</span>
+      <input class="form-input" type="number" step="0.05" data-key="dbscan.epsilon">
+    </div>
+    <div class="form-row">
+      <span class="form-label">DBSCAN Min Samples</span>
+      <input class="form-input" type="number" step="1" data-key="dbscan.min_samples">
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Units</h3>
+    <div class="form-row">
+      <span class="form-label">Unit</span>
+      <select class="form-input" data-key="unit">
+        <option value="meter">Meters</option>
+        <option value="foot">Feet</option>
+      </select>
+    </div>
   </div>
 </div>
+
+<div id="tab-camera" class="settings-tab-content" style="display:none;">
+  <div class="settings-section">
+    <h3>Recording</h3>
+    <div class="form-row">
+      <span class="form-label">Record Mode</span>
+      <select class="form-input" data-key="record_mode">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Record Directory</span>
+      <input class="form-input" type="text" data-key="record_dir">
+    </div>
+    <div class="form-row">
+      <span class="form-label">Frame Sync</span>
+      <select class="form-input" data-key="frame_sync">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Camera Configs</h3>
+    <p style="color:var(--text-dim); font-size:0.85rem;">Camera configurations are managed via the raw JSON editor below or through the setup wizard.</p>
+  </div>
+</div>
+
+<div id="tab-network" class="settings-tab-content" style="display:none;">
+  <div class="settings-section">
+    <h3>NetworkTables</h3>
+    <div class="form-row">
+      <span class="form-label">Enable NetworkTables</span>
+      <select class="form-input" data-key="use_network_tables">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+      <span class="restart-badge" style="display:none;">restart required</span>
+    </div>
+    <div class="form-row">
+      <span class="form-label">NT Server IP</span>
+      <input class="form-input" type="text" data-key="network_tables_ip" placeholder="10.0.0.2">
+      <span class="restart-badge" style="display:none;">restart required</span>
+    </div>
+  </div>
+</div>
+
+<div id="tab-advanced" class="settings-tab-content" style="display:none;">
+  <div class="settings-section">
+    <h3>System</h3>
+    <div class="form-row">
+      <span class="form-label">App Mode (Web UI)</span>
+      <select class="form-input" data-key="app_mode" data-restart="true">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+      <span class="restart-badge" style="display:none;">restart required</span>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Metrics</span>
+      <select class="form-input" data-key="metrics">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Debug Mode</span>
+      <select class="form-input" data-key="debug_mode">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Log Level</span>
+      <select class="form-input" data-key="log_level" data-restart="true">
+        <option value="DEBUG">Debug</option>
+        <option value="INFO">Info</option>
+        <option value="WARNING">Warning</option>
+        <option value="ERROR">Error</option>
+      </select>
+      <span class="restart-badge" style="display:none;">restart required</span>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Device</span>
+      <input class="form-input" type="number" data-key="device" data-restart="true">
+      <span class="restart-badge" style="display:none;">restart required</span>
+    </div>
+  </div>
+</div>
+
+<div id="tab-raw" class="settings-tab-content" style="display:none;">
+  <div class="card">
+    <p style="color:var(--text-dim); margin:0 0 12px 0; font-size:0.9rem;">
+      Edit the raw config.json directly. Click Save when done.
+    </p>
+    <textarea id="cfg" style="
+      width:100%; height:60vh; background:var(--bg); color:var(--ok);
+      font-family:var(--mono); font-size:13px; border:1px solid var(--border);
+      border-radius:var(--radius); padding:12px; resize:vertical;
+    "></textarea>
+  </div>
+</div>
+
+<div style="display:flex; align-items:center; gap:12px; margin-top:16px;">
+  <button onclick="saveSettings()" id="save-btn">Save</button>
+  <button onclick="restartSpy()" id="restart-btn" class="btn-warn" style="display:none;">Apply & Restart</button>
+  <span id="msg" style="font-size:0.85rem;"></span>
+</div>
+
 <script>
-async function load() {
-  document.getElementById('cfg').value = JSON.stringify(await (await fetch('/api/settings')).json(), null, 2);
+let configData = {};
+let defaultsData = {};
+let needsRestart = false;
+
+const BOOL_KEYS = new Set(["auto_opt", "record_mode", "frame_sync", "use_network_tables", "metrics", "app_mode", "debug_mode", "grayscale"]);
+
+function parseValue(val) {
+  if (val === "true") return true;
+  if (val === "false") return false;
+  if (val === "null") return null;
+  return val;
 }
-async function save() {
+
+function setNestedValue(obj, path, value) {
+  const parts = path.split(".");
+  let target = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!(parts[i] in target) || typeof target[parts[i]] !== 'object') {
+      target[parts[i]] = {};
+    }
+    target = target[parts[i]];
+  }
+  target[parts[parts.length - 1]] = value;
+}
+
+function getNestedValue(obj, path) {
+  const parts = path.split(".");
+  let target = obj;
+  for (const p of parts) {
+    if (target == null || typeof target !== 'object') return undefined;
+    target = target[p];
+  }
+  return target;
+}
+
+function loadFormValues() {
+  document.querySelectorAll('[data-key]').forEach(el => {
+    const key = el.dataset.key;
+    let val = getNestedValue(configData, key);
+    if (val === undefined) val = getNestedValue(defaultsData, key);
+    if (val === undefined) return;
+
+    if (el.tagName === 'SELECT') {
+      el.value = String(val);
+    } else {
+      el.value = val;
+    }
+
+    if (el.dataset.restart) {
+      const badge = el.parentElement.querySelector('.restart-badge');
+      if (badge) badge.style.display = '';
+    }
+  });
+}
+
+function collectFormValues() {
+  const data = {};
+  document.querySelectorAll('[data-key]').forEach(el => {
+    const key = el.dataset.key;
+    let val = parseValue(el.value);
+    if (BOOL_KEYS.has(key.split('.').pop())) {
+      val = val === true || val === "true";
+    }
+    setNestedValue(data, key, val);
+  });
+  return data;
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.settings-tab-content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.settings-tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).style.display = '';
+  event.target.classList.add('active');
+}
+
+async function saveSettings() {
   const msg = document.getElementById('msg');
+  const tabRaw = document.getElementById('tab-raw');
+  let data;
+
+  if (!tabRaw.style.display || tabRaw.style.display === '') {
+    try {
+      data = JSON.parse(document.getElementById('cfg').value);
+    } catch(e) {
+      msg.textContent = 'Invalid JSON: ' + e.message;
+      msg.style.color = 'var(--bad)';
+      return;
+    }
+  } else {
+    data = collectFormValues();
+  }
+
   try {
-    const data = JSON.parse(document.getElementById('cfg').value);
     const r = await fetch('/api/settings', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(data)
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
     });
     const j = await r.json();
-    msg.textContent = r.ok ? 'Saved. Restart iSpy to apply.' : ('Error: ' + j.error);
-    msg.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+    if (r.ok) {
+      needsRestart = j.needs_restart;
+      msg.textContent = needsRestart ? 'Saved. Restart required to apply changes.' : 'Saved successfully.';
+      msg.style.color = needsRestart ? 'var(--warn)' : 'var(--ok)';
+      document.getElementById('restart-btn').style.display = needsRestart ? '' : 'none';
+    } else {
+      msg.textContent = 'Error: ' + (j.error || 'Unknown error');
+      msg.style.color = 'var(--bad)';
+    }
   } catch(e) {
-    msg.textContent = 'Invalid JSON: ' + e.message;
+    msg.textContent = 'Save failed: ' + e.message;
     msg.style.color = 'var(--bad)';
   }
 }
+
+async function restartSpy() {
+  try {
+    await fetch('/api/service/restart', { method: 'POST' });
+    document.getElementById('msg').textContent = 'Restarting iSpy...';
+    document.getElementById('msg').style.color = 'var(--warn)';
+  } catch(e) {
+    document.getElementById('msg').textContent = 'Restart failed. Please restart manually.';
+    document.getElementById('msg').style.color = 'var(--bad)';
+  }
+}
+
+async function load() {
+  const data = await fetch('/api/settings').then(r => r.json());
+  configData = data.config || {};
+  defaultsData = data.defaults || {};
+  document.getElementById('cfg').value = JSON.stringify(configData, null, 2);
+  loadFormValues();
+}
+
 load();
 </script>
 {% endblock %}

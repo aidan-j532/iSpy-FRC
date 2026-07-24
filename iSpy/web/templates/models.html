@@ -1,39 +1,156 @@
-<!-- iSpy/web/templates/models.html -->
 {% extends "base.html" %}
 {% block title %}Models - iSpy{% endblock %}
 {% block content %}
 <h1>Model Manager</h1>
-<div class="card">
-  <input type="file" id="file-input" accept=".pt">
-  <button onclick="upload()">Upload</button>
+
+<div class="card" style="display:flex; gap:12px; align-items:center;">
+  <input type="file" id="file-input" accept=".pt" style="flex:1;">
+  <button onclick="upload()" id="upload-btn">Upload</button>
+  <div id="upload-progress" style="display:none; flex:1;">
+    <div class="progress-bar-wrap">
+      <div class="progress-bar" id="upload-bar" style="width:0%"></div>
+    </div>
+    <span id="upload-status" style="font-size:0.8rem; color:var(--text-dim);"></span>
+  </div>
 </div>
+
 <table id="models-table">
   <thead><tr><th>Name</th><th>Task</th><th>Classes</th><th>Input</th><th>Size (MB)</th><th></th></tr></thead>
   <tbody></tbody>
 </table>
+
+<div id="delete-modal" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <h3>Delete Model</h3>
+    <p id="delete-msg">Are you sure you want to delete <strong id="delete-name"></strong>?</p>
+    <p style="color:var(--warn); font-size:0.82rem;">This action cannot be undone. You will need to re-upload the file.</p>
+    <div class="modal-actions">
+      <button onclick="closeDeleteModal()">Cancel</button>
+      <button class="btn-danger" onclick="confirmDelete()" id="confirm-del-btn">Delete</button>
+    </div>
+  </div>
+</div>
+
 <script>
+let pendingDelete = null;
+
 async function loadModels() {
   const data = await fetch('/api/models').then(r => r.json());
-  document.querySelector('#models-table tbody').innerHTML = data.models.map(m => `
+  const tbody = document.querySelector('#models-table tbody');
+  tbody.innerHTML = data.models.map(m => `
     <tr>
-      <td>${m.name}</td><td>${m.task}</td><td>${m.nc ?? '-'}</td>
+      <td>
+        ${m.name}
+        ${m.active ? '<span style="color:var(--ok); font-size:0.75rem; margin-left:6px;">ACTIVE</span>' : ''}
+      </td>
+      <td>${m.task}</td>
+      <td>${m.nc ?? '-'}</td>
       <td>${m.input_size ? m.input_size.join('x') : '-'}</td>
       <td>${m.size_mb}</td>
-      <td><button onclick="del('${m.name}')">Delete</button></td>
+      <td style="text-align:right;">
+        ${m.active
+          ? '<span style="color:var(--text-dim); font-size:0.8rem;">in use</span>'
+          : `<button class="btn btn-bad" onclick="openDeleteModal('${m.name}')" title="Delete model" style="padding:4px 8px;">&#128465;</button>`
+        }
+      </td>
     </tr>`).join('');
 }
+
 async function upload() {
   const f = document.getElementById('file-input').files[0];
   if (!f) return;
+  const btn = document.getElementById('upload-btn');
+  const progress = document.getElementById('upload-progress');
+  const bar = document.getElementById('upload-bar');
+  const status = document.getElementById('upload-status');
+
+  btn.style.display = 'none';
+  progress.style.display = 'block';
+  bar.style.width = '0%';
+  status.textContent = 'Uploading...';
+
   const form = new FormData();
   form.append('file', f);
-  await fetch('/api/models/upload', { method: 'POST', body: form });
+
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener('progress', e => {
+      if (e.lengthComputable) {
+        const pct = Math.round((e.loaded / e.total) * 100);
+        bar.style.width = pct + '%';
+        status.textContent = `${pct}%`;
+      }
+    });
+
+    await new Promise((resolve, reject) => {
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          status.textContent = 'Done!';
+          bar.style.width = '100%';
+          resolve();
+        } else {
+          try {
+            const resp = JSON.parse(xhr.responseText);
+            status.textContent = resp.error || 'Upload failed';
+          } catch(e) {
+            status.textContent = 'Upload failed';
+          }
+          reject(new Error('Upload failed'));
+        }
+      };
+      xhr.onerror = () => { status.textContent = 'Network error'; reject(new Error('Network error')); };
+      xhr.open('POST', '/api/models/upload');
+      xhr.send(form);
+    });
+  } catch(e) {
+    console.error('Upload failed:', e);
+  }
+
+  setTimeout(() => {
+    btn.style.display = '';
+    progress.style.display = 'none';
+    document.getElementById('file-input').value = '';
+    loadModels();
+  }, 1500);
+}
+
+function openDeleteModal(name) {
+  pendingDelete = name;
+  document.getElementById('delete-name').textContent = name;
+  document.getElementById('delete-modal').style.display = 'flex';
+}
+
+function closeDeleteModal() {
+  pendingDelete = null;
+  document.getElementById('delete-modal').style.display = 'none';
+}
+
+async function confirmDelete() {
+  if (!pendingDelete) return;
+  const btn = document.getElementById('confirm-del-btn');
+  btn.disabled = true;
+  btn.textContent = 'Deleting...';
+
+  try {
+    const resp = await fetch(`/api/models/${encodeURIComponent(pendingDelete)}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert(data.error || 'Delete failed');
+    }
+  } catch(e) {
+    console.error('Delete failed:', e);
+  }
+
+  closeDeleteModal();
+  btn.disabled = false;
+  btn.textContent = 'Delete';
   loadModels();
 }
-async function del(name) {
-  await fetch(`/api/models/${name}`, { method: 'DELETE' });
-  loadModels();
-}
+
+document.getElementById('delete-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeDeleteModal();
+});
+
 loadModels();
 </script>
 {% endblock %}

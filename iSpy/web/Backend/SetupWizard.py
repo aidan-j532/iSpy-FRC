@@ -47,8 +47,15 @@ class SetupWizardModule(WebModule):
             data = request.get_json(force=True) or {}
             if not data.get("camera_configs"):
                 return jsonify(error="At least one camera_configs entry required"), 400
-            self.context["config"]._update_config(data)
-            self.context["config"].save()
+            config = self.context["config"]
+            if "unit" in data:
+                config.set("unit", data["unit"])
+            if "use_network_tables" in data:
+                config.set("use_network_tables", data["use_network_tables"])
+            if "network_tables_ip" in data:
+                config.set("network_tables_ip", data["network_tables_ip"])
+            config.set("camera_configs", data["camera_configs"])
+            config.save()
             return jsonify(success=True)
         except Exception as e:
             return jsonify(error=str(e)), 500

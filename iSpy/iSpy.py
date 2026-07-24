@@ -1,16 +1,12 @@
 from pathlib import Path
-from iSpy.plugins.trackers.BuiltIn.PathPlanner import PathPlanner
-from iSpy.plugins.utilities.BuiltIn import VideoRecorder
 from iSpy.utilities.MultipleCameraHandler import MultipleCameraHandler
 import time
 import threading
 import logging
 import os
-import numpy as np
 from iSpy.config.iSpyConfig import iSpyConfig
 import signal
 from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
-from iSpy.vision.Object import Object
 from iSpy.validations.model_validator import (
     enforce_model_organization,
     validate_model_organization,
@@ -18,21 +14,10 @@ from iSpy.validations.model_validator import (
 from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import TrackerBase, UtilityBase
 from wpimath.geometry import Pose2d
-from iSpy.plugins.utilities.BuiltIn.NetworkHandler import NetworkTableHandler
-from iSpy.plugins.utilities.BuiltIn.HealthReporter import HealthReporter
 from iSpy.web.Backend.WebApp import create_app
 from iSpy.web.Backend.Status import StatusReporter
-from iSpy.web.Backend.Settings import SettingsModule
 from iSpy.web.Backend.YOLOHandler import YOLOHandler
 from iSpy.web.Backend.DatasetManager import DatasetManager
-from iSpy.web.Backend.SetupWizard import SetupWizardModule
-
-try:
-    from rknnlite.api import RKNNLite
-
-    RKNN_FOUND = True
-except ImportError:
-    RKNN_FOUND = False
 
 PROJECT_ROOT = Path(__file__).resolve()
 
@@ -71,10 +56,6 @@ class iSpy:
             else:
                 self.logger.warning("Unknown tracker: %s", name)
 
-        # Grab the two built-in trackers by name for use in the loop
-        # self._fuel_tracker = self.trackers.get("object_tracker")
-        # self._detection_cleanup = self.trackers.get("path_planner")
-
         self.web_app = create_app(cameras=cameras, config=config) if config["app_mode"] else None
         context = {
             "config": config,
@@ -84,11 +65,6 @@ class iSpy:
 
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
         self.utilities = {}
-        # for name, cls in (("health_reporter", HealthReporter), ("video_recorder", VideoRecorder)):
-        #     try:
-        #         self.utilities[name] = cls(context)
-        #     except Exception:
-        #         self.logger.exception("Failed to initialize built-in utility: %s", name)
 
         for name, cls in (
             ("status_reporter", StatusReporter),
@@ -156,9 +132,10 @@ class iSpy:
 
     def _get_pose(self) -> Pose2d:
         for util in self.utilities.values():
-            pose = util.get_robot_pose()
-            if pose is not None:
-                return pose
+            if hasattr(util, "get_robot_pose"):
+                pose = util.get_robot_pose()
+                if pose is not None:
+                    return pose
         return Pose2d()
 
     def _update_utilities(self, frame_data: dict):
@@ -272,7 +249,7 @@ class iSpy:
         return frame_data
 
     def run_solo_mode(self):
-        # Tell them where to lood for web stuff
+        # Tell them where to look for web stuff
         self.logger.info("Check out the web interface at http://localhost:5000/")
         camera = self.cameras[0]
         try:
