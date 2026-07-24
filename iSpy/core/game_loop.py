@@ -1,6 +1,8 @@
 from pathlib import Path
 import logging
 import sys
+import os
+import threading
 
 
 def _configure_quiet_logging() -> None:
@@ -51,6 +53,29 @@ from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
 
 logger = logging.getLogger(__name__)
 
+_pause_event = threading.Event()
+_shutdown_event = threading.Event()
+
+
+def _stdin_reader():
+    """Read commands from stdin sent by VisionProcessManager."""
+    try:
+        for line in sys.stdin:
+            cmd = line.strip().upper()
+            if cmd == "PAUSE":
+                _pause_event.set()
+                logger.info("Vision paused by service")
+            elif cmd == "RESUME":
+                _pause_event.clear()
+                logger.info("Vision resumed by service")
+            elif cmd == "SHUTDOWN":
+                _shutdown_event.set()
+                logger.info("Shutdown command received from service")
+                break
+    except Exception:
+        pass
+
+
 def main():
     repo_root = Path.cwd()
     plugin_root = Path(_plugins_pkg.__file__).resolve().parent
@@ -82,7 +107,20 @@ def main():
         logger.error("No cameras configured or detected. Cannot run iSpy.")
         sys.exit(1)
 
+    if os.environ.get("ISPY_MANAGED"):
+        reader_thread = threading.Thread(target=_stdin_reader, daemon=True, name="stdin-reader")
+        reader_thread.start()
+
     vision = iSpy(cameras, config)
+
+    if os.environ.get("ISPY_MANAGED"):
+        original_shutdown_check = vision.shutdown_event.is_set
+
+        def _combined_check():
+            return original_shutdown_check() or _shutdown_event.is_set() or _pause_event.is_set()
+
+        vision.shutdown_event.is_set = _combined_check
+
     vision.run()
 
 if __name__ == "__main__":

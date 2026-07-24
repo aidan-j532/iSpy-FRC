@@ -99,7 +99,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   font-size: 0.85rem;
   position: absolute;
 }
-.camera-feed:not(.feed-error) + .camera-feed-wrap::after { display: none; }
+.camera-feed-wrap:has(.camera-feed:not(.feed-error))::after,
+.camera-feed-wrap.feed-ok::after { display: none; }
 
 /* Headings */
 h1 { font-size: 1.4rem; font-weight: 600; margin: 0 0 16px 0; }

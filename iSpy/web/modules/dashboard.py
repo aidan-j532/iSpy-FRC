@@ -20,10 +20,13 @@ _LOG_PATH = Path.cwd() / "Outputs" / "log.txt"
 class DashboardModule(WebModule):
     plugin_name = "dashboard"
 
-    def __init__(self, context: dict, other_modules_ref=None):
+    def __init__(self, context: dict):
         super().__init__(context)
-        self._web_app = other_modules_ref
-        self._latest: dict = {}
+        self._latest: dict = {
+            "fps": 0, "vision_ms": 0, "camera_lag_ms": 0,
+            "detections": 0, "loop_s": 0,
+        }
+        self._vision_last_tick: float = 0
         self._start_time = time.perf_counter()
         self._model_info: dict = {}
         self._plugin_info: dict = {"trackers": [], "utilities": [], "frame_processors": []}
@@ -43,6 +46,7 @@ class DashboardModule(WebModule):
             "detections": frame_data.get("detections", 0),
             "loop_s": round(frame_data.get("loop_s", 0) * 1000, 1),
         }
+        self._vision_last_tick = time.perf_counter()
 
         fuel_list = frame_data.get("fuel_list", [])
         self._detection_classes = {}
@@ -163,6 +167,8 @@ class DashboardModule(WebModule):
         if self._standalone and self._process_manager:
             service_status = self._process_manager.status()
 
+        vision_running = (time.perf_counter() - self._vision_last_tick) < 5.0 if self._vision_last_tick else False
+
         cameras = self._get_camera_status()
         system = self._get_system_metrics()
         recent_logs = self._get_recent_logs(5)
@@ -170,6 +176,7 @@ class DashboardModule(WebModule):
 
         return jsonify({
             **self._latest,
+            "vision_running": vision_running,
             "uptime_s": uptime_s,
             "cameras": cameras,
             "system": system,

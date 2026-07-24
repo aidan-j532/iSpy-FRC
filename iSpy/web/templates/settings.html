@@ -113,14 +113,6 @@
   <div class="settings-section">
     <h3>System</h3>
     <div class="form-row">
-      <span class="form-label">App Mode (Web UI)</span>
-      <select class="form-input" data-key="app_mode" data-restart="true">
-        <option value="true">Enabled</option>
-        <option value="false">Disabled</option>
-      </select>
-      <span class="restart-badge" style="display:none;">restart required</span>
-    </div>
-    <div class="form-row">
       <span class="form-label">Metrics</span>
       <select class="form-input" data-key="metrics">
         <option value="true">Enabled</option>
@@ -155,7 +147,7 @@
 <div id="tab-raw" class="settings-tab-content" style="display:none;">
   <div class="card">
     <p style="color:var(--text-dim); margin:0 0 12px 0; font-size:0.9rem;">
-      Edit the raw config.json directly. Click Save when done.
+      Edit the raw config.json directly. Click Save when done. WARNING: Invalid JSON will NOT be handled gracefully. 
     </p>
     <textarea id="cfg" style="
       width:100%; height:60vh; background:var(--bg); color:var(--ok);
@@ -176,7 +168,7 @@ let configData = {};
 let defaultsData = {};
 let needsRestart = false;
 
-const BOOL_KEYS = new Set(["auto_opt", "record_mode", "frame_sync", "use_network_tables", "metrics", "app_mode", "debug_mode", "grayscale"]);
+const BOOL_KEYS = new Set(["auto_opt", "record_mode", "frame_sync", "use_network_tables", "metrics", "debug_mode", "grayscale"]);
 
 function parseValue(val) {
   if (val === "true") return true;
@@ -229,6 +221,7 @@ function loadFormValues() {
 
 function collectFormValues() {
   const data = {};
+  const restartKeys = [];
   document.querySelectorAll('[data-key]').forEach(el => {
     const key = el.dataset.key;
     let val = parseValue(el.value);
@@ -236,8 +229,11 @@ function collectFormValues() {
       val = val === true || val === "true";
     }
     setNestedValue(data, key, val);
+    if (el.dataset.restart) {
+      restartKeys.push(key);
+    }
   });
-  return data;
+  return { data, restartKeys };
 }
 
 function switchTab(name) {
@@ -251,6 +247,7 @@ async function saveSettings() {
   const msg = document.getElementById('msg');
   const tabRaw = document.getElementById('tab-raw');
   let data;
+  let restartKeys = [];
 
   if (!tabRaw.style.display || tabRaw.style.display === '') {
     try {
@@ -261,14 +258,16 @@ async function saveSettings() {
       return;
     }
   } else {
-    data = collectFormValues();
+    const result = collectFormValues();
+    data = result.data;
+    restartKeys = result.restartKeys;
   }
 
   try {
     const r = await fetch('/api/settings', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(data),
+      body: JSON.stringify({config: data, restart_keys: restartKeys}),
     });
     const j = await r.json();
     if (r.ok) {

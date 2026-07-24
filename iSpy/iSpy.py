@@ -56,7 +56,9 @@ class iSpy:
             else:
                 self.logger.warning("Unknown tracker: %s", name)
 
-        self.web_app = create_app(cameras=cameras, config=config) if config["app_mode"] else None
+        self.web_app = None if os.environ.get("ISPY_MANAGED") else (
+            create_app(cameras=cameras, config=config) if config["app_mode"] else None
+        )
         context = {
             "config": config,
             "cameras": self.cameras,
@@ -98,7 +100,7 @@ class iSpy:
 
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
-        if config["app_mode"]:
+        if self.web_app:
             threading.Thread(target=self.web_app.run, daemon=True).start()
 
         self._silence_external_loggers()

@@ -13,6 +13,7 @@ class VisionState(str, Enum):
     STOPPED = "stopped"
     STARTING = "starting"
     RUNNING = "running"
+    PAUSED = "paused"
     STOPPING = "stopping"
     ERROR = "error"
 
@@ -20,9 +21,8 @@ class VisionState(str, Enum):
 class VisionProcessManager:
     """Manages the iSpy vision loop as a subprocess.
 
-    The web service owns this manager. It can start/stop/restart the vision
-    process independently. When the vision process is not running, the web
-    UI shows a control page instead of disappearing.
+    Supports start/stop/restart/pause/resume.  When paused, the subprocess
+    receives a PAUSE command over stdin and idles without processing frames.
     """
 
     def __init__(self):
@@ -44,7 +44,7 @@ class VisionProcessManager:
 
     @property
     def uptime(self) -> float | None:
-        if self._start_time and self._state == VisionState.RUNNING:
+        if self._start_time and self._state in (VisionState.RUNNING, VisionState.PAUSED):
             return time.time() - self._start_time
         return None
 
@@ -60,6 +60,14 @@ class VisionProcessManager:
                 "error": self._error_msg,
                 "pid": self._process.pid if self._process else None,
             }
+
+    def _send_command(self, cmd: str):
+        if self._process and self._process.stdin and not self._process.stdin.closed:
+            try:
+                self._process.stdin.write((cmd + "\n").encode())
+                self._process.stdin.flush()
+            except Exception:
+                logger.warning("Failed to send command '%s' to vision process", cmd)
 
     def start(self) -> dict:
         with self._lock:
@@ -77,6 +85,7 @@ class VisionProcessManager:
             self._process = subprocess.Popen(
                 cmd,
                 env=env,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -103,7 +112,7 @@ class VisionProcessManager:
 
     def stop(self) -> dict:
         with self._lock:
-            if self._state not in (VisionState.RUNNING, VisionState.STARTING):
+            if self._state not in (VisionState.RUNNING, VisionState.STARTING, VisionState.PAUSED):
                 return {"ok": False, "error": f"Vision is not running (state={self._state.value})"}
             self._state = VisionState.STOPPING
 
@@ -113,6 +122,7 @@ class VisionProcessManager:
             return {"ok": True}
 
         try:
+            self._send_command("SHUTDOWN")
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
@@ -132,6 +142,28 @@ class VisionProcessManager:
                 self._error_msg = str(e)
             logger.exception("Failed to stop vision process")
             return {"ok": False, "error": str(e)}
+
+    def pause(self) -> dict:
+        with self._lock:
+            if self._state != VisionState.RUNNING:
+                return {"ok": False, "error": f"Can only pause from running state (current: {self._state.value})"}
+
+        self._send_command("PAUSE")
+        with self._lock:
+            self._state = VisionState.PAUSED
+        logger.info("Vision process paused")
+        return {"ok": True}
+
+    def resume(self) -> dict:
+        with self._lock:
+            if self._state != VisionState.PAUSED:
+                return {"ok": False, "error": f"Can only resume from paused state (current: {self._state.value})"}
+
+        self._send_command("RESUME")
+        with self._lock:
+            self._state = VisionState.RUNNING
+        logger.info("Vision process resumed")
+        return {"ok": True}
 
     def restart(self) -> dict:
         stop_result = self.stop()

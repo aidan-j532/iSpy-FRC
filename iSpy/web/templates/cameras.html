@@ -47,39 +47,63 @@ function updateCameraStatuses(cameras) {
 
 async function refreshCameras() {
   try {
-    const data = await fetch('/api/cameras').then(r => r.json());
+    const [camData, discData] = await Promise.all([
+      fetch('/api/cameras').then(r => r.json()),
+      fetch('/api/cameras/discover').then(r => r.json()),
+    ]);
     const grid = document.getElementById('camera-grid');
-    const cameras = data.cameras || [];
-    const newNames = new Set(cameras.map(c => c.name));
+    const cameras = camData.cameras || [];
+    const discovered = discData.devices || [];
+    const allNames = new Set([...cameras.map(c => c.name), ...discovered.map(d => d.name)]);
 
-    if (cameras.length === 0) {
-      grid.innerHTML = '<div class="card" style="color:var(--text-dim)">No cameras detected. Connect a camera and restart iSpy.</div>';
+    if (allNames.size === 0) {
+      grid.innerHTML = '<div class="card" style="color:var(--text-dim)">No cameras detected. Connect a camera and click Refresh.</div>';
       knownCameras.clear();
       return;
     }
 
-    cameras.forEach(c => {
-      if (!knownCameras.has(c.name)) {
+    const cameraMap = new Map(cameras.map(c => [c.name, c]));
+    const discoveredSet = new Set(discovered.map(d => d.name));
+
+    allNames.forEach(name => {
+      const cam = cameraMap.get(name);
+      const isDiscovered = discoveredSet.has(name);
+      if (!knownCameras.has(name)) {
         const card = document.createElement('div');
         card.className = 'card camera-card';
-        card.dataset.camera = c.name;
+        card.dataset.camera = name;
+        const age = cam ? (cam.age_ms != null ? cam.age_ms + 'ms' : '') : (isDiscovered ? 'detected' : '');
         card.innerHTML = `
           <div class="camera-header">
-            <span class="status-dot status-ok"></span>
-            <strong>${c.name}</strong>
-            <span class="cam-meta" style="margin-left:auto; color:var(--text-dim); font-size:0.82rem;"></span>
+            <span class="status-dot ${cam ? 'status-ok' : isDiscovered ? 'status-warn' : 'status-bad'}"></span>
+            <strong>${name}</strong>
+            <span class="cam-meta" style="margin-left:auto; color:var(--text-dim); font-size:0.82rem;">${age}</span>
           </div>
-          <div class="camera-feed-wrap">
-            <img class="camera-feed" src="/video/${encodeURIComponent(c.name)}" alt="${c.name}" onerror="this.classList.add('feed-error')">
-          </div>
+          ${cam ? `<div class="camera-feed-wrap">
+            <img class="camera-feed" src="/video/${encodeURIComponent(name)}" alt="${name}" onload="this.closest('.camera-feed-wrap').classList.add('feed-ok')" onerror="this.classList.add('feed-error'); this.closest('.camera-feed-wrap').classList.remove('feed-ok')">
+          </div>` : `<div style="padding:16px; color:var(--text-dim); font-size:0.85rem;">Discovered but not streaming. Start vision to view.</div>`}
         `;
         grid.appendChild(card);
-        knownCameras.add(c.name);
+        knownCameras.add(name);
+      } else if (cam) {
+        const card = grid.querySelector(`[data-camera="${name}"]`);
+        if (card && !card.querySelector('.camera-feed-wrap')) {
+          card.innerHTML = `
+            <div class="camera-header">
+              <span class="status-dot status-ok"></span>
+              <strong>${name}</strong>
+              <span class="cam-meta" style="margin-left:auto; color:var(--text-dim); font-size:0.82rem;"></span>
+            </div>
+            <div class="camera-feed-wrap">
+              <img class="camera-feed" src="/video/${encodeURIComponent(name)}" alt="${name}" onload="this.closest('.camera-feed-wrap').classList.add('feed-ok')" onerror="this.classList.add('feed-error'); this.closest('.camera-feed-wrap').classList.remove('feed-ok')">
+            </div>
+          `;
+        }
       }
     });
 
     knownCameras.forEach(name => {
-      if (!newNames.has(name)) {
+      if (!allNames.has(name)) {
         const card = grid.querySelector(`[data-camera="${name}"]`);
         if (card) card.remove();
         knownCameras.delete(name);

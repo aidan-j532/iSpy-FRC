@@ -8,7 +8,7 @@ _RESTART_REQUIRED_KEYS = {
     "vision_model", "unit", "debug_mode", "dbscan", "distance_threshold",
     "stale_threshold", "record_mode", "record_dir", "frame_sync",
     "auto_opt", "log_level", "use_network_tables", "network_tables_ip",
-    "metrics", "app_mode", "plugins", "camera_configs", "device", "num_gpus",
+    "metrics", "plugins", "camera_configs", "device", "num_gpus",
 }
 
 
@@ -30,12 +30,15 @@ class SettingsModule(WebModule):
             data = request.get_json(force=True)
             config = self.context["config"]
 
+            config_data = data.get("config", data)
+            frontend_restart_keys = set(data.get("restart_keys", []))
+
             old_config = copy.deepcopy(config.config)
-            config._update_config(data)
+            config._update_config(config_data)
             config.save()
 
             changed_keys = self._find_changed_keys(old_config, config.config)
-            needs_restart = bool(changed_keys & _RESTART_REQUIRED_KEYS)
+            needs_restart = bool(changed_keys & (_RESTART_REQUIRED_KEYS | frontend_restart_keys))
 
             return jsonify(success=True, needs_restart=needs_restart, changed=list(changed_keys))
         except Exception as e:

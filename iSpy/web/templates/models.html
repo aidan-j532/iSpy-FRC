@@ -26,7 +26,20 @@
     <p style="color:var(--warn); font-size:0.82rem;">This action cannot be undone. You will need to re-upload the file.</p>
     <div class="modal-actions">
       <button onclick="closeDeleteModal()">Cancel</button>
-      <button class="btn-danger" onclick="confirmDelete()" id="confirm-del-btn">Delete</button>
+      <button class="btn-danger" onclick="goToStep2()" id="step1-next-btn">Continue</button>
+    </div>
+  </div>
+</div>
+
+<div id="delete-modal-step2" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <h3>Confirm Deletion</h3>
+    <p>Type the model name to confirm:</p>
+    <input type="text" id="delete-confirm-input" style="width:100%; margin-bottom:12px;" placeholder="" oninput="checkDeleteConfirm()">
+    <p style="color:var(--bad); font-size:0.82rem;">This will permanently delete the model file and its metadata sidecar.</p>
+    <div class="modal-actions">
+      <button onclick="closeDeleteModalStep2()">Cancel</button>
+      <button class="btn-danger" onclick="confirmDelete()" id="confirm-del-btn" disabled>Delete Permanently</button>
     </div>
   </div>
 </div>
@@ -125,6 +138,26 @@ function closeDeleteModal() {
   document.getElementById('delete-modal').style.display = 'none';
 }
 
+function goToStep2() {
+  document.getElementById('delete-modal').style.display = 'none';
+  const input = document.getElementById('delete-confirm-input');
+  input.value = '';
+  input.placeholder = pendingDelete;
+  document.getElementById('confirm-del-btn').disabled = true;
+  document.getElementById('delete-modal-step2').style.display = 'flex';
+  input.focus();
+}
+
+function closeDeleteModalStep2() {
+  pendingDelete = null;
+  document.getElementById('delete-modal-step2').style.display = 'none';
+}
+
+function checkDeleteConfirm() {
+  const input = document.getElementById('delete-confirm-input');
+  document.getElementById('confirm-del-btn').disabled = input.value !== pendingDelete;
+}
+
 async function confirmDelete() {
   if (!pendingDelete) return;
   const btn = document.getElementById('confirm-del-btn');
@@ -141,14 +174,17 @@ async function confirmDelete() {
     console.error('Delete failed:', e);
   }
 
-  closeDeleteModal();
+  closeDeleteModalStep2();
   btn.disabled = false;
-  btn.textContent = 'Delete';
+  btn.textContent = 'Delete Permanently';
   loadModels();
 }
 
 document.getElementById('delete-modal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeDeleteModal();
+});
+document.getElementById('delete-modal-step2').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeDeleteModalStep2();
 });
 
 loadModels();

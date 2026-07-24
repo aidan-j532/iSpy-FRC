@@ -12,6 +12,8 @@
     <button class="btn btn-ok" id="btn-start" onclick="serviceAction('start')">Start</button>
     <button class="btn btn-bad" id="btn-stop" onclick="serviceAction('stop')">Stop</button>
     <button class="btn btn-warn" id="btn-restart" onclick="serviceAction('restart')">Restart</button>
+    <button class="btn" id="btn-pause" onclick="serviceAction('pause')" style="background:var(--text-dim);">Pause</button>
+    <button class="btn btn-ok" id="btn-resume" onclick="serviceAction('resume')" style="display:none;">Resume</button>
   </div>
 </div>
 
@@ -23,6 +25,7 @@
   <div class="card stat-card"><div class="stat-label">Camera Lag</div><div class="stat-value" id="s-lag">--<span class="stat-unit">ms</span></div></div>
   <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value" id="s-up">--</div></div>
 </div>
+<div id="vision-status" style="margin-bottom:16px; padding:10px 16px; border-radius:var(--radius); font-weight:600; font-size:0.9rem;"></div>
 
 <div class="dash-columns">
   <div class="dash-col-left">
@@ -90,10 +93,14 @@ function updateServiceBar(svc) {
   const dot = document.getElementById('svc-dot');
   const state = document.getElementById('svc-state');
   state.textContent = svc.state.toUpperCase();
-  dot.className = 'status-dot ' + (svc.state === 'running' ? 'status-ok' : svc.state === 'error' ? 'status-bad' : 'status-warn');
-  document.getElementById('btn-start').disabled = svc.state === 'running';
-  document.getElementById('btn-stop').disabled = svc.state !== 'running';
-  document.getElementById('btn-restart').disabled = svc.state !== 'running';
+  dot.className = 'status-dot ' + (svc.state === 'running' ? 'status-ok' : svc.state === 'error' ? 'status-bad' : svc.state === 'paused' ? 'status-warn' : 'status-warn');
+  document.getElementById('btn-start').disabled = svc.state === 'running' || svc.state === 'paused';
+  document.getElementById('btn-stop').disabled = svc.state !== 'running' && svc.state !== 'paused';
+  document.getElementById('btn-restart').disabled = svc.state !== 'running' && svc.state !== 'paused';
+  document.getElementById('btn-pause').style.display = svc.state === 'running' ? '' : 'none';
+  document.getElementById('btn-pause').disabled = svc.state !== 'running';
+  document.getElementById('btn-resume').style.display = svc.state === 'paused' ? '' : 'none';
+  document.getElementById('btn-resume').disabled = svc.state !== 'paused';
 }
 
 async function serviceAction(action) {
@@ -116,6 +123,17 @@ async function refresh() {
     document.getElementById('s-det').textContent = data.detections ?? '--';
     document.getElementById('s-lag').innerHTML = (data.camera_lag_ms ?? '--') + '<span class="stat-unit">ms</span>';
     document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
+
+    const visionBanner = document.getElementById('vision-status');
+    if (data.vision_running) {
+      visionBanner.style.background = 'rgba(76,175,80,0.15)';
+      visionBanner.style.color = 'var(--ok)';
+      visionBanner.textContent = 'Vision is running';
+    } else {
+      visionBanner.style.background = 'rgba(244,67,54,0.15)';
+      visionBanner.style.color = 'var(--bad)';
+      visionBanner.textContent = 'Vision is not running';
+    }
 
     if (data.service) updateServiceBar(data.service);
 

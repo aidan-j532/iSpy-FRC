@@ -41,7 +41,7 @@ class iSpyWebApp:
             "models": ModelsModule(context),
             "datasets": DatasetsModule(context),
             "viewer3d": Viewer3DModule(context),
-            "dashboard": DashboardModule(context, other_modules_ref=self),
+            "dashboard": DashboardModule(context),
             "logs": LogsModule(context),
             "metrics": MetricsModule(context),
             "settings": SettingsModule(context),
@@ -80,6 +80,12 @@ class iSpyWebApp:
         def _service_restart():
             return jsonify(pm.restart())
 
+        def _service_pause():
+            return jsonify(pm.pause())
+
+        def _service_resume():
+            return jsonify(pm.resume())
+
         self.flask_app.add_url_rule(
             "/api/service/status", "service_status", _service_status, methods=["GET"]
         )
@@ -91,6 +97,12 @@ class iSpyWebApp:
         )
         self.flask_app.add_url_rule(
             "/api/service/restart", "service_restart", _service_restart, methods=["POST"]
+        )
+        self.flask_app.add_url_rule(
+            "/api/service/pause", "service_pause", _service_pause, methods=["POST"]
+        )
+        self.flask_app.add_url_rule(
+            "/api/service/resume", "service_resume", _service_resume, methods=["POST"]
         )
 
     def update(self, frame_data: dict):

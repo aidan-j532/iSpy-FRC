@@ -551,6 +551,21 @@ def _rebuild_dataset_txt(ds: Path, root: Path | None = None):
     return False
 
 
+def add_image_to_dataset_txt(ds_root: Path, rel_path: str):
+    txt = ds_root / "dataset.txt"
+    existing = txt.read_text().splitlines() if txt.exists() else []
+    if rel_path not in existing:
+        existing.append(rel_path)
+        txt.write_text("\n".join(existing) + "\n")
+
+
+def remove_image_from_dataset_txt(ds_root: Path, rel_path: str):
+    txt = ds_root / "dataset.txt"
+    if txt.exists():
+        lines = [l for l in txt.read_text().splitlines() if l.strip() != rel_path]
+        txt.write_text("\n".join(lines) + ("\n" if lines else ""))
+
+
 def add_validate_images(
     dataset_path: str | Path,
     count: int = _CALIB_COUNT,
