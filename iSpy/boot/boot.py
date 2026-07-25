@@ -1588,6 +1588,10 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
     if config is None:
         config = iSpyConfig(str(config_path))
 
+    _bootstrap_default_camera(config)
+
+    best_format = None
+
     best_format = None
     if config.get("auto_opt"):
         install_special_dependencies(auto_install=True)

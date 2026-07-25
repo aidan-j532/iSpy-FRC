@@ -5,9 +5,11 @@ import subprocess
 import threading
 import cv2
 import time
-from flask import Response, jsonify, render_template
+from flask import Response, jsonify, render_template, request
 import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
+from iSpy.web.Backend.save_store import read, write
+from iSpy.utilities.device_id import _resolve_device_id
 from pathlib import Path
 
 _STALE_EVICT_S = 10.0
@@ -51,16 +53,15 @@ class CamerasModule(WebModule):
                     self.frames[name] = f
                     self.dims[name] = f.shape[1], f.shape[0]
                     self.last_seen[name] = now
-                    # best-effort: match name back to a camera object for its source
                     if i < len(cameras) and hasattr(cameras[i], "source"):
-                        self.sources[name] = str(cameras[i].source)
+                        self.sources[name] = self._device_key(cameras[i])
             elif cameras:
                 cam = cameras[0]
                 name = cam.config.get("name", "camera_1") if hasattr(cam, "config") else "camera_1"
                 self.frames[name] = frame
                 self.dims[name] = frame.shape[1], frame.shape[0]
                 self.last_seen[name] = now
-                self.sources[name] = str(getattr(cam, "source", ""))
+                self.sources[name] = self._device_key(cam)
             else:
                 self.frames["camera_1"] = frame
                 self.dims["camera_1"] = frame.shape[1], frame.shape[0]
@@ -68,13 +69,21 @@ class CamerasModule(WebModule):
 
             self._evict_stale(now)
 
+    def _device_key(self, cam) -> str:
+        """Stable hardware identity for a running camera - prefers the
+        resolved device_id (by-id path / vendor:product:serial), falling
+        back to the raw source if resolution failed (e.g. it's an image
+        placeholder, not a real device)."""
+        dev_id = getattr(cam, "device_id", None)
+        if dev_id:
+            return dev_id
+        return str(getattr(cam, "source", ""))
+
     def _get_profile(self, device_id):
-        from iSpy.web.Backend.save_store import read
         profiles = read("camera_profiles", {})
         return jsonify(profile=profiles.get(device_id))
 
     def _add_camera(self):
-        from iSpy.web.Backend.save_store import read, write
         data = request.get_json(force=True) or {}
         name = data.get("name")
         device_id = data.get("device_id")
@@ -86,6 +95,12 @@ class CamerasModule(WebModule):
         cams = dict(config.get("camera_configs", {}))
         if name in cams:
             return jsonify(error=f"Camera '{name}' already exists"), 409
+
+        # Refuse to add a device already claimed by another configured camera
+        if device_id:
+            for existing in cams.values():
+                if existing.get("device_id") == device_id:
+                    return jsonify(error=f"Device already in use by camera '{existing.get('name')}'"), 409
 
         cam_entry = {
             "name": name, "source": source, "device_id": device_id,
@@ -109,7 +124,6 @@ class CamerasModule(WebModule):
         return jsonify(success=True, note="Restart vision to apply.")
 
     def _remove_camera(self, cam_name):
-        from iSpy.web.Backend.save_store import read, write
         config = self.context["config"]
         cams = dict(config.get("camera_configs", {}))
         if cam_name not in cams:
@@ -124,7 +138,7 @@ class CamerasModule(WebModule):
         device_id = removed.get("device_id")
         if device_id:
             profiles = read("camera_profiles", {})
-            profiles[device_id] = removed  # save full params for autofill next time
+            profiles[device_id] = removed  # remember full params for autofill next time
             write("camera_profiles", profiles)
 
         return jsonify(success=True, note="Restart vision to apply.")
@@ -163,16 +177,28 @@ class CamerasModule(WebModule):
                 self._discover_cache = devices
                 self._discover_cache_ts = now
 
-        with self.lock:
-            active_sources = {s for s in self.sources.values() if s}
+        # Cross-reference against configured cameras BY DEVICE ID, not by
+        # path/name - a camera configured as source=0 and a discovered
+        # /dev/video0 device are the same hardware only if their resolved
+        # device_id matches (or, if resolution failed for both, their raw
+        # source strings match as a fallback).
+        config = self.context.get("config")
+        configured_device_ids = set()
+        configured_sources = set()
+        if config:
+            for cam_cfg in config.get("camera_configs", {}).values():
+                dev_id = cam_cfg.get("device_id")
+                if dev_id:
+                    configured_device_ids.add(dev_id)
+                else:
+                    configured_sources.add(str(cam_cfg.get("source", "")))
 
         for dev in devices:
-            dev_path = dev["path"]
-            dev_tail = dev_path.rsplit("/", 1)[-1]
-            dev["active"] = any(
-                dev_path == s or dev_tail == s.rsplit("/", 1)[-1]
-                for s in active_sources
-            )
+            dev_id = dev.get("device_id")
+            if dev_id:
+                dev["active"] = dev_id in configured_device_ids
+            else:
+                dev["active"] = str(dev["path"]) in configured_sources
 
         return jsonify(devices=devices)
 
@@ -192,24 +218,34 @@ class CamerasModule(WebModule):
                     if line.endswith(":"):
                         current_name = line.rstrip(":")
                     elif line.startswith("/dev/video"):
-                        devices.append({"path": line, "name": current_name or line})
+                        devices.append({
+                            "path": line,
+                            "name": current_name or line,
+                            "device_id": _resolve_device_id(line),
+                        })
         else:
             with self.lock:
                 claimed = {s for s in self.sources.values() if s}
 
             for path in sorted(glob.glob("/dev/video*")):
-                devices.append({"path": path, "name": path})
+                devices.append({
+                    "path": path, "name": path,
+                    "device_id": _resolve_device_id(path),
+                })
             if not devices:
                 for i in range(10):
-                    # NEW: don't open indices already claimed by the running pipeline
                     if str(i) in claimed:
-                        devices.append({"path": str(i), "name": f"Camera {i}"})
+                        devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
                         continue
                     cap = cv2.VideoCapture(i)
                     if cap.isOpened():
                         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        devices.append({"path": str(i), "name": f"Camera {i}", "resolution": f"{w}x{h}" if w and h else None})
+                        devices.append({
+                            "path": str(i), "name": f"Camera {i}",
+                            "resolution": f"{w}x{h}" if w and h else None,
+                            "device_id": None,  # Windows path: no stable id available
+                        })
                         cap.release()
         return devices
 

@@ -107,19 +107,17 @@ def main():
         logger.error("No cameras configured or detected. Cannot run iSpy.")
         sys.exit(1)
 
-    if os.environ.get("ISPY_MANAGED"):
-        reader_thread = threading.Thread(target=_stdin_reader, daemon=True, name="stdin-reader")
-        reader_thread.start()
+    reader_thread = threading.Thread(target=_stdin_reader, daemon=True, name="stdin-reader")
+    reader_thread.start()
 
     vision = iSpy(cameras, config)
 
-    if os.environ.get("ISPY_MANAGED"):
-        original_shutdown_check = vision.shutdown_event.is_set
+    original_shutdown_check = vision.shutdown_event.is_set
 
-        def _combined_check():
-            return original_shutdown_check() or _shutdown_event.is_set() or _pause_event.is_set()
+    def _combined_check():
+        return original_shutdown_check() or _shutdown_event.is_set() or _pause_event.is_set()
 
-        vision.shutdown_event.is_set = _combined_check
+    vision.shutdown_event.is_set = _combined_check
 
     vision.run()
 

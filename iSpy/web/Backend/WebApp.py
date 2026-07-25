@@ -12,6 +12,8 @@ from iSpy.web.modules.metrics import MetricsModule
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.Settings import SettingsModule
 from iSpy.web.Backend.SetupWizard import SetupWizardModule
+from iSpy.web.modules.recommendations import RecommendationsModule
+from iSpy.web.Backend.PluginStatus import PluginStatusModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,7 +32,10 @@ class iSpyWebApp:
             "config": config,
             "cameras": cameras,
             "flask_app": self.flask_app,
+            "vision_instance": None,  # set later via set_vision_instance()
         }
+        
+        self.context = context
 
         self.modules: dict[str, WebModule] = {
             "cameras": CamerasModule(context),
@@ -42,6 +47,8 @@ class iSpyWebApp:
             "metrics": MetricsModule(context),
             "settings": SettingsModule(context),
             "setup_wizard": SetupWizardModule(context),
+            "recommendations": RecommendationsModule(context),
+            "plugin_status": PluginStatusModule(context),
         }
 
         for name, mod in self.modules.items():
@@ -59,6 +66,10 @@ class iSpyWebApp:
                 mod.update(frame_data)
             except Exception:
                 self.logger.exception("Web module '%s' update failed", name)
+
+    def set_vision_instance(self, vision):
+        """Called by iSpy.py once trackers/utilities/frame_processors exist."""
+        self.context["vision_instance"] = vision
 
     def run(self, host="0.0.0.0", port=5000):
         self.flask_app.run(host=host, port=port, threaded=True)

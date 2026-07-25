@@ -27,13 +27,13 @@ class Viewer3DModule(WebModule):
     def _upload_glb(self):
         if "file" not in request.files:
             return jsonify(error="No file provided"), 400
-            
+
         file = request.files["file"]
         if file.filename == '':
             return jsonify(error="Empty filename"), 400
-            
-        safe_name = secure_filename(file.filename + self.context.config.get("vision_model", {}).get("source_pt", ""))
+
+        safe_name = secure_filename(file.filename)
         save_path = self.models_dir / safe_name
         file.save(str(save_path))
-        
+
         return jsonify(success=True, message=f"Model saved to {save_path}")

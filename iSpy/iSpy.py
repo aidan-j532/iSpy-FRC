@@ -60,6 +60,7 @@ class iSpy:
         # if os.environ.get("ISPY_MANAGED"):
         #     reader_thread = threading.Thread(target=_stdin_reader, daemon=True)
         #     reader_thread.start()
+
         context = {
             "config": config,
             "cameras": self.cameras,
@@ -118,11 +119,7 @@ class iSpy:
             dash = self.web_app.modules.get("dashboard")
             if dash and hasattr(dash, "set_plugins"):
                 dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
-
-        logging.getLogger("werkzeug").setLevel(logging.WARNING)
-
-        if self.web_app:
-            threading.Thread(target=self.web_app.run, daemon=True).start()
+            self.web_app.set_vision_instance(self)
 
         self._silence_external_loggers()
         
@@ -131,6 +128,10 @@ class iSpy:
             for camera in self.cameras:
                 for name, processor in self.frame_processors.items():
                     camera.add_frame_processor(processor)
+                    
+        # I think has to be at very bottom
+        if self.web_app:
+            self.web_app.set_vision_instance(self)
 
     def _silence_external_loggers(self):
         for name in logging.root.manager.loggerDict:
