@@ -45,6 +45,7 @@ class DashboardModule(WebModule):
             "camera_lag_ms": round(frame_data.get("camera_lag_s", 0) * 1000, 1),
             "detections": frame_data.get("detections", 0),
             "loop_s": round(frame_data.get("loop_s", 0) * 1000, 1),
+            "uptime_s": round(time.perf_counter() - self._start_time, 1),
         }
         self._vision_last_tick = time.perf_counter()
 

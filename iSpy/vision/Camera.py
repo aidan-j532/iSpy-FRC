@@ -7,13 +7,12 @@ import subprocess
 from iSpy.config.iSpyConfig import iSpyCameraConfig
 import platform
 from pathlib import Path
-
+from iSpy.utilities.device_id import _resolve_device_id
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
 
 class Camera:
-
     # Resolution used for the synthetic "no camera" placeholder frame.
     _PLACEHOLDER_W = 640
     _PLACEHOLDER_H = 480
@@ -27,6 +26,7 @@ class Camera:
         self._cap_h = input_size[1]
 
         self.source = camera_config["source"]
+        self.device_id = _resolve_device_id(self.source) if isinstance(self.source, (str, int)) and not self.is_image else None
         self.stopped = False
         self.frame: np.ndarray | None = None
         self.frame_timestamp: float | None = None

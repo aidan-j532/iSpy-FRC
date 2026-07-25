@@ -116,6 +116,7 @@ function applyTick(data) {
     : clsEntries.map(([name, count]) =>
       `<div class="det-item"><span class="det-class">${name}</span><span class="det-count">${count}</span></div>`
     ).join('');
+    if (data.uptime_s != null) document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
 }
 
 function applyFull(data) {
@@ -219,6 +220,6 @@ async function pollSystem() {
 }
 
 connectSSE();
-setInterval(pollSystem, 2000);
+setInterval(pollSystem, 1000);
 </script>
 {% endblock %}

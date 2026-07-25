@@ -8,6 +8,7 @@ import time
 from flask import Response, jsonify, render_template
 import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
+from pathlib import Path
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
@@ -21,8 +22,8 @@ class CamerasModule(WebModule):
         self.frames: dict[str, "np.ndarray"] = {}
         self.dims: dict[str, tuple[int, int]] = {}
         self.last_seen: dict[str, float] = {}
-        self.sources: dict[str, str] = {}          # NEW: name -> source path/index
-        self._discover_cache: list = []              # NEW: cache expensive probing
+        self.sources: dict[str, str] = {}
+        self._discover_cache: list = []
         self._discover_cache_ts: float = 0.0
         self._discover_lock = threading.Lock()
 
@@ -31,6 +32,9 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras", "api_cameras", self._api_cameras)
         flask_app.add_url_rule("/api/cameras/discover", "api_cameras_discover", self._discover)
         flask_app.add_url_rule("/video/<camera_name>", "video_feed", self._video_feed)
+        flask_app.add_url_rule("/api/cameras/config", "api_cameras_config_add", self._add_camera, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_delete", self._remove_camera, methods=["DELETE"])
+        flask_app.add_url_rule("/api/cameras/profile/<device_id>", "api_cameras_profile", self._get_profile, methods=["GET"])
 
     def update(self, frame_data: dict):
         frame = frame_data.get("frame")
@@ -63,6 +67,67 @@ class CamerasModule(WebModule):
                 self.last_seen["camera_1"] = now
 
             self._evict_stale(now)
+
+    def _get_profile(self, device_id):
+        from iSpy.web.Backend.save_store import read
+        profiles = read("camera_profiles", {})
+        return jsonify(profile=profiles.get(device_id))
+
+    def _add_camera(self):
+        from iSpy.web.Backend.save_store import read, write
+        data = request.get_json(force=True) or {}
+        name = data.get("name")
+        device_id = data.get("device_id")
+        source = data.get("source")
+        if not name or source is None:
+            return jsonify(error="name and source required"), 400
+
+        config = self.context["config"]
+        cams = dict(config.get("camera_configs", {}))
+        if name in cams:
+            return jsonify(error=f"Camera '{name}' already exists"), 409
+
+        cam_entry = {
+            "name": name, "source": source, "device_id": device_id,
+            "pipeline": data.get("pipeline", "object_detection"),
+            "yaw": data.get("yaw", 0), "pitch": data.get("pitch", 0),
+            "height": data.get("height", 0), "x": data.get("x", 0),
+            "y": data.get("y", 0), "z": data.get("z", 0),
+            "grayscale": data.get("grayscale", False),
+            "subsystem": data.get("subsystem", "field"),
+            "calibration": data.get("calibration", {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0}),
+        }
+        cams[name] = cam_entry
+        config.set("camera_configs", cams)
+        config.save()
+
+        if device_id:
+            profiles = read("camera_profiles", {})
+            profiles[device_id] = cam_entry
+            write("camera_profiles", profiles)
+
+        return jsonify(success=True, note="Restart vision to apply.")
+
+    def _remove_camera(self, cam_name):
+        from iSpy.web.Backend.save_store import read, write
+        config = self.context["config"]
+        cams = dict(config.get("camera_configs", {}))
+        if cam_name not in cams:
+            return jsonify(error="Camera not found"), 404
+        if len(cams) <= 1:
+            return jsonify(error="Cannot remove the last camera - at least one is required."), 400
+
+        removed = cams.pop(cam_name)
+        config.set("camera_configs", cams)
+        config.save()
+
+        device_id = removed.get("device_id")
+        if device_id:
+            profiles = read("camera_profiles", {})
+            profiles[device_id] = removed  # save full params for autofill next time
+            write("camera_profiles", profiles)
+
+        return jsonify(success=True, note="Restart vision to apply.")
 
     def _evict_stale(self, now: float):
         stale = [n for n, ts in self.last_seen.items() if now - ts > _STALE_EVICT_S]

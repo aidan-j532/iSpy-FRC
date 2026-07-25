@@ -56,9 +56,10 @@ class iSpy:
             else:
                 self.logger.warning("Unknown tracker: %s", name)
 
-        self.web_app = None if os.environ.get("ISPY_MANAGED") else (
-            create_app(cameras=cameras, config=config) if config["app_mode"] else None
-        )
+        self.web_app = create_app(cameras=cameras, config=config) if config["app_mode"] else None
+        # if os.environ.get("ISPY_MANAGED"):
+        #     reader_thread = threading.Thread(target=_stdin_reader, daemon=True)
+        #     reader_thread.start()
         context = {
             "config": config,
             "cameras": self.cameras,
@@ -271,16 +272,20 @@ class iSpy:
         return frame_data
 
     def run_solo_mode(self):
-        # Tell them where to look for web stuff
-        self.logger.info("Check out the web interface at http://localhost:5000/")
         camera = self.cameras[0]
+        last_frame_data = None
+        status_util = self.utilities.get("status_reporter")
         try:
-            self.logger.info("Solo mode - warming up...")
             self.run_solo_vision(camera)
-            self.logger.info("Warm-up complete.")
-
             while not self.shutdown_event.is_set():
+                if self._pause_check():  # threaded in from ISPY_MANAGED pause flag
+                    if last_frame_data is not None:
+                        self._update_utilities({**last_frame_data, "fps": 0})
+                        self._update_web({**last_frame_data, "fps": 0})
+                    time.sleep(0.05)
+                    continue
                 frame_data = self._run_loop_body_solo(camera)
+                last_frame_data = frame_data
                 self._update_utilities(frame_data)
                 self._update_web(frame_data)
                 print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")

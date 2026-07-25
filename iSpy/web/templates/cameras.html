@@ -45,6 +45,66 @@ function updateCameraStatuses(cameras) {
   });
 }
 
+async function openAddCameraModal() {
+  const data = await fetch('/api/cameras/discover').then(r => r.json());
+  const available = (data.devices || []).filter(d => !d.active);
+  const sel = document.getElementById('new-cam-device');
+  sel.innerHTML = available.map(d => `<option value="${d.path}" data-device-id="${d.device_id || ''}">${d.name}</option>`).join('')
+    || '<option disabled>No unused cameras detected</option>';
+  document.getElementById('add-camera-modal').style.display = 'flex';
+  onDeviceSelected();
+}
+
+async function onDeviceSelected() {
+  const sel = document.getElementById('new-cam-device');
+  const opt = sel.selectedOptions[0];
+  if (!opt) return;
+  const deviceId = opt.dataset.deviceId;
+  if (!deviceId) return;
+  const r = await fetch(`/api/cameras/profile/${encodeURIComponent(deviceId)}`);
+  const { profile } = await r.json();
+  if (profile) {
+    // Prefill only - never auto-submit
+    document.getElementById('new-cam-name').value = profile.name || '';
+    document.getElementById('new-cam-x').value = profile.x ?? 0;
+    document.getElementById('new-cam-y').value = profile.y ?? 0;
+    document.getElementById('new-cam-yaw').value = profile.yaw ?? 0;
+    document.getElementById('new-cam-height').value = profile.height ?? 0;
+    document.getElementById('new-cam-subsystem').value = profile.subsystem || 'field';
+    // ... calibration fields similarly
+  }
+}
+
+async function submitAddCamera() {
+  const sel = document.getElementById('new-cam-device');
+  const opt = sel.selectedOptions[0];
+  const payload = {
+    name: document.getElementById('new-cam-name').value,
+    source: opt.value,
+    device_id: opt.dataset.deviceId || null,
+    x: Number(document.getElementById('new-cam-x').value),
+    y: Number(document.getElementById('new-cam-y').value),
+    yaw: Number(document.getElementById('new-cam-yaw').value),
+    height: Number(document.getElementById('new-cam-height').value),
+    subsystem: document.getElementById('new-cam-subsystem').value,
+    calibration: { /* ... */ },
+  };
+  const r = await fetch('/api/cameras/config', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const j = await r.json();
+  if (r.ok) { showToast('Camera added - restart vision to apply', 'success'); closeAddCameraModal(); refreshCameras(); }
+  else showToast(j.error, 'error');
+}
+
+function confirmRemoveCamera(name) {
+  if (!confirm(`Remove camera "${name}"? Its settings will be saved for next time you add it back.`)) return;
+  fetch(`/api/cameras/config/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    .then(r => r.json())
+    .then(j => { showToast(j.success ? 'Camera removed' : j.error, j.success ? 'success' : 'error'); refreshCameras(); });
+}
+
 function buildCameraCard(name, isStreaming, ageText) {
   const card = document.createElement('div');
   card.className = 'card camera-card';

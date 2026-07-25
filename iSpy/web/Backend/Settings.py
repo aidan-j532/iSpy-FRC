@@ -2,7 +2,7 @@ import json
 import copy
 from flask import jsonify, render_template, request
 from iSpy.web.Backend.WebModule import WebModule
-
+from iSpy.validations.recommendations import get_structured_recommendations
 
 _RESTART_REQUIRED_KEYS = {
     "vision_model", "unit", "debug_mode", "dbscan", "distance_threshold",
@@ -20,11 +20,30 @@ class SettingsModule(WebModule):
         flask_app.add_url_rule("/api/settings", "api_settings_get", self._get, methods=["GET"])
         flask_app.add_url_rule("/api/settings", "api_settings_post", self._post, methods=["POST"])
         flask_app.add_url_rule("/api/settings/compare", "api_settings_compare", self._compare, methods=["POST"])
+        flask_app.add_url_rule("/api/settings/snapshot", "api_settings_snapshot", self._snapshot, methods=["POST"])
+        flask_app.add_url_rule("/api/settings/restore", "api_settings_restore", self._restore, methods=["POST"])
 
     def _get(self):
         config = self.context["config"]
         return jsonify(config=config.config, defaults=config.default_config)
+    
+    def _snapshot(self):
+        from iSpy.web.Backend.save_store import write
+        config = self.context["config"]
+        write("config_snapshot", {"config": config.config, "taken": True})
+        return jsonify(success=True)
 
+    def _restore(self):
+        from iSpy.web.Backend.save_store import read, write
+        snap = read("config_snapshot")
+        if not snap or not snap.get("taken"):
+            return jsonify(error="No snapshot available (already used, or none was taken)"), 404
+        config = self.context["config"]
+        config.config = snap["config"]
+        config.save()
+        write("config_snapshot", {"config": None, "taken": False})  # one-shot: consume it
+        return jsonify(success=True, config=config.config)
+    
     def _post(self):
         try:
             data = request.get_json(force=True)
@@ -39,6 +58,10 @@ class SettingsModule(WebModule):
 
             changed_keys = self._find_changed_keys(old_config, config.config)
             needs_restart = bool(changed_keys & (_RESTART_REQUIRED_KEYS | frontend_restart_keys))
+
+            recs = get_structured_recommendations(config.config)
+            critical = [r for r in recs if r["severity"] == "critical"]
+            dash = self.context.get("dashboard_module")
 
             return jsonify(success=True, needs_restart=needs_restart, changed=list(changed_keys))
         except Exception as e:

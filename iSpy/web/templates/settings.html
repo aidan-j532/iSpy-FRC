@@ -140,17 +140,17 @@
 </div>
 
 <div id="tab-raw" class="settings-tab-content" style="display:none;">
-  <div class="card">
-    <p class="text-dim text-sm" style="margin:0 0 12px 0;">
-      Edit the raw config.json directly. Click Save when done.
-    </p>
+  <div id="raw-gate" class="card">
+    <p><strong>Advanced feature.</strong> Editing raw JSON can break your config if done incorrectly. A single restore point is saved automatically before your first edit in this session.</p>
+    <label><input type="checkbox" id="raw-ack"> I understand the risk</label>
+    <button onclick="unlockRawEditor()">Continue</button>
+  </div>
+  <div id="raw-editor-wrap" class="card" style="display:none;">
+    <div class="controls-bar">
+      <button onclick="restoreSnapshot()" id="restore-btn">Restore last snapshot</button>
+    </div>
     <textarea id="cfg" class="raw-editor"></textarea>
   </div>
-</div>
-
-<div class="settings-actions">
-  <button onclick="saveSettings()" id="save-btn">Save</button>
-  <span id="msg" class="settings-msg"></span>
 </div>
 
 <script>
@@ -168,6 +168,34 @@ function parseValue(el) {
     return Number.isFinite(n) ? n : val;
   }
   return val;
+}
+
+async function checkCriticalAfterSave() {
+  const { recommendations } = await fetch('/api/recommendations').then(r => r.json());
+  recommendations.filter(r => r.severity === 'critical').forEach(r => showToast(r.message, 'error'));
+}
+
+function unlockRawEditor() {
+  if (!document.getElementById('raw-ack').checked) return;
+  document.getElementById('raw-gate').style.display = 'none';
+  document.getElementById('raw-editor-wrap').style.display = '';
+  snapshotBeforeFirstEdit();
+}
+
+let snapshotTaken = false;
+async function snapshotBeforeFirstEdit() {
+  if (snapshotTaken) return;
+  snapshotTaken = true;
+  await fetch('/api/settings/snapshot', { method: 'POST' });
+  document.getElementById('restore-btn').disabled = false;
+}
+
+async function restoreSnapshot() {
+  if (!confirm('Restore the pre-edit snapshot? This overwrites your current raw JSON edits and can only be used once.')) return;
+  const r = await fetch('/api/settings/restore', { method: 'POST' });
+  const j = await r.json();
+  if (j.success) { configData = j.config; document.getElementById('cfg').value = JSON.stringify(configData, null, 2); showToast('Restored', 'success'); }
+  else showToast(j.error || 'No snapshot available', 'error');
 }
 
 async function checkRestartNeeded() {

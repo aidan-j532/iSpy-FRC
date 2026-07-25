@@ -73,9 +73,8 @@ class ModelsModule(WebModule):
         return jsonify(models=out, current=current)
 
     def _detail(self, name):
-        safe_name = secure_filename(name)
-        pt = self.pytorch_dir / safe_name
-        if not _is_safe_path(self.pytorch_dir, pt) or not pt.exists():
+        pt = self._resolve_model_path(name)
+        if pt is None or not pt.exists():
             return jsonify(error="Model not found"), 404
         meta = read_metadata(pt) or {}
         # current = self._get_current_model()
@@ -123,15 +122,22 @@ class ModelsModule(WebModule):
             config.save()
         return jsonify(success=True, note="Restart iSpy to load this model.")
     
+    def _resolve_model_path(self, name: str) -> Path | None:
+        target = (self.pytorch_dir / name).resolve()
+        try:
+            target.relative_to(self.pytorch_dir.resolve())
+        except ValueError:
+            return None
+        return target
+    
     def _delete(self, name):
-        safe_name = secure_filename(name)
-        target = self.pytorch_dir / safe_name
-        if not _is_safe_path(self.pytorch_dir, target) or not target.exists():
+        target = self._resolve_model_path(name)
+        if target is None or not target.exists():
             return jsonify(error="Not found"), 404
 
         protected = self._get_protected_model_names()
-        if safe_name in protected:
-            return jsonify(error="Cannot delete a model currently referenced by the active config (file_path or source_pt). Select a different model first."), 400
+        if target.name in protected:
+            return jsonify(error="Cannot delete a model referenced by the active config. Select a different model first."), 400
 
         target.unlink()
         meta = metadata_path_for(target)

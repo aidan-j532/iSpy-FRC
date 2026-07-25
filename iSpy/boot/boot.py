@@ -21,6 +21,27 @@ class _NullWriter(io.TextIOBase):
     def flush(self):
         pass
 
+def _bootstrap_default_camera(config: iSpyConfig):
+    cams = config.get("camera_configs", {})
+    if cams and any(c.get("source") not in (None, "") for c in cams.values()):
+        return  # already has something real
+    from iSpy.web.modules.cameras import CamerasModule  # or move probing to a shared util
+    devices = CamerasModule({})._probe_devices()
+    if not devices:
+        logger.warning("No cameras detected at first boot - leaving default placeholder config.")
+        return
+    dev = devices[0]
+    name = "camera_1"
+    config.set("camera_configs", {
+        name: {
+            "name": name, "source": dev["path"], "device_id": dev.get("device_id"),
+            "pipeline": "object_detection", "yaw": 0, "pitch": 0, "height": 1.0,
+            "x": 0, "y": 0, "z": 0, "grayscale": False, "subsystem": "field",
+            "calibration": {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
+        }
+    })
+    config.save()
+    logger.info("First boot: auto-configured camera '%s' -> %s", name, dev["path"])
 
 def _close_logging_handlers() -> None:
     root = logging.getLogger()

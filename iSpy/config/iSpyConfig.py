@@ -289,6 +289,7 @@ class iSpyCameraConfig:
         "auto_brightness": True,
         "calibration": {"size": 0, "distance": 0, "game_piece_size": 0, "fov": 0},
         "source": "/dev/video0",
+        "device_id": None,
         "subsystem": "field",
     }
 

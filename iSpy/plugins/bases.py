@@ -1,23 +1,28 @@
 from abc import ABC, abstractmethod
 
-class TrackerBase:
-    """Base for tracker plugin"""
-    def __init__(self, config):
-        pass
-    
-    def start(self):
-        pass
+class StatusMixin:
+    def __init__(self):
+        self._status = "idle"
 
+    def update_status(self, status: str) -> None:
+        self._status = status
+
+    def get_status(self) -> str:
+        return getattr(self, "_status", "unknown")
+
+class TrackerBase(StatusMixin):
+    def __init__(self, config):
+        StatusMixin.__init__(self)
+
+    def start(self): pass
     def update(self, fuel_list, robot_x, robot_y, robot_yaw):
         return fuel_list
+    def stop(self): pass
 
-    def stop(self):
-        pass
 
-class FrameProcessorBase:
-    """Base for frame processor plugin"""
+class FrameProcessorBase(StatusMixin):
     def __init__(self, config):
-        pass
+        StatusMixin.__init__(self)
     
     def start(self):
         pass
@@ -28,19 +33,10 @@ class FrameProcessorBase:
     def stop(self):
         pass
 
-class UtilityBase:
-    """
-    Base for utility plugin
-    context keys available in __init__:
-        config, camera_app, cameras, flask_app
-
-    frame_data keys available in update():
-        fuel_list, frame, fps, loop_s, vision_s,
-        camera_lag_s, detections, cameras
-    """
+class UtilityBase(StatusMixin):
     def __init__(self, context: dict):
-        pass
-    
+        StatusMixin.__init__(self)
+        
     def start(self):
         pass
 

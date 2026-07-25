@@ -116,32 +116,6 @@ window.setViewPreset = function() {
 
 let userModel = null;
 const gltfLoader = new GLTFLoader();
-window.loadUserModel = function(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const url = URL.createObjectURL(file);
-  gltfLoader.load(url, (gltf) => {
-    if (userModel) scene.remove(userModel);
-    userModel = gltf.scene;
-    const box = new THREE.Box3().setFromObject(userModel);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    const scale = 2 / maxDim;
-    userModel.scale.setScalar(scale);
-    userModel.position.sub(center.multiplyScalar(scale));
-    scene.add(userModel);
-    URL.revokeObjectURL(url);
-  }, undefined, (err) => {
-    console.error('Failed to load model:', err);
-    URL.revokeObjectURL(url);
-  });
-};
-window.clearUserModel = function() {
-  if (userModel) { scene.remove(userModel); userModel = null; }
-  document.getElementById('model-file').value = '';
-};
-
 const boxes = {};
 const BOX_COLORS = [0x4c8bf5, 0x4caf50, 0xf44336, 0xff9800, 0x9c27b0, 0x00bcd4];
 

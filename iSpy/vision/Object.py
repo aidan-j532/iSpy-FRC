@@ -1,7 +1,8 @@
 import numpy as np
 import math
 import time
-
+import itertools
+_id_counter = itertools.count(1)
 
 class Object:
     def __init__(
@@ -9,7 +10,7 @@ class Object:
         x: float,
         y: float,
         z: float = 0.0,
-        id: int = -1,
+        id: int = 0.0,
         alive_time: float = 0.4,
         roll: float = 0.0,
         pitch: float = 0.0,
@@ -20,7 +21,7 @@ class Object:
         self.x = x
         self.y = y
         self.z = z
-        self.id = id
+        self.id = id if id is not None else next(_id_counter)
         self.roll = roll
         self.pitch = pitch
         self.yaw = yaw
