@@ -13,8 +13,90 @@
     </select>
   </label>
   <button onclick="refreshCameras()" class="btn-refresh">Refresh</button>
+  <button onclick="openAddCameraModal()" class="btn-ok" style="margin-left:auto;">+ Add Camera</button>
 </div>
 <div id="camera-grid" class="grid"></div>
+
+<div id="add-camera-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeAddCameraModal()">
+  <div class="modal" style="max-width:520px;">
+    <h3>Add Camera</h3>
+    <div class="settings-section">
+      <div class="form-row">
+        <span class="form-label">Device</span>
+        <select id="new-cam-device" class="form-input" onchange="onDeviceSelected()"></select>
+      </div>
+      <div class="form-row">
+        <span class="form-label">Name</span>
+        <input id="new-cam-name" class="form-input" type="text" placeholder="e.g. front_cam">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Pipeline</span>
+        <select id="new-cam-pipeline" class="form-input">
+          <option value="object_detection">Object Detection</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <span class="form-label">X offset</span>
+        <input id="new-cam-x" class="form-input" type="number" step="0.01" value="0">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Y offset</span>
+        <input id="new-cam-y" class="form-input" type="number" step="0.01" value="0">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Height (m)</span>
+        <input id="new-cam-height" class="form-input" type="number" step="0.01" value="0">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Yaw (deg)</span>
+        <input id="new-cam-yaw" class="form-input" type="number" step="0.1" value="0">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Pitch (deg)</span>
+        <input id="new-cam-pitch" class="form-input" type="number" step="0.1" value="0">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Subsystem</span>
+        <select id="new-cam-subsystem" class="form-input">
+          <option value="field">Field</option>
+          <option value="robot">Robot</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <span class="form-label">Grayscale</span>
+        <select id="new-cam-grayscale" class="form-input">
+          <option value="false">No</option>
+          <option value="true">Yes</option>
+        </select>
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>Calibration</h3>
+      <div class="form-row">
+        <span class="form-label">Distance (m)</span>
+        <input id="new-cam-cal-distance" class="form-input" type="number" step="0.01" value="0">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Game Piece Size (m)</span>
+        <input id="new-cam-cal-gpsize" class="form-input" type="number" step="0.01" value="0">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Size (px)</span>
+        <input id="new-cam-cal-size" class="form-input" type="number" step="1" value="0">
+      </div>
+      <div class="form-row">
+        <span class="form-label">FOV (deg)</span>
+        <input id="new-cam-cal-fov" class="form-input" type="number" step="0.1" value="0">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button onclick="closeAddCameraModal()" style="background:var(--border);">Cancel</button>
+      <button onclick="submitAddCamera()" class="btn-ok">Add Camera</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let refreshTimer = null;
 let currentRate = 1000;
@@ -26,31 +108,17 @@ function setRefreshRate() {
   refreshTimer = setInterval(refreshCameras, currentRate);
 }
 
-function updateCameraStatuses(cameras) {
-  cameras.forEach(c => {
-    const card = document.querySelector(`[data-camera="${c.name}"]`);
-    if (!card) return;
-    const dot = card.querySelector('.status-dot');
-    if (c.ok) {
-      dot.className = 'status-dot status-ok';
-    } else if (c.stale) {
-      dot.className = 'status-dot status-warn';
-    } else {
-      dot.className = 'status-dot status-bad';
-    }
-    const meta = card.querySelector('.cam-meta');
-    if (meta) {
-      meta.textContent = c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '';
-    }
-  });
+function closeAddCameraModal() {
+  document.getElementById('add-camera-modal').style.display = 'none';
 }
 
 async function openAddCameraModal() {
   const data = await fetch('/api/cameras/discover').then(r => r.json());
   const available = (data.devices || []).filter(d => !d.active);
   const sel = document.getElementById('new-cam-device');
-  sel.innerHTML = available.map(d => `<option value="${d.path}" data-device-id="${d.device_id || ''}">${d.name}</option>`).join('')
-    || '<option disabled>No unused cameras detected</option>';
+  sel.innerHTML = available.map(d =>
+    `<option value="${d.path}" data-device-id="${d.device_id || ''}">${d.name}${d.resolution ? ' (' + d.resolution + ')' : ''}</option>`
+  ).join('') || '<option disabled>No unused cameras detected</option>';
   document.getElementById('add-camera-modal').style.display = 'flex';
   onDeviceSelected();
 }
@@ -61,41 +129,65 @@ async function onDeviceSelected() {
   if (!opt) return;
   const deviceId = opt.dataset.deviceId;
   if (!deviceId) return;
-  const r = await fetch(`/api/cameras/profile/${encodeURIComponent(deviceId)}`);
-  const { profile } = await r.json();
-  if (profile) {
-    // Prefill only - never auto-submit
-    document.getElementById('new-cam-name').value = profile.name || '';
-    document.getElementById('new-cam-x').value = profile.x ?? 0;
-    document.getElementById('new-cam-y').value = profile.y ?? 0;
-    document.getElementById('new-cam-yaw').value = profile.yaw ?? 0;
-    document.getElementById('new-cam-height').value = profile.height ?? 0;
-    document.getElementById('new-cam-subsystem').value = profile.subsystem || 'field';
-    // ... calibration fields similarly
-  }
+  try {
+    const r = await fetch(`/api/cameras/profile/${encodeURIComponent(deviceId)}`);
+    const { profile } = await r.json();
+    if (profile) {
+      document.getElementById('new-cam-name').value = profile.name || '';
+      document.getElementById('new-cam-x').value = profile.x ?? 0;
+      document.getElementById('new-cam-y').value = profile.y ?? 0;
+      document.getElementById('new-cam-height').value = profile.height ?? 0;
+      document.getElementById('new-cam-yaw').value = profile.yaw ?? 0;
+      document.getElementById('new-cam-pitch').value = profile.pitch ?? 0;
+      document.getElementById('new-cam-subsystem').value = profile.subsystem || 'field';
+      document.getElementById('new-cam-grayscale').value = String(profile.grayscale || false);
+      if (profile.calibration) {
+        document.getElementById('new-cam-cal-distance').value = profile.calibration.distance ?? 0;
+        document.getElementById('new-cam-cal-gpsize').value = profile.calibration.game_piece_size ?? 0;
+        document.getElementById('new-cam-cal-size').value = profile.calibration.size ?? 0;
+        document.getElementById('new-cam-cal-fov').value = profile.calibration.fov ?? 0;
+      }
+    }
+  } catch (e) { /* no profile yet */ }
 }
 
 async function submitAddCamera() {
   const sel = document.getElementById('new-cam-device');
   const opt = sel.selectedOptions[0];
+  if (!opt) { showToast('Select a device first', 'error'); return; }
+  const name = document.getElementById('new-cam-name').value.trim();
+  if (!name) { showToast('Camera name is required', 'error'); return; }
   const payload = {
-    name: document.getElementById('new-cam-name').value,
-    source: opt.value,
+    name: name,
+    source: isNaN(Number(opt.value)) ? opt.value : Number(opt.value),
     device_id: opt.dataset.deviceId || null,
+    pipeline: document.getElementById('new-cam-pipeline').value,
     x: Number(document.getElementById('new-cam-x').value),
     y: Number(document.getElementById('new-cam-y').value),
-    yaw: Number(document.getElementById('new-cam-yaw').value),
     height: Number(document.getElementById('new-cam-height').value),
+    yaw: Number(document.getElementById('new-cam-yaw').value),
+    pitch: Number(document.getElementById('new-cam-pitch').value),
     subsystem: document.getElementById('new-cam-subsystem').value,
-    calibration: { /* ... */ },
+    grayscale: document.getElementById('new-cam-grayscale').value === 'true',
+    calibration: {
+      distance: Number(document.getElementById('new-cam-cal-distance').value),
+      game_piece_size: Number(document.getElementById('new-cam-cal-gpsize').value),
+      size: Number(document.getElementById('new-cam-cal-size').value),
+      fov: Number(document.getElementById('new-cam-cal-fov').value),
+    },
   };
   const r = await fetch('/api/cameras/config', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload),
   });
   const j = await r.json();
-  if (r.ok) { showToast('Camera added - restart vision to apply', 'success'); closeAddCameraModal(); refreshCameras(); }
-  else showToast(j.error, 'error');
+  if (r.ok) {
+    showToast('Camera added - restart vision to apply', 'success');
+    closeAddCameraModal();
+    refreshCameras();
+  } else {
+    showToast(j.error, 'error');
+  }
 }
 
 function confirmRemoveCamera(name) {
@@ -114,6 +206,7 @@ function buildCameraCard(name, isStreaming, ageText) {
       <span class="status-dot ${isStreaming ? 'status-ok' : 'status-warn'}"></span>
       <strong>${name}</strong>
       <span class="cam-meta">${ageText}</span>
+      <button class="btn-sm btn-bad" onclick="confirmRemoveCamera('${name}')" style="margin-left:auto;">Remove</button>
     </div>
     ${isStreaming
       ? `<div class="camera-feed-wrap">
@@ -123,6 +216,22 @@ function buildCameraCard(name, isStreaming, ageText) {
         </div>`
       : `<div class="camera-not-streaming">Not streaming. Start vision to view.</div>`
     }
+  `;
+  return card;
+}
+
+function buildDiscoverCard(device) {
+  const card = document.createElement('div');
+  card.className = 'card camera-card';
+  card.style.borderLeft = '3px solid var(--accent)';
+  card.innerHTML = `
+    <div class="camera-header">
+      <span class="status-dot status-ok"></span>
+      <strong>${device.name}</strong>
+      <span class="cam-meta">${device.resolution || device.path}</span>
+      <button class="btn-sm btn-ok" onclick="openAddCameraModal()" style="margin-left:auto;">Add</button>
+    </div>
+    <div class="camera-not-streaming">Discovered but not configured.</div>
   `;
   return card;
 }
@@ -138,11 +247,8 @@ async function refreshCameras() {
     const discovered = discData.devices || [];
 
     const streamingNames = new Set(cameras.map(c => c.name));
-    const discoveredNames = new Set(discovered.map(d => d.name));
 
-    const allNames = new Set([...streamingNames, ...discoveredNames]);
-
-    if (allNames.size === 0) {
+    if (cameras.length === 0 && discovered.length === 0) {
       grid.innerHTML = '<div class="card empty-state">No cameras detected. Connect a camera and click Refresh.</div>';
       knownCameras.clear();
       return;
@@ -150,37 +256,39 @@ async function refreshCameras() {
 
     const cameraMap = new Map(cameras.map(c => [c.name, c]));
 
-    allNames.forEach(name => {
-      const cam = cameraMap.get(name);
-      const isStreaming = !!cam;
-      const age = cam ? (cam.age_ms != null ? cam.age_ms + 'ms' : '') : '';
-
+    cameras.forEach(cam => {
+      const name = cam.name;
+      const age = cam.age_ms != null ? cam.age_ms + 'ms' : '';
       if (!knownCameras.has(name)) {
-        const card = buildCameraCard(name, isStreaming, age);
+        const card = buildCameraCard(name, true, age);
         grid.appendChild(card);
-        knownCameras.set(name, { streaming: isStreaming });
+        knownCameras.set(name, { streaming: true });
       } else {
         const known = knownCameras.get(name);
-        if (!known.streaming && isStreaming) {
+        if (!known.streaming) {
           const oldCard = grid.querySelector(`[data-camera="${name}"]`);
-          if (oldCard) {
-            const newCard = buildCameraCard(name, true, age);
-            oldCard.replaceWith(newCard);
-          }
+          if (oldCard) oldCard.replaceWith(buildCameraCard(name, true, age));
           knownCameras.set(name, { streaming: true });
+        } else {
+          const meta = grid.querySelector(`[data-camera="${name}"] .cam-meta`);
+          if (meta) meta.textContent = age;
         }
       }
     });
 
     knownCameras.forEach((info, name) => {
-      if (!allNames.has(name)) {
+      if (!streamingNames.has(name)) {
         const card = grid.querySelector(`[data-camera="${name}"]`);
         if (card) card.remove();
         knownCameras.delete(name);
       }
     });
 
-    updateCameraStatuses(cameras);
+    const existingDiscoverCards = grid.querySelectorAll('[data-discover]');
+    existingDiscoverCards.forEach(c => c.remove());
+    discovered.filter(d => !d.active).forEach(d => {
+      grid.appendChild(buildDiscoverCard(d));
+    });
   } catch (e) {
     console.error('Camera refresh failed', e);
   }
