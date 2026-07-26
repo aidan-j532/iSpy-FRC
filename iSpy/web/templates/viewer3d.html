@@ -117,11 +117,7 @@ window.setViewPreset = function() {
 let userModel = null;
 const gltfLoader = new GLTFLoader();
 const boxes = {};
-const BOX_COLORS = [0x4c8bf5, 0x4caf50, 0xf44336, 0xff9800, 0x9c27b0, 0x00bcd4];
-
-function getColor(id) {
-  return BOX_COLORS[id % BOX_COLORS.length];
-}
+const BOX_COLOR = 0x4c8bf5;
 
 async function uploadModelToServer(event) {
   const file = event.target.files[0];
@@ -158,7 +154,7 @@ function makeMarker(id) {
     return clone;
   }
   const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-  const mat = new THREE.MeshStandardMaterial({ color: getColor(id), transparent: true, opacity: 0.85 });
+  const mat = new THREE.MeshStandardMaterial({ color: BOX_COLOR, transparent: true, opacity: 0.85 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
   const wireGeo = new THREE.EdgesGeometry(geo);

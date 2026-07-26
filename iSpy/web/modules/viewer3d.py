@@ -24,9 +24,9 @@ class Viewer3DModule(WebModule):
     def update(self, frame_data: dict):
         fuel_list = frame_data.get("fuel_list", [])
         self._latest_objects = []
-        for obj in fuel_list:
+        for idx, obj in enumerate(fuel_list):
             self._latest_objects.append({
-                "id": getattr(obj, "id", None) or id(obj),
+                "id": idx,
                 "x": getattr(obj, "x", 0),
                 "y": getattr(obj, "y", 0),
                 "z": getattr(obj, "z", 0),

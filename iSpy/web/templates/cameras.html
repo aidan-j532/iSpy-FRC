@@ -3,11 +3,28 @@
 {% block content %}
 <h1>Cameras</h1>
 <div id="camera-controls" class="card controls-bar">
+  <label class="controls-label">
+    Refresh interval
+    <select id="refresh-rate" onchange="setRefreshRate()">
+      <option value="500">500ms</option>
+      <option value="1000" selected>1s</option>
+      <option value="2000">2s</option>
+      <option value="5000">5s</option>
+    </select>
+  </label>
   <button onclick="refreshCameras()" class="btn-refresh">Refresh</button>
 </div>
 <div id="camera-grid" class="grid"></div>
 <script>
+let refreshTimer = null;
+let currentRate = 1000;
 let knownCameras = new Map();
+
+function setRefreshRate() {
+  currentRate = Number(document.getElementById('refresh-rate').value);
+  clearInterval(refreshTimer);
+  refreshTimer = setInterval(refreshCameras, currentRate);
+}
 
 function updateCameraStatuses(cameras) {
   cameras.forEach(c => {
@@ -170,5 +187,6 @@ async function refreshCameras() {
 }
 
 refreshCameras();
+refreshTimer = setInterval(refreshCameras, currentRate);
 </script>
 {% endblock %}
