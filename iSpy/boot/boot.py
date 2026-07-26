@@ -9,6 +9,7 @@ from pathlib import Path
 from functools import lru_cache
 import io
 from iSpy.dataset.dataset import get_active_dataset_dir
+import iSpy.config.iSpyConfig as iSpyConfig
 
 _REAL_STDOUT_FD = os.dup(1)
 _REAL_STDERR_FD = os.dup(2)
