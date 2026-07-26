@@ -57,24 +57,22 @@ _pause_event = threading.Event()
 _shutdown_event = threading.Event()
 
 
-def _stdin_reader():
-    """Read commands from stdin sent by VisionProcessManager."""
+def _stdin_reader(pause_event: threading.Event, shutdown_event: threading.Event):
     try:
         for line in sys.stdin:
             cmd = line.strip().upper()
             if cmd == "PAUSE":
-                _pause_event.set()
+                pause_event.set()
                 logger.info("Vision paused by service")
             elif cmd == "RESUME":
-                _pause_event.clear()
+                pause_event.clear()
                 logger.info("Vision resumed by service")
             elif cmd == "SHUTDOWN":
-                _shutdown_event.set()
+                shutdown_event.set()
                 logger.info("Shutdown command received from service")
                 break
     except Exception:
         pass
-
 
 def main():
     repo_root = Path.cwd()
@@ -107,17 +105,15 @@ def main():
         logger.error("No cameras configured or detected. Cannot run iSpy.")
         sys.exit(1)
 
-    reader_thread = threading.Thread(target=_stdin_reader, daemon=True, name="stdin-reader")
-    reader_thread.start()
-
     vision = iSpy(cameras, config)
 
-    original_shutdown_check = vision.shutdown_event.is_set
-
-    def _combined_check():
-        return original_shutdown_check() or _shutdown_event.is_set() or _pause_event.is_set()
-
-    vision.shutdown_event.is_set = _combined_check
+    reader_thread = threading.Thread(
+        target=_stdin_reader,
+        args=(vision.pause_event, vision.shutdown_event),
+        daemon=True,
+        name="stdin-reader",
+    )
+    reader_thread.start()
 
     vision.run()
 

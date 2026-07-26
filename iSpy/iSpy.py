@@ -30,8 +30,9 @@ class iSpy:
     def __init__(self, cameras: list[ObjectDetectionCamera], config: iSpyConfig):
         self.cameras = cameras
         self.config = config
-        
+
         self.shutdown_event = threading.Event()
+        self.pause_event = threading.Event()
         os.makedirs("Outputs", exist_ok=True)
         self.logger = logging.getLogger(__name__)
 
@@ -275,16 +276,17 @@ class iSpy:
     def run_solo_mode(self):
         camera = self.cameras[0]
         last_frame_data = None
-        status_util = self.utilities.get("status_reporter")
         try:
             self.run_solo_vision(camera)
             while not self.shutdown_event.is_set():
-                if self._pause_check():  # threaded in from ISPY_MANAGED pause flag
+                if self.pause_event.is_set():
                     if last_frame_data is not None:
-                        self._update_utilities({**last_frame_data, "fps": 0})
-                        self._update_web({**last_frame_data, "fps": 0})
+                        frozen = {**last_frame_data, "fps": 0}
+                        self._update_utilities(frozen)
+                        self._update_web(frozen)
                     time.sleep(0.05)
                     continue
+
                 frame_data = self._run_loop_body_solo(camera)
                 last_frame_data = frame_data
                 self._update_utilities(frame_data)
@@ -308,8 +310,18 @@ class iSpy:
             self.run_multi_vision(handler)
             self.logger.info("Warm-up complete.")
 
+            last_frame_data = None
             while not self.shutdown_event.is_set():
+                if self.pause_event.is_set():
+                    if last_frame_data is not None:
+                        frozen = {**last_frame_data, "fps": 0}
+                        self._update_utilities(frozen)
+                        self._update_web(frozen)
+                    time.sleep(0.05)
+                    continue
+
                 frame_data = self._run_loop_body_multi(handler)
+                last_frame_data = frame_data
                 self._update_utilities(frame_data)
                 self._update_web(frame_data)
                 print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")

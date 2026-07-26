@@ -24,19 +24,12 @@ class VisionSupervisor:
         with self.lock:
             if self.proc and self.proc.poll() is None:
                 return {"ok": False, "error": "already running"}
-            env = {"ISPY_MANAGED": "1"}
             import os
-            full_env = {**os.environ, **env}
             self.proc = subprocess.Popen(
                 [sys.executable, self.entry_point],
-                stdin=subprocess.PIPE, text=True, env=full_env,
+                stdin=subprocess.PIPE, text=True, env=os.environ,
                 cwd=str(Path.cwd()),
             )
-            self.status = "running"
-            self.last_error = None
-            self._save_state()
-            threading.Thread(target=self._watch, daemon=True).start()
-            return {"ok": True}
 
     def _watch(self):
         proc = self.proc
