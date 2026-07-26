@@ -26,12 +26,21 @@ class Camera:
         self._cap_h = input_size[1]
 
         self.source = camera_config["source"]
-        self.device_id = _resolve_device_id(self.source) if isinstance(self.source, (str, int)) and not self.is_image else None
+
+        self.is_image = isinstance(self.source, str) and self.source.lower().endswith(
+            (".png", ".jpg", ".jpeg", ".bmp")
+        )
+        self.device_id = (
+            _resolve_device_id(self.source)
+            if isinstance(self.source, (str, int)) and not self.is_image
+            else None
+        )
+
         self.stopped = False
         self.frame: np.ndarray | None = None
         self.frame_timestamp: float | None = None
         self.frame_lock = threading.Lock()
-        self._frame_event = threading.Event()   
+        self._frame_event = threading.Event()
         self._frame_processors = []
 
         self.auto_brightness = camera_config.get("auto_brightness", True)
@@ -45,10 +54,7 @@ class Camera:
         self._exposure_time = camera_config.get("exposure_time", 100)   # 10 ms
         self._gain = camera_config.get("gain", 200)
 
-        if isinstance(self.source, str) and self.source.lower().endswith(
-            (".png", ".jpg", ".jpeg", ".bmp")
-        ):
-            self.is_image = True
+        if self.is_image:
             self.image = cv2.imread(self.source)
             if self.image is None:
                 self.logger.warning(
@@ -57,7 +63,6 @@ class Camera:
                 )
                 self.image = self._make_placeholder_frame()
         else:
-            self.is_image = False
             try:
                 self._open_camera()
             except ValueError as exc:
