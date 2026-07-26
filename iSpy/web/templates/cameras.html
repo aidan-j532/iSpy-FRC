@@ -112,13 +112,16 @@ function closeAddCameraModal() {
   document.getElementById('add-camera-modal').style.display = 'none';
 }
 
-async function openAddCameraModal() {
+async function openAddCameraModal(preselectPath) {
   const data = await fetch('/api/cameras/discover').then(r => r.json());
   const available = (data.devices || []).filter(d => !d.active);
   const sel = document.getElementById('new-cam-device');
   sel.innerHTML = available.map(d =>
     `<option value="${d.path}" data-device-id="${d.device_id || ''}">${d.name}${d.resolution ? ' (' + d.resolution + ')' : ''}</option>`
   ).join('') || '<option disabled>No unused cameras detected</option>';
+  if (preselectPath) {
+    sel.value = preselectPath;
+  }
   document.getElementById('add-camera-modal').style.display = 'flex';
   onDeviceSelected();
 }
@@ -223,13 +226,14 @@ function buildCameraCard(name, isStreaming, ageText) {
 function buildDiscoverCard(device) {
   const card = document.createElement('div');
   card.className = 'card camera-card';
+  card.dataset.discover = device.path;
   card.style.borderLeft = '3px solid var(--accent)';
   card.innerHTML = `
     <div class="camera-header">
       <span class="status-dot status-ok"></span>
       <strong>${device.name}</strong>
       <span class="cam-meta">${device.resolution || device.path}</span>
-      <button class="btn-sm btn-ok" onclick="openAddCameraModal()" style="margin-left:auto;">Add</button>
+      <button class="btn-sm btn-ok" onclick="openAddCameraModal('${device.path}')" style="margin-left:auto;">Add</button>
     </div>
     <div class="camera-not-streaming">Discovered but not configured.</div>
   `;
