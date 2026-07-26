@@ -62,6 +62,8 @@ class DashboardModule(WebModule):
             "type": "tick",
             **self._latest,
             "detection_classes": self._detection_classes,
+            "cameras": self._get_camera_status(),
+            "system": self._get_system_metrics(),
         })
 
     def _refresh_model_info(self):

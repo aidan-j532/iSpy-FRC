@@ -303,6 +303,12 @@ function switchTab(name, btn) {
   document.querySelectorAll('.settings-tab').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + name).style.display = '';
   btn.classList.add('active');
+
+  if (name !== 'raw') {
+    document.getElementById('raw-gate').style.display = '';
+    document.getElementById('raw-editor-wrap').style.display = 'none';
+    document.getElementById('raw-ack').checked = false;
+  }
 }
 
 async function saveSettings() {

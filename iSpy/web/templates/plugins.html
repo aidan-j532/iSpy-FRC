@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Plugins - iSpy{% endblock %}
+{% block content %}
+<h1>Plugins</h1>
+<div id="restart-banner" class="card" style="display:none; border-left:3px solid var(--warn);">
+  <p>Plugin changes require a vision restart to take effect.</p>
+  <button onclick="restartVision()">Restart Vision Now</button>
+</div>
+
+<div class="dash-columns">
+  <div class="dash-col-left">
+    <div class="card">
+      <h3>Loaded Plugins</h3>
+      <div id="loaded-list"></div>
+    </div>
+  </div>
+  <div class="dash-col-right">
+    <div class="card">
+      <h3>Available Plugins</h3>
+      <div id="available-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let pluginData = [];
+let statusInterval = null;
+
+function typeBadge(type) {
+  const colors = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#ff9800' };
+  const label = type === 'frame_processor' ? 'frame processor' : type;
+  return `<span class="plugin-pill" style="background:${colors[type] || '#666'}">${label}</span>`;
+}
+
+function statusDot(status) {
+  if (status === 'running' || status === 'active') return 'status-dot status-ok';
+  if (status === 'idle') return 'status-dot status-warn';
+  return 'status-dot status-bad';
+}
+
+async function loadStatus() {
+  try {
+    const [statusResp, availResp] = await Promise.all([
+      fetch('/api/plugins/status').then(r => r.json()),
+      fetch('/api/plugins/available').then(r => r.json()),
+    ]);
+
+    const loaded = statusResp.plugins || [];
+    const available = availResp.available || [];
+
+    const loadedDiv = document.getElementById('loaded-list');
+    if (loaded.length === 0) {
+      loadedDiv.innerHTML = '<div class="empty-state">No plugins loaded. Enable plugins below and restart vision.</div>';
+    } else {
+      loadedDiv.innerHTML = loaded.map(p => `
+        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
+          <span class="${statusDot(p.status)}"></span>
+          <strong>${p.name}</strong>
+          ${typeBadge(p.type)}
+          <span style="margin-left:auto;color:var(--text-dim);font-size:0.85rem;">${p.status}</span>
+        </div>
+      `).join('');
+    }
+
+    const availDiv = document.getElementById('available-list');
+    if (available.length === 0) {
+      availDiv.innerHTML = '<div class="empty-state">No plugins found in plugin directories.</div>';
+    } else {
+      availDiv.innerHTML = available.map(p => `
+        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" ${p.enabled ? 'checked' : ''}
+              onchange="togglePlugin('${p.name}', '${p.type}', this.checked)">
+          </label>
+          <strong>${p.name}</strong>
+          ${typeBadge(p.type)}
+          ${p.doc ? `<span style="margin-left:auto;color:var(--text-dim);font-size:0.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${p.doc.replace(/"/g, '&quot;')}">${p.doc}</span>` : ''}
+        </div>
+      `).join('');
+    }
+  } catch (e) {
+    console.error('Failed to load plugins', e);
+  }
+}
+
+async function togglePlugin(name, type, enable) {
+  try {
+    const r = await fetch('/api/plugins/toggle', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name, type, enable }),
+    });
+    const j = await r.json();
+    if (r.ok) {
+      showToast(enable ? `${name} enabled` : `${name} disabled`, 'success');
+      if (j.needs_restart) {
+        document.getElementById('restart-banner').style.display = '';
+      }
+    } else {
+      showToast(j.error || 'Failed', 'error');
+      loadStatus();
+    }
+  } catch (e) {
+    showToast('Request failed', 'error');
+    loadStatus();
+  }
+}
+
+async function restartVision() {
+  try {
+    const r = await fetch(`http://${location.hostname}:5050/service/restart`, { method: 'POST' });
+    const j = await r.json();
+    showToast(j.ok ? 'Restart sent' : (j.error || 'Failed'), j.ok ? 'success' : 'error');
+    document.getElementById('restart-banner').style.display = 'none';
+  } catch (e) {
+    showToast('Could not reach service daemon', 'error');
+  }
+}
+
+loadStatus();
+statusInterval = setInterval(loadStatus, 3000);
+</script>
+{% endblock %}

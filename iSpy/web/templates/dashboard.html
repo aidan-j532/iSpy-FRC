@@ -116,7 +116,22 @@ function applyTick(data) {
     : clsEntries.map(([name, count]) =>
       `<div class="det-item"><span class="det-class">${name}</span><span class="det-count">${count}</span></div>`
     ).join('');
-    if (data.uptime_s != null) document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
+  if (data.uptime_s != null) document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
+
+  if (data.cameras) {
+    const cams = data.cameras;
+    const camHtml = cams.length === 0
+      ? '<div class="empty-state">No cameras configured</div>'
+      : cams.map(c => `
+        <div class="cam-item">
+          <span class="status-dot ${c.ok ? 'status-ok' : c.stale ? 'status-warn' : 'status-bad'}"></span>
+          <span class="cam-name">${c.name}</span>
+          <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}${c.resolution ? ' | ' + c.resolution : ''}</span>
+        </div>`).join('');
+    document.getElementById('camera-list').innerHTML = camHtml;
+  }
+
+  if (data.system) applySystem(data.system);
 }
 
 function applyFull(data) {
@@ -132,17 +147,6 @@ function applyFull(data) {
     visionBanner.className = 'vision-banner vision-bad';
     visionBanner.textContent = 'Vision is not running';
   }
-
-  const cams = data.cameras || [];
-  const camHtml = cams.length === 0
-    ? '<div class="empty-state">No cameras configured</div>'
-    : cams.map(c => `
-      <div class="cam-item">
-        <span class="status-dot ${c.ok ? 'status-ok' : c.stale ? 'status-warn' : 'status-bad'}"></span>
-        <span class="cam-name">${c.name}</span>
-        <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}${c.resolution ? ' | ' + c.resolution : ''}</span>
-      </div>`).join('');
-  document.getElementById('camera-list').innerHTML = camHtml;
 
   const model = data.model || {};
   document.getElementById('model-info').innerHTML = model.name
@@ -200,26 +204,6 @@ function connectSSE() {
   };
 }
 
-async function pollSystem() {
-  try {
-    const resp = await fetch('/api/system');
-    const data = await resp.json();
-    applySystem(data.system || {});
-    document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
-    const cams = data.cameras || [];
-    const camHtml = cams.length === 0
-      ? '<div class="empty-state">No cameras configured</div>'
-      : cams.map(c => `
-        <div class="cam-item">
-          <span class="status-dot ${c.ok ? 'status-ok' : c.stale ? 'status-warn' : 'status-bad'}"></span>
-          <span class="cam-name">${c.name}</span>
-          <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}${c.resolution ? ' | ' + c.resolution : ''}</span>
-        </div>`).join('');
-    document.getElementById('camera-list').innerHTML = camHtml;
-  } catch(e) {}
-}
-
 connectSSE();
-setInterval(pollSystem, 1000);
 </script>
 {% endblock %}
