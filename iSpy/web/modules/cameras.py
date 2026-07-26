@@ -237,16 +237,19 @@ class CamerasModule(WebModule):
                     if str(i) in claimed:
                         devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
                         continue
-                    cap = cv2.VideoCapture(i)
-                    if cap.isOpened():
-                        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        devices.append({
-                            "path": str(i), "name": f"Camera {i}",
-                            "resolution": f"{w}x{h}" if w and h else None,
-                            "device_id": None,  # Windows path: no stable id available
-                        })
+                    try:
+                        cap = cv2.VideoCapture(i)
+                        if cap.isOpened():
+                            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                            devices.append({
+                                "path": str(i), "name": f"Camera {i}",
+                                "resolution": f"{w}x{h}" if w and h else None,
+                                "device_id": None,
+                            })
                         cap.release()
+                    except Exception:
+                        continue
         return devices
 
     def _video_feed(self, camera_name):

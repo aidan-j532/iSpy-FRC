@@ -65,7 +65,7 @@ class Camera:
         else:
             try:
                 self._open_camera()
-            except ValueError as exc:
+            except (ValueError, Exception) as exc:
                 self.logger.warning(
                     "Camera source '%s' could not be opened (%s) - using synthetic placeholder frame.",
                     self.source,
@@ -159,6 +159,9 @@ class Camera:
 
         if is_windows:
             self.cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
+            if not self.cap.isOpened():
+                self.cap.release()
+                self.cap = cv2.VideoCapture(self.source)
         else:
             self.cap = cv2.VideoCapture(self.source, cv2.CAP_V4L2)
 
@@ -166,7 +169,10 @@ class Camera:
             raise ValueError(f"Camera failed to open: {self.source}")
 
         for _ in range(10):
-            self.cap.grab()
+            try:
+                self.cap.grab()
+            except Exception:
+                break
 
         if not is_windows:
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
@@ -182,7 +188,10 @@ class Camera:
             self.cap.set(cv2.CAP_PROP_FPS, 30)
 
         for _ in range(20):
-            self.cap.grab()
+            try:
+                self.cap.grab()
+            except Exception:
+                break
 
         if not self.cap.isOpened():
             raise ValueError(f"Camera lost after configuration: {self.source}")
