@@ -70,6 +70,14 @@ class PluginStatusModule(WebModule):
 
         if not name or not plugin_type:
             return jsonify(error="Missing name or type"), 400
+        if plugin_type not in ("tracker", "utility"):
+            return jsonify(error="type must be 'tracker' or 'utility'"), 400
+
+        base_cls = TrackerBase if plugin_type == "tracker" else UtilityBase
+        subdir = "trackers" if plugin_type == "tracker" else "utilities"
+        discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
+        if name not in discovered:
+            return jsonify(error=f"Unknown {plugin_type} plugin: '{name}'"), 404
 
         config = self.context.get("config")
         if not config:

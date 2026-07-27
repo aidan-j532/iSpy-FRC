@@ -30,6 +30,11 @@ class VisionSupervisor:
                 stdin=subprocess.PIPE, text=True, env=os.environ,
                 cwd=str(Path.cwd()),
             )
+            self.status = "running"
+            self.last_error = None
+            self._save_state()
+            threading.Thread(target=self._watch, daemon=True).start()
+            return {"ok": True, "pid": self.proc.pid}
 
     def _watch(self):
         proc = self.proc

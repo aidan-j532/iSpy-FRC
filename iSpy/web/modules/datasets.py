@@ -56,11 +56,8 @@ class DatasetsModule(WebModule):
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_delete", self._delete_image, methods=["DELETE"])
 
     def _images_dir(self, name: str) -> Path:
-        per_model = self.dataset_root / name / "images"
-        if per_model.exists():
-            return per_model
         return self.dataset_root / name / "images"
-
+    
     def _list(self):
         out = []
         if self.dataset_root.exists():

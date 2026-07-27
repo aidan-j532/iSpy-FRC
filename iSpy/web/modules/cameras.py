@@ -43,18 +43,24 @@ class CamerasModule(WebModule):
         if frame is None:
             return
         cameras = frame_data.get("cameras") or []
+        cam_by_name = {
+            (cam.config.get("name", str(getattr(cam, "source", ""))) if hasattr(cam, "config")
+            else str(getattr(cam, "source", ""))): cam
+            for cam in cameras
+        }
         per_cam = frame_data.get("camera_frames")
         now = time.monotonic()
         with self.lock:
             if per_cam:
-                for i, (name, f) in enumerate(per_cam.items()):
+                for name, f in per_cam.items():
                     if f is None:
                         continue
                     self.frames[name] = f
                     self.dims[name] = f.shape[1], f.shape[0]
                     self.last_seen[name] = now
-                    if i < len(cameras) and hasattr(cameras[i], "source"):
-                        self.sources[name] = self._device_key(cameras[i])
+                    cam = cam_by_name.get(name)
+                    if cam is not None:
+                        self.sources[name] = self._device_key(cam)
             elif cameras:
                 cam = cameras[0]
                 name = cam.config.get("name", "camera_1") if hasattr(cam, "config") else "camera_1"

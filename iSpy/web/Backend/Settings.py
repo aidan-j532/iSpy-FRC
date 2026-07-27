@@ -26,7 +26,7 @@ class SettingsModule(WebModule):
     def _get(self):
         config = self.context["config"]
         return jsonify(config=config.config, defaults=config.default_config)
-    
+
     def _snapshot(self):
         from iSpy.web.Backend.save_store import write
         config = self.context["config"]
@@ -43,7 +43,7 @@ class SettingsModule(WebModule):
         config.save()
         write("config_snapshot", {"config": None, "taken": False})  # one-shot: consume it
         return jsonify(success=True, config=config.config)
-    
+
     def _post(self):
         try:
             data = request.get_json(force=True)
@@ -59,9 +59,17 @@ class SettingsModule(WebModule):
             changed_keys = self._find_changed_keys(old_config, config.config)
             needs_restart = bool(changed_keys & (_RESTART_REQUIRED_KEYS | frontend_restart_keys))
 
+            # Surface any critical post-save recommendations to the dashboard
+            # in real time via SSE, instead of leaving them to be discovered
+            # only when someone happens to visit /recommendations.
             recs = get_structured_recommendations(config.config)
             critical = [r for r in recs if r["severity"] == "critical"]
             dash = self.context.get("dashboard_module")
+            if critical and dash:
+                dash._push_sse({
+                    "type": "config_warning",
+                    "messages": [r["message"] for r in critical],
+                })
 
             return jsonify(success=True, needs_restart=needs_restart, changed=list(changed_keys))
         except Exception as e:

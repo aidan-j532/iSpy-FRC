@@ -15,9 +15,7 @@ from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import TrackerBase, UtilityBase
 from wpimath.geometry import Pose2d
 from iSpy.web.Backend.WebApp import create_app
-from iSpy.web.Backend.Status import StatusReporter
 from iSpy.web.Backend.YOLOHandler import YOLOHandler
-from iSpy.web.Backend.DatasetManager import DatasetManager
 
 PROJECT_ROOT = Path(__file__).resolve()
 
@@ -38,7 +36,7 @@ class iSpy:
 
         signal.signal(signal.SIGINT, lambda *_: self._handle_shutdown())
         signal.signal(signal.SIGTERM, lambda *_: self._handle_shutdown())
-        
+
         if len(cameras) == 0:
             self.logger.warning("No cameras provided - vision will not run.")
             self.camera_handler = None
@@ -50,7 +48,7 @@ class iSpy:
             self.camera_handler = MultipleCameraHandler(cameras)
 
         tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)
-        self.trackers = {} # No default trackers
+        self.trackers = {}  # No default trackers
         for name in config.get_nested("plugins", "trackers", default=[]):
             if name in tracker_classes:
                 self.trackers[name] = tracker_classes[name](config)
@@ -58,23 +56,25 @@ class iSpy:
                 self.logger.warning("Unknown tracker: %s", name)
 
         self.web_app = create_app(cameras=cameras, config=config) if config["app_mode"] else None
-        # if os.environ.get("ISPY_MANAGED"):
-        #     reader_thread = threading.Thread(target=_stdin_reader, daemon=True)
-        #     reader_thread.start()
 
         context = {
             "config": config,
             "cameras": self.cameras,
             "flask_app": self.web_app.flask_app if self.web_app else None,
+            # HealthModule/PluginStatusModule read this lazily per-request,
+            # so it's fine that it's set for real a few lines down.
+            "vision_instance": self,
         }
 
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
         self.utilities = {}
 
+        # status_reporter / health_reporter / dataset_manager were removed -
+        # replaced by the web.modules.health.HealthModule (registers /health,
+        # /health/detailed, /health-page, /api/health) which merges what
+        # those three used to do separately, plus live plugin status.
         for name, cls in (
-            ("status_reporter", StatusReporter),
             ("yolo_handler", YOLOHandler),
-            ("dataset_manager", DatasetManager),
         ):
             try:
                 self.utilities[name] = cls(context)
@@ -103,15 +103,12 @@ class iSpy:
             else:
                 self.logger.warning("Unknown frame processor: %s", name)
 
-        # Wire health reporter to network handler if both exist
-        health = self.utilities.get("health_reporter")
+        # Wire the NetworkTables handler (if the user enabled that plugin)
+        # into the merged HealthModule so /api/health can report NT status.
         nt = self.utilities.get("network_table_handler")
-        if health and nt:
-            health.set_network_handler(nt)
-
-        status = self.utilities.get("status_reporter")
-        if status and hasattr(status, "set_plugins"):
-            status.set_plugins(self.trackers, self.utilities, self.frame_processors)
+        health_mod = self.web_app.modules.get("health") if self.web_app else None
+        if health_mod and nt:
+            health_mod.set_network_handler(nt)
 
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
@@ -123,13 +120,13 @@ class iSpy:
             self.web_app.set_vision_instance(self)
 
         self._silence_external_loggers()
-        
+
         # Make sure cameras get frame processors if any are configured
         if self.frame_processors:
             for camera in self.cameras:
                 for name, processor in self.frame_processors.items():
                     camera.add_frame_processor(processor)
-                    
+
         # I think has to be at very bottom
         if self.web_app:
             self.web_app.set_vision_instance(self)
@@ -239,7 +236,6 @@ class iSpy:
             "detections": len(fuel_list), "cameras": self.cameras,
         }
         return frame_data
-
 
     def _run_loop_body_multi(self, handler) -> dict:
         t0 = time.perf_counter()

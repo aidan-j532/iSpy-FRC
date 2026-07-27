@@ -19,12 +19,12 @@ class YOLOHandler(UtilityBase):
     def __init__(self, context: dict):
         self.config = context["config"]
         self.logger = logging.getLogger(__name__)
-        flask_app = context.get("flask_app")
+        # flask_app = context.get("flask_app")
 
-        if flask_app and FLASK_AVAILABLE:
-            flask_app.add_url_rule("/api/models/select", "yolo_select", self._select, methods=["POST"])
-        elif not FLASK_AVAILABLE:
-            self.logger.warning("Flask not available - model endpoints disabled.")
+        # if flask_app and FLASK_AVAILABLE:
+        #     flask_app.add_url_rule("/api/models/select", "yolo_select", self._select, methods=["POST"])
+        # elif not FLASK_AVAILABLE:
+        #     self.logger.warning("Flask not available - model endpoints disabled.")
 
     def _select(self):
         data = request.get_json(force=True) or {}

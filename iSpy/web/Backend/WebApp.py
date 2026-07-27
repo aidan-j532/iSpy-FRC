@@ -14,6 +14,7 @@ from iSpy.web.Backend.Settings import SettingsModule
 from iSpy.web.Backend.SetupWizard import SetupWizardModule
 from iSpy.web.modules.recommendations import RecommendationsModule
 from iSpy.web.Backend.PluginStatus import PluginStatusModule
+from iSpy.web.modules.health import HealthModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
 
@@ -43,6 +44,7 @@ class iSpyWebApp:
             "datasets": DatasetsModule(context),
             "viewer3d": Viewer3DModule(context),
             "dashboard": DashboardModule(context),
+            "health": HealthModule(context),
             "logs": LogsModule(context),
             "metrics": MetricsModule(context),
             "settings": SettingsModule(context),
@@ -57,6 +59,7 @@ class iSpyWebApp:
             except Exception:
                 self.logger.exception("Failed to register routes for web module '%s'", name)
 
+        self.context["dashboard_module"] = self.modules.get("dashboard")
         self.flask_app.add_url_rule("/", "root", lambda: render_template("dashboard.html"))
 
     def update(self, frame_data: dict):
