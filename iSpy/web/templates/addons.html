@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% block title %}Add-ons - iSpy{% endblock %}
+{% block content %}
+<h1>Add-ons</h1>
+<div id="restart-banner" class="card" style="display:none; border-left:3px solid var(--warn);">
+  <p>Add-on changes require a vision restart to take effect.</p>
+  <button onclick="restartVision()">Restart Vision Now</button>
+</div>
+
+<div class="card">
+  <h3>New Add-on</h3>
+  <div class="settings-tabs">
+    <button class="settings-tab active" onclick="switchNewTab('upload', this)">Upload File</button>
+    <button class="settings-tab" onclick="switchNewTab('paste', this)">Write Code</button>
+  </div>
+
+  <div id="new-upload" style="margin-top:12px;">
+    <div class="form-row">
+      <span class="form-label">Kind</span>
+      <select id="upload-type" class="form-input">
+        <option value="tracker">Tracker</option>
+        <option value="utility">Utility</option>
+        <option value="frame_processor">Frame Processor</option>
+      </select>
+    </div>
+    <div class="upload-zone" id="upload-zone">
+      <div>Drop a .py file here or click to upload</div>
+      <input type="file" id="addon-file-input" accept=".py" style="display:none;">
+    </div>
+  </div>
+
+  <div id="new-paste" style="margin-top:12px; display:none;">
+    <div class="form-row">
+      <span class="form-label">Kind</span>
+      <select id="paste-type" class="form-input">
+        <option value="tracker">Tracker</option>
+        <option value="utility">Utility</option>
+        <option value="frame_processor">Frame Processor</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Filename</span>
+      <input id="paste-filename" class="form-input" type="text" placeholder="e.g. april_tag_tracker">
+    </div>
+    <textarea id="paste-code" class="raw-editor" style="height:40vh;" placeholder="from iSpy.plugins.bases import TrackerBase
+
+class YourTracker(TrackerBase):
+    plugin_name = &quot;my_tracker&quot;
+    def update(self, fuel_list, robot_x, robot_y, robot_yaw):
+        return fuel_list"></textarea>
+    <div style="margin-top:8px;">
+      <button onclick="submitPasted()">Save Add-on</button>
+    </div>
+  </div>
+</div>
+
+<div class="dash-columns">
+  <div class="dash-col-left">
+    <div class="card">
+      <h3>Loaded Add-ons</h3>
+      <div id="loaded-list"></div>
+    </div>
+  </div>
+  <div class="dash-col-right">
+    <div class="card">
+      <h3>Available Add-ons</h3>
+      <div id="available-list"></div>
+    </div>
+  </div>
+</div>
+
+<div id="delete-addon-modal" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <h3>Delete Add-on</h3>
+    <p>Delete <strong id="del-addon-name"></strong>? This removes the file and disables it if active.</p>
+    <div class="modal-actions">
+      <button onclick="closeDeleteAddonModal()">Cancel</button>
+      <button class="btn-danger" onclick="confirmDeleteAddon()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let pendingDeleteAddon = null;
+
+function switchNewTab(name, btn) {
+  document.querySelectorAll('#new-upload, #new-paste').forEach(el => el.style.display = 'none');
+  document.getElementById('new-' + name).style.display = '';
+  btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function typeBadge(type) {
+  const colors = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#ff9800' };
+  const label = type === 'frame_processor' ? 'frame processor' : type;
+  return `<span class="plugin-pill" style="background:${colors[type] || '#666'}">${label}</span>`;
+}
+
+function statusDot(status) {
+  if (status === 'running' || status === 'active') return 'status-dot status-ok';
+  if (status === 'idle') return 'status-dot status-warn';
+  return 'status-dot status-bad';
+}
+
+async function loadStatus() {
+  try {
+    const [statusResp, availResp] = await Promise.all([
+      fetch('/api/plugins/status').then(r => r.json()),
+      fetch('/api/plugins/available').then(r => r.json()),
+    ]);
+
+    const loaded = statusResp.plugins || [];
+    const available = availResp.available || [];
+
+    const loadedDiv = document.getElementById('loaded-list');
+    loadedDiv.innerHTML = loaded.length === 0
+      ? '<div class="empty-state">No add-ons loaded. Enable one below and restart vision.</div>'
+      : loaded.map(p => `
+        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
+          <span class="${statusDot(p.status)}"></span>
+          <strong>${p.name}</strong>
+          ${typeBadge(p.type)}
+          <span style="margin-left:auto;color:var(--text-dim);font-size:0.85rem;">${p.status}</span>
+        </div>`).join('');
+
+    const availDiv = document.getElementById('available-list');
+    availDiv.innerHTML = available.length === 0
+      ? '<div class="empty-state">No add-ons found.</div>'
+      : available.map(p => `
+        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" ${p.enabled ? 'checked' : ''}
+              onchange="togglePlugin('${p.name}', '${p.type}', this.checked)">
+          </label>
+          <strong>${p.name}</strong>
+          ${typeBadge(p.type)}
+          ${p.doc ? `<span style="margin-left:8px;color:var(--text-dim);font-size:0.8rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${p.doc.replace(/"/g, '&quot;')}">${p.doc}</span>` : ''}
+          <button class="btn-sm btn-bad" style="margin-left:auto;" onclick="openDeleteAddonModal('${p.type}','${p.filename || p.name}','${p.name}')" title="Delete">&#10005;</button>
+        </div>`).join('');
+  } catch (e) {
+    console.error('Failed to load add-ons', e);
+  }
+}
+
+async function togglePlugin(name, type, enable) {
+  try {
+    const r = await fetch('/api/plugins/toggle', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name, type, enable }),
+    });
+    const j = await r.json();
+    if (r.ok) {
+      showToast(enable ? `${name} enabled` : `${name} disabled`, 'success');
+      if (j.needs_restart) document.getElementById('restart-banner').style.display = '';
+    } else {
+      showToast(j.error || 'Failed', 'error');
+      loadStatus();
+    }
+  } catch (e) {
+    showToast('Request failed', 'error');
+    loadStatus();
+  }
+}
+
+async function submitPasted() {
+  const type = document.getElementById('paste-type').value;
+  const filename = document.getElementById('paste-filename').value.trim();
+  const code = document.getElementById('paste-code').value;
+  if (!filename) { showToast('Filename required', 'error'); return; }
+  if (!code.trim()) { showToast('Code cannot be empty', 'error'); return; }
+
+  const r = await fetch('/api/plugins/create', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ type, filename, code }),
+  });
+  const j = await r.json();
+  if (r.ok) {
+    showToast('Add-on saved - restart vision to detect it', 'success');
+    document.getElementById('paste-filename').value = '';
+    document.getElementById('paste-code').value = '';
+    document.getElementById('restart-banner').style.display = '';
+    loadStatus();
+  } else {
+    showToast(j.error || 'Save failed', 'error');
+  }
+}
+
+const uploadZone = document.getElementById('upload-zone');
+const addonFileInput = document.getElementById('addon-file-input');
+uploadZone.addEventListener('click', () => addonFileInput.click());
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  handleAddonUpload(e.dataTransfer.files[0]);
+});
+addonFileInput.addEventListener('change', () => handleAddonUpload(addonFileInput.files[0]));
+
+async function handleAddonUpload(file) {
+  if (!file) return;
+  const type = document.getElementById('upload-type').value;
+  const form = new FormData();
+  form.append('file', file);
+  form.append('type', type);
+  try {
+    const r = await fetch('/api/plugins/upload', { method: 'POST', body: form });
+    const j = await r.json();
+    if (r.ok) {
+      showToast('Add-on uploaded - restart vision to detect it', 'success');
+      document.getElementById('restart-banner').style.display = '';
+    } else {
+      showToast(j.error || 'Upload failed', 'error');
+    }
+  } catch (e) {
+    showToast('Upload failed', 'error');
+  }
+  addonFileInput.value = '';
+  loadStatus();
+}
+
+function openDeleteAddonModal(type, filename, name) {
+  pendingDeleteAddon = { type, filename, name };
+  document.getElementById('del-addon-name').textContent = name;
+  document.getElementById('delete-addon-modal').style.display = 'flex';
+}
+function closeDeleteAddonModal() {
+  pendingDeleteAddon = null;
+  document.getElementById('delete-addon-modal').style.display = 'none';
+}
+async function confirmDeleteAddon() {
+  if (!pendingDeleteAddon) return;
+  const { type, filename } = pendingDeleteAddon;
+  try {
+    const r = await fetch(`/api/plugins/${type}/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    const j = await r.json();
+    showToast(r.ok ? 'Add-on deleted' : (j.error || 'Delete failed'), r.ok ? 'success' : 'error');
+    if (r.ok) document.getElementById('restart-banner').style.display = '';
+  } catch (e) {
+    showToast('Delete failed', 'error');
+  }
+  closeDeleteAddonModal();
+  loadStatus();
+}
+
+document.getElementById('delete-addon-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeDeleteAddonModal();
+});
+
+async function restartVision() {
+  try {
+    const r = await fetch(`http://${location.hostname}:5050/service/restart`, { method: 'POST' });
+    const j = await r.json();
+    showToast(j.ok ? 'Restart sent' : (j.error || 'Failed'), j.ok ? 'success' : 'error');
+    document.getElementById('restart-banner').style.display = 'none';
+  } catch (e) {
+    showToast('Could not reach service daemon', 'error');
+  }
+}
+
+loadStatus();
+setInterval(loadStatus, 3000);
+</script>
+{% endblock %}

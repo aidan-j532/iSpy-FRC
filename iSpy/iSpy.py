@@ -12,10 +12,10 @@ from iSpy.validations.model_validator import (
     validate_model_organization,
 )
 from iSpy.plugins._loader import load_plugins
-from iSpy.plugins.bases import TrackerBase, UtilityBase
+from iSpy.plugins.bases import TrackerBase, UtilityBase, FrameProcessorBase
 from wpimath.geometry import Pose2d
 from iSpy.web.Backend.WebApp import create_app
-from iSpy.web.Backend.YOLOHandler import YOLOHandler
+
 
 PROJECT_ROOT = Path(__file__).resolve()
 
@@ -69,21 +69,7 @@ class iSpy:
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
         self.utilities = {}
 
-        # status_reporter / health_reporter / dataset_manager were removed -
-        # replaced by the web.modules.health.HealthModule (registers /health,
-        # /health/detailed, /health-page, /api/health) which merges what
-        # those three used to do separately, plus live plugin status.
-        for name, cls in (
-            ("yolo_handler", YOLOHandler),
-        ):
-            try:
-                self.utilities[name] = cls(context)
-            except Exception:
-                self.logger.exception("Failed to initialize built-in utility: %s", name)
-
         for name in config.get_nested("plugins", "utilities", default=[]):
-            if name in self.utilities:
-                continue
             if name in utility_classes:
                 try:
                     self.utilities[name] = utility_classes[name](context)
@@ -92,7 +78,7 @@ class iSpy:
             else:
                 self.logger.warning("Unknown utility plugin: %s", name)
 
-        frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", UtilityBase)
+        frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", FrameProcessorBase)
         self.frame_processors = {}
         for name in config.get_nested("plugins", "frame_processors", default=[]):
             if name in frame_processor_classes:
