@@ -146,42 +146,45 @@ class iSpyConfig:
             with open(file_path, "r") as f:
                 data = json.load(f)
             self._update_config(data)
-        except Exception as e:
-            self.logger.warning(
-                "Failed to load config from %s: %s, searching for config", file_path, e
-            )
-            try:
-                config_file = self.search_for_config()
-                with open(config_file, "r") as f:
-                    data = json.load(f)
-                self._update_config(data)
-            except Exception as e2:
-                self.logger.warning(
-                    "Failed to find and load config: %s. Using defaults.", e2
-                )
+        except json.JSONDecodeError as e:
+            # Back up the corrupt file instead of silently discarding it or
+            # re-searching the same broken path.
+            bad_path = Path(file_path)
+            if bad_path.exists():
+                backup = bad_path.with_suffix(f".corrupt-{int(__import__('time').time())}.json")
+                try:
+                    bad_path.rename(backup)
+                    self.logger.error(
+                        "Config at %s was invalid JSON (%s). Backed up to %s and "
+                        "regenerating defaults.", file_path, e, backup,
+                    )
+                except OSError:
+                    self.logger.error(
+                        "Config at %s was invalid JSON (%s) and could not be backed up. "
+                        "Using defaults without touching the file.", file_path, e,
+                    )
+            self.save()
+        except FileNotFoundError:
+            self.logger.warning("Config file not found at %s. Using defaults.", file_path)
         finally:
             try:
                 self._configure_logging()
             except Exception:
-                self.logger.exception(
-                    "Failed to apply logging configuration after loading file"
-                )
-
+                self.logger.exception("Failed to apply logging configuration after loading file")
     def save(self, quiet=False):
         try:
             if self.file_path:
                 if not quiet:
                     self.logger.info("Config saved to %s", self.file_path)
             else:
-                self.logger.info(
-                    "No config file path set; saving to Config/config.json"
-                )
+                self.logger.info("No config file path set; saving to Config/config.json")
                 self.file_path = str(_REPO_ROOT / "Config" / "config.json")
+
+            Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
             with open(self.file_path, "w") as f:
                 json.dump(self.config, f, indent=4)
         except Exception as e:
             self.logger.error("Failed to save config to %s: %s", self.file_path, e)
-
     def get(self, key, default=None):
         return self.config.get(key, default)
 

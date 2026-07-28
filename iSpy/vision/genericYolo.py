@@ -9,6 +9,23 @@ import threading
 import queue
 import torch
 
+class ModelFileError(RuntimeError):
+    """Raised when a configured model file is missing, empty, or truncated."""
+
+def _validate_model_file(path: str) -> None:
+    p = Path(path)
+    if not p.exists():
+        raise ModelFileError(f"Model file does not exist: {p}")
+    size = p.stat().st_size if p.is_file() else sum(
+        f.stat().st_size for f in p.rglob("*") if f.is_file()
+    )
+    if size < 1024:  # nothing legitimate is this small
+        raise ModelFileError(
+            f"Model file '{p}' is only {size} bytes — it is empty or truncated "
+            f"(likely a bad download, a Git LFS pointer file that was never pulled, "
+            f"or a failed export). Re-download or re-export it before continuing."
+        )
+
 try:
     from rknnlite.api import RKNNLite
 
@@ -319,8 +336,9 @@ class GenericYolo:
     def __init__(self, model_config: dict, core_mask=None, iSpy_config=None):
         self.logger = logging.getLogger(__name__)
         self._iSpy_config = iSpy_config
+        _validate_model_file(model_config.get("file_path", ""))
         model_config = fill_missing_config(model_config)
-
+        
         cfg = normalize_model_config(model_config)
         model_file_path = cfg["file_path"]
         self.device = cfg.get("device", 0)

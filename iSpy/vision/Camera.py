@@ -11,6 +11,8 @@ from iSpy.utilities.device_id import _resolve_device_id
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
+cv2.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+
 
 class Camera:
     # Resolution used for the synthetic "no camera" placeholder frame.
@@ -161,7 +163,7 @@ class Camera:
             self.cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
             if not self.cap.isOpened():
                 self.cap.release()
-                self.cap = cv2.VideoCapture(self.source)
+                self.cap = cv2.VideoCapture(self.source, cv2.CAP_MSMF)
         else:
             self.cap = cv2.VideoCapture(self.source, cv2.CAP_V4L2)
 

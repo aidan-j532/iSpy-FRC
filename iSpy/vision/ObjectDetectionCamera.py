@@ -11,6 +11,7 @@ from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
 from iSpy.vision.genericYolo import Box, Results, GenericYolo
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+from iSpy.vision.genericYolo import Box, Results, GenericYolo, ModelFileError
 
 class ObjectDetectionCamera(Camera, VisionBase):
     plugin_name = "object_detection"
@@ -86,11 +87,14 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         super().__init__(camera_config, self.input_size, self.grayscale)
 
-        self.model = GenericYolo(
-            vm_filled,
-            self.core_mask,
-            iSpy_config=config,
-        )
+        try:
+            self.model = GenericYolo(vm_filled, self.core_mask, iSpy_config=config)
+        except ModelFileError as e:
+            self.logger.error(
+                "Camera '%s': %s — this camera will run without detection until fixed.",
+                camera_config.get("name", "?"), e,
+            )
+            self.model = None
 
         self._class_names: dict[int, str] = {0: "object"}
         try:
@@ -102,7 +106,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
             pass
 
         self._preproc_q: queue.Queue = queue.Queue(maxsize=1)
-        self._use_pipeline = self.model.model_type in ("rknn", "onnx", "tflite")
+        self._use_pipeline = self.model is not None and self.model.model_type in ("rknn", "onnx", "tflite")
 
         self._last_result: Results | None = None
         self._last_frame: np.ndarray | None = None
@@ -240,6 +244,10 @@ class ObjectDetectionCamera(Camera, VisionBase):
         )
 
     def get_yolo_data(self) -> tuple[Results | None, np.ndarray | None]:
+        if self.model is None:
+            frame = self.get_frame()
+            return None, frame
+
         if self._use_pipeline:
             try:
                 preprocessed, orig_frame, orig_shape = self._preproc_q.get(
@@ -321,7 +329,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
     def run(self):
         data, frame = self.get_yolo_data()
         if data is None or frame is None:
-            return [], None
+            return [], frame
 
         img_h, img_w = frame.shape[:2]
         objects: list[Object] = []
