@@ -258,6 +258,7 @@ class iSpy:
     def run_solo_mode(self):
         camera = self.cameras[0]
         last_frame_data = None
+        max_fps = self.config.get("max_fps", 0)
         try:
             self.run_solo_vision(camera)
             while not self.shutdown_event.is_set():
@@ -269,11 +270,17 @@ class iSpy:
                     time.sleep(0.05)
                     continue
 
+                t_start = time.perf_counter()
                 frame_data = self._run_loop_body_solo(camera)
                 last_frame_data = frame_data
                 self._update_utilities(frame_data)
                 self._update_web(frame_data)
                 print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")
+
+                if max_fps > 0:
+                    elapsed = time.perf_counter() - t_start
+                    sleep_time = max(0, 1.0 / max_fps - elapsed)
+                    time.sleep(sleep_time)
 
         finally:
             print()
@@ -287,6 +294,7 @@ class iSpy:
         if handler is None:
             self.logger.error("Multi-camera handler not initialized.")
             return
+        max_fps = self.config.get("max_fps", 0)
         try:
             self.logger.info("Multi mode - warming up...")
             self.run_multi_vision(handler)
@@ -302,11 +310,17 @@ class iSpy:
                     time.sleep(0.05)
                     continue
 
+                t_start = time.perf_counter()
                 frame_data = self._run_loop_body_multi(handler)
                 last_frame_data = frame_data
                 self._update_utilities(frame_data)
                 self._update_web(frame_data)
                 print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")
+
+                if max_fps > 0:
+                    elapsed = time.perf_counter() - t_start
+                    sleep_time = max(0, 1.0 / max_fps - elapsed)
+                    time.sleep(sleep_time)
 
         finally:
             print()

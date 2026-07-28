@@ -44,6 +44,7 @@ class iSpyConfig:
             "network_tables_ip": "10.0.0.2",
             "metrics": True,
             "app_mode": True,
+            "max_fps": 0,
             "camera_configs": {
                 "default_cam": {
                     "name": "default_cam",
