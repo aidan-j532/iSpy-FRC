@@ -1,7 +1,7 @@
 import sys
 import os
 import contextlib
-
+import warnings
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 import logging
@@ -1144,6 +1144,7 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
 
     try:
         from rknn.api import RKNN
+        warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
     except ImportError:
         raise ImportError("RKNN Toolkit not found. Install it to convert to RKNN format.")
 
@@ -1406,6 +1407,9 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
 def _convert_model_subprocess(model_file, target_format, input_size, quantize=None, force=False, kw=None) -> Path:
     import tempfile
 
+    outputs_dir = _PROJECT_ROOT / "Outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+
     args = {
         "model_file": str(model_file),
         "target_format": target_format,
@@ -1415,9 +1419,11 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
         "kw": kw,
     }
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump(args, f)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir=str(outputs_dir)) as f:
         args_path = f.name
+        json.dump(args, f)
+
+    result_path = args_path + ".result.json"
 
     try:
         proc = subprocess.run(
@@ -1427,11 +1433,6 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
             text=True,
         )
 
-        result_line = None
-        for line in proc.stdout.splitlines():
-            if line.startswith("ISPY_RESULT:"):
-                result_line = line[len("ISPY_RESULT:"):]
-
         # Surface the worker's own logging - it just runs in a subprocess,
         # it shouldn't run silently.
         if proc.stdout:
@@ -1439,19 +1440,22 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
         if proc.stderr:
             print(proc.stderr, file=_REAL_STDERR, end="")
 
-        if proc.returncode != 0 or result_line is None:
+        if proc.returncode != 0 or not os.path.exists(result_path):
             logger.error(
                 "Conversion subprocess for %s -> %s failed (exit code %s). Falling back to .pt.",
                 Path(model_file).name, target_format, proc.returncode,
             )
             return Path(model_file)
 
-        return Path(result_line)
+        with open(result_path) as f:
+            result_data = json.load(f)
+        return Path(result_data["result"])
     finally:
-        try:
-            os.unlink(args_path)
-        except OSError:
-            pass
+        for p in (args_path, result_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 def setup_files(first_boot: bool = False):
     yolo_dir = _PROJECT_ROOT / "YoloModels"

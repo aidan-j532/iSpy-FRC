@@ -1,6 +1,6 @@
 import sys
 import json
-
+from pathlib import Path
 
 def main():
     if len(sys.argv) != 2:
@@ -23,8 +23,8 @@ def main():
         kw=args.get("kw"),
     )
 
-    print(f"ISPY_RESULT:{result}")
-
+    out_path = Path(sys.argv[1] + ".result.json")
+    out_path.write_text(json.dumps({"result": result}))
 
 if __name__ == "__main__":
     main()

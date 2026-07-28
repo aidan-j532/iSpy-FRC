@@ -8,6 +8,8 @@ from iSpy.vision.ModelInspector import fill_missing_config
 import threading
 import queue
 import torch
+import warnings
+from pathlib import Path
 
 class ModelFileError(RuntimeError):
     """Raised when a configured model file is missing, empty, or truncated."""
@@ -28,6 +30,7 @@ def _validate_model_file(path: str) -> None:
 
 try:
     from rknnlite.api import RKNNLite
+    warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
 
     RKNN_FOUND = True
 
