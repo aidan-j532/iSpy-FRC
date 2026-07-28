@@ -11,8 +11,11 @@ from iSpy.utilities.device_id import _resolve_device_id
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
-cv2.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
-
+try:
+    cv2.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+except AttributeError:
+    # Older OpenCV versions don't have setLogLevel
+    pass
 
 class Camera:
     # Resolution used for the synthetic "no camera" placeholder frame.
