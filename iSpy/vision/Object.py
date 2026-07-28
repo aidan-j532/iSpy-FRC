@@ -17,6 +17,7 @@ class Object:
         yaw: float = 0.0,
         name: str = "unknown",
         confidence: float = 0.0,
+        keypoints_3d: list | None = None,
     ):
         self.x = x
         self.y = y
@@ -27,6 +28,7 @@ class Object:
         self.yaw = yaw
         self.name = name
         self.confidence = confidence
+        self.keypoints_3d = keypoints_3d
 
         self.start_time = time.perf_counter()
         self.alive = 0

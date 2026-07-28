@@ -294,10 +294,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         return results, annotated_frame
 
-    def _pnp_to_robot_coordinates(
-        self, tvec: tuple[float, float, float]
-    ) -> np.ndarray:
-        fx, fy, fz = tvec
+    def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
+        fx, fy, fz = pt
         yaw_rad = math.radians(self.camera_bot_relative_yaw)
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
         x_rot = fz * cos_y + (-fx) * sin_y
@@ -312,6 +310,11 @@ class ObjectDetectionCamera(Camera, VisionBase):
             dtype=np.float32,
         )
 
+    def _pnp_to_robot_coordinates(
+        self, tvec: tuple[float, float, float]
+    ) -> np.ndarray:
+        return self._camera_point_to_robot(tvec)
+
     def _box_to_object(self, box: Box, img_w: int, img_h: int) -> Object|None:
         if box.translation is not None:
             pt = self._pnp_to_robot_coordinates(box.translation)
@@ -324,7 +327,20 @@ class ObjectDetectionCamera(Camera, VisionBase):
             roll, pitch, yaw = box.rotation
         z = float(pt[2]) if len(pt) > 2 else 0.0
         class_name = self._class_names.get(box.cls_id, f"class_{box.cls_id}")
-        return Object(float(pt[0]), float(pt[1]), z=z, roll=roll, pitch=pitch, yaw=yaw, name=class_name, confidence=box.conf)
+
+        kpts_3d_robot = None
+        if box.keypoints_3d is not None:
+            kpts_3d_robot = []
+            for kpt in box.keypoints_3d:
+                rpt = self._camera_point_to_robot(tuple(kpt))
+                kpts_3d_robot.append(rpt.tolist())
+
+        return Object(
+            float(pt[0]), float(pt[1]), z=z,
+            roll=roll, pitch=pitch, yaw=yaw,
+            name=class_name, confidence=box.conf,
+            keypoints_3d=kpts_3d_robot,
+        )
 
     def run(self):
         data, frame = self.get_yolo_data()

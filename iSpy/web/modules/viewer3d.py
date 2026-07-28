@@ -25,7 +25,7 @@ class Viewer3DModule(WebModule):
         fuel_list = frame_data.get("fuel_list", [])
         self._latest_objects = []
         for idx, obj in enumerate(fuel_list):
-            self._latest_objects.append({
+            obj_entry = {
                 "id": idx,
                 "x": getattr(obj, "x", 0),
                 "y": getattr(obj, "y", 0),
@@ -35,7 +35,11 @@ class Viewer3DModule(WebModule):
                 "pitch": getattr(obj, "pitch", 0),
                 "name": getattr(obj, "name", "unknown"),
                 "confidence": getattr(obj, "confidence", 0),
-            })
+            }
+            kpts = getattr(obj, "keypoints_3d", None)
+            if kpts is not None:
+                obj_entry["keypoints_3d"] = kpts
+            self._latest_objects.append(obj_entry)
 
     def _latest(self):
         return jsonify(objects=self._latest_objects)

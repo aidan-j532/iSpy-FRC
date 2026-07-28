@@ -284,13 +284,14 @@ def _validate_output_block(out: dict, task: str, num_classes: int) -> None:
 
 
 class Box:
-    def __init__(self, xyxy, conf, cls_id=0, translation=None, rotation=None):
+    def __init__(self, xyxy, conf, cls_id=0, translation=None, rotation=None, keypoints_3d=None):
         self.xyxy = xyxy
         self.conf = conf
         self.cls_id = cls_id
         # PnP results, both None for detect-only models
         self.translation = translation  # (x, y, z) metres in camera frame
         self.rotation = rotation  # (roll, pitch, yaw) radians in camera frame
+        self.keypoints_3d = keypoints_3d  # list of [x,y,z] per keypoint in camera frame or None
 
 
 class Results:
@@ -983,9 +984,9 @@ class GenericYolo:
 
     def _solve_pnp(
         self, keypoints: np.ndarray
-    ) -> tuple[tuple[float, float, float] | None, np.ndarray | None]:
+    ) -> tuple[tuple[float, float, float] | None, np.ndarray | None, list | None]:
         if not self.pnp_config:
-            return None, None
+            return None, None, None
 
         object_points = np.asarray(self.pnp_config["object_points"], dtype=np.float64)
         camera_matrix = np.asarray(self.pnp_config["camera_matrix"], dtype=np.float64)
@@ -1005,7 +1006,7 @@ class GenericYolo:
             model_points.append(object_points[i])
 
         if len(image_points) < 4:
-            return None, None
+            return None, None, None
 
         image_points = np.asarray(image_points, dtype=np.float64)
         model_points = np.asarray(model_points, dtype=np.float64)
@@ -1017,10 +1018,16 @@ class GenericYolo:
             flags=cv2.SOLVEPNP_ITERATIVE,
         )
         if not ok:
-            return None, None
+            return None, None, None
+
+        R, _ = cv2.Rodrigues(rvec)
+        keypoints_3d = []
+        for i, pt in enumerate(object_points):
+            pos = R @ pt + tvec.reshape(3)
+            keypoints_3d.append(pos.tolist())
 
         euler = self._rvec_to_euler(rvec.reshape(3))
-        return euler, tvec.reshape(3)
+        return euler, tvec.reshape(3), keypoints_3d
 
     def _apply_software_nms(
         self,
@@ -1085,13 +1092,14 @@ class GenericYolo:
             translation: list | None = None
             rotation: tuple | None = None
             kpt_scaled: np.ndarray | None = None
+            kpts_3d: list | None = None
 
             if kpts_raw is not None and num_kpts > 0:
                 kpt_set = kpts_raw[i].reshape(num_kpts, kpt_dims)
                 kpt_scaled = self._scale_coords(kpt_set, orig_shape, is_kpts=True)
 
                 if self.pnp_config:
-                    euler, tvec = self._solve_pnp(kpt_scaled)
+                    euler, tvec, kpts_3d = self._solve_pnp(kpt_scaled)
                     if tvec is not None:
                         translation = tvec.tolist()
                     if euler is not None:
@@ -1104,6 +1112,7 @@ class GenericYolo:
                     int(class_ids[i]),
                     translation,
                     rotation,
+                    keypoints_3d=kpts_3d,
                 )
             )
             if kpt_scaled is not None:
@@ -1202,11 +1211,13 @@ class GenericYolo:
                 kpt_arr = np.asarray(kpt_set)
                 if self.pnp_config and len(boxes) == len(kpt_arrs):
                     idx = len(keypoints_list)
-                    euler, tvec = self._solve_pnp(kpt_arr)
+                    euler, tvec, kpts_3d = self._solve_pnp(kpt_arr)
                     if euler is not None:
                         boxes[idx].rotation = euler
                     if tvec is not None:
                         boxes[idx].translation = tvec.tolist()
+                    if kpts_3d is not None:
+                        boxes[idx].keypoints_3d = kpts_3d
                 keypoints_list.append(kpt_arr)
 
         return Results(boxes, ultralytics_result.orig_shape, keypoints_list or None)

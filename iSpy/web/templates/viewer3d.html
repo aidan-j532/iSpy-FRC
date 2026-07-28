@@ -168,10 +168,72 @@ function makeMarker(id) {
 function rebuildAllMarkers() {
   for (const id in boxes) {
     scene.remove(boxes[id]);
+    disposeMesh(boxes[id]);
+    delete boxes[id];
   }
-  const oldIds = Object.keys(boxes);
-  oldIds.forEach(id => delete boxes[id]);
-  // markers will be recreated on next sync() tick from live detection data
+}
+
+const COCO_SKELETON = [
+  [16, 14], [14, 12], [17, 15], [15, 13], [12, 13],
+  [6, 12], [7, 13], [6, 7], [6, 8], [7, 9],
+  [8, 10], [9, 11], [2, 3], [1, 2], [1, 3],
+  [2, 4], [3, 5], [4, 6], [5, 7],
+];
+const LIMB_COLORS = [
+  0xff0000, 0xff0000, 0x0000ff, 0x0000ff, 0xff00ff,
+  0xff8000, 0x0080ff, 0x80ff00, 0xff8000, 0x0080ff,
+  0xff8000, 0x0080ff, 0x00ffff, 0x00ffff, 0x00ffff,
+  0x00ffff, 0x00ffff, 0xff8000, 0x0080ff,
+];
+const JOINT_COLORS = [
+  0xff0000, 0x00ff00, 0x00ff00, 0x00ff00, 0x00ff00,
+  0xff8000, 0x0080ff, 0xff8000, 0x0080ff,
+  0xff8000, 0x0080ff, 0xff00ff, 0xff00ff,
+  0xff0000, 0x0000ff, 0xff0000, 0x0000ff,
+];
+
+function makeSkeleton(keypoints3d) {
+  const group = new THREE.Group();
+  group.userData.isSkeleton = true;
+  const kpts = keypoints3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
+
+  const bonePositions = [];
+  const boneColors = [];
+  for (let i = 0; i < COCO_SKELETON.length; i++) {
+    const [a, b] = COCO_SKELETON[i];
+    const p1 = kpts[a - 1], p2 = kpts[b - 1];
+    if (!p1 || !p2) {
+      bonePositions.push(0, 0, 0, 0, 0, 0);
+      continue;
+    }
+    bonePositions.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+    const c = new THREE.Color(LIMB_COLORS[i]);
+    boneColors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+  }
+  const boneGeo = new THREE.BufferGeometry();
+  boneGeo.setAttribute('position', new THREE.Float32BufferAttribute(bonePositions, 3));
+  boneGeo.setAttribute('color', new THREE.Float32BufferAttribute(boneColors, 3));
+  const boneMat = new THREE.LineBasicMaterial({ vertexColors: true });
+  group.add(new THREE.LineSegments(boneGeo, boneMat));
+
+  const jointGeo = new THREE.SphereGeometry(0.04, 8, 8);
+  for (let i = 0; i < kpts.length; i++) {
+    const m = new THREE.Mesh(jointGeo, new THREE.MeshStandardMaterial({
+      color: JOINT_COLORS[i] || 0xff0000,
+    }));
+    m.position.copy(kpts[i]);
+    group.add(m);
+  }
+
+  return group;
+}
+
+function disposeMesh(obj) {
+  if (obj.geometry) obj.geometry.dispose();
+  if (obj.material) obj.material.dispose();
+  if (obj.children) {
+    for (const c of obj.children) disposeMesh(c);
+  }
 }
 
 function sync(objects) {
@@ -180,17 +242,46 @@ function sync(objects) {
   let rows = '';
   for (const o of objects) {
     seen.add(o.id);
+    const hasSkeleton = o.keypoints_3d && o.keypoints_3d.length >= 17;
+
     if (!boxes[o.id]) {
-      boxes[o.id] = makeMarker(o.id);          // CHANGED
+      boxes[o.id] = hasSkeleton ? makeSkeleton(o.keypoints_3d) : makeMarker(o.id);
       scene.add(boxes[o.id]);
+    } else {
+      // Type changed (skeleton <-> box)? Rebuild
+      if (boxes[o.id].userData.isSkeleton !== hasSkeleton) {
+        scene.remove(boxes[o.id]);
+        disposeMesh(boxes[o.id]);
+        boxes[o.id] = hasSkeleton ? makeSkeleton(o.keypoints_3d) : makeMarker(o.id);
+        scene.add(boxes[o.id]);
+      } else if (hasSkeleton) {
+        // Update skeleton positions in-place
+        const kpts = o.keypoints_3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
+        let idx = 0;
+        const pos = boxes[o.id].children[0].geometry.attributes.position.array;
+        for (const [a, b] of COCO_SKELETON) {
+          const p1 = kpts[a - 1], p2 = kpts[b - 1];
+          if (p1 && p2) {
+            pos[idx] = p1.x; pos[idx+1] = p1.y; pos[idx+2] = p1.z;
+            pos[idx+3] = p2.x; pos[idx+4] = p2.y; pos[idx+5] = p2.z;
+          }
+          idx += 6;
+        }
+        boxes[o.id].children[0].geometry.attributes.position.needsUpdate = true;
+        for (let i = 0; i < kpts.length && i + 1 < boxes[o.id].children.length; i++) {
+          boxes[o.id].children[i + 1].position.copy(kpts[i]);
+        }
+      } else {
+        boxes[o.id].position.set(o.x, o.z, o.y);
+        boxes[o.id].rotation.set(o.roll, o.yaw, o.pitch);
+      }
     }
-    boxes[o.id].position.set(o.x, o.z, o.y);
-    boxes[o.id].rotation.set(o.roll, o.yaw, o.pitch);
     rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td></tr>`;
   }
   for (const id in boxes) {
     if (!seen.has(Number(id)) && !seen.has(id)) {
       scene.remove(boxes[id]);
+      disposeMesh(boxes[id]);
       delete boxes[id];
     }
   }
