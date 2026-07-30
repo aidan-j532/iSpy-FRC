@@ -10,6 +10,8 @@
 #object-list { max-height:200px; overflow-y:auto; }
 #object-list table { width:100%; }
 .obj-row td { font-size:0.82rem; }
+.pose-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.pose-controls select { max-width:200px; }
 </style>
 {% endblock %}
 {% block content %}
@@ -27,11 +29,29 @@
     <input type="file" id="model-file" accept=".glb,.gltf" onchange="loadUserModel(event)">
   </label>
   <button onclick="clearUserModel()">Clear model</button>
+  <div class="pose-controls">
+    <label>Pose Model
+      <select id="pose-model-select" onchange="selectPoseModel(this.value)">
+        <option value="">None (skeleton only)</option>
+      </select>
+    </label>
+    <label>View
+      <select id="vis-mode" onchange="onVisModeChange()">
+        <option value="auto">Auto</option>
+        <option value="model">3D Model</option>
+        <option value="skeleton">Skeleton</option>
+        <option value="both">Both</option>
+      </select>
+    </label>
+  </div>
   <label style="margin-left:auto;">
     <input type="checkbox" id="show-grid" checked onchange="toggleGrid()"> Grid
   </label>
   <label>
     <input type="checkbox" id="show-axes" checked onchange="toggleAxes()"> Axes
+  </label>
+  <label>
+    <input type="checkbox" id="light-bg" onchange="toggleLightBg()"> White BG
   </label>
 </div>
 <div id="scene-container"></div>
@@ -39,7 +59,7 @@
   <h3>Detections</h3>
   <div id="object-list">
     <table>
-      <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th><th>Yaw</th></tr></thead>
+      <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th><th>Yaw</th><th>Pose</th></tr></thead>
       <tbody id="obj-tbody"></tbody>
     </table>
   </div>
@@ -102,6 +122,23 @@ window.toggleGrid = function() {
 window.toggleAxes = function() {
   axesHelper.visible = document.getElementById('show-axes').checked;
 };
+let lightBg = false;
+window.toggleLightBg = function() {
+  lightBg = document.getElementById('light-bg').checked;
+  if (lightBg) {
+    scene.background = new THREE.Color(0xf0f0f0);
+    scene.fog = null;
+    gridHelper.material.color.set(0x888888);
+    gridHelper.material.color2.set(0xcccccc);
+    container.style.background = '#f0f0f0';
+  } else {
+    scene.background = new THREE.Color(0x0a0a0f);
+    scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
+    gridHelper.material.color.set(0x2a2e38);
+    gridHelper.material.color2.set(0x1a1d24);
+    container.style.background = '#0a0a0f';
+  }
+};
 
 const PRESETS = {
   default: { pos: [0, 5, 8], target: [0, 0, 0] },
@@ -117,44 +154,421 @@ window.setViewPreset = function() {
 };
 
 let userModel = null;
+let userModelFileName = '';
 const gltfLoader = new GLTFLoader();
 const boxes = {};
 const BOX_COLOR = 0x4c8bf5;
 
-async function uploadModelToServer(event) {
-  const file = event.target.files[0];
-  if (!file) return;
+// ============================================================
+//  SKELETON / KEYPOINT DEFINITIONS
+// ============================================================
 
-  // 1. Pack the file into a FormData object
-  const formData = new FormData();
-  formData.append("file", file);
+const SKELETON_DEFS = {};
 
-  try {
-    // 2. Send it to the Python route we just created
-    const response = await fetch('/api/upload_glb', {
-      method: 'POST',
-      body: formData
-    });
-    
-    // 3. Handle the Python function's return value
-    const data = await response.json();
-    
-    if (response.ok) {
-      showToast(data.message, 'success'); // Using your existing toast system!
-    } else {
-      showToast(data.error, 'error');
+SKELETON_DEFS[17] = {
+  name: 'COCO 17 (Human)',
+  edges: [
+    [16, 14], [14, 12], [17, 15], [15, 13], [12, 13],
+    [6, 12], [7, 13], [6, 7], [6, 8], [7, 9],
+    [8, 10], [9, 11], [2, 3], [1, 2], [1, 3],
+    [2, 4], [3, 5], [4, 6], [5, 7],
+  ],
+  edgeColors: [
+    0xff0000, 0xff0000, 0x0000ff, 0x0000ff, 0xff00ff,
+    0xff8000, 0x0080ff, 0x80ff00, 0xff8000, 0x0080ff,
+    0xff8000, 0x0080ff, 0x00ffff, 0x00ffff, 0x00ffff,
+    0x00ffff, 0x00ffff, 0xff8000, 0x0080ff,
+  ],
+  jointColors: [
+    0xff0000, 0x00ff00, 0x00ff00, 0x00ff00, 0x00ff00,
+    0xff8000, 0x0080ff, 0xff8000, 0x0080ff,
+    0xff8000, 0x0080ff, 0xff00ff, 0xff00ff,
+    0xff0000, 0x0000ff, 0xff0000, 0x0000ff,
+  ],
+  restPose: [
+    [0.0, 0.0, 0.48],    [ -0.03, 0.03, 0.46 ],
+    [0.03, 0.03, 0.46],   [ -0.07, 0.0, 0.44 ],
+    [0.07, 0.0, 0.44],    [ -0.18, 0.0, 0.3 ],
+    [0.18, 0.0, 0.3],     [ -0.35, 0.0, 0.08 ],
+    [0.35, 0.0, 0.08],    [ -0.4, 0.0, -0.12 ],
+    [0.4, 0.0, -0.12],    [ -0.12, 0.0, -0.15 ],
+    [0.12, 0.0, -0.15],   [ -0.12, 0.0, -0.45 ],
+    [0.12, 0.0, -0.45],   [ -0.12, 0.0, -0.65 ],
+    [0.12, 0.0, -0.65],
+  ],
+};
+
+SKELETON_DEFS[21] = {
+  name: 'Hand 21',
+  edges: [
+    [1,2],[2,3],[3,4],[5,6],[6,7],[7,8],
+    [9,10],[10,11],[11,12],[13,14],[14,15],[15,16],
+    [17,18],[18,19],[19,20],[0,1],[0,5],[0,9],[0,13],[0,17],
+    [5,9],[9,13],[13,17],
+  ],
+  edgeColors: [],
+  jointColors: [],
+  restPose: [
+    [0.0, 0.0, 0.4],     [ -0.12, 0.0, 0.3 ],
+    [-0.18, 0.0, 0.18],   [ -0.22, 0.0, 0.08 ],
+    [-0.25, 0.0, -0.02],  [ -0.06, 0.06, 0.3 ],
+    [-0.06, 0.08, 0.15],  [ -0.06, 0.09, 0.05 ],
+    [-0.06, 0.1, -0.05],  [ 0.0, 0.0, 0.3 ],
+    [0.0, 0.0, 0.15],     [ 0.0, 0.0, 0.05 ],
+    [0.0, 0.0, -0.05],    [ 0.06, -0.06, 0.3 ],
+    [0.06, -0.08, 0.15],  [ 0.06, -0.09, 0.05 ],
+    [0.06, -0.1, -0.05],  [ 0.12, -0.06, 0.3 ],
+    [0.12, -0.08, 0.15],  [ 0.12, -0.09, 0.05 ],
+    [0.12, -0.1, -0.05],
+  ],
+};
+
+// Face 68 - build dynamic chain
+(function() {
+  const face = { name: 'Face 68', edges: [], edgeColors: [], jointColors: [], restPose: [] };
+  for (let i = 1; i <= 68; i++) {
+    face.edges.push([i, i + 1]);
+    face.edgeColors.push(0x00ff00);
+    face.jointColors.push(0x00ff00);
+  }
+  face.jointColors[0] = 0xff0000;
+  for (let i = 0; i < 68; i++) {
+    const angle = (i / 68) * Math.PI * 2;
+    face.restPose.push([Math.cos(angle) * 0.4, Math.sin(angle) * 0.28, 0.5]);
+  }
+  SKELETON_DEFS[68] = face;
+})();
+
+SKELETON_DEFS.default = { name: 'Generic', edges: [], edgeColors: [], jointColors: [], restPose: [] };
+
+function getSkelDef(nk) {
+  return SKELETON_DEFS[nk] || SKELETON_DEFS.default;
+}
+
+// ============================================================
+//  POSE DEFORMER
+// ============================================================
+
+class PoseDeformer {
+  constructor(root, numKeypoints) {
+    this.root = root;
+    this.nk = numKeypoints;
+    this.skelDef = getSkelDef(numKeypoints);
+    this.restPose = [];
+    this.meshData = [];
+    this.ok = true;
+
+      try {
+        this._bakeMeshes();
+        console.log('PoseDeformer: baked meshes');
+        this._computeLocalBBox();
+        console.log('PoseDeformer: bbox', this.bbox.getSize(new THREE.Vector3()).toArray().map(v=>v.toFixed(3)));
+        this._generateRestPose();
+        this._setupVertexWeights();
+        console.log('PoseDeformer: ready, meshes:', this.meshData.length);
+      } catch (e) {
+        console.error('PoseDeformer init failed:', e);
+        this.ok = false;
+      }
+  }
+
+  _bakeMeshes() {
+    const skinned = [];
+    this.root.traverse(c => { if (c.isSkinnedMesh) skinned.push(c); });
+    if (skinned.length === 0) return;
+
+    this.root.updateMatrixWorld(true);
+    const rootInv = new THREE.Matrix4().copy(this.root.matrixWorld).invert();
+    const v3 = new THREE.Vector3();
+
+    for (const sm of skinned) {
+      try {
+        sm.updateMatrixWorld(true);
+        const geo = sm.geometry.clone();
+
+        // Remove skinning attributes so shader won't override
+        delete geo.attributes.skinIndex;
+        delete geo.attributes.skinWeight;
+        delete geo.attributes.skinNormal;
+
+        // Transform vertices from mesh-local to root-local space
+        // This accounts for all intermediate parent transforms
+        const toRootLocal = new THREE.Matrix4().copy(rootInv).multiply(sm.matrixWorld);
+        const pos = geo.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          v3.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+          v3.applyMatrix4(toRootLocal);
+          pos.setXYZ(i, v3.x, v3.y, v3.z);
+        }
+        pos.needsUpdate = true;
+
+        const matList = Array.isArray(sm.material) ? sm.material : [sm.material];
+        const mat = matList.map(m => {
+          const mc = m.clone();
+          if (mc.skinning !== undefined) mc.skinning = false;
+          return mc;
+        });
+        const nm = new THREE.Mesh(geo, mat.length === 1 ? mat[0] : mat);
+        nm.position.set(0, 0, 0);
+        nm.quaternion.identity();
+        nm.scale.set(1, 1, 1);
+        nm.castShadow = sm.castShadow;
+        nm.receiveShadow = sm.receiveShadow;
+        this.root.add(nm);
+        if (sm.parent) sm.parent.remove(sm);
+      } catch (e) {
+        console.warn('Failed to bake SkinnedMesh:', e);
+      }
     }
-  } catch (error) {
-    showToast('Failed to reach server', 'error');
+  }
+
+  _computeLocalBBox() {
+    // Use setFromObject which correctly handles hierarchy
+    const savedPos = this.root.position.clone();
+    const savedScale = this.root.scale.clone();
+    this.root.position.set(0, 0, 0);
+    this.root.scale.set(1, 1, 1);
+    this.root.updateMatrixWorld(true);
+    this.bbox = new THREE.Box3().setFromObject(this.root);
+    this.root.position.copy(savedPos);
+    this.root.scale.copy(savedScale);
+    this.root.updateMatrixWorld(true);
+  }
+
+  _generateRestPose() {
+    const size = this.bbox.getSize(new THREE.Vector3());
+    const center = this.bbox.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const template = this.skelDef.restPose;
+    const pad = maxDim * 0.95;
+
+    for (let i = 0; i < this.nk; i++) {
+      if (i < template.length) {
+        const t = template[i];
+        this.restPose.push(new THREE.Vector3(
+          center.x + t[0] * pad,
+          center.y + t[1] * pad,
+          center.z + t[2] * pad
+        ));
+      } else {
+        const t = i / Math.max(this.nk - 1, 1);
+        this.restPose.push(new THREE.Vector3(
+          center.x + (t - 0.5) * maxDim * 0.8,
+          center.y,
+          center.z
+        ));
+      }
+    }
+  }
+
+  _setupVertexWeights() {
+    this.root.traverse(c => {
+      if (!c.isMesh || !c.geometry || !c.geometry.attributes.position) return;
+      const pos = c.geometry.attributes.position;
+      const orig = [];
+      for (let i = 0; i < pos.count; i++) {
+        orig.push(new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)));
+      }
+      const weights = [];
+      const k = Math.min(4, this.restPose.length);
+      for (let vi = 0; vi < orig.length; vi++) {
+        const dists = [];
+        for (let ki = 0; ki < this.restPose.length; ki++) {
+          dists.push({ idx: ki, d: orig[vi].distanceTo(this.restPose[ki]) });
+        }
+        dists.sort((a, b) => a.d - b.d);
+        const nearest = dists.slice(0, k);
+        let total = 0;
+        const w = [];
+        for (const n of nearest) {
+          const wt = 1 / (n.d * n.d + 0.0001);
+          w.push({ idx: n.idx, w: wt });
+          total += wt;
+        }
+        if (total > 0) {
+          for (const x of w) x.w /= total;
+        }
+        weights.push(w);
+      }
+      this.meshData.push({ mesh: c, orig, weights });
+    });
+  }
+
+  update(keypoints3d) {
+    if (!this.ok) return;
+    const nk = Math.min(this.nk, keypoints3d ? keypoints3d.length : 0);
+    if (nk < 3) return;
+
+    this.root.updateMatrixWorld(true);
+
+    const localKpts = [];
+    for (let i = 0; i < nk; i++) {
+      const k = keypoints3d[i];
+      const wKpt = new THREE.Vector3(k[0], k[2], k[1]);
+      if (isNaN(wKpt.x) || isNaN(wKpt.y) || isNaN(wKpt.z)) continue;
+      const lKpt = this.root.worldToLocal(wKpt);
+      localKpts.push(lKpt);
+    }
+    if (localKpts.length < 3) return;
+
+    const disp = [];
+    for (let i = 0; i < localKpts.length && i < this.restPose.length; i++) {
+      disp.push(localKpts[i].clone().sub(this.restPose[i]));
+    }
+
+    for (const md of this.meshData) {
+      const pos = md.mesh.geometry.attributes.position;
+      const arr = pos.array;
+      for (let vi = 0; vi < md.orig.length; vi++) {
+        const i3 = vi * 3;
+        const d = new THREE.Vector3();
+        for (const w of md.weights[vi]) {
+          if (w.idx < disp.length) {
+            d.x += w.w * disp[w.idx].x;
+            d.y += w.w * disp[w.idx].y;
+            d.z += w.w * disp[w.idx].z;
+          }
+        }
+        arr[i3] = md.orig[vi].x + d.x;
+        arr[i3 + 1] = md.orig[vi].y + d.y;
+        arr[i3 + 2] = md.orig[vi].z + d.z;
+      }
+      pos.needsUpdate = true;
+    }
+  }
+
+  reset() {
+    if (!this.ok) return;
+    for (const md of this.meshData) {
+      const pos = md.mesh.geometry.attributes.position;
+      const arr = pos.array;
+      for (let vi = 0; vi < md.orig.length; vi++) {
+        const i3 = vi * 3;
+        arr[i3] = md.orig[vi].x;
+        arr[i3 + 1] = md.orig[vi].y;
+        arr[i3 + 2] = md.orig[vi].z;
+      }
+      pos.needsUpdate = true;
+    }
+  }
+
+  dispose() {
+    this.reset();
+    this.meshData = [];
+    this.restPose = [];
   }
 }
 
-function makeMarker(id) {
-  if (userModel) {
-    const clone = userModel.clone(true);
-    clone.traverse(o => { if (o.isMesh) { o.castShadow = true; } });
-    return clone;
+// ============================================================
+//  MODEL / POSE STATE
+// ============================================================
+
+let serverModel = null;
+let serverModelFileName = '';
+let visMode = 'auto';
+
+function getVisMode() { return document.getElementById('vis-mode').value; }
+window.onVisModeChange = function() { visMode = getVisMode(); };
+
+// ============================================================
+//  SERVER MODEL UPLOAD / MANAGEMENT
+// ============================================================
+
+async function uploadModelToServer(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch('/api/upload_glb', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (r.ok) { showToast(d.message, 'success'); refreshPoseModelList(); }
+    else { showToast(d.error, 'error'); }
+  } catch (_) { showToast('Failed to reach server', 'error'); }
+}
+
+async function refreshPoseModelList() {
+  try {
+    const d = await fetch('/api/pose_models/list').then(r => r.json());
+    const sel = document.getElementById('pose-model-select');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">None (skeleton only)</option>';
+    for (const m of d.models) {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      sel.appendChild(opt);
+    }
+    let restore = cur || d.active;
+    if (restore && d.models.includes(restore)) sel.value = restore;
+    if (sel.value) loadServerModel(sel.value);
+  } catch (_) {}
+}
+
+window.selectPoseModel = async function(filename) {
+  try {
+    await fetch('/api/pose_models/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: filename }),
+    });
+  } catch (_) {}
+  if (filename) loadServerModel(filename);
+  else clearServerModel();
+};
+
+function loadServerModel(filename) {
+  if (serverModelFileName === filename && serverModel) return;
+  clearServerModel();
+  const url = `/api/pose_models/file/${encodeURIComponent(filename)}`;
+  gltfLoader.load(url, (gltf) => {
+    serverModel = gltf.scene;
+    serverModelFileName = filename;
+    _normalizeModel(serverModel);
+    rebuildAllMarkers();
+  }, undefined, (err) => {
+    console.error('Failed to load server model:', err);
+  });
+}
+
+function clearServerModel() {
+  if (serverModel) {
+    disposeMesh(serverModel);
+    serverModel = null;
+    serverModelFileName = '';
   }
+  rebuildAllMarkers();
+}
+
+// ============================================================
+//  HELPERS
+// ============================================================
+
+function _normalizeModel(model) {
+  const box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const s = 2.0 / maxDim;
+  model.scale.setScalar(s);
+  model.position.sub(center.clone().multiplyScalar(s));
+  model.traverse(o => { if (o.isMesh) { o.castShadow = true; } });
+}
+
+function getActiveModel() { return userModel || serverModel; }
+function getActiveModelName() { return userModelFileName || serverModelFileName; }
+
+function disposeMesh(obj) {
+  if (obj.geometry) obj.geometry.dispose();
+  if (obj.material) {
+    if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+    else obj.material.dispose();
+  }
+  if (obj.children) {
+    for (const c of obj.children.slice()) disposeMesh(c);
+  }
+}
+
+function makeCubeMarker() {
   const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
   const mat = new THREE.MeshStandardMaterial({ color: BOX_COLOR, transparent: true, opacity: 0.85 });
   const mesh = new THREE.Mesh(geo, mat);
@@ -165,74 +579,152 @@ function makeMarker(id) {
   return mesh;
 }
 
-function rebuildAllMarkers() {
-  for (const id in boxes) {
-    scene.remove(boxes[id]);
-    disposeMesh(boxes[id]);
-    delete boxes[id];
-  }
-}
+// ============================================================
+//  SKELETON DRAWING
+// ============================================================
 
-const COCO_SKELETON = [
-  [16, 14], [14, 12], [17, 15], [15, 13], [12, 13],
-  [6, 12], [7, 13], [6, 7], [6, 8], [7, 9],
-  [8, 10], [9, 11], [2, 3], [1, 2], [1, 3],
-  [2, 4], [3, 5], [4, 6], [5, 7],
-];
-const LIMB_COLORS = [
-  0xff0000, 0xff0000, 0x0000ff, 0x0000ff, 0xff00ff,
-  0xff8000, 0x0080ff, 0x80ff00, 0xff8000, 0x0080ff,
-  0xff8000, 0x0080ff, 0x00ffff, 0x00ffff, 0x00ffff,
-  0x00ffff, 0x00ffff, 0xff8000, 0x0080ff,
-];
-const JOINT_COLORS = [
-  0xff0000, 0x00ff00, 0x00ff00, 0x00ff00, 0x00ff00,
-  0xff8000, 0x0080ff, 0xff8000, 0x0080ff,
-  0xff8000, 0x0080ff, 0xff00ff, 0xff00ff,
-  0xff0000, 0x0000ff, 0xff0000, 0x0000ff,
-];
+function buildSkeletonGroup(kpts3d, nk) {
+  const g = new THREE.Group();
+  g.userData.isSkeleton = true;
+  g.userData.nk = nk;
+  const def = getSkelDef(nk || kpts3d.length);
+  const pts = kpts3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
 
-function makeSkeleton(keypoints3d) {
-  const group = new THREE.Group();
-  group.userData.isSkeleton = true;
-  const kpts = keypoints3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
-
-  const bonePositions = [];
-  const boneColors = [];
-  for (let i = 0; i < COCO_SKELETON.length; i++) {
-    const [a, b] = COCO_SKELETON[i];
-    const p1 = kpts[a - 1], p2 = kpts[b - 1];
-    if (!p1 || !p2) {
-      bonePositions.push(0, 0, 0, 0, 0, 0);
-      continue;
+  if (def.edges && def.edges.length > 0) {
+    const bp = []; const bc = [];
+    for (let i = 0; i < def.edges.length; i++) {
+      const [a, b] = def.edges[i];
+      const p1 = pts[a - 1], p2 = pts[b - 1];
+      if (!p1 || !p2) { bp.push(0,0,0,0,0,0); continue; }
+      bp.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+      const c = new THREE.Color(def.edgeColors[i] || 0x00ff00);
+      bc.push(c.r, c.g, c.b, c.r, c.g, c.b);
     }
-    bonePositions.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
-    const c = new THREE.Color(LIMB_COLORS[i]);
-    boneColors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3));
+    bg.setAttribute('color', new THREE.Float32BufferAttribute(bc, 3));
+    g.add(new THREE.LineSegments(bg, new THREE.LineBasicMaterial({ vertexColors: true })));
   }
-  const boneGeo = new THREE.BufferGeometry();
-  boneGeo.setAttribute('position', new THREE.Float32BufferAttribute(bonePositions, 3));
-  boneGeo.setAttribute('color', new THREE.Float32BufferAttribute(boneColors, 3));
-  const boneMat = new THREE.LineBasicMaterial({ vertexColors: true });
-  group.add(new THREE.LineSegments(boneGeo, boneMat));
 
-  const jointGeo = new THREE.SphereGeometry(0.04, 8, 8);
-  for (let i = 0; i < kpts.length; i++) {
-    const m = new THREE.Mesh(jointGeo, new THREE.MeshStandardMaterial({
-      color: JOINT_COLORS[i] || 0xff0000,
+  const jg = new THREE.SphereGeometry(0.04, 8, 8);
+  for (let i = 0; i < pts.length; i++) {
+    const m = new THREE.Mesh(jg, new THREE.MeshStandardMaterial({
+      color: (def.jointColors && def.jointColors[i]) || 0xff0000,
     }));
-    m.position.copy(kpts[i]);
-    group.add(m);
+    m.position.copy(pts[i]);
+    g.add(m);
   }
-
-  return group;
+  return g;
 }
 
-function disposeMesh(obj) {
-  if (obj.geometry) obj.geometry.dispose();
-  if (obj.material) obj.material.dispose();
-  if (obj.children) {
-    for (const c of obj.children) disposeMesh(c);
+function updateSkeletonGroup(g, kpts3d, nk) {
+  const def = getSkelDef(nk || kpts3d.length);
+  const pts = kpts3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
+
+  if (def.edges && def.edges.length > 0 && g.children[0] && g.children[0].geometry) {
+    const arr = g.children[0].geometry.attributes.position.array;
+    let idx = 0;
+    for (const [a, b] of def.edges) {
+      const p1 = pts[a - 1], p2 = pts[b - 1];
+      if (p1 && p2) {
+        arr[idx] = p1.x; arr[idx+1] = p1.y; arr[idx+2] = p1.z;
+        arr[idx+3] = p2.x; arr[idx+4] = p2.y; arr[idx+5] = p2.z;
+      }
+      idx += 6;
+    }
+    g.children[0].geometry.attributes.position.needsUpdate = true;
+  }
+  for (let i = 0; i < pts.length && i + 1 < g.children.length; i++) {
+    g.children[i + 1].position.copy(pts[i]);
+  }
+}
+
+// ============================================================
+//  MAIN SYNC
+// ============================================================
+
+function decideVisualization(o, mode) {
+  const hasKp = o.keypoints_3d && o.keypoints_3d.length >= 3;
+  const nk = o.num_keypoints || (hasKp ? o.keypoints_3d.length : 0);
+  const hasModel = getActiveModel() !== null;
+
+  if (!hasKp) return { type: 'cube', nk: 0 };
+
+  if (mode === 'skeleton') return { type: 'skeleton', nk };
+  if (mode === 'model' && hasModel) return { type: 'model', nk };
+  if (mode === 'model' && !hasModel) return { type: 'skeleton', nk };
+  if (mode === 'both' && hasModel) return { type: 'both', nk };
+  if (mode === 'both' && !hasModel) return { type: 'skeleton', nk };
+
+  // auto
+  if (hasModel && nk >= 3) return { type: 'model', nk };
+  if (hasKp) return { type: 'skeleton', nk };
+  return { type: 'cube', nk: 0 };
+}
+
+function createBoxForDetection(o, dec, modelTemplate) {
+  const key = o.id;
+  const prev = boxes[key];
+  if (prev) {
+    if (prev.userData.visType === dec.type) return prev;
+    cleanupBox(key);
+  }
+
+  let main;
+  if (dec.type === 'model' || dec.type === 'both') {
+    const clone = modelTemplate.clone(true);
+    clone.traverse(c => { if (c.isMesh) c.castShadow = true; });
+    clone.position.set(o.x, o.z, o.y);
+    clone.rotation.set(o.roll, o.yaw, o.pitch);
+    scene.add(clone);
+    try {
+      const def = new PoseDeformer(clone, dec.nk);
+      if (def.ok) clone.userData.poseDeformer = def;
+    } catch (e) {
+      console.warn('PoseDeformer error:', e);
+    }
+    clone.userData.visType = dec.type;
+    main = clone;
+  } else if (dec.type === 'skeleton') {
+    main = buildSkeletonGroup(o.keypoints_3d, dec.nk);
+    main.userData.visType = 'skeleton';
+    scene.add(main);
+  } else {
+    main = makeCubeMarker();
+    main.position.set(o.x, o.z, o.y);
+    main.userData.visType = 'cube';
+    scene.add(main);
+  }
+  return main;
+}
+
+function updateExistingBox(obj3d, o, dec) {
+  if (obj3d.userData.poseDeformer) {
+    obj3d.position.set(o.x, o.z, o.y);
+    obj3d.rotation.set(o.roll, o.yaw, o.pitch);
+    obj3d.userData.poseDeformer.update(o.keypoints_3d);
+  } else if (obj3d.userData.isSkeleton) {
+    updateSkeletonGroup(obj3d, o.keypoints_3d, dec.nk);
+  } else {
+    obj3d.position.set(o.x, o.z, o.y);
+    obj3d.rotation.set(o.roll, o.yaw, o.pitch);
+  }
+}
+
+function cleanupBox(key) {
+  const obj = boxes[key];
+  if (!obj) return;
+  if (obj.userData && obj.userData.poseDeformer) obj.userData.poseDeformer.dispose();
+  scene.remove(obj);
+  disposeMesh(obj);
+  delete boxes[key];
+
+  const skKey = key + '_skel';
+  const sk = boxes[skKey];
+  if (sk) {
+    scene.remove(sk);
+    disposeMesh(sk);
+    delete boxes[skKey];
   }
 }
 
@@ -240,86 +732,103 @@ function sync(objects) {
   const seen = new Set();
   const tbody = document.getElementById('obj-tbody');
   let rows = '';
+  const mode = getVisMode();
+  const modelTemplate = getActiveModel();
+
   for (const o of objects) {
     seen.add(o.id);
-    const hasSkeleton = o.keypoints_3d && o.keypoints_3d.length >= 17;
+    const dec = decideVisualization(o, mode);
+    const key = o.id;
 
-    if (!boxes[o.id]) {
-      boxes[o.id] = hasSkeleton ? makeSkeleton(o.keypoints_3d) : makeMarker(o.id);
-      scene.add(boxes[o.id]);
-    } else {
-      // Type changed (skeleton <-> box)? Rebuild
-      if (boxes[o.id].userData.isSkeleton !== hasSkeleton) {
-        scene.remove(boxes[o.id]);
-        disposeMesh(boxes[o.id]);
-        boxes[o.id] = hasSkeleton ? makeSkeleton(o.keypoints_3d) : makeMarker(o.id);
-        scene.add(boxes[o.id]);
-      } else if (hasSkeleton) {
-        // Update skeleton positions in-place
-        const kpts = o.keypoints_3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
-        let idx = 0;
-        const pos = boxes[o.id].children[0].geometry.attributes.position.array;
-        for (const [a, b] of COCO_SKELETON) {
-          const p1 = kpts[a - 1], p2 = kpts[b - 1];
-          if (p1 && p2) {
-            pos[idx] = p1.x; pos[idx+1] = p1.y; pos[idx+2] = p1.z;
-            pos[idx+3] = p2.x; pos[idx+4] = p2.y; pos[idx+5] = p2.z;
-          }
-          idx += 6;
-        }
-        boxes[o.id].children[0].geometry.attributes.position.needsUpdate = true;
-        for (let i = 0; i < kpts.length && i + 1 < boxes[o.id].children.length; i++) {
-          boxes[o.id].children[i + 1].position.copy(kpts[i]);
-        }
+    // Handle skeleton companion for 'both' mode when main box already exists
+    const skKey = key + '_skel';
+    if (dec.type === 'both') {
+      if (!boxes[skKey]) {
+        const sk = buildSkeletonGroup(o.keypoints_3d, dec.nk);
+        sk.userData.visType = 'skeleton_companion';
+        scene.add(sk);
+        boxes[skKey] = sk;
       } else {
-        boxes[o.id].position.set(o.x, o.z, o.y);
-        boxes[o.id].rotation.set(o.roll, o.yaw, o.pitch);
+        updateSkeletonGroup(boxes[skKey], o.keypoints_3d, dec.nk);
+      }
+    } else if (boxes[skKey]) {
+      scene.remove(boxes[skKey]);
+      disposeMesh(boxes[skKey]);
+      delete boxes[skKey];
+    }
+
+    if (!boxes[key]) {
+      boxes[key] = createBoxForDetection(o, dec, modelTemplate);
+    } else {
+      const cur = boxes[key];
+      if (cur.userData.visType !== dec.type) {
+        boxes[key] = createBoxForDetection(o, dec, modelTemplate);
+      } else {
+        updateExistingBox(cur, o, dec);
       }
     }
-    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td></tr>`;
+
+    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${dec.nk > 0 ? dec.nk + ' kpts' : '-'}</td></tr>`;
   }
-  for (const id in boxes) {
-    if (!seen.has(Number(id)) && !seen.has(id)) {
-      scene.remove(boxes[id]);
-      disposeMesh(boxes[id]);
-      delete boxes[id];
+
+  for (const k in boxes) {
+    const idNum = parseInt(k, 10);
+    if (!isNaN(idNum) && !seen.has(idNum)) {
+      cleanupBox(k);
     }
   }
-  tbody.innerHTML = rows || '<tr><td colspan="5" class="empty-state">No detections</td></tr>';
+
+  tbody.innerHTML = rows || '<tr><td colspan="6" class="empty-state">No detections</td></tr>';
 }
+
+// ============================================================
+//  USER MODEL LOADING (client-side)
+// ============================================================
 
 window.loadUserModel = function(event) {
   const file = event.target.files[0];
   if (!file) return;
   const url = URL.createObjectURL(file);
   gltfLoader.load(url, (gltf) => {
+    if (userModel) { disposeMesh(userModel); }
     userModel = gltf.scene;
-    // Normalize scale/pivot once on the template so every clone looks right
-    const box = new THREE.Box3().setFromObject(userModel);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const scale = 0.4 / maxDim;   // sized to roughly match old 0.3 box markers
-    userModel.scale.setScalar(scale);
-    userModel.position.sub(center.multiplyScalar(scale));
-    rebuildAllMarkers();          // CHANGED: force existing markers to swap
+    userModelFileName = file.name;
+    _normalizeModel(userModel);
+    rebuildAllMarkers();
     URL.revokeObjectURL(url);
   }, undefined, (err) => {
     console.error('Failed to load model:', err);
     URL.revokeObjectURL(url);
   });
 };
+
 window.clearUserModel = function() {
-  userModel = null;
-  rebuildAllMarkers();            // CHANGED: force existing markers to revert to boxes
+  if (userModel) { disposeMesh(userModel); userModel = null; userModelFileName = ''; }
+  rebuildAllMarkers();
   document.getElementById('model-file').value = '';
 };
 
+function rebuildAllMarkers() {
+  for (const k in boxes) {
+    const obj = boxes[k];
+    if (obj.userData && obj.userData.poseDeformer) {
+      obj.userData.poseDeformer.dispose();
+    }
+    scene.remove(obj);
+    disposeMesh(obj);
+  }
+  for (const k in boxes) delete boxes[k];
+}
+
+// ============================================================
+//  POLL & ANIMATE
+// ============================================================
+
 async function poll() {
   try {
-    const data = await fetch('/api/detections/latest').then(r => r.json());
-    sync(data.objects || []);
-  } catch (e) { /* ignore */ }
+    const d = await fetch('/api/detections/latest').then(r => r.json());
+    sync(d.objects || []);
+  } catch (_) {}
 }
 setInterval(poll, 200);
 
@@ -335,5 +844,7 @@ function animate() {
   renderer.render(scene, camera);
 }
 animate();
+
+refreshPoseModelList();
 </script>
 {% endblock %}

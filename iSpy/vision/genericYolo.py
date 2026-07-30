@@ -995,6 +995,7 @@ class GenericYolo:
             dtype=np.float64,
         )
         min_kpt_conf = float(self.pnp_config.get("min_keypoint_conf", 0.5))
+        method = self.pnp_config.get("method", "iterative")
 
         image_points, model_points = [], []
         for i, pt in enumerate(keypoints):
@@ -1005,30 +1006,89 @@ class GenericYolo:
             image_points.append([float(pt[0]), float(pt[1])])
             model_points.append(object_points[i])
 
-        if len(image_points) < 4:
-            return None, None, None
+        if method == "iterative":
+            if len(image_points) < 6:
+                return None, None, None
+        else:
+            if len(image_points) < 4:
+                return None, None, None
 
         image_points = np.asarray(image_points, dtype=np.float64)
         model_points = np.asarray(model_points, dtype=np.float64)
+
+        if method == "ippe":
+            if model_points.shape[0] != 4:
+                self.logger.warning("IPPE requires exactly 4 points, got %d; falling back to ITERATIVE", model_points.shape[0])
+                flags = cv2.SOLVEPNP_ITERATIVE
+            else:
+                flags = cv2.SOLVEPNP_IPPE
+        else:
+            flags = cv2.SOLVEPNP_ITERATIVE
+
         ok, rvec, tvec = cv2.solvePnP(
             model_points,
             image_points,
             camera_matrix,
             dist_coeffs,
-            flags=cv2.SOLVEPNP_ITERATIVE,
+            flags=flags,
         )
         if not ok:
             return None, None, None
 
         R, _ = cv2.Rodrigues(rvec)
+        # keypoints_3d = []
+        # for i, pt in enumerate(object_points):
+        #     pos = R @ pt + tvec.reshape(3)
+        #     keypoints_3d.append(pos.tolist())
+
+        # euler = self._rvec_to_euler(rvec.reshape(3))
+        # return euler, tvec.reshape(3), keypoints_3d
+
+        ok, rvec, tvec = cv2.solvePnP(
+            model_points,
+            image_points,
+            camera_matrix,
+            dist_coeffs,
+            flags=flags,
+        )
+        if not ok:
+            return None, None, None
+
+        R, _ = cv2.Rodrigues(rvec)
+        
+        # FIX: Flatten tvec to 1D first so tvec[2] is a true scalar
+        tvec = tvec.reshape(3)
+        
+        # 1. Get the average depth of the person from the PnP translation vector
+        depth_z = float(tvec[2])
+        
+        # 2. Extract camera intrinsics
+        fx = camera_matrix[0, 0]
+        fy = camera_matrix[1, 1]
+        cx = camera_matrix[0, 2]
+        cy = camera_matrix[1, 2]
+
         keypoints_3d = []
-        for i, pt in enumerate(object_points):
-            pos = R @ pt + tvec.reshape(3)
-            keypoints_3d.append(pos.tolist())
+        
+        # 3. Un-project each 2D pixel back into 3D space
+        for i, pt in enumerate(keypoints):
+            u, v, conf = pt[0], pt[1], pt[2]
+            
+            if conf < min_kpt_conf and i < len(object_points):
+                # Fallback: If the joint is hidden, use the rigid T-pose template point
+                pos = R @ object_points[i] + tvec
+                keypoints_3d.append(pos.tolist())
+            else:
+                # Standard pinhole camera un-projection math
+                X = (u - cx) * depth_z / fx
+                Y = (v - cy) * depth_z / fy
+                Z = depth_z
+                
+                keypoints_3d.append([float(X), float(Y), float(Z)])
 
         euler = self._rvec_to_euler(rvec.reshape(3))
-        return euler, tvec.reshape(3), keypoints_3d
-
+        return euler, tvec, keypoints_3d
+    
     def _apply_software_nms(
         self,
         boxes_xyxy: np.ndarray,
