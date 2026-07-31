@@ -302,6 +302,17 @@ class Results:
         self.orig_shape = orig_shape
         self.keypoints = keypoints if keypoints is not None else []
 
+    _SKELETONS = {
+        17: [
+            (0, 1), (0, 2), (1, 3), (2, 4),
+            (5, 6),
+            (5, 7), (7, 9), (6, 8), (8, 10),
+            (5, 11), (6, 12),
+            (11, 12),
+            (11, 13), (13, 15), (12, 14), (14, 16),
+        ],
+    }
+
     def plot(self, frame):
         for box in self.boxes:
             if not all(math.isfinite(v) for v in box.xyxy):
@@ -326,6 +337,16 @@ class Results:
                     cv2.LINE_AA,
                 )
         for kpt_set in self.keypoints:
+            nk = kpt_set.shape[0]
+            skeleton = self._SKELETONS.get(nk)
+            if skeleton is not None:
+                for i, j in skeleton:
+                    if i >= nk or j >= nk:
+                        continue
+                    x1, y1, c1 = kpt_set[i]
+                    x2, y2, c2 = kpt_set[j]
+                    if c1 > 0.5 and c2 > 0.5:
+                        cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
             for kpt in kpt_set:
                 x, y, conf = kpt
                 if conf > 0.5:
@@ -1043,18 +1064,6 @@ class GenericYolo:
 
         # euler = self._rvec_to_euler(rvec.reshape(3))
         # return euler, tvec.reshape(3), keypoints_3d
-
-        ok, rvec, tvec = cv2.solvePnP(
-            model_points,
-            image_points,
-            camera_matrix,
-            dist_coeffs,
-            flags=flags,
-        )
-        if not ok:
-            return None, None, None
-
-        R, _ = cv2.Rodrigues(rvec)
         
         # FIX: Flatten tvec to 1D first so tvec[2] is a true scalar
         tvec = tvec.reshape(3)
@@ -1069,23 +1078,17 @@ class GenericYolo:
         cy = camera_matrix[1, 2]
 
         keypoints_3d = []
-        
-        # 3. Un-project each 2D pixel back into 3D space
         for i, pt in enumerate(keypoints):
             u, v, conf = pt[0], pt[1], pt[2]
-            
-            if conf < min_kpt_conf and i < len(object_points):
-                # Fallback: If the joint is hidden, use the rigid T-pose template point
-                pos = R @ object_points[i] + tvec
-                keypoints_3d.append(pos.tolist())
-            else:
-                # Standard pinhole camera un-projection math
-                X = (u - cx) * depth_z / fx
-                Y = (v - cy) * depth_z / fy
-                Z = depth_z
-                
-                keypoints_3d.append([float(X), float(Y), float(Z)])
-
+            # Always unproject from the observed 2D pixel at the shared
+            # PnP depth - consistent for every joint, confident or not.
+            # (Previously, low-confidence joints used a totally different
+            # source - the rigid template point - which is what produced
+            # inconsistent/warped limbs.)
+            X = (u - cx) * depth_z / fx
+            Y = (v - cy) * depth_z / fy
+            Z = depth_z
+            keypoints_3d.append([float(X), float(Y), float(Z)])
         euler = self._rvec_to_euler(rvec.reshape(3))
         return euler, tvec, keypoints_3d
     

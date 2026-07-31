@@ -18,6 +18,9 @@ class Object:
         name: str = "unknown",
         confidence: float = 0.0,
         keypoints_3d: list | None = None,
+        ray_origin=None,
+        ray_direction=None,
+        depth_source: str="monocular",
     ):
         self.x = x
         self.y = y
@@ -29,6 +32,10 @@ class Object:
         self.name = name
         self.confidence = confidence
         self.keypoints_3d = keypoints_3d
+        self.keypoints_3d = keypoints_3d
+        self.ray_origin = ray_origin        # np.ndarray(3,) robot-frame, or None
+        self.ray_direction = ray_direction  # np.ndarray(3,) unit vector, or None
+        self.depth_source = depth_source  
 
         self.start_time = time.perf_counter()
         self.alive = 0

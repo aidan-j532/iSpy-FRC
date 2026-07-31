@@ -45,8 +45,7 @@ class iSpy:
             self.camera_handler = None
         else:
             self.logger.info("%d cameras - multi mode.", len(cameras))
-            self.camera_handler = MultipleCameraHandler(cameras)
-
+            self.camera_handler = MultipleCameraHandler(cameras, config)
         tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)
         self.trackers = {}  # No default trackers
         for name in config.get_nested("plugins", "trackers", default=[]):
@@ -275,12 +274,14 @@ class iSpy:
                 last_frame_data = frame_data
                 self._update_utilities(frame_data)
                 self._update_web(frame_data)
-                print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")
 
                 if max_fps > 0:
                     elapsed = time.perf_counter() - t_start
                     sleep_time = max(0, 1.0 / max_fps - elapsed)
                     time.sleep(sleep_time)
+
+                actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
+                print(f"\rFPS: {actual_fps:.1f}   ", end="")
 
         finally:
             print()
@@ -315,12 +316,14 @@ class iSpy:
                 last_frame_data = frame_data
                 self._update_utilities(frame_data)
                 self._update_web(frame_data)
-                print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")
 
                 if max_fps > 0:
                     elapsed = time.perf_counter() - t_start
                     sleep_time = max(0, 1.0 / max_fps - elapsed)
                     time.sleep(sleep_time)
+
+                actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
+                print(f"\rFPS: {actual_fps:.1f}   ", end="")
 
         finally:
             print()
