@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import numpy as np
 
 from iSpy.vision.Object import Object
-from iSpy.vision.genericYolo import Box, Results
+from iSpy.vision.genericYolo import Box, Results, GenericYolo
 from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.plugins.trackers.BuiltIn.ObjectTracker import ObjectTracker
@@ -103,11 +103,11 @@ def test_box_pnp_path():
     assert obj is not None
     # With yaw=0, forward=fz=2.0, left_right=-fx=-0.5, height=-fy=-0.1
     # x_rot = 2*1 + (-0.5)*0 = 2, y_rot = 2*0 - (-0.5)*1 = 0.5
-    # camera_x=0, camera_y=0, camera_z=0, scale=0.0254
-    scale = 0.0254
-    assert abs(obj.x - 2.0 * scale) < 1e-6, f"x={obj.x}"
-    assert abs(obj.y - 0.5 * scale) < 1e-6, f"y={obj.y}"
-    assert abs(obj.z - (-0.1) * scale) < 1e-6, f"z={obj.z}"
+    # pnp.object_points are meters and unit="meter", so _pnp_point_to_robot
+    # nets out to meters (camera offsets are 0).
+    assert abs(obj.x - 2.0) < 1e-6, f"x={obj.x}"
+    assert abs(obj.y - 0.5) < 1e-6, f"y={obj.y}"
+    assert abs(obj.z - (-0.1)) < 1e-6, f"z={obj.z}"
     assert abs(obj.roll - 0.1) < 1e-9
     assert abs(obj.pitch - 0.2) < 1e-9
     assert abs(obj.yaw - 0.3) < 1e-9
@@ -217,15 +217,17 @@ def test_pnp_to_robot_coordinates():
     tvec = (1.0, 0.5, 3.0)
     pt = camera._pnp_to_robot_coordinates(tvec)
     assert len(pt) == 3, f"expected 3D, got {len(pt)}"
+    # pnp.object_points are meters, so the output is meters.  Camera offsets
+    # are stored in the internal inch convention and converted in.
     # yaw=45°: cos=sin≈0.7071
     c = math.cos(math.radians(45))
     s = math.sin(math.radians(45))
-    scale = 0.0254
+    inch_to_m = 0.0254
     x_rot = 3.0 * c + (-1.0) * s
     y_rot = 3.0 * s - (-1.0) * c
-    expected_x = (x_rot + 0.5) * scale
-    expected_y = (y_rot + 0.3) * scale
-    expected_z = (-0.5 + 0.2) * scale
+    expected_x = x_rot + 0.5 * inch_to_m
+    expected_y = y_rot + 0.3 * inch_to_m
+    expected_z = (-0.5) + 0.2 * inch_to_m
     assert abs(pt[0] - expected_x) < 1e-6, f"x={pt[0]} != {expected_x}"
     assert abs(pt[1] - expected_y) < 1e-6
     assert abs(pt[2] - expected_z) < 1e-6
@@ -259,6 +261,86 @@ def test_camera_loads_camera_z():
     print("  PASS ObjectDetectionCamera loads camera_z from config")
 
 
+_PNP_OBJECT_POINTS = [
+    [0.0, 1.0, 0.1], [-0.03, 0.95, 0.1], [0.03, 0.95, 0.1],
+    [-0.08, 0.93, 0.0], [0.08, 0.93, 0.0], [-0.2, 0.8, 0.0],
+    [0.2, 0.8, 0.0], [-0.35, 0.55, -0.05], [0.35, 0.55, -0.05],
+    [-0.4, 0.3, -0.1], [0.4, 0.3, -0.1], [-0.15, 0.0, 0.0],
+    [0.15, 0.0, 0.0], [-0.15, -0.45, 0.0], [0.15, -0.45, 0.0],
+    [-0.15, -0.9, 0.0], [0.15, -0.9, 0.0],
+]
+
+
+def _make_pnp_yolo(mode):
+    import logging
+    gy = GenericYolo.__new__(GenericYolo)
+    gy.logger = logging.getLogger("temp_tests")
+    gy.pnp_config = {
+        "object_points": _PNP_OBJECT_POINTS,
+        "camera_matrix": [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+        "dist_coeffs": [0, 0, 0, 0, 0],
+        "min_keypoint_conf": 0.5,
+        "mode": mode,
+    }
+    return gy
+
+
+def test_solve_pnp_flexible_recovers_depth_and_shape():
+    import cv2
+    gy = _make_pnp_yolo("flexible")
+    obj_pts = np.asarray(gy.pnp_config["object_points"], dtype=np.float64)
+    K = np.asarray(gy.pnp_config["camera_matrix"], dtype=np.float64)
+    dist = np.zeros(5)
+
+    # Synthetic upright person ~1.9 m tall standing 3 m ahead, model y-up
+    # projected into the camera's y-down frame.
+    rvec_true, _ = cv2.Rodrigues(np.diag([-1.0, -1.0, 1.0]))
+    proj, _ = cv2.projectPoints(obj_pts, rvec_true, np.array([0.0, 0.0, 3.0]), K, dist)
+    kpts = np.column_stack([proj[:, 0], np.ones((len(obj_pts), 1))])
+
+    euler, tvec, kpts_3d = gy._solve_pnp(kpts, 640, 480)
+    assert tvec is not None, "solvePnP failed"
+    assert tvec[2] > 2.0, f"depth collapsed to degenerate {tvec[2]:.3f} m"
+    k3 = np.asarray(kpts_3d)
+    span = float(k3[:, 1].max() - k3[:, 1].min())
+    assert 1.5 < span < 2.4, f"vertical span {span:.2f} m not a ~1.9 m person"
+    assert k3[0][1] < k3[15][1], "nose below ankles - skeleton is upside down"
+    print(f"  PASS _solve_pnp flexible: depth={tvec[2]:.2f} m span={span:.2f} m upright")
+
+
+def test_solve_pnp_rigid_recovers_full_pose():
+    import cv2
+    gy = _make_pnp_yolo("rigid")
+    obj_pts = np.asarray(gy.pnp_config["object_points"], dtype=np.float64)
+    K = np.asarray(gy.pnp_config["camera_matrix"], dtype=np.float64)
+    dist = np.zeros(5)
+
+    # Known 6DOF pose: tilted/rotated rigid object at (0.4, -0.2, 3.0).
+    rvec_true = np.array([0.25, -0.4, 0.6])
+    R_true, _ = cv2.Rodrigues(rvec_true)
+    t_true = np.array([0.4, -0.2, 3.0])
+    proj, _ = cv2.projectPoints(obj_pts, rvec_true, t_true, K, dist)
+    kpts = np.column_stack([proj[:, 0], np.ones((len(obj_pts), 1))])
+
+    euler, tvec, kpts_3d = gy._solve_pnp(kpts, 640, 480)
+    assert tvec is not None, "solvePnP failed"
+    assert np.allclose(tvec, t_true, atol=1e-3), f"tvec {tvec} != {t_true}"
+    # Rigid mode: keypoints_3d must be the fitted model, not the billboard.
+    expected = (R_true @ obj_pts.T).T + t_true
+    got = np.asarray(kpts_3d)
+    assert got.shape == expected.shape
+    assert np.allclose(got, expected, atol=1e-2), "rigid keypoints_3d != fitted model"
+    sy = math.sqrt(R_true[0, 0] ** 2 + R_true[1, 0] ** 2)
+    exp_roll = math.atan2(R_true[2, 1], R_true[2, 2])
+    exp_pitch = math.atan2(-R_true[2, 0], sy)
+    exp_yaw = math.atan2(R_true[1, 0], R_true[0, 0])
+    roll, pitch, yaw = euler
+    assert abs(roll - exp_roll) < 1e-2, f"roll {roll} != {exp_roll}"
+    assert abs(pitch - exp_pitch) < 1e-2, f"pitch {pitch} != {exp_pitch}"
+    assert abs(yaw - exp_yaw) < 1e-2, f"yaw {yaw} != {exp_yaw}"
+    print(f"  PASS _solve_pnp rigid: xyz={tvec.round(3)} rpy=({roll:.3f},{pitch:.3f},{yaw:.3f})")
+
+
 def main():
     tests = [
         ("Object z", test_object_z),
@@ -276,6 +358,8 @@ def main():
         ("Object.__str__ shows Z", test_object_str_shows_z),
         ("Camera config default z", test_camera_config_default_has_z),
         ("Camera loads camera_z", test_camera_loads_camera_z),
+        ("_solve_pnp flexible depth/shape", test_solve_pnp_flexible_recovers_depth_and_shape),
+        ("_solve_pnp rigid full 6DOF", test_solve_pnp_rigid_recovers_full_pose),
     ]
 
     passed = 0

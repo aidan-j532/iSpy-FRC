@@ -1111,7 +1111,7 @@ class GenericYolo:
             dtype=np.float64,
         )
         min_kpt_conf = float(self.pnp_config.get("min_keypoint_conf", 0.5))
-        method = self.pnp_config.get("method", "epnp")
+        mode = str(self.pnp_config.get("mode", "flexible")).lower()
 
         image_points, model_points = [], []
         for i, pt in enumerate(keypoints):
@@ -1122,74 +1122,66 @@ class GenericYolo:
             image_points.append([float(pt[0]), float(pt[1])])
             model_points.append(object_points[i])
 
-        if method == "iterative":
-            if len(image_points) < 6:
-                return None, None, None
-        else:
-            if len(image_points) < 4:
-                return None, None, None
+        if len(image_points) < 4:
+            return None, None, None
 
         image_points = np.asarray(image_points, dtype=np.float64)
         model_points = np.asarray(model_points, dtype=np.float64)
 
-        if method == "ippe":
-            if model_points.shape[0] != 4:
-                self.logger.warning("IPPE requires exactly 4 points, got %d; falling back to EPNP", model_points.shape[0])
-                flags = cv2.SOLVEPNP_EPNP
-            else:
-                flags = cv2.SOLVEPNP_IPPE
-        elif method == "iterative":
-            flags = cv2.SOLVEPNP_ITERATIVE
-        else:
-            # Default to EPNP: a global solver.  ITERATIVE starts from an
-            # identity pose and collapses to a degenerate local minimum on
-            # near-planar keypoint templates (e.g. a pose skeleton),
-            # returning a tiny/negative depth and a garbage skeleton.
-            flags = cv2.SOLVEPNP_EPNP
-
+        # Auto-select the solver: EPNP is a global method (no initial guess
+        # needed) and is robust on near-planar keypoint templates, where
+        # ITERATIVE from an identity pose collapses to a degenerate local
+        # minimum.  When enough points are available, refine the EPNP pose
+        # with ITERATIVE using it as the initial guess for maximum accuracy.
         ok, rvec, tvec = cv2.solvePnP(
             model_points,
             image_points,
             camera_matrix,
             dist_coeffs,
-            flags=flags,
+            flags=cv2.SOLVEPNP_EPNP,
         )
+        if ok and len(image_points) >= 6:
+            ok_refined, rvec_refined, tvec_refined = cv2.solvePnP(
+                model_points,
+                image_points,
+                camera_matrix,
+                dist_coeffs,
+                rvec,
+                tvec,
+                useExtrinsicGuess=True,
+                flags=cv2.SOLVEPNP_ITERATIVE,
+            )
+            if ok_refined:
+                rvec, tvec = rvec_refined, tvec_refined
         if not ok:
             return None, None, None
 
-        R, _ = cv2.Rodrigues(rvec)
-        # keypoints_3d = []
-        # for i, pt in enumerate(object_points):
-        #     pos = R @ pt + tvec.reshape(3)
-        #     keypoints_3d.append(pos.tolist())
-
-        # euler = self._rvec_to_euler(rvec.reshape(3))
-        # return euler, tvec.reshape(3), keypoints_3d
-        
-        # FIX: Flatten tvec to 1D first so tvec[2] is a true scalar
         tvec = tvec.reshape(3)
-        
-        # 1. Get the average depth of the person from the PnP translation vector
-        depth_z = float(tvec[2])
-        
-        # 2. Extract camera intrinsics
-        fx = camera_matrix[0, 0]
-        fy = camera_matrix[1, 1]
-        cx = camera_matrix[0, 2]
-        cy = camera_matrix[1, 2]
+        R, _ = cv2.Rodrigues(rvec)
 
-        keypoints_3d = []
-        for i, pt in enumerate(keypoints):
-            u, v, conf = pt[0], pt[1], pt[2]
-            # Always unproject from the observed 2D pixel at the shared
-            # PnP depth - consistent for every joint, confident or not.
-            # (Previously, low-confidence joints used a totally different
-            # source - the rigid template point - which is what produced
-            # inconsistent/warped limbs.)
-            X = (u - cx) * depth_z / fx
-            Y = (v - cy) * depth_z / fy
-            Z = depth_z
-            keypoints_3d.append([float(X), float(Y), float(Z)])
+        if mode == "rigid":
+            # Rigid object: the fitted pose is the whole story.  Return the
+            # canonical model transformed by the recovered (R, tvec), so the
+            # keypoints trace the object's actual 3D shape and the box carries
+            # exact xyz + roll/pitch/yaw.
+            keypoints_3d = [(R @ pt + tvec).tolist() for pt in object_points]
+        else:
+            # Flexible/deformable object: keep every observed 2D keypoint but
+            # inflate it to 3D on a plane at the shared PnP depth, preserving
+            # the detected pose shape instead of forcing a rigid template.
+            depth_z = float(tvec[2])
+            fx = camera_matrix[0, 0]
+            fy = camera_matrix[1, 1]
+            cx = camera_matrix[0, 2]
+            cy = camera_matrix[1, 2]
+            keypoints_3d = []
+            for pt in keypoints:
+                u, v = float(pt[0]), float(pt[1])
+                X = (u - cx) * depth_z / fx
+                Y = (v - cy) * depth_z / fy
+                Z = depth_z
+                keypoints_3d.append([float(X), float(Y), float(Z)])
+
         euler = self._rvec_to_euler(rvec.reshape(3))
         return euler, tvec, keypoints_3d
     

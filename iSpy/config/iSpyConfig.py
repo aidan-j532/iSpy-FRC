@@ -47,7 +47,10 @@ class iSpyConfig:
                 #     "camera_matrix": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
                 #     "dist_coeffs": [0, 0, 0, 0, 0],
                 #     "min_keypoint_conf": 0.5,
-                #     # "method": "iterative",  # "iterative" (3D objects) or "ippe" (planar objects, exactly 4 points)
+                #     # "mode": "flexible",  # "flexible" (deformable: keep detected 2D keypoint shape
+                #     #                       #   inflated to 3D at the PnP depth) or "rigid"
+                #     #                       #   (rigid object: keypoints = fitted model, full
+                #     #                       #   xyz + roll/pitch/yaw).  Solver is auto-selected.
                 # },
             # },
             "num_gpus": "auto",
