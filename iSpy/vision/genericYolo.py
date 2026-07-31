@@ -1073,20 +1073,45 @@ class GenericYolo:
             yaw = 0.0
         return roll, pitch, yaw
 
+    def _rescale_camera_matrix(
+        self, K: np.ndarray, img_w: int, img_h: int
+    ) -> np.ndarray:
+        # The user-calibrated intrinsics are for one reference resolution; if
+        # the live frame is a different size the keypoints are unprojected on a
+        # different pixel scale and the skeleton comes out too big/small (a tiny
+        # speck of dots in the viewer).  Infer the calibration resolution from
+        # the principal point (centered sensor) and rescale fx/fy/cx/cy to the
+        # actual frame so the skeleton stays real-world scale.
+        if img_w <= 0 or img_h <= 0:
+            return K
+        calib_w = 2.0 * float(K[0, 2])
+        calib_h = 2.0 * float(K[1, 2])
+        if calib_w <= 1 or calib_h <= 1:
+            return K
+        sx = img_w / calib_w
+        sy = img_h / calib_h
+        if abs(sx - 1.0) < 1e-3 and abs(sy - 1.0) < 1e-3:
+            return K
+        return np.diag([sx, sy, 1.0]) @ K
+
     def _solve_pnp(
-        self, keypoints: np.ndarray
+        self, keypoints: np.ndarray, img_w: int = 0, img_h: int = 0
     ) -> tuple[tuple[float, float, float] | None, np.ndarray | None, list | None]:
         if not self.pnp_config:
             return None, None, None
 
         object_points = np.asarray(self.pnp_config["object_points"], dtype=np.float64)
-        camera_matrix = np.asarray(self.pnp_config["camera_matrix"], dtype=np.float64)
+        camera_matrix = self._rescale_camera_matrix(
+            np.asarray(self.pnp_config["camera_matrix"], dtype=np.float64),
+            img_w,
+            img_h,
+        )
         dist_coeffs = np.asarray(
             self.pnp_config.get("dist_coeffs", [0.0, 0.0, 0.0, 0.0, 0.0]),
             dtype=np.float64,
         )
         min_kpt_conf = float(self.pnp_config.get("min_keypoint_conf", 0.5))
-        method = self.pnp_config.get("method", "iterative")
+        method = self.pnp_config.get("method", "epnp")
 
         image_points, model_points = [], []
         for i, pt in enumerate(keypoints):
@@ -1109,12 +1134,18 @@ class GenericYolo:
 
         if method == "ippe":
             if model_points.shape[0] != 4:
-                self.logger.warning("IPPE requires exactly 4 points, got %d; falling back to ITERATIVE", model_points.shape[0])
-                flags = cv2.SOLVEPNP_ITERATIVE
+                self.logger.warning("IPPE requires exactly 4 points, got %d; falling back to EPNP", model_points.shape[0])
+                flags = cv2.SOLVEPNP_EPNP
             else:
                 flags = cv2.SOLVEPNP_IPPE
-        else:
+        elif method == "iterative":
             flags = cv2.SOLVEPNP_ITERATIVE
+        else:
+            # Default to EPNP: a global solver.  ITERATIVE starts from an
+            # identity pose and collapses to a degenerate local minimum on
+            # near-planar keypoint templates (e.g. a pose skeleton),
+            # returning a tiny/negative depth and a garbage skeleton.
+            flags = cv2.SOLVEPNP_EPNP
 
         ok, rvec, tvec = cv2.solvePnP(
             model_points,
@@ -1232,7 +1263,9 @@ class GenericYolo:
                 kpt_scaled = self._scale_coords(kpt_set, orig_shape, is_kpts=True)
 
                 if self.pnp_config:
-                    euler, tvec, kpts_3d = self._solve_pnp(kpt_scaled)
+                    euler, tvec, kpts_3d = self._solve_pnp(
+                        kpt_scaled, orig_shape[1], orig_shape[0]
+                    )
                     if tvec is not None:
                         translation = tvec.tolist()
                     if euler is not None:
@@ -1340,11 +1373,14 @@ class GenericYolo:
         kpt_data = getattr(ultralytics_result, "keypoints", None)
         if kpt_data is not None and kpt_data.data is not None:
             kpt_arrs = kpt_data.data.cpu().numpy() if hasattr(kpt_data.data, "cpu") else np.asarray(kpt_data.data)
+            oshape = getattr(ultralytics_result, "orig_shape", None)
+            img_w = int(oshape[1]) if oshape is not None and len(oshape) > 1 else 0
+            img_h = int(oshape[0]) if oshape is not None else 0
             for i, kpt_set in enumerate(kpt_arrs):
                 kpt_arr = np.asarray(kpt_set)
                 if self.pnp_config and len(boxes) == len(kpt_arrs):
                     idx = len(keypoints_list)
-                    euler, tvec, kpts_3d = self._solve_pnp(kpt_arr)
+                    euler, tvec, kpts_3d = self._solve_pnp(kpt_arr, img_w, img_h)
                     if euler is not None:
                         boxes[idx].rotation = euler
                     if tvec is not None:

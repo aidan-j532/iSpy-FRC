@@ -327,10 +327,26 @@ class ObjectDetectionCamera(Camera, VisionBase):
             dtype=np.float32,
         )
 
+    def _pnp_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
+        # solvePnP output is in the units of `pnp.object_points`, which the
+        # config documents as meters (the ~1.8 m tall COCO skeleton).  The rest
+        # of the pipeline (camera offsets, _camera_point_to_robot) works in the
+        # codebase's internal inch convention, so convert meters -> inches
+        # first.  Without this a 3 m deep object/keypoint set renders ~39x too
+        # small - a skeleton the size of a speck of dots in the viewer.
+        meters_to_inches = 1.0 / self.conversions["meter"]
+        return self._camera_point_to_robot(
+            (
+                pt[0] * meters_to_inches,
+                pt[1] * meters_to_inches,
+                pt[2] * meters_to_inches,
+            )
+        )
+
     def _pnp_to_robot_coordinates(
         self, tvec: tuple[float, float, float]
     ) -> np.ndarray:
-        return self._camera_point_to_robot(tvec)
+        return self._pnp_point_to_robot(tvec)
 
     def _box_to_object(self, box: Box, img_w: int, img_h: int, keypoints_2d: np.ndarray | None = None) -> Object | None:
         bottom_x = (box.xyxy[0] + box.xyxy[2]) / 2.0
@@ -364,7 +380,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         kpts_3d_robot = None
         if box.keypoints_3d is not None:
-            kpts_3d_robot = [self._camera_point_to_robot(tuple(kpt)).tolist() for kpt in box.keypoints_3d]
+            kpts_3d_robot = [self._pnp_point_to_robot(tuple(kpt)).tolist() for kpt in box.keypoints_3d]
         elif keypoints_2d is not None:
             x1, y1, x2, y2 = box.xyxy
             avg_px = ((x2 - x1) + (y2 - y1)) / 2.0

@@ -6,12 +6,10 @@
 #scene-container canvas { display:block; }
 .viewer-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
 .viewer-toolbar label { color:var(--text-dim); font-size:0.85rem; display:flex; align-items:center; gap:6px; }
-.viewer-toolbar select, .viewer-toolbar input[type=file] { background:var(--bg); color:var(--text); border:1px solid var(--border); padding:4px 8px; border-radius:var(--radius); }
+.viewer-toolbar select { background:var(--bg); color:var(--text); border:1px solid var(--border); padding:4px 8px; border-radius:var(--radius); }
 #object-list { max-height:200px; overflow-y:auto; }
 #object-list table { width:100%; }
 .obj-row td { font-size:0.82rem; }
-.pose-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.pose-controls select { max-width:200px; }
 </style>
 {% endblock %}
 {% block content %}
@@ -25,25 +23,6 @@
       <option value="side">Side</option>
     </select>
   </label>
-  <label>Load .glb/.gltf model
-    <input type="file" id="model-file" accept=".glb,.gltf" onchange="loadUserModel(event)">
-  </label>
-  <button onclick="clearUserModel()">Clear model</button>
-  <div class="pose-controls">
-    <label>Pose Model
-      <select id="pose-model-select" onchange="selectPoseModel(this.value)">
-        <option value="">None (skeleton only)</option>
-      </select>
-    </label>
-    <label>View
-      <select id="vis-mode" onchange="onVisModeChange()">
-        <option value="auto">Auto</option>
-        <option value="model">3D Model</option>
-        <option value="skeleton">Skeleton</option>
-        <option value="both">Both</option>
-      </select>
-    </label>
-  </div>
   <label style="margin-left:auto;">
     <input type="checkbox" id="show-grid" checked onchange="toggleGrid()"> Grid
   </label>
@@ -64,9 +43,6 @@
     </table>
   </div>
 </div>
-<label>Upload .glb to Server
-  <input type="file" id="server-model-file" accept=".glb,.gltf" onchange="uploadModelToServer(event)">
-</label>
 
 <script type="importmap">
 {
@@ -79,7 +55,6 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
-import { GLTFLoader } from 'three/addons/GLTFLoader.js';
 
 const container = document.getElementById('scene-container');
 const scene = new THREE.Scene();
@@ -153,11 +128,11 @@ window.setViewPreset = function() {
   controls.update();
 };
 
-let userModel = null;
-let userModelFileName = '';
-const gltfLoader = new GLTFLoader();
 const boxes = {};
 const BOX_COLOR = 0x4c8bf5;
+// Adaptive scene scale (units of the data). Markers size off this so dots and
+// cubes stay clearly visible no matter what unit/resolution the pipeline runs in.
+let sceneScale = 2;
 
 // ============================================================
 //  SKELETON / KEYPOINT DEFINITIONS
@@ -185,377 +160,41 @@ SKELETON_DEFS[17] = {
     0xff8000, 0x0080ff, 0xff00ff, 0xff00ff,
     0xff0000, 0x0000ff, 0xff0000, 0x0000ff,
   ],
-  restPose: [
-    [0.0, 0.0, 0.48],    [ -0.03, 0.03, 0.46 ],
-    [0.03, 0.03, 0.46],   [ -0.07, 0.0, 0.44 ],
-    [0.07, 0.0, 0.44],    [ -0.18, 0.0, 0.3 ],
-    [0.18, 0.0, 0.3],     [ -0.35, 0.0, 0.08 ],
-    [0.35, 0.0, 0.08],    [ -0.4, 0.0, -0.12 ],
-    [0.4, 0.0, -0.12],    [ -0.12, 0.0, -0.15 ],
-    [0.12, 0.0, -0.15],   [ -0.12, 0.0, -0.45 ],
-    [0.12, 0.0, -0.45],   [ -0.12, 0.0, -0.65 ],
-    [0.12, 0.0, -0.65],
-  ],
 };
 
 SKELETON_DEFS[21] = {
   name: 'Hand 21',
   edges: [
-    [1,2],[2,3],[3,4],[5,6],[6,7],[7,8],
-    [9,10],[10,11],[11,12],[13,14],[14,15],[15,16],
-    [17,18],[18,19],[19,20],[0,1],[0,5],[0,9],[0,13],[0,17],
-    [5,9],[9,13],[13,17],
+    [2,3],[3,4],[4,5],[6,7],[7,8],[8,9],
+    [10,11],[11,12],[12,13],[14,15],[15,16],[16,17],
+    [18,19],[19,20],[20,21],[1,2],[1,6],[1,10],[1,14],[1,18],
+    [6,10],[10,14],[14,18],
   ],
   edgeColors: [],
   jointColors: [],
-  restPose: [
-    [0.0, 0.0, 0.4],     [ -0.12, 0.0, 0.3 ],
-    [-0.18, 0.0, 0.18],   [ -0.22, 0.0, 0.08 ],
-    [-0.25, 0.0, -0.02],  [ -0.06, 0.06, 0.3 ],
-    [-0.06, 0.08, 0.15],  [ -0.06, 0.09, 0.05 ],
-    [-0.06, 0.1, -0.05],  [ 0.0, 0.0, 0.3 ],
-    [0.0, 0.0, 0.15],     [ 0.0, 0.0, 0.05 ],
-    [0.0, 0.0, -0.05],    [ 0.06, -0.06, 0.3 ],
-    [0.06, -0.08, 0.15],  [ 0.06, -0.09, 0.05 ],
-    [0.06, -0.1, -0.05],  [ 0.12, -0.06, 0.3 ],
-    [0.12, -0.08, 0.15],  [ 0.12, -0.09, 0.05 ],
-    [0.12, -0.1, -0.05],
-  ],
 };
 
 // Face 68 - build dynamic chain
 (function() {
-  const face = { name: 'Face 68', edges: [], edgeColors: [], jointColors: [], restPose: [] };
+  const face = { name: 'Face 68', edges: [], edgeColors: [], jointColors: [] };
   for (let i = 1; i <= 68; i++) {
     face.edges.push([i, i + 1]);
     face.edgeColors.push(0x00ff00);
     face.jointColors.push(0x00ff00);
   }
   face.jointColors[0] = 0xff0000;
-  for (let i = 0; i < 68; i++) {
-    const angle = (i / 68) * Math.PI * 2;
-    face.restPose.push([Math.cos(angle) * 0.4, Math.sin(angle) * 0.28, 0.5]);
-  }
   SKELETON_DEFS[68] = face;
 })();
 
-SKELETON_DEFS.default = { name: 'Generic', edges: [], edgeColors: [], jointColors: [], restPose: [] };
+SKELETON_DEFS.default = { name: 'Generic', edges: [], edgeColors: [], jointColors: [] };
 
 function getSkelDef(nk) {
   return SKELETON_DEFS[nk] || SKELETON_DEFS.default;
 }
 
 // ============================================================
-//  POSE DEFORMER
-// ============================================================
-
-class PoseDeformer {
-  constructor(root, numKeypoints) {
-    this.root = root;
-    this.nk = numKeypoints;
-    this.skelDef = getSkelDef(numKeypoints);
-    this.restPose = [];
-    this.meshData = [];
-    this.ok = true;
-
-      try {
-        this._bakeMeshes();
-        console.log('PoseDeformer: baked meshes');
-        this._computeLocalBBox();
-        console.log('PoseDeformer: bbox', this.bbox.getSize(new THREE.Vector3()).toArray().map(v=>v.toFixed(3)));
-        this._generateRestPose();
-        this._setupVertexWeights();
-        console.log('PoseDeformer: ready, meshes:', this.meshData.length);
-      } catch (e) {
-        console.error('PoseDeformer init failed:', e);
-        this.ok = false;
-      }
-  }
-
-  _bakeMeshes() {
-    const skinned = [];
-    this.root.traverse(c => { if (c.isSkinnedMesh) skinned.push(c); });
-    if (skinned.length === 0) return;
-
-    this.root.updateMatrixWorld(true);
-    const rootInv = new THREE.Matrix4().copy(this.root.matrixWorld).invert();
-    const v3 = new THREE.Vector3();
-
-    for (const sm of skinned) {
-      try {
-        sm.updateMatrixWorld(true);
-        const geo = sm.geometry.clone();
-
-        // Remove skinning attributes so shader won't override
-        delete geo.attributes.skinIndex;
-        delete geo.attributes.skinWeight;
-        delete geo.attributes.skinNormal;
-
-        // Transform vertices from mesh-local to root-local space
-        // This accounts for all intermediate parent transforms
-        const toRootLocal = new THREE.Matrix4().copy(rootInv).multiply(sm.matrixWorld);
-        const pos = geo.attributes.position;
-        for (let i = 0; i < pos.count; i++) {
-          v3.set(pos.getX(i), pos.getY(i), pos.getZ(i));
-          v3.applyMatrix4(toRootLocal);
-          pos.setXYZ(i, v3.x, v3.y, v3.z);
-        }
-        pos.needsUpdate = true;
-
-        const matList = Array.isArray(sm.material) ? sm.material : [sm.material];
-        const mat = matList.map(m => {
-          const mc = m.clone();
-          if (mc.skinning !== undefined) mc.skinning = false;
-          return mc;
-        });
-        const nm = new THREE.Mesh(geo, mat.length === 1 ? mat[0] : mat);
-        nm.position.set(0, 0, 0);
-        nm.quaternion.identity();
-        nm.scale.set(1, 1, 1);
-        nm.castShadow = sm.castShadow;
-        nm.receiveShadow = sm.receiveShadow;
-        this.root.add(nm);
-        if (sm.parent) sm.parent.remove(sm);
-      } catch (e) {
-        console.warn('Failed to bake SkinnedMesh:', e);
-      }
-    }
-  }
-
-  _computeLocalBBox() {
-    // Use setFromObject which correctly handles hierarchy
-    const savedPos = this.root.position.clone();
-    const savedScale = this.root.scale.clone();
-    this.root.position.set(0, 0, 0);
-    this.root.scale.set(1, 1, 1);
-    this.root.updateMatrixWorld(true);
-    this.bbox = new THREE.Box3().setFromObject(this.root);
-    this.root.position.copy(savedPos);
-    this.root.scale.copy(savedScale);
-    this.root.updateMatrixWorld(true);
-  }
-
-  _generateRestPose() {
-    const size = this.bbox.getSize(new THREE.Vector3());
-    const center = this.bbox.getCenter(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const template = this.skelDef.restPose;
-    const pad = maxDim * 0.95;
-
-    for (let i = 0; i < this.nk; i++) {
-      if (i < template.length) {
-        const t = template[i];
-        this.restPose.push(new THREE.Vector3(
-          center.x + t[0] * pad,
-          center.y + t[1] * pad,
-          center.z + t[2] * pad
-        ));
-      } else {
-        const t = i / Math.max(this.nk - 1, 1);
-        this.restPose.push(new THREE.Vector3(
-          center.x + (t - 0.5) * maxDim * 0.8,
-          center.y,
-          center.z
-        ));
-      }
-    }
-  }
-
-  _setupVertexWeights() {
-    this.root.traverse(c => {
-      if (!c.isMesh || !c.geometry || !c.geometry.attributes.position) return;
-      const pos = c.geometry.attributes.position;
-      const orig = [];
-      for (let i = 0; i < pos.count; i++) {
-        orig.push(new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)));
-      }
-      const weights = [];
-      const k = Math.min(4, this.restPose.length);
-      for (let vi = 0; vi < orig.length; vi++) {
-        const dists = [];
-        for (let ki = 0; ki < this.restPose.length; ki++) {
-          dists.push({ idx: ki, d: orig[vi].distanceTo(this.restPose[ki]) });
-        }
-        dists.sort((a, b) => a.d - b.d);
-        const nearest = dists.slice(0, k);
-        let total = 0;
-        const w = [];
-        for (const n of nearest) {
-          const wt = 1 / (n.d * n.d + 0.0001);
-          w.push({ idx: n.idx, w: wt });
-          total += wt;
-        }
-        if (total > 0) {
-          for (const x of w) x.w /= total;
-        }
-        weights.push(w);
-      }
-      this.meshData.push({ mesh: c, orig, weights });
-    });
-  }
-
-  update(keypoints3d) {
-    if (!this.ok) return;
-    const nk = Math.min(this.nk, keypoints3d ? keypoints3d.length : 0);
-    if (nk < 3) return;
-
-    this.root.updateMatrixWorld(true);
-
-    const localKpts = [];
-    for (let i = 0; i < nk; i++) {
-      const k = keypoints3d[i];
-      const wKpt = new THREE.Vector3(k[0], k[2], k[1]);
-      if (isNaN(wKpt.x) || isNaN(wKpt.y) || isNaN(wKpt.z)) continue;
-      const lKpt = this.root.worldToLocal(wKpt);
-      localKpts.push(lKpt);
-    }
-    if (localKpts.length < 3) return;
-
-    const disp = [];
-    for (let i = 0; i < localKpts.length && i < this.restPose.length; i++) {
-      disp.push(localKpts[i].clone().sub(this.restPose[i]));
-    }
-
-    for (const md of this.meshData) {
-      const pos = md.mesh.geometry.attributes.position;
-      const arr = pos.array;
-      for (let vi = 0; vi < md.orig.length; vi++) {
-        const i3 = vi * 3;
-        const d = new THREE.Vector3();
-        for (const w of md.weights[vi]) {
-          if (w.idx < disp.length) {
-            d.x += w.w * disp[w.idx].x;
-            d.y += w.w * disp[w.idx].y;
-            d.z += w.w * disp[w.idx].z;
-          }
-        }
-        arr[i3] = md.orig[vi].x + d.x;
-        arr[i3 + 1] = md.orig[vi].y + d.y;
-        arr[i3 + 2] = md.orig[vi].z + d.z;
-      }
-      pos.needsUpdate = true;
-    }
-  }
-
-  reset() {
-    if (!this.ok) return;
-    for (const md of this.meshData) {
-      const pos = md.mesh.geometry.attributes.position;
-      const arr = pos.array;
-      for (let vi = 0; vi < md.orig.length; vi++) {
-        const i3 = vi * 3;
-        arr[i3] = md.orig[vi].x;
-        arr[i3 + 1] = md.orig[vi].y;
-        arr[i3 + 2] = md.orig[vi].z;
-      }
-      pos.needsUpdate = true;
-    }
-  }
-
-  dispose() {
-    this.reset();
-    this.meshData = [];
-    this.restPose = [];
-  }
-}
-
-// ============================================================
-//  MODEL / POSE STATE
-// ============================================================
-
-let serverModel = null;
-let serverModelFileName = '';
-let visMode = 'auto';
-
-function getVisMode() { return document.getElementById('vis-mode').value; }
-window.onVisModeChange = function() { visMode = getVisMode(); };
-
-// ============================================================
-//  SERVER MODEL UPLOAD / MANAGEMENT
-// ============================================================
-
-async function uploadModelToServer(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const fd = new FormData();
-  fd.append('file', file);
-  try {
-    const r = await fetch('/api/upload_glb', { method: 'POST', body: fd });
-    const d = await r.json();
-    if (r.ok) { showToast(d.message, 'success'); refreshPoseModelList(); }
-    else { showToast(d.error, 'error'); }
-  } catch (_) { showToast('Failed to reach server', 'error'); }
-}
-
-async function refreshPoseModelList() {
-  try {
-    const d = await fetch('/api/pose_models/list').then(r => r.json());
-    const sel = document.getElementById('pose-model-select');
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">None (skeleton only)</option>';
-    for (const m of d.models) {
-      const opt = document.createElement('option');
-      opt.value = m; opt.textContent = m;
-      sel.appendChild(opt);
-    }
-    let restore = cur || d.active;
-    if (restore && d.models.includes(restore)) sel.value = restore;
-    if (sel.value) loadServerModel(sel.value);
-  } catch (_) {}
-}
-
-window.selectPoseModel = async function(filename) {
-  try {
-    await fetch('/api/pose_models/select', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: filename }),
-    });
-  } catch (_) {}
-  if (filename) loadServerModel(filename);
-  else clearServerModel();
-};
-
-function loadServerModel(filename) {
-  if (serverModelFileName === filename && serverModel) return;
-  clearServerModel();
-  const url = `/api/pose_models/file/${encodeURIComponent(filename)}`;
-  gltfLoader.load(url, (gltf) => {
-    serverModel = gltf.scene;
-    serverModelFileName = filename;
-    _normalizeModel(serverModel);
-    rebuildAllMarkers();
-  }, undefined, (err) => {
-    console.error('Failed to load server model:', err);
-  });
-}
-
-function clearServerModel() {
-  if (serverModel) {
-    disposeMesh(serverModel);
-    serverModel = null;
-    serverModelFileName = '';
-  }
-  rebuildAllMarkers();
-}
-
-// ============================================================
 //  HELPERS
 // ============================================================
-
-function _normalizeModel(model) {
-  const box = new THREE.Box3().setFromObject(model);
-  const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3());
-  const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  const s = 2.0 / maxDim;
-  model.scale.setScalar(s);
-  model.position.sub(center.clone().multiplyScalar(s));
-  model.traverse(o => { if (o.isMesh) { o.castShadow = true; } });
-}
-
-function getActiveModel() { return userModel || serverModel; }
-function getActiveModelName() { return userModelFileName || serverModelFileName; }
 
 function disposeMesh(obj) {
   if (obj.geometry) obj.geometry.dispose();
@@ -568,11 +207,24 @@ function disposeMesh(obj) {
   }
 }
 
+function skeletonExtent(pts) {
+  let max = 0;
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const d = pts[i].distanceTo(pts[j]);
+      if (d > max) max = d;
+    }
+  }
+  return max;
+}
+
 function makeCubeMarker() {
-  const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+  const base = Math.max(0.25, Math.min(2.5, sceneScale * 0.12));
+  const geo = new THREE.BoxGeometry(base, base, base);
   const mat = new THREE.MeshStandardMaterial({ color: BOX_COLOR, transparent: true, opacity: 0.85 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
+  mesh.userData.cubeBase = base;
   const wireGeo = new THREE.EdgesGeometry(geo);
   const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
   mesh.add(new THREE.LineSegments(wireGeo, wireMat));
@@ -606,7 +258,9 @@ function buildSkeletonGroup(kpts3d, nk) {
     g.add(new THREE.LineSegments(bg, new THREE.LineBasicMaterial({ vertexColors: true })));
   }
 
-  const jg = new THREE.SphereGeometry(0.04, 8, 8);
+  const extent = skeletonExtent(pts) || 1;
+  const jointRadius = Math.max(0.025, Math.min(0.15, extent * 0.04));
+  const jg = new THREE.SphereGeometry(jointRadius, 12, 12);
   for (let i = 0; i < pts.length; i++) {
     const m = new THREE.Mesh(jg, new THREE.MeshStandardMaterial({
       color: (def.jointColors && def.jointColors[i]) || 0xff0000,
@@ -643,26 +297,14 @@ function updateSkeletonGroup(g, kpts3d, nk) {
 //  MAIN SYNC
 // ============================================================
 
-function decideVisualization(o, mode) {
+function decideVisualization(o) {
   const hasKp = o.keypoints_3d && o.keypoints_3d.length >= 3;
   const nk = o.num_keypoints || (hasKp ? o.keypoints_3d.length : 0);
-  const hasModel = getActiveModel() !== null;
-
-  if (!hasKp) return { type: 'cube', nk: 0 };
-
-  if (mode === 'skeleton') return { type: 'skeleton', nk };
-  if (mode === 'model' && hasModel) return { type: 'model', nk };
-  if (mode === 'model' && !hasModel) return { type: 'skeleton', nk };
-  if (mode === 'both' && hasModel) return { type: 'both', nk };
-  if (mode === 'both' && !hasModel) return { type: 'skeleton', nk };
-
-  // auto
-  if (hasModel && nk >= 3) return { type: 'model', nk };
   if (hasKp) return { type: 'skeleton', nk };
   return { type: 'cube', nk: 0 };
 }
 
-function createBoxForDetection(o, dec, modelTemplate) {
+function createBoxForDetection(o, dec) {
   const key = o.id;
   const prev = boxes[key];
   if (prev) {
@@ -671,21 +313,7 @@ function createBoxForDetection(o, dec, modelTemplate) {
   }
 
   let main;
-  if (dec.type === 'model' || dec.type === 'both') {
-    const clone = modelTemplate.clone(true);
-    clone.traverse(c => { if (c.isMesh) c.castShadow = true; });
-    clone.position.set(o.x, o.z, o.y);
-    clone.rotation.set(o.roll, o.yaw, o.pitch);
-    scene.add(clone);
-    try {
-      const def = new PoseDeformer(clone, dec.nk);
-      if (def.ok) clone.userData.poseDeformer = def;
-    } catch (e) {
-      console.warn('PoseDeformer error:', e);
-    }
-    clone.userData.visType = dec.type;
-    main = clone;
-  } else if (dec.type === 'skeleton') {
+  if (dec.type === 'skeleton') {
     main = buildSkeletonGroup(o.keypoints_3d, dec.nk);
     main.userData.visType = 'skeleton';
     scene.add(main);
@@ -699,70 +327,51 @@ function createBoxForDetection(o, dec, modelTemplate) {
 }
 
 function updateExistingBox(obj3d, o, dec) {
-  if (obj3d.userData.poseDeformer) {
-    obj3d.position.set(o.x, o.z, o.y);
-    obj3d.rotation.set(o.roll, o.yaw, o.pitch);
-    obj3d.userData.poseDeformer.update(o.keypoints_3d);
-  } else if (obj3d.userData.isSkeleton) {
+  if (obj3d.userData.isSkeleton) {
     updateSkeletonGroup(obj3d, o.keypoints_3d, dec.nk);
   } else {
     obj3d.position.set(o.x, o.z, o.y);
     obj3d.rotation.set(o.roll, o.yaw, o.pitch);
+    const target = Math.max(0.25, Math.min(2.5, sceneScale * 0.12));
+    const base = obj3d.userData.cubeBase || target;
+    obj3d.scale.setScalar(target / base);
   }
 }
 
 function cleanupBox(key) {
   const obj = boxes[key];
   if (!obj) return;
-  if (obj.userData && obj.userData.poseDeformer) obj.userData.poseDeformer.dispose();
   scene.remove(obj);
   disposeMesh(obj);
   delete boxes[key];
-
-  const skKey = key + '_skel';
-  const sk = boxes[skKey];
-  if (sk) {
-    scene.remove(sk);
-    disposeMesh(sk);
-    delete boxes[skKey];
-  }
 }
 
 function sync(objects) {
   const seen = new Set();
   const tbody = document.getElementById('obj-tbody');
   let rows = '';
-  const mode = getVisMode();
-  const modelTemplate = getActiveModel();
+
+  let maxScale = 0;
+  for (const o of objects) {
+    maxScale = Math.max(maxScale, Math.hypot(o.x || 0, o.y || 0, o.z || 0));
+    if (Array.isArray(o.keypoints_3d) && o.keypoints_3d.length >= 2) {
+      const kpts = o.keypoints_3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
+      maxScale = Math.max(maxScale, skeletonExtent(kpts));
+    }
+  }
+  if (maxScale > 0) sceneScale = Math.max(0.5, maxScale);
 
   for (const o of objects) {
     seen.add(o.id);
-    const dec = decideVisualization(o, mode);
+    const dec = decideVisualization(o);
     const key = o.id;
 
-    // Handle skeleton companion for 'both' mode when main box already exists
-    const skKey = key + '_skel';
-    if (dec.type === 'both') {
-      if (!boxes[skKey]) {
-        const sk = buildSkeletonGroup(o.keypoints_3d, dec.nk);
-        sk.userData.visType = 'skeleton_companion';
-        scene.add(sk);
-        boxes[skKey] = sk;
-      } else {
-        updateSkeletonGroup(boxes[skKey], o.keypoints_3d, dec.nk);
-      }
-    } else if (boxes[skKey]) {
-      scene.remove(boxes[skKey]);
-      disposeMesh(boxes[skKey]);
-      delete boxes[skKey];
-    }
-
     if (!boxes[key]) {
-      boxes[key] = createBoxForDetection(o, dec, modelTemplate);
+      boxes[key] = createBoxForDetection(o, dec);
     } else {
       const cur = boxes[key];
       if (cur.userData.visType !== dec.type) {
-        boxes[key] = createBoxForDetection(o, dec, modelTemplate);
+        boxes[key] = createBoxForDetection(o, dec);
       } else {
         updateExistingBox(cur, o, dec);
       }
@@ -779,45 +388,6 @@ function sync(objects) {
   }
 
   tbody.innerHTML = rows || '<tr><td colspan="6" class="empty-state">No detections</td></tr>';
-}
-
-// ============================================================
-//  USER MODEL LOADING (client-side)
-// ============================================================
-
-window.loadUserModel = function(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const url = URL.createObjectURL(file);
-  gltfLoader.load(url, (gltf) => {
-    if (userModel) { disposeMesh(userModel); }
-    userModel = gltf.scene;
-    userModelFileName = file.name;
-    _normalizeModel(userModel);
-    rebuildAllMarkers();
-    URL.revokeObjectURL(url);
-  }, undefined, (err) => {
-    console.error('Failed to load model:', err);
-    URL.revokeObjectURL(url);
-  });
-};
-
-window.clearUserModel = function() {
-  if (userModel) { disposeMesh(userModel); userModel = null; userModelFileName = ''; }
-  rebuildAllMarkers();
-  document.getElementById('model-file').value = '';
-};
-
-function rebuildAllMarkers() {
-  for (const k in boxes) {
-    const obj = boxes[k];
-    if (obj.userData && obj.userData.poseDeformer) {
-      obj.userData.poseDeformer.dispose();
-    }
-    scene.remove(obj);
-    disposeMesh(obj);
-  }
-  for (const k in boxes) delete boxes[k];
 }
 
 // ============================================================
@@ -844,7 +414,5 @@ function animate() {
   renderer.render(scene, camera);
 }
 animate();
-
-refreshPoseModelList();
 </script>
 {% endblock %}
