@@ -103,6 +103,13 @@ def main():
                 "camera_lag_s": random.uniform(0, 0.05),
                 "detections": len(fuel_list),
                 "cameras": cameras,
+                "code_times": {
+                    "vision": random.uniform(0.005, 0.02),
+                    "trackers": random.uniform(0.001, 0.004),
+                    "pose": random.uniform(0.0002, 0.002),
+                    "utilities": random.uniform(0.0005, 0.003),
+                    "web": random.uniform(0.0005, 0.005),
+                },
             }
 
             web_app.update(frame_data)

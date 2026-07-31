@@ -7,10 +7,15 @@
   <div class="card"><h3>Loop Time</h3><canvas id="chart-loop_s"></canvas></div>
   <div class="card"><h3>Vision Time</h3><canvas id="chart-vision_s"></canvas></div>
   <div class="card"><h3>Camera Lag</h3><canvas id="chart-camera_lag_s"></canvas></div>
+  <div class="card card-full">
+    <h3>Code Breakdown <span class="part-note">(display only)</span></h3>
+    <canvas id="chart-code-parts"></canvas>
+  </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
 <script>
 const charts = {};
+let codeChart = null;
 function ensureChart(id, label, unit) {
   if (charts[id]) return charts[id];
   const ctx = document.getElementById(`chart-${id}`);
@@ -21,10 +26,53 @@ function ensureChart(id, label, unit) {
   });
   return charts[id];
 }
+function ensureCodeChart() {
+  if (codeChart) return codeChart;
+  const ctx = document.getElementById('chart-code-parts');
+  codeChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [] },
+    options: {
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { stacked: true, display: false },
+        y: { stacked: true, beginAtZero: true, title: { display: true, text: 'ms' } },
+      },
+      plugins: { legend: { labels: { color: '#ccc' } } },
+    },
+  });
+  return codeChart;
+}
+function renderCodeParts(cp) {
+  const s = cp.series;
+  const series = Object.values(s);
+  if (!series.length) return;
+  const chart = ensureCodeChart();
+  const names = series.map(part => part.label).join('|');
+  if (chart.data.datasets.length !== series.length || chart._partNames !== names) {
+    chart._partNames = names;
+    chart.data.datasets = series.map(part => ({
+      label: part.label,
+      data: [],
+      borderColor: part.color,
+      backgroundColor: part.color,
+      borderWidth: 1,
+      pointRadius: 0,
+      fill: true,
+      tension: 0.1,
+      stack: 'code',
+    }));
+  }
+  chart.data.labels = series[0].x.map(v => v.toFixed(1));
+  series.forEach((part, i) => { chart.data.datasets[i].data = part.y; });
+  chart.update('none');
+}
 async function refresh() {
   try {
     const data = await fetch('/api/metrics').then(r => r.json());
     for (const key in data) {
+      if (key === 'code_parts') { renderCodeParts(data[key]); continue; }
       const s = data[key];
       const c = ensureChart(key, s.label, s.unit);
       c.data.labels = s.x.map(v => v.toFixed(1));

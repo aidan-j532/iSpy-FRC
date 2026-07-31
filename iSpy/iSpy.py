@@ -204,18 +204,24 @@ class iSpy:
 
     def _run_loop_body_solo(self, camera) -> dict:
         t0 = time.perf_counter()
+        code_times = {}
         camera_lag_s = camera.get_frame_age()
 
         t_vis = time.perf_counter()
         fuel_list, frame = self.run_solo_vision(camera)
         vision_s = time.perf_counter() - t_vis
+        code_times["vision"] = vision_s
 
+        t_pose = time.perf_counter()
         pose = self._get_pose()
+        code_times["pose"] = time.perf_counter() - t_pose
 
+        t_track = time.perf_counter()
         for tracker in self.trackers.values():
             fuel_list = tracker.update(
                 fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), 0.0
             )
+        code_times["trackers"] = time.perf_counter() - t_track
 
         loop_s = time.perf_counter() - t0
         frame_data = {
@@ -223,24 +229,31 @@ class iSpy:
             "fps": 1 / loop_s if loop_s > 0 else 0,
             "loop_s": loop_s, "vision_s": vision_s, "camera_lag_s": camera_lag_s,
             "detections": len(fuel_list), "cameras": self.cameras,
+            "code_times": code_times,
         }
         return frame_data
 
     def _run_loop_body_multi(self, handler) -> dict:
         t0 = time.perf_counter()
+        code_times = {}
         ages = [cam.get_frame_age() for cam in handler.cameras]
         camera_lag_s = sum(ages) / len(ages) if ages else 0.0
 
         t_vis = time.perf_counter()
         fuel_list, frame = self.run_multi_vision(handler)
         vision_s = time.perf_counter() - t_vis
+        code_times["vision"] = vision_s
 
+        t_pose = time.perf_counter()
         pose = self._get_pose()
+        code_times["pose"] = time.perf_counter() - t_pose
 
+        t_track = time.perf_counter()
         for tracker in self.trackers.values():
             fuel_list = tracker.update(
                 fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), 0.0
             )
+        code_times["trackers"] = time.perf_counter() - t_track
 
         loop_s = time.perf_counter() - t0
 
@@ -254,6 +267,7 @@ class iSpy:
             "detections": len(fuel_list),
             "cameras": self.cameras,
             "camera_frames": handler.get_camera_frames(),
+            "code_times": code_times,
         }
 
         return frame_data
@@ -276,8 +290,14 @@ class iSpy:
                 t_start = time.perf_counter()
                 frame_data = self._run_loop_body_solo(camera)
                 last_frame_data = frame_data
+
+                t_util = time.perf_counter()
                 self._update_utilities(frame_data)
+                frame_data["code_times"]["utilities"] = time.perf_counter() - t_util
+
+                t_web = time.perf_counter()
                 self._update_web(frame_data)
+                frame_data["code_times"]["web"] = time.perf_counter() - t_web
 
                 if max_fps > 0:
                     elapsed = time.perf_counter() - t_start
@@ -318,8 +338,14 @@ class iSpy:
                 t_start = time.perf_counter()
                 frame_data = self._run_loop_body_multi(handler)
                 last_frame_data = frame_data
+
+                t_util = time.perf_counter()
                 self._update_utilities(frame_data)
+                frame_data["code_times"]["utilities"] = time.perf_counter() - t_util
+
+                t_web = time.perf_counter()
                 self._update_web(frame_data)
+                frame_data["code_times"]["web"] = time.perf_counter() - t_web
 
                 if max_fps > 0:
                     elapsed = time.perf_counter() - t_start

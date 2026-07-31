@@ -15,12 +15,22 @@ class MetricsModule(WebModule):
         "vision_s": ("Vision time", "ms", 1000.0),
         "camera_lag_s": ("Camera lag", "ms", 1000.0),
     }
+    # Which pipeline stage is the slowest, over time.  Display-only: never
+    # written to the saved metrics file.
+    CODE_PARTS = {
+        "vision": ("Vision", "#e63946"),
+        "trackers": ("Trackers", "#f4a261"),
+        "pose": ("Pose", "#2a9d8f"),
+        "utilities": ("Utilities", "#457b9d"),
+        "web": ("Web", "#9b5de5"),
+    }
     MAX_POINTS = 600  # ring buffer - keeps memory bounded on long runs
 
     def __init__(self, context: dict):
         super().__init__(context)
         self._timeline = {k: deque(maxlen=self.MAX_POINTS) for k in self.SERIES}
         self._fps_timeline = deque(maxlen=self.MAX_POINTS)
+        self._code_timeline = {k: deque(maxlen=self.MAX_POINTS) for k in self.CODE_PARTS}
         self._start = time.perf_counter()
 
     def register_routes(self, flask_app):
@@ -37,6 +47,11 @@ class MetricsModule(WebModule):
         loop_s = frame_data.get("loop_s")
         if loop_s:
             self._fps_timeline.append((t, 1.0 / loop_s if loop_s > 0 else 0))
+        code_times = frame_data.get("code_times") or {}
+        for key in self.CODE_PARTS:
+            val = code_times.get(key)
+            if val is not None:
+                self._code_timeline[key].append((t, val * 1000.0))
 
     def _api_metrics(self):
         out = {}
@@ -48,6 +63,18 @@ class MetricsModule(WebModule):
             "label": "FPS", "unit": "fps",
             "x": [p[0] for p in self._fps_timeline],
             "y": [p[1] for p in self._fps_timeline],
+        }
+        out["code_parts"] = {
+            "label": "Loop breakdown", "unit": "ms",
+            "series": {
+                key: {
+                    "label": label,
+                    "color": color,
+                    "x": [p[0] for p in self._code_timeline[key]],
+                    "y": [p[1] for p in self._code_timeline[key]],
+                }
+                for key, (label, color) in self.CODE_PARTS.items()
+            },
         }
         return jsonify(out)
 
