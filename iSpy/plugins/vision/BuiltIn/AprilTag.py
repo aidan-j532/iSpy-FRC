@@ -67,8 +67,8 @@ class AprilTagCamera(Camera, VisionBase):
         
         # FRC AprilTags are exactly 16.5cm (~6.5 inches)
         # We work in inches internally before converting to output unit
-        tag_size_inches = 6.5
-        half = tag_size_inches / 2.0
+        self.tag_size_inches = 6.5
+        half = self.tag_size_inches / 2.0
         self.obj_pts = np.array([
             [-half,  half, 0],
             [ half,  half, 0],
@@ -155,6 +155,8 @@ class AprilTagCamera(Camera, VisionBase):
                     robot_pt = self._camera_point_to_robot((tvec[0], tvec[1], tvec[2]))
                     roll, pitch, yaw = self._rvec_to_euler(rvec.reshape(3))
 
+                    scale = self.conversions.get(self.unit, self.conversions["meter"])
+
                     # Map properties to iSpy Object
                     obj = Object(
                         x=float(robot_pt[0]),
@@ -165,7 +167,12 @@ class AprilTagCamera(Camera, VisionBase):
                         roll=roll,
                         pitch=pitch,
                         yaw=yaw,
-                        depth_source="pnp"
+                        depth_source="pnp",
+                        vis_type="planar",
+                        vis_meta={
+                            "tag_id": tag_id,
+                            "size": self.tag_size_inches * scale,
+                        },
                     )
                     
                     # Optional: Add ray origins for triangulation across multiple cameras

@@ -34,6 +34,8 @@ class Viewer3DModule(WebModule):
                 "name": getattr(obj, "name", "unknown"),
                 "confidence": getattr(obj, "confidence", 0),
                 "num_keypoints": num_kpts,
+                "vis_type": getattr(obj, "vis_type", "generic"),
+                "vis_meta": getattr(obj, "vis_meta", {}) or {},
             }
             kpts = getattr(obj, "keypoints_3d", None)
             if kpts is not None:

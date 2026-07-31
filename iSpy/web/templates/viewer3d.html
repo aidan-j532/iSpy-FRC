@@ -38,7 +38,7 @@
   <h3>Detections</h3>
   <div id="object-list">
     <table>
-      <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th><th>Yaw</th><th>Pose</th></tr></thead>
+      <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th><th>Yaw</th><th>Vis</th></tr></thead>
       <tbody id="obj-tbody"></tbody>
     </table>
   </div>
@@ -135,64 +135,6 @@ const BOX_COLOR = 0x4c8bf5;
 let sceneScale = 2;
 
 // ============================================================
-//  SKELETON / KEYPOINT DEFINITIONS
-// ============================================================
-
-const SKELETON_DEFS = {};
-
-SKELETON_DEFS[17] = {
-  name: 'COCO 17 (Human)',
-  edges: [
-    [16, 14], [14, 12], [17, 15], [15, 13], [12, 13],
-    [6, 12], [7, 13], [6, 7], [6, 8], [7, 9],
-    [8, 10], [9, 11], [2, 3], [1, 2], [1, 3],
-    [2, 4], [3, 5], [4, 6], [5, 7],
-  ],
-  edgeColors: [
-    0xff0000, 0xff0000, 0x0000ff, 0x0000ff, 0xff00ff,
-    0xff8000, 0x0080ff, 0x80ff00, 0xff8000, 0x0080ff,
-    0xff8000, 0x0080ff, 0x00ffff, 0x00ffff, 0x00ffff,
-    0x00ffff, 0x00ffff, 0xff8000, 0x0080ff,
-  ],
-  jointColors: [
-    0xff0000, 0x00ff00, 0x00ff00, 0x00ff00, 0x00ff00,
-    0xff8000, 0x0080ff, 0xff8000, 0x0080ff,
-    0xff8000, 0x0080ff, 0xff00ff, 0xff00ff,
-    0xff0000, 0x0000ff, 0xff0000, 0x0000ff,
-  ],
-};
-
-SKELETON_DEFS[21] = {
-  name: 'Hand 21',
-  edges: [
-    [2,3],[3,4],[4,5],[6,7],[7,8],[8,9],
-    [10,11],[11,12],[12,13],[14,15],[15,16],[16,17],
-    [18,19],[19,20],[20,21],[1,2],[1,6],[1,10],[1,14],[1,18],
-    [6,10],[10,14],[14,18],
-  ],
-  edgeColors: [],
-  jointColors: [],
-};
-
-// Face 68 - build dynamic chain
-(function() {
-  const face = { name: 'Face 68', edges: [], edgeColors: [], jointColors: [] };
-  for (let i = 1; i <= 68; i++) {
-    face.edges.push([i, i + 1]);
-    face.edgeColors.push(0x00ff00);
-    face.jointColors.push(0x00ff00);
-  }
-  face.jointColors[0] = 0xff0000;
-  SKELETON_DEFS[68] = face;
-})();
-
-SKELETON_DEFS.default = { name: 'Generic', edges: [], edgeColors: [], jointColors: [] };
-
-function getSkelDef(nk) {
-  return SKELETON_DEFS[nk] || SKELETON_DEFS.default;
-}
-
-// ============================================================
 //  HELPERS
 // ============================================================
 
@@ -218,6 +160,13 @@ function skeletonExtent(pts) {
   return max;
 }
 
+// ============================================================
+//  VIS RENDERER REGISTRY
+//  To add a new detector's visualization: register a { create, update }
+//  pair here keyed by the Object's vis_type (set in Python when you build
+//  the Object). Nothing else in this file needs to change.
+// ============================================================
+
 function makeCubeMarker() {
   const base = Math.max(0.25, Math.min(2.5, sceneScale * 0.12));
   const geo = new THREE.BoxGeometry(base, base, base);
@@ -231,111 +180,126 @@ function makeCubeMarker() {
   return mesh;
 }
 
-// ============================================================
-//  SKELETON DRAWING
-// ============================================================
+function updateCubeMarker(mesh, o) {
+  mesh.position.set(o.x, o.z, o.y);
+  mesh.rotation.set(o.roll, o.yaw, o.pitch);
+  const target = Math.max(0.25, Math.min(2.5, sceneScale * 0.12));
+  const base = mesh.userData.cubeBase || target;
+  mesh.scale.setScalar(target / base);
+}
 
-function buildSkeletonGroup(kpts3d, nk) {
+// Flat rectangle + RGB axes gizmo - for AprilTags, QR codes, barcodes, or
+// any other planar fiducial. vis_meta.size (in the config's unit) controls
+// the plane's edge length; defaults to a sensible visible size.
+function makePlanarMarker(o) {
   const g = new THREE.Group();
-  g.userData.isSkeleton = true;
-  g.userData.nk = nk;
-  const def = getSkelDef(nk || kpts3d.length);
-  const pts = kpts3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
+  const size = Math.max(0.05, (o.vis_meta && o.vis_meta.size) || Math.max(0.3, sceneScale * 0.08));
 
-  if (def.edges && def.edges.length > 0) {
-    const bp = []; const bc = [];
-    for (let i = 0; i < def.edges.length; i++) {
-      const [a, b] = def.edges[i];
-      const p1 = pts[a - 1], p2 = pts[b - 1];
-      if (!p1 || !p2) { bp.push(0,0,0,0,0,0); continue; }
-      bp.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
-      const c = new THREE.Color(def.edgeColors[i] || 0x00ff00);
-      bc.push(c.r, c.g, c.b, c.r, c.g, c.b);
-    }
-    const bg = new THREE.BufferGeometry();
-    bg.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3));
-    bg.setAttribute('color', new THREE.Float32BufferAttribute(bc, 3));
-    g.add(new THREE.LineSegments(bg, new THREE.LineBasicMaterial({ vertexColors: true })));
-  }
+  const planeGeo = new THREE.PlaneGeometry(size, size);
+  const planeMat = new THREE.MeshStandardMaterial({
+    color: 0xffaa00, transparent: true, opacity: 0.75, side: THREE.DoubleSide,
+  });
+  const plane = new THREE.Mesh(planeGeo, planeMat);
+  g.add(plane);
 
-  const extent = skeletonExtent(pts) || 1;
-  const jointRadius = Math.max(0.025, Math.min(0.15, extent * 0.04));
-  const jg = new THREE.SphereGeometry(jointRadius, 12, 12);
-  for (let i = 0; i < pts.length; i++) {
-    const m = new THREE.Mesh(jg, new THREE.MeshStandardMaterial({
-      color: (def.jointColors && def.jointColors[i]) || 0xff0000,
-    }));
-    m.position.copy(pts[i]);
-    g.add(m);
-  }
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(planeGeo),
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }),
+  );
+  g.add(edges);
+
+  const axesLen = size * 0.6;
+  g.add(new THREE.AxesHelper(axesLen));
+
+  g.userData.planarSize = size;
   return g;
 }
 
-function updateSkeletonGroup(g, kpts3d, nk) {
-  const def = getSkelDef(nk || kpts3d.length);
+function updatePlanarMarker(g, o) {
+  g.position.set(o.x, o.z, o.y);
+  g.rotation.set(o.roll, o.yaw, o.pitch);
+  const size = Math.max(0.05, (o.vis_meta && o.vis_meta.size) || Math.max(0.3, sceneScale * 0.08));
+  const base = g.userData.planarSize || size;
+  g.scale.setScalar(size / base);
+}
+
+// Flexible pose / any keypoint set - just plot the points in 3D, no bones.
+// Point count can vary frame to frame (occluded keypoints dropped, etc.).
+function buildPointCloud(kpts3d) {
+  const g = new THREE.Group();
+
+  const pts = kpts3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
+  const extent = skeletonExtent(pts) || 1;
+  const dotRadius = Math.max(0.025, Math.min(0.15, extent * 0.04));
+  const dotGeo = new THREE.SphereGeometry(dotRadius, 12, 12);
+  const dotMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
+
+  for (const p of pts) {
+    const m = new THREE.Mesh(dotGeo, dotMat);
+    m.position.copy(p);
+    g.add(m);
+  }
+  g.userData.dotRadius = dotRadius;
+  return g;
+}
+
+function updatePointCloud(g, kpts3d) {
   const pts = kpts3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
 
-  if (def.edges && def.edges.length > 0 && g.children[0] && g.children[0].geometry) {
-    const arr = g.children[0].geometry.attributes.position.array;
-    let idx = 0;
-    for (const [a, b] of def.edges) {
-      const p1 = pts[a - 1], p2 = pts[b - 1];
-      if (p1 && p2) {
-        arr[idx] = p1.x; arr[idx+1] = p1.y; arr[idx+2] = p1.z;
-        arr[idx+3] = p2.x; arr[idx+4] = p2.y; arr[idx+5] = p2.z;
-      }
-      idx += 6;
-    }
-    g.children[0].geometry.attributes.position.needsUpdate = true;
+  while (g.children.length < pts.length) {
+    const dotGeo = new THREE.SphereGeometry(g.userData.dotRadius || 0.05, 12, 12);
+    const dotMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
+    g.add(new THREE.Mesh(dotGeo, dotMat));
   }
-  for (let i = 0; i < pts.length && i + 1 < g.children.length; i++) {
-    g.children[i + 1].position.copy(pts[i]);
+  while (g.children.length > pts.length) {
+    const extra = g.children.pop();
+    disposeMesh(extra);
   }
+  for (let i = 0; i < pts.length; i++) {
+    g.children[i].position.copy(pts[i]);
+  }
+}
+
+const VIS_RENDERERS = {
+  generic: { create: () => makeCubeMarker(),     update: updateCubeMarker },
+  points:  { create: (o) => buildPointCloud(o.keypoints_3d),
+             update: (g, o) => updatePointCloud(g, o.keypoints_3d) },
+  planar:  { create: (o) => makePlanarMarker(o), update: updatePlanarMarker },
+};
+
+function resolveVisType(o) {
+  // keypoints_3d presence still forces the point-cloud renderer even if a
+  // detector forgets to set vis_type, for back-compat with pose detectors.
+  const hasKp = o.keypoints_3d && o.keypoints_3d.length >= 3;
+  if (hasKp) return "points";
+  if (o.vis_type && VIS_RENDERERS[o.vis_type]) return o.vis_type;
+  return "generic";
 }
 
 // ============================================================
 //  MAIN SYNC
 // ============================================================
 
-function decideVisualization(o) {
-  const hasKp = o.keypoints_3d && o.keypoints_3d.length >= 3;
-  const nk = o.num_keypoints || (hasKp ? o.keypoints_3d.length : 0);
-  if (hasKp) return { type: 'skeleton', nk };
-  return { type: 'cube', nk: 0 };
-}
-
-function createBoxForDetection(o, dec) {
+function createBoxForDetection(o) {
   const key = o.id;
+  const visType = resolveVisType(o);
   const prev = boxes[key];
   if (prev) {
-    if (prev.userData.visType === dec.type) return prev;
+    if (prev.userData.visType === visType) return prev;
     cleanupBox(key);
   }
 
-  let main;
-  if (dec.type === 'skeleton') {
-    main = buildSkeletonGroup(o.keypoints_3d, dec.nk);
-    main.userData.visType = 'skeleton';
-    scene.add(main);
-  } else {
-    main = makeCubeMarker();
-    main.position.set(o.x, o.z, o.y);
-    main.userData.visType = 'cube';
-    scene.add(main);
-  }
-  return main;
+  const renderer = VIS_RENDERERS[visType] || VIS_RENDERERS.generic;
+  const obj3d = renderer.create(o);
+  obj3d.userData.visType = visType;
+  scene.add(obj3d);
+  return obj3d;
 }
 
-function updateExistingBox(obj3d, o, dec) {
-  if (obj3d.userData.isSkeleton) {
-    updateSkeletonGroup(obj3d, o.keypoints_3d, dec.nk);
-  } else {
-    obj3d.position.set(o.x, o.z, o.y);
-    obj3d.rotation.set(o.roll, o.yaw, o.pitch);
-    const target = Math.max(0.25, Math.min(2.5, sceneScale * 0.12));
-    const base = obj3d.userData.cubeBase || target;
-    obj3d.scale.setScalar(target / base);
-  }
+function updateExistingBox(obj3d, o) {
+  const visType = obj3d.userData.visType || "generic";
+  const renderer = VIS_RENDERERS[visType] || VIS_RENDERERS.generic;
+  renderer.update(obj3d, o);
 }
 
 function cleanupBox(key) {
@@ -363,21 +327,22 @@ function sync(objects) {
 
   for (const o of objects) {
     seen.add(o.id);
-    const dec = decideVisualization(o);
     const key = o.id;
+    const visType = resolveVisType(o);
 
     if (!boxes[key]) {
-      boxes[key] = createBoxForDetection(o, dec);
+      boxes[key] = createBoxForDetection(o);
+    } else if (boxes[key].userData.visType !== visType) {
+      boxes[key] = createBoxForDetection(o);
     } else {
-      const cur = boxes[key];
-      if (cur.userData.visType !== dec.type) {
-        boxes[key] = createBoxForDetection(o, dec);
-      } else {
-        updateExistingBox(cur, o, dec);
-      }
+      updateExistingBox(boxes[key], o);
     }
 
-    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${dec.nk > 0 ? dec.nk + ' kpts' : '-'}</td></tr>`;
+    const nk = o.num_keypoints || (o.keypoints_3d ? o.keypoints_3d.length : 0);
+    const label = visType === 'points' ? `${nk} pts`
+                : visType === 'planar' ? (o.vis_meta && o.vis_meta.tag_id != null ? `tag ${o.vis_meta.tag_id}` : 'planar')
+                : '-';
+    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
   }
 
   for (const k in boxes) {

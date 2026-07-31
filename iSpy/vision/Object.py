@@ -20,7 +20,9 @@ class Object:
         keypoints_3d: list | None = None,
         ray_origin=None,
         ray_direction=None,
-        depth_source: str="monocular",
+        depth_source: str = "monocular",
+        vis_type: str = "generic",
+        vis_meta: dict | None = None,
     ):
         self.x = x
         self.y = y
@@ -32,10 +34,19 @@ class Object:
         self.name = name
         self.confidence = confidence
         self.keypoints_3d = keypoints_3d
-        self.keypoints_3d = keypoints_3d
         self.ray_origin = ray_origin        # np.ndarray(3,) robot-frame, or None
         self.ray_direction = ray_direction  # np.ndarray(3,) unit vector, or None
-        self.depth_source = depth_source  
+        self.depth_source = depth_source
+
+        # Drives which renderer the 3D viewer uses for this object. New
+        # detector types just need a value here + a matching entry in
+        # VIS_RENDERERS in viewer3d.html - no other file needs to change.
+        #   "generic" -> cube (default)
+        #   "points"  -> raw keypoint dots, no bones (auto-selected whenever
+        #                keypoints_3d is set, regardless of this field)
+        #   "planar"  -> flat rectangle + orientation gizmo (AprilTags, QR, barcodes)
+        self.vis_type = vis_type
+        self.vis_meta = vis_meta or {}
 
         self.start_time = time.perf_counter()
         self.alive = 0
