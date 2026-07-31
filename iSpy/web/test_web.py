@@ -24,7 +24,6 @@ CAM_NAMES = ["camera_1", "camera_2"]
 
 
 class FakeObject:
-    """Stands in for iSpy.vision.Object.Object - same fields the web layer reads."""
     NAMES = {0: "fuel_cell", 1: "cone", 2: "cube"}
 
     def __init__(self, i: int):
@@ -38,6 +37,22 @@ class FakeObject:
         self.name = self.NAMES.get(i % len(self.NAMES), "unknown")
         self.confidence = random.uniform(0.5, 0.99)
 
+        mode = i % 3
+        if mode == 0:
+            self.vis_type = "generic"
+            self.vis_meta = {}
+            self.keypoints_3d = None
+        elif mode == 1:
+            self.vis_type = "planar"
+            self.vis_meta = {"tag_id": i, "size": 0.15}
+            self.keypoints_3d = None
+        else:
+            self.vis_type = "generic"  # forces auto-detect via keypoints_3d
+            self.vis_meta = {}
+            self.keypoints_3d = [
+                [random.uniform(-0.5, 0.5), random.uniform(0, 1.8), random.uniform(-0.3, 0.3)]
+                for _ in range(17)
+            ]
 
 class FakeCamera:
     """Stands in for ObjectDetectionCamera - only what the web layer touches
