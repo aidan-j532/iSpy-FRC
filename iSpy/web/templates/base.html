@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}iSpy{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/design.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <div class="app-shell">
+    <nav class="sidebar">
+      <div class="brand">iSpy</div>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/cameras">Cameras</a>
+      <a href="/health-page">Health</a>
+      <a href="/metrics">Metrics</a>
+      <a href="/models">Models</a>
+      <a href="/datasets">Datasets</a>
+      <a href="/viewer3d">3D Viewer</a>
+      <a href="/logs">Logs</a>
+      <a href="/addons">Add-ons</a>
+      <a href="/settings">Settings</a>
+    </nav>
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <div class="toast-container" id="toast-container"></div>
+  {% block scripts %}{% endblock %}
+  <script>
+    document.querySelectorAll('.sidebar a').forEach(a => {
+      if (a.pathname === location.pathname) a.classList.add('active');
+    });
+
+    function showToast(message, type) {
+      type = type || 'info';
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'toast toast-' + type;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+  </script>
+</body>
+</html>

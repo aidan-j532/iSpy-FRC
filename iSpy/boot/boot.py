@@ -1,13 +1,15 @@
 import sys
 import os
 import contextlib
-
+import warnings
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 import logging
 from pathlib import Path
 from functools import lru_cache
 import io
+from iSpy.dataset.dataset import get_active_dataset_dir
+import iSpy.config.iSpyConfig as iSpyConfig
 
 _REAL_STDOUT_FD = os.dup(1)
 _REAL_STDERR_FD = os.dup(2)
@@ -20,6 +22,27 @@ class _NullWriter(io.TextIOBase):
     def flush(self):
         pass
 
+def _bootstrap_default_camera(config: iSpyConfig):
+    cams = config.get("camera_configs", {})
+    if cams and any(c.get("source") not in (None, "") for c in cams.values()):
+        return  # already has something real
+    from iSpy.web.modules.cameras import CamerasModule  # or move probing to a shared util
+    devices = CamerasModule({})._probe_devices()
+    if not devices:
+        logger.warning("No cameras detected at first boot - leaving default placeholder config.")
+        return
+    dev = devices[0]
+    name = "camera_1"
+    config.set("camera_configs", {
+        name: {
+            "name": name, "source": dev["path"], "device_id": dev.get("device_id"),
+            "pipeline": "object_detection", "yaw": 0, "pitch": 0, "height": 1.0,
+            "x": 0, "y": 0, "z": 0, "grayscale": False, "subsystem": "field",
+            "calibration": {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
+        }
+    })
+    config.save()
+    logger.info("First boot: auto-configured camera '%s' -> %s", name, dev["path"])
 
 def _close_logging_handlers() -> None:
     root = logging.getLogger()
@@ -1171,6 +1194,7 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
 
     try:
         from rknn.api import RKNN
+        warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
     except ImportError:
         raise ImportError("RKNN Toolkit not found. Install it to convert to RKNN format.")
 
@@ -1461,6 +1485,9 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
 def _convert_model_subprocess(model_file, target_format, input_size, quantize=None, force=False, kw=None) -> Path:
     import tempfile
 
+    outputs_dir = _PROJECT_ROOT / "Outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+
     args = {
         "model_file": str(model_file),
         "target_format": target_format,
@@ -1470,9 +1497,11 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
         "kw": kw,
     }
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump(args, f)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir=str(outputs_dir)) as f:
         args_path = f.name
+        json.dump(args, f)
+
+    result_path = args_path + ".result.json"
 
     try:
         proc = subprocess.run(
@@ -1482,11 +1511,6 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
             text=True,
         )
 
-        result_line = None
-        for line in proc.stdout.splitlines():
-            if line.startswith("ISPY_RESULT:"):
-                result_line = line[len("ISPY_RESULT:"):]
-
         # Surface the worker's own logging - it just runs in a subprocess,
         # it shouldn't run silently.
         if proc.stdout:
@@ -1494,26 +1518,28 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
         if proc.stderr:
             print(proc.stderr, file=_REAL_STDERR, end="")
 
-        if proc.returncode != 0 or result_line is None:
+        if proc.returncode != 0 or not os.path.exists(result_path):
             logger.error(
                 "Conversion subprocess for %s -> %s failed (exit code %s). Falling back to .pt.",
                 Path(model_file).name, target_format, proc.returncode,
             )
             return Path(model_file)
 
-        return Path(result_line)
+        with open(result_path) as f:
+            result_data = json.load(f)
+        return Path(result_data["result"])
     finally:
-        try:
-            os.unlink(args_path)
-        except OSError:
-            pass
+        for p in (args_path, result_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 def setup_files(first_boot: bool = False):
     yolo_dir = _PROJECT_ROOT / "YoloModels"
     config_dir = _PROJECT_ROOT / "Config"
     outputs_dir = _PROJECT_ROOT / "Outputs"
-    dataset_dir = _PROJECT_ROOT / "QuantizeDataset"
-
+    dataset_dir = get_active_dataset_dir()
     saved_config = None
     if first_boot:
         config_path = config_dir / "config.json"
@@ -1644,6 +1670,10 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
 
     if config is None:
         config = iSpyConfig(str(config_path))
+
+    _bootstrap_default_camera(config)
+
+    best_format = None
 
     best_format = None
     if config.get("auto_opt"):

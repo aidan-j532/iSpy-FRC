@@ -1,6 +1,8 @@
 from pathlib import Path
 import logging
 import sys
+import os
+import threading
 
 
 def _configure_quiet_logging() -> None:
@@ -51,6 +53,27 @@ from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
 
 logger = logging.getLogger(__name__)
 
+_pause_event = threading.Event()
+_shutdown_event = threading.Event()
+
+
+def _stdin_reader(pause_event: threading.Event, shutdown_event: threading.Event):
+    try:
+        for line in sys.stdin:
+            cmd = line.strip().upper()
+            if cmd == "PAUSE":
+                pause_event.set()
+                logger.info("Vision paused by service")
+            elif cmd == "RESUME":
+                pause_event.clear()
+                logger.info("Vision resumed by service")
+            elif cmd == "SHUTDOWN":
+                shutdown_event.set()
+                logger.info("Shutdown command received from service")
+                break
+    except Exception:
+        pass
+
 def main():
     repo_root = Path.cwd()
     plugin_root = Path(_plugins_pkg.__file__).resolve().parent
@@ -65,7 +88,7 @@ def main():
     is_valid, corrected_model_path = enforce_model_organization(repo_root, config.config)
     if corrected_model_path:
         config.config["vision_model"]["file_path"] = corrected_model_path
-        
+
     cameras = []
     for cam_name in config.camera_configs:
         cam_config = config.camera_config(cam_name)
@@ -83,6 +106,15 @@ def main():
         sys.exit(1)
 
     vision = iSpy(cameras, config)
+
+    reader_thread = threading.Thread(
+        target=_stdin_reader,
+        args=(vision.pause_event, vision.shutdown_event),
+        daemon=True,
+        name="stdin-reader",
+    )
+    reader_thread.start()
+
     vision.run()
 
 if __name__ == "__main__":

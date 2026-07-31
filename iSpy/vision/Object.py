@@ -1,7 +1,8 @@
 import numpy as np
 import math
 import time
-
+import itertools
+_id_counter = itertools.count(1)
 
 class Object:
     def __init__(
@@ -9,19 +10,32 @@ class Object:
         x: float,
         y: float,
         z: float = 0.0,
-        id: int = -1,
+        id: int = 0.0,
         alive_time: float = 0.4,
         roll: float = 0.0,
         pitch: float = 0.0,
         yaw: float = 0.0,
+        name: str = "unknown",
+        confidence: float = 0.0,
+        keypoints_3d: list | None = None,
+        ray_origin=None,
+        ray_direction=None,
+        depth_source: str="monocular",
     ):
         self.x = x
         self.y = y
         self.z = z
-        self.id = id
+        self.id = id if id is not None else next(_id_counter)
         self.roll = roll
         self.pitch = pitch
         self.yaw = yaw
+        self.name = name
+        self.confidence = confidence
+        self.keypoints_3d = keypoints_3d
+        self.keypoints_3d = keypoints_3d
+        self.ray_origin = ray_origin        # np.ndarray(3,) robot-frame, or None
+        self.ray_direction = ray_direction  # np.ndarray(3,) unit vector, or None
+        self.depth_source = depth_source  
 
         self.start_time = time.perf_counter()
         self.alive = 0

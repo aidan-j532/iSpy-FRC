@@ -49,7 +49,7 @@ _HTML = """<!DOCTYPE html>
   <script>
     async function refresh() {
       try {
-        const data = await fetch('/health', {
+        const data = await fetch('/health/detailed', {
           headers: { 'Accept': 'application/json' }
         }).then(r => r.json());
 
@@ -113,9 +113,9 @@ class HealthReporter(UtilityBase):
         self._network_handler = None  # set externally after all utilities load
 
         if flask_app and FLASK_AVAILABLE:
-            flask_app.add_url_rule("/health", "health", self._health_route)
+            flask_app.add_url_rule("/health/detailed", "health_detailed", self._health_route)
         elif not FLASK_AVAILABLE:
-            self.logger.warning("Flask not available - /health endpoint disabled.")
+            self.logger.warning("Flask not available - /health/detailed endpoint disabled.")
 
     def set_network_handler(self, handler):
         self._network_handler = handler

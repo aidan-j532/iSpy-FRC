@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Logs - iSpy{% endblock %}
+{% block content %}
+<h1>Logs</h1>
+<div class="card controls-bar">
+  <label class="controls-label">
+    <input type="checkbox" id="autoscroll" checked> Auto-scroll
+  </label>
+  <label class="controls-label">
+    <input type="checkbox" id="paused"> Pause
+  </label>
+  <label class="controls-label">
+    Lines
+    <select id="line-count" onchange="refresh()">
+      <option value="100">100</option>
+      <option value="200" selected>200</option>
+      <option value="500">500</option>
+      <option value="1000">1000</option>
+    </select>
+  </label>
+  <button onclick="clearView()">Clear view</button>
+</div>
+<pre id="log-view" class="card log-view"></pre>
+<script>
+const view = document.getElementById('log-view');
+const autoscroll = document.getElementById('autoscroll');
+const paused = document.getElementById('paused');
+let lastContent = '';
+
+function colorize(line) {
+  const esc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (/\bERROR\b|\bCRITICAL\b/.test(line)) return `<span class="log-error">${esc}</span>`;
+  if (/\bWARNING\b/.test(line)) return `<span class="log-warn">${esc}</span>`;
+  if (/\bINFO\b/.test(line)) return `<span class="log-info">${esc}</span>`;
+  return `<span class="log-dim">${esc}</span>`;
+}
+
+function clearView() {
+  view.innerHTML = '';
+  lastContent = '';
+}
+
+async function refresh() {
+  if (paused.checked) return;
+  try {
+    const n = document.getElementById('line-count').value;
+    const data = await fetch(`/api/logs?n_lines=${n}`).then(r => r.json());
+    const content = data.lines.map(colorize).join('');
+    if (content !== lastContent) {
+      view.innerHTML = content;
+      lastContent = content;
+      if (autoscroll.checked) view.scrollTop = view.scrollHeight;
+    }
+  } catch (e) {
+    console.error('Log refresh failed', e);
+  }
+}
+setInterval(refresh, 2000);
+refresh();
+</script>
+{% endblock %}

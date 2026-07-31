@@ -19,12 +19,35 @@ class iSpyConfig:
                 "source_pt": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
                 "min_conf": 0.5,
             },
-                # Optional PnP for pose (translation stored on Box; rotation not stored):
+                # Optional PnP for pose (translation stored on Box; rotation stored as roll/pitch/yaw on Box).
+                # Enable to get 3D position + orientation from 2D keypoints, and to render a 3D human
+                # skeleton in the web viewer (when keypoints_3d is present on the Object).
                 # "pnp": {
-                #     "object_points": [[0, 0, 0], ...],
+                #     # Canonical COCO 17-keypoint skeleton (~1.8 m tall, origin at mid-hip).
+                #     # Indices match the model's kpt_shape ordering (typically COCO format).
+                #     "object_points": [
+                #         [0.0, 1.0, 0.1],       # 0  nose
+                #         [-0.03, 0.95, 0.1],    # 1  left_eye
+                #         [0.03, 0.95, 0.1],     # 2  right_eye
+                #         [-0.08, 0.93, 0.0],    # 3  left_ear
+                #         [0.08, 0.93, 0.0],     # 4  right_ear
+                #         [-0.2, 0.8, 0.0],      # 5  left_shoulder
+                #         [0.2, 0.8, 0.0],       # 6  right_shoulder
+                #         [-0.35, 0.55, -0.05],  # 7  left_elbow
+                #         [0.35, 0.55, -0.05],   # 8  right_elbow
+                #         [-0.4, 0.3, -0.1],     # 9  left_wrist
+                #         [0.4, 0.3, -0.1],      # 10 right_wrist
+                #         [-0.15, 0.0, 0.0],     # 11 left_hip
+                #         [0.15, 0.0, 0.0],      # 12 right_hip
+                #         [-0.15, -0.45, 0.0],   # 13 left_knee
+                #         [0.15, -0.45, 0.0],    # 14 right_knee
+                #         [-0.15, -0.9, 0.0],    # 15 left_ankle
+                #         [0.15, -0.9, 0.0],     # 16 right_ankle
+                #     ],
                 #     "camera_matrix": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
                 #     "dist_coeffs": [0, 0, 0, 0, 0],
                 #     "min_keypoint_conf": 0.5,
+                #     # "method": "iterative",  # "iterative" (3D objects) or "ippe" (planar objects, exactly 4 points)
                 # },
             # },
             "num_gpus": "auto",
@@ -44,6 +67,7 @@ class iSpyConfig:
             "network_tables_ip": "10.0.0.2",
             "metrics": True,
             "app_mode": True,
+            "max_fps": 0,
             "camera_configs": {
                 "default_cam": {
                     "name": "default_cam",
@@ -145,42 +169,45 @@ class iSpyConfig:
             with open(file_path, "r") as f:
                 data = json.load(f)
             self._update_config(data)
-        except Exception as e:
-            self.logger.warning(
-                "Failed to load config from %s: %s, searching for config", file_path, e
-            )
-            try:
-                config_file = self.search_for_config()
-                with open(config_file, "r") as f:
-                    data = json.load(f)
-                self._update_config(data)
-            except Exception as e2:
-                self.logger.warning(
-                    "Failed to find and load config: %s. Using defaults.", e2
-                )
+        except json.JSONDecodeError as e:
+            # Back up the corrupt file instead of silently discarding it or
+            # re-searching the same broken path.
+            bad_path = Path(file_path)
+            if bad_path.exists():
+                backup = bad_path.with_suffix(f".corrupt-{int(__import__('time').time())}.json")
+                try:
+                    bad_path.rename(backup)
+                    self.logger.error(
+                        "Config at %s was invalid JSON (%s). Backed up to %s and "
+                        "regenerating defaults.", file_path, e, backup,
+                    )
+                except OSError:
+                    self.logger.error(
+                        "Config at %s was invalid JSON (%s) and could not be backed up. "
+                        "Using defaults without touching the file.", file_path, e,
+                    )
+            self.save()
+        except FileNotFoundError:
+            self.logger.warning("Config file not found at %s. Using defaults.", file_path)
         finally:
             try:
                 self._configure_logging()
             except Exception:
-                self.logger.exception(
-                    "Failed to apply logging configuration after loading file"
-                )
-
+                self.logger.exception("Failed to apply logging configuration after loading file")
     def save(self, quiet=False):
         try:
             if self.file_path:
                 if not quiet:
                     self.logger.info("Config saved to %s", self.file_path)
             else:
-                self.logger.info(
-                    "No config file path set; saving to Config/config.json"
-                )
+                self.logger.info("No config file path set; saving to Config/config.json")
                 self.file_path = str(_REPO_ROOT / "Config" / "config.json")
+
+            Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
             with open(self.file_path, "w") as f:
                 json.dump(self.config, f, indent=4)
         except Exception as e:
             self.logger.error("Failed to save config to %s: %s", self.file_path, e)
-
     def get(self, key, default=None):
         return self.config.get(key, default)
 
@@ -289,6 +316,7 @@ class iSpyCameraConfig:
         "auto_brightness": True,
         "calibration": {"size": 0, "distance": 0, "game_piece_size": 0, "fov": 0},
         "source": "/dev/video0",
+        "device_id": None,
         "subsystem": "field",
     }
 

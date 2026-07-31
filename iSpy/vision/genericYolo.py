@@ -7,13 +7,30 @@ from ultralytics import YOLO
 from iSpy.vision.ModelInspector import fill_missing_config
 import threading
 import queue
-try:
-    import torch
-except ImportError:
-    torch = None
-    
+import torch
+import warnings
+from pathlib import Path
+
+class ModelFileError(RuntimeError):
+    """Raised when a configured model file is missing, empty, or truncated."""
+
+def _validate_model_file(path: str) -> None:
+    p = Path(path)
+    if not p.exists():
+        raise ModelFileError(f"Model file does not exist: {p}")
+    size = p.stat().st_size if p.is_file() else sum(
+        f.stat().st_size for f in p.rglob("*") if f.is_file()
+    )
+    if size < 1024:  # nothing legitimate is this small
+        raise ModelFileError(
+            f"Model file '{p}' is only {size} bytes — it is empty or truncated "
+            f"(likely a bad download, a Git LFS pointer file that was never pulled, "
+            f"or a failed export). Re-download or re-export it before continuing."
+        )
+
 try:
     from rknnlite.api import RKNNLite
+    warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
 
     RKNN_FOUND = True
 
@@ -267,13 +284,14 @@ def _validate_output_block(out: dict, task: str, num_classes: int) -> None:
 
 
 class Box:
-    def __init__(self, xyxy, conf, cls_id=0, translation=None, rotation=None):
+    def __init__(self, xyxy, conf, cls_id=0, translation=None, rotation=None, keypoints_3d=None):
         self.xyxy = xyxy
         self.conf = conf
         self.cls_id = cls_id
         # PnP results, both None for detect-only models
         self.translation = translation  # (x, y, z) metres in camera frame
         self.rotation = rotation  # (roll, pitch, yaw) radians in camera frame
+        self.keypoints_3d = keypoints_3d  # list of [x,y,z] per keypoint in camera frame or None
 
 
 class Results:
@@ -283,6 +301,17 @@ class Results:
         self.boxes = boxes
         self.orig_shape = orig_shape
         self.keypoints = keypoints if keypoints is not None else []
+
+    _SKELETONS = {
+        17: [
+            (0, 1), (0, 2), (1, 3), (2, 4),
+            (5, 6),
+            (5, 7), (7, 9), (6, 8), (8, 10),
+            (5, 11), (6, 12),
+            (11, 12),
+            (11, 13), (13, 15), (12, 14), (14, 16),
+        ],
+    }
 
     def plot(self, frame):
         for box in self.boxes:
@@ -308,6 +337,16 @@ class Results:
                     cv2.LINE_AA,
                 )
         for kpt_set in self.keypoints:
+            nk = kpt_set.shape[0]
+            skeleton = self._SKELETONS.get(nk)
+            if skeleton is not None:
+                for i, j in skeleton:
+                    if i >= nk or j >= nk:
+                        continue
+                    x1, y1, c1 = kpt_set[i]
+                    x2, y2, c2 = kpt_set[j]
+                    if c1 > 0.5 and c2 > 0.5:
+                        cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
             for kpt in kpt_set:
                 x, y, conf = kpt
                 if conf > 0.5:
@@ -322,8 +361,9 @@ class GenericYolo:
     def __init__(self, model_config: dict, core_mask=None, iSpy_config=None):
         self.logger = logging.getLogger(__name__)
         self._iSpy_config = iSpy_config
+        _validate_model_file(model_config.get("file_path", ""))
         model_config = fill_missing_config(model_config)
-
+        
         cfg = normalize_model_config(model_config)
         model_file_path = cfg["file_path"]
         self.device = cfg.get("device", 0)
@@ -1035,9 +1075,9 @@ class GenericYolo:
 
     def _solve_pnp(
         self, keypoints: np.ndarray
-    ) -> tuple[tuple[float, float, float] | None, np.ndarray | None]:
+    ) -> tuple[tuple[float, float, float] | None, np.ndarray | None, list | None]:
         if not self.pnp_config:
-            return None, None
+            return None, None, None
 
         object_points = np.asarray(self.pnp_config["object_points"], dtype=np.float64)
         camera_matrix = np.asarray(self.pnp_config["camera_matrix"], dtype=np.float64)
@@ -1046,6 +1086,7 @@ class GenericYolo:
             dtype=np.float64,
         )
         min_kpt_conf = float(self.pnp_config.get("min_keypoint_conf", 0.5))
+        method = self.pnp_config.get("method", "iterative")
 
         image_points, model_points = [], []
         for i, pt in enumerate(keypoints):
@@ -1056,24 +1097,71 @@ class GenericYolo:
             image_points.append([float(pt[0]), float(pt[1])])
             model_points.append(object_points[i])
 
-        if len(image_points) < 4:
-            return None, None
+        if method == "iterative":
+            if len(image_points) < 6:
+                return None, None, None
+        else:
+            if len(image_points) < 4:
+                return None, None, None
 
         image_points = np.asarray(image_points, dtype=np.float64)
         model_points = np.asarray(model_points, dtype=np.float64)
+
+        if method == "ippe":
+            if model_points.shape[0] != 4:
+                self.logger.warning("IPPE requires exactly 4 points, got %d; falling back to ITERATIVE", model_points.shape[0])
+                flags = cv2.SOLVEPNP_ITERATIVE
+            else:
+                flags = cv2.SOLVEPNP_IPPE
+        else:
+            flags = cv2.SOLVEPNP_ITERATIVE
+
         ok, rvec, tvec = cv2.solvePnP(
             model_points,
             image_points,
             camera_matrix,
             dist_coeffs,
-            flags=cv2.SOLVEPNP_ITERATIVE,
+            flags=flags,
         )
         if not ok:
-            return None, None
+            return None, None, None
 
+        R, _ = cv2.Rodrigues(rvec)
+        # keypoints_3d = []
+        # for i, pt in enumerate(object_points):
+        #     pos = R @ pt + tvec.reshape(3)
+        #     keypoints_3d.append(pos.tolist())
+
+        # euler = self._rvec_to_euler(rvec.reshape(3))
+        # return euler, tvec.reshape(3), keypoints_3d
+        
+        # FIX: Flatten tvec to 1D first so tvec[2] is a true scalar
+        tvec = tvec.reshape(3)
+        
+        # 1. Get the average depth of the person from the PnP translation vector
+        depth_z = float(tvec[2])
+        
+        # 2. Extract camera intrinsics
+        fx = camera_matrix[0, 0]
+        fy = camera_matrix[1, 1]
+        cx = camera_matrix[0, 2]
+        cy = camera_matrix[1, 2]
+
+        keypoints_3d = []
+        for i, pt in enumerate(keypoints):
+            u, v, conf = pt[0], pt[1], pt[2]
+            # Always unproject from the observed 2D pixel at the shared
+            # PnP depth - consistent for every joint, confident or not.
+            # (Previously, low-confidence joints used a totally different
+            # source - the rigid template point - which is what produced
+            # inconsistent/warped limbs.)
+            X = (u - cx) * depth_z / fx
+            Y = (v - cy) * depth_z / fy
+            Z = depth_z
+            keypoints_3d.append([float(X), float(Y), float(Z)])
         euler = self._rvec_to_euler(rvec.reshape(3))
-        return euler, tvec.reshape(3)
-
+        return euler, tvec, keypoints_3d
+    
     def _apply_software_nms(
         self,
         boxes_xyxy: np.ndarray,
@@ -1137,13 +1225,14 @@ class GenericYolo:
             translation: list | None = None
             rotation: tuple | None = None
             kpt_scaled: np.ndarray | None = None
+            kpts_3d: list | None = None
 
             if kpts_raw is not None and num_kpts > 0:
                 kpt_set = kpts_raw[i].reshape(num_kpts, kpt_dims)
                 kpt_scaled = self._scale_coords(kpt_set, orig_shape, is_kpts=True)
 
                 if self.pnp_config:
-                    euler, tvec = self._solve_pnp(kpt_scaled)
+                    euler, tvec, kpts_3d = self._solve_pnp(kpt_scaled)
                     if tvec is not None:
                         translation = tvec.tolist()
                     if euler is not None:
@@ -1156,6 +1245,7 @@ class GenericYolo:
                     int(class_ids[i]),
                     translation,
                     rotation,
+                    keypoints_3d=kpts_3d,
                 )
             )
             if kpt_scaled is not None:
@@ -1254,11 +1344,13 @@ class GenericYolo:
                 kpt_arr = np.asarray(kpt_set)
                 if self.pnp_config and len(boxes) == len(kpt_arrs):
                     idx = len(keypoints_list)
-                    euler, tvec = self._solve_pnp(kpt_arr)
+                    euler, tvec, kpts_3d = self._solve_pnp(kpt_arr)
                     if euler is not None:
                         boxes[idx].rotation = euler
                     if tvec is not None:
                         boxes[idx].translation = tvec.tolist()
+                    if kpts_3d is not None:
+                        boxes[idx].keypoints_3d = kpts_3d
                 keypoints_list.append(kpt_arr)
 
         return Results(boxes, ultralytics_result.orig_shape, keypoints_list or None)

@@ -1,3 +1,4 @@
+from pathlib import Path
 from iSpy.vision.Object import Object
 import cv2
 import math
@@ -10,7 +11,8 @@ from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
 from iSpy.vision.genericYolo import Box, Results, GenericYolo
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
-import logging
+from iSpy.vision.genericYolo import Box, Results, GenericYolo, ModelFileError
+from iSpy.vision import triangulation
 
 class ObjectDetectionCamera(Camera, VisionBase):
     plugin_name = "object_detection"
@@ -48,6 +50,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
         vm_filled = fill_missing_config(dict(config["vision_model"]))
         self.margin = vm_filled.get("margin", config["vision_model"].get("margin", 0))
         self.min_confidence = float(vm_filled.get("min_conf", config["vision_model"].get("min_conf", 0.5)))
+        self.z_mode = config["vision_model"].get("z_mode", "size_based")  # "size_based" | "ground_plane"
         self.yolo_model_file = vm_filled["file_path"]
         self.input_size = tuple(vm_filled["input_size"])
         self.quantized = vm_filled.get("quantized", config["vision_model"].get("quantized", False))
@@ -86,14 +89,26 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         super().__init__(camera_config, self.input_size, self.grayscale)
 
-        self.model = GenericYolo(
-            vm_filled,
-            self.core_mask,
-            iSpy_config=config,
-        )
+        try:
+            self.model = GenericYolo(vm_filled, self.core_mask, iSpy_config=config)
+        except ModelFileError as e:
+            self.logger.error(
+                "Camera '%s': %s — this camera will run without detection until fixed.",
+                camera_config.get("name", "?"), e,
+            )
+            self.model = None
+
+        self._class_names: dict[int, str] = {0: "object"}
+        try:
+            from iSpy.vision.metadata import read_metadata
+            meta = read_metadata(Path(self.yolo_model_file))
+            if meta and isinstance(meta.get("names"), dict):
+                self._class_names = {int(k): str(v) for k, v in meta["names"].items()}
+        except Exception:
+            pass
 
         self._preproc_q: queue.Queue = queue.Queue(maxsize=1)
-        self._use_pipeline = self.model.model_type in ("rknn", "onnx", "tflite")
+        self._use_pipeline = self.model is not None and self.model.model_type in ("rknn", "onnx", "tflite")
 
         self._last_result: Results | None = None
         self._last_frame: np.ndarray | None = None
@@ -169,6 +184,21 @@ class ObjectDetectionCamera(Camera, VisionBase):
             preprocessed = self.model._preprocess_frame(frame)
             self._preproc_q.put((preprocessed, frame, orig_shape))
 
+    def _focal_length_px_fov(self, img_w: int) -> float:
+        # FOV-derived intrinsic - independent of any specific game piece's
+        # known size, unlike self.focal_length_pixels.
+        if self.fov and self.fov > 0:
+            return (img_w / 2.0) / math.tan(math.radians(self.fov / 2.0))
+        return self.focal_length_pixels  # fallback if FOV isn't calibrated
+
+    def _pixel_ray(self, pixel_x: float, pixel_y: float, img_w: int, img_h: int) -> triangulation.Ray:
+        f = self._focal_length_px_fov(img_w)
+        return triangulation.pixel_to_ray(
+            pixel_x, pixel_y, img_w, img_h, f,
+            self.camera_x, self.camera_y, self.camera_z,
+            self.camera_bot_relative_yaw, self.camera_pitch_angle,
+        )
+
     def _filter_box(self, box: Box, img_w: int, img_h: int) -> bool:
         x1, y1, x2, y2 = box.xyxy
         w_px = x2 - x1
@@ -231,6 +261,10 @@ class ObjectDetectionCamera(Camera, VisionBase):
         )
 
     def get_yolo_data(self) -> tuple[Results | None, np.ndarray | None]:
+        if self.model is None:
+            frame = self.get_frame()
+            return None, frame
+
         if self._use_pipeline:
             try:
                 preprocessed, orig_frame, orig_shape = self._preproc_q.get(
@@ -277,10 +311,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         return results, annotated_frame
 
-    def _pnp_to_robot_coordinates(
-        self, tvec: tuple[float, float, float]
-    ) -> np.ndarray:
-        fx, fy, fz = tvec
+    def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
+        fx, fy, fz = pt
         yaw_rad = math.radians(self.camera_bot_relative_yaw)
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
         x_rot = fz * cos_y + (-fx) * sin_y
@@ -295,30 +327,85 @@ class ObjectDetectionCamera(Camera, VisionBase):
             dtype=np.float32,
         )
 
-    def _box_to_object(self, box: Box, img_w: int, img_h: int) -> Object|None:
+    def _pnp_to_robot_coordinates(
+        self, tvec: tuple[float, float, float]
+    ) -> np.ndarray:
+        return self._camera_point_to_robot(tvec)
+
+    def _box_to_object(self, box: Box, img_w: int, img_h: int, keypoints_2d: np.ndarray | None = None) -> Object | None:
+        bottom_x = (box.xyxy[0] + box.xyxy[2]) / 2.0
+        bottom_y = box.xyxy[3]
+        ray = self._pixel_ray(bottom_x, bottom_y, img_w, img_h)
+
+        depth_source = "monocular"
         if box.translation is not None:
             pt = self._pnp_to_robot_coordinates(box.translation)
+        elif self.z_mode == "ground_plane":
+            gp = triangulation.ground_plane_intersection(ray)
+            if gp is not None:
+                pt = gp
+                depth_source = "ground_plane"
+            else:
+                pt = self._box_to_robot_point(box, img_w, img_h)
+                if pt is None:
+                    return None
+                pt = np.array([pt[0], pt[1], 0.0])
         else:
             pt = self._box_to_robot_point(box, img_w, img_h)
-        if pt is None:
-            return None
+            if pt is None:
+                return None
+            pt = np.array([pt[0], pt[1], 0.0])
+
         roll, pitch, yaw = 0.0, 0.0, 0.0
         if box.rotation is not None:
             roll, pitch, yaw = box.rotation
         z = float(pt[2]) if len(pt) > 2 else 0.0
-        return Object(float(pt[0]), float(pt[1]), z=z, roll=roll, pitch=pitch, yaw=yaw)
+        class_name = self._class_names.get(box.cls_id, f"class_{box.cls_id}")
+
+        kpts_3d_robot = None
+        if box.keypoints_3d is not None:
+            kpts_3d_robot = [self._camera_point_to_robot(tuple(kpt)).tolist() for kpt in box.keypoints_3d]
+        elif keypoints_2d is not None:
+            x1, y1, x2, y2 = box.xyxy
+            avg_px = ((x2 - x1) + (y2 - y1)) / 2.0
+            if avg_px > 0:
+                distance_los = (self.ball_d_inches * self.focal_length_pixels) / avg_px
+                f = self._focal_length_px_fov(img_w)
+                cx = img_w / 2.0
+                cy = img_h / 2.0
+                kpts_3d_robot = []
+                for kp in keypoints_2d:
+                    kp_x, kp_y = kp[0], kp[1]
+                    fx_cam = (kp_x - cx) * distance_los / f
+                    fy_cam = (kp_y - cy) * distance_los / f
+                    fz_cam = distance_los
+                    rpt = self._camera_point_to_robot((fx_cam, fy_cam, fz_cam))
+                    kpts_3d_robot.append(rpt.tolist())
+
+        return Object(
+            float(pt[0]), float(pt[1]), z=z,
+            roll=roll, pitch=pitch, yaw=yaw,
+            name=class_name, confidence=box.conf,
+            keypoints_3d=kpts_3d_robot,
+            ray_origin=ray.origin, ray_direction=ray.direction,
+            depth_source=depth_source,
+        )
 
     def run(self):
         data, frame = self.get_yolo_data()
         if data is None or frame is None:
-            return [], None
+            return [], frame
 
         img_h, img_w = frame.shape[:2]
         objects: list[Object] = []
+        kp_iter = iter(data.keypoints) if data.keypoints else None
         for box in data.boxes:
             if not self._filter_box(box, img_w, img_h):
+                if kp_iter:
+                    next(kp_iter, None)
                 continue
-            obj = self._box_to_object(box, img_w, img_h)
+            kp = next(kp_iter) if kp_iter else None
+            obj = self._box_to_object(box, img_w, img_h, keypoints_2d=kp)
             if obj is not None:
                 objects.append(obj)
         self._last_objects = objects
@@ -327,10 +414,14 @@ class ObjectDetectionCamera(Camera, VisionBase):
     def run_with_supplied_data(self, data: Results) -> list[Object]:
         img_h, img_w = data.orig_shape[:2]
         objects: list[Object] = []
+        kp_iter = iter(data.keypoints) if data.keypoints else None
         for box in data.boxes:
             if not self._filter_box(box, img_w, img_h):
+                if kp_iter:
+                    next(kp_iter, None)
                 continue
-            obj = self._box_to_object(box, img_w, img_h)
+            kp = next(kp_iter) if kp_iter else None
+            obj = self._box_to_object(box, img_w, img_h, keypoints_2d=kp)
             if obj is not None:
                 objects.append(obj)
         return objects

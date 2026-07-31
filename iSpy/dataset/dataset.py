@@ -261,6 +261,22 @@ def _search_urls_google(sess, keyword: str, count: int, headers: dict) -> list[s
 
     return found
 
+def get_active_dataset_dir(default_root: str = "QuantizeDataset") -> Path:
+    active_file = Path.cwd() / "Config" / "active_dataset.json"
+    root = Path.cwd() / default_root
+    if not active_file.exists():
+        return root
+    try:
+        import json
+        data = json.loads(active_file.read_text())
+        name = data.get("active", "")
+        if name:
+            candidate = root / name
+            if candidate.exists():
+                return candidate
+    except Exception:
+        pass
+    return root
 
 def _is_host_reachable(host: str, timeout: int = 3) -> bool:
     try:
@@ -549,6 +565,21 @@ def _rebuild_dataset_txt(ds: Path, root: Path | None = None):
         )
         return True
     return False
+
+
+def add_image_to_dataset_txt(ds_root: Path, rel_path: str):
+    txt = ds_root / "dataset.txt"
+    existing = txt.read_text().splitlines() if txt.exists() else []
+    if rel_path not in existing:
+        existing.append(rel_path)
+        txt.write_text("\n".join(existing) + "\n")
+
+
+def remove_image_from_dataset_txt(ds_root: Path, rel_path: str):
+    txt = ds_root / "dataset.txt"
+    if txt.exists():
+        lines = [l for l in txt.read_text().splitlines() if l.strip() != rel_path]
+        txt.write_text("\n".join(lines) + ("\n" if lines else ""))
 
 
 def add_validate_images(

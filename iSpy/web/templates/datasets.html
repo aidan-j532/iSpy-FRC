@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Datasets - iSpy{% endblock %}
+{% block content %}
+<h1>Dataset Manager</h1>
+
+<div id="datasets-view">
+  <div id="datasets-grid" class="dataset-grid"></div>
+</div>
+
+<div id="dataset-detail" style="display:none;">
+  <div class="controls-bar" style="margin-bottom:16px;">
+    <button onclick="backToList()" style="background:var(--border);">&larr; Back</button>
+    <h2 id="detail-title" style="margin:0;"></h2>
+    <span id="detail-count" class="text-dim"></span>
+    <button id="select-active-btn" onclick="selectActive()" style="margin-left:auto;">Set as Active</button>
+  </div>
+
+  <div class="upload-zone" id="upload-zone">
+    <div>Drop images here or click to upload</div>
+    <input type="file" id="ds-file-input" accept=".jpg,.jpeg,.png,.bmp" multiple style="display:none;">
+  </div>
+
+  <div id="image-grid" class="dataset-images-grid" style="margin-top:16px;"></div>
+</div>
+
+<div id="delete-img-modal" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <h3>Delete Image</h3>
+    <p>Are you sure you want to delete <strong id="del-img-name"></strong>?</p>
+    <div class="modal-actions">
+      <button onclick="closeDelImgModal()">Cancel</button>
+      <button class="btn-danger" onclick="confirmDelImg()" id="confirm-del-img">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentDataset = null;
+let pendingDelImg = null;
+let activeDataset = '';
+
+async function loadDatasets() {
+  const data = await fetch('/api/datasets').then(r => r.json());
+  const grid = document.getElementById('datasets-grid');
+  const datasets = data.datasets || [];
+  activeDataset = data.active || '';
+
+  if (datasets.length === 0) {
+    grid.innerHTML = '<div class="card empty-state">No datasets found. Create a dataset folder in QuantizeDataset/ to get started.</div>';
+    return;
+  }
+
+  grid.innerHTML = datasets.map(d => `
+    <div class="card dataset-card" onclick="openDataset('${d.name}')">
+      <div class="dataset-name">${d.name} ${d.active ? '<span class="badge-ok">ACTIVE</span>' : ''}</div>
+      <div class="dataset-count">${d.image_count} image${d.image_count !== 1 ? 's' : ''}</div>
+    </div>
+  `).join('');
+}
+
+async function openDataset(name) {
+  currentDataset = name;
+  document.getElementById('datasets-view').style.display = 'none';
+  document.getElementById('dataset-detail').style.display = 'block';
+  document.getElementById('detail-title').textContent = name;
+  document.getElementById('select-active-btn').textContent = name === activeDataset ? 'Currently Active' : 'Set as Active';
+  document.getElementById('select-active-btn').disabled = name === activeDataset;
+  await loadImages();
+}
+
+function backToList() {
+  currentDataset = null;
+  document.getElementById('datasets-view').style.display = '';
+  document.getElementById('dataset-detail').style.display = 'none';
+  loadDatasets();
+}
+
+async function selectActive() {
+  if (!currentDataset) return;
+  try {
+    const resp = await fetch('/api/datasets/active', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: currentDataset}),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      activeDataset = data.active;
+      document.getElementById('select-active-btn').textContent = 'Currently Active';
+      document.getElementById('select-active-btn').disabled = true;
+      showToast(`"${currentDataset}" set as active dataset`, 'success');
+    } else {
+      showToast(data.error || 'Failed to set active', 'error');
+    }
+  } catch(e) {
+    showToast('Failed to set active dataset', 'error');
+  }
+}
+
+async function loadImages() {
+  if (!currentDataset) return;
+  const data = await fetch(`/api/datasets/${encodeURIComponent(currentDataset)}/images`).then(r => r.json());
+  const images = data.images || [];
+  document.getElementById('detail-count').textContent = `${images.length} image${images.length !== 1 ? 's' : ''}`;
+
+  const grid = document.getElementById('image-grid');
+  if (images.length === 0) {
+    grid.innerHTML = '<div class="empty-state">No images in this dataset yet.</div>';
+    return;
+  }
+
+  grid.innerHTML = images.map(name => `
+    <div class="dataset-img-wrap">
+      <img src="/api/datasets/${encodeURIComponent(currentDataset)}/images/${encodeURIComponent(name)}" alt="${name}" loading="lazy">
+      <button class="dataset-img-del" onclick="event.stopPropagation(); openDelImgModal('${name}')" title="Delete">&#10005;</button>
+    </div>
+  `).join('');
+}
+
+function openDelImgModal(name) {
+  pendingDelImg = name;
+  document.getElementById('del-img-name').textContent = name;
+  document.getElementById('delete-img-modal').style.display = 'flex';
+}
+
+function closeDelImgModal() {
+  pendingDelImg = null;
+  document.getElementById('delete-img-modal').style.display = 'none';
+}
+
+async function confirmDelImg() {
+  if (!pendingDelImg || !currentDataset) return;
+  const btn = document.getElementById('confirm-del-img');
+  btn.disabled = true;
+  try {
+    await fetch(`/api/datasets/${encodeURIComponent(currentDataset)}/images/${encodeURIComponent(pendingDelImg)}`, { method: 'DELETE' });
+  } catch(e) { console.error(e); }
+  closeDelImgModal();
+  btn.disabled = false;
+  loadImages();
+}
+
+document.getElementById('delete-img-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeDelImgModal();
+});
+
+const uploadZone = document.getElementById('upload-zone');
+const fileInput = document.getElementById('ds-file-input');
+
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  handleFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+
+async function handleFiles(files) {
+  if (!currentDataset) return;
+  for (const file of files) {
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      await fetch(`/api/datasets/${encodeURIComponent(currentDataset)}/images`, { method: 'POST', body: form });
+    } catch(e) { console.error('Upload failed:', e); }
+  }
+  fileInput.value = '';
+  loadImages();
+}
+
+loadDatasets();
+</script>
+{% endblock %}

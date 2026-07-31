@@ -7,13 +7,17 @@ import subprocess
 from iSpy.config.iSpyConfig import iSpyCameraConfig
 import platform
 from pathlib import Path
-
+from iSpy.utilities.device_id import _resolve_device_id
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
+try:
+    cv2.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+except AttributeError:
+    # Older OpenCV versions don't have setLogLevel
+    pass
 
 class Camera:
-
     # Resolution used for the synthetic "no camera" placeholder frame.
     _PLACEHOLDER_W = 640
     _PLACEHOLDER_H = 480
@@ -27,11 +31,21 @@ class Camera:
         self._cap_h = input_size[1]
 
         self.source = camera_config["source"]
+
+        self.is_image = isinstance(self.source, str) and self.source.lower().endswith(
+            (".png", ".jpg", ".jpeg", ".bmp")
+        )
+        self.device_id = (
+            _resolve_device_id(self.source)
+            if isinstance(self.source, (str, int)) and not self.is_image
+            else None
+        )
+
         self.stopped = False
         self.frame: np.ndarray | None = None
         self.frame_timestamp: float | None = None
         self.frame_lock = threading.Lock()
-        self._frame_event = threading.Event()   
+        self._frame_event = threading.Event()
         self._frame_processors = []
 
         self.auto_brightness = camera_config.get("auto_brightness", True)
@@ -45,10 +59,7 @@ class Camera:
         self._exposure_time = camera_config.get("exposure_time", 100)   # 10 ms
         self._gain = camera_config.get("gain", 200)
 
-        if isinstance(self.source, str) and self.source.lower().endswith(
-            (".png", ".jpg", ".jpeg", ".bmp")
-        ):
-            self.is_image = True
+        if self.is_image:
             self.image = cv2.imread(self.source)
             if self.image is None:
                 self.logger.warning(
@@ -57,10 +68,9 @@ class Camera:
                 )
                 self.image = self._make_placeholder_frame()
         else:
-            self.is_image = False
             try:
                 self._open_camera()
-            except ValueError as exc:
+            except (ValueError, Exception) as exc:
                 self.logger.warning(
                     "Camera source '%s' could not be opened (%s) - using synthetic placeholder frame.",
                     self.source,
@@ -190,7 +200,10 @@ class Camera:
             self.cap.set(cv2.CAP_PROP_FPS, 30)
 
         for _ in range(20):
-            self.cap.grab()
+            try:
+                self.cap.grab()
+            except Exception:
+                break
 
         if not self.cap.isOpened():
             raise ValueError(f"Camera lost after configuration: {self.source}")

@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Health - iSpy{% endblock %}
+{% block content %}
+<h1>System Health</h1>
+<div id="health-banner" class="vision-banner"></div>
+
+<div class="grid stats-grid">
+  <div class="card stat-card"><div class="stat-label">FPS</div><div class="stat-value" id="h-fps">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Vision</div><div class="stat-value" id="h-vis">--<span class="stat-unit">ms</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Detections</div><div class="stat-value" id="h-det">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Loop stale</div><div class="stat-value" id="h-stale">--<span class="stat-unit">s</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Loop count</div><div class="stat-value" id="h-loops">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value" id="h-up">--</div></div>
+</div>
+
+<div class="dash-columns">
+  <div class="dash-col-left">
+    <div class="card">
+      <h3>Cameras</h3>
+      <div id="h-cameras" class="camera-grid"></div>
+    </div>
+    <div class="card">
+      <h3>NetworkTables</h3>
+      <p>Enabled: <span id="h-nt-enabled">--</span></p>
+      <p>Connected: <span id="h-nt-connected">--</span></p>
+    </div>
+  </div>
+  <div class="dash-col-right">
+    <div class="card">
+      <h3>Plugins</h3>
+      <div id="h-plugins"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function fmtUptime(s) {
+  if (s == null) return '--';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function typeBadge(type) {
+  const colors = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#ff9800' };
+  const label = type === 'frame_processor' ? 'frame processor' : type;
+  return `<span class="plugin-pill" style="background:${colors[type] || '#666'}">${label}</span>`;
+}
+
+function statusDot(status) {
+  if (status === 'running' || status === 'active') return 'status-dot status-ok';
+  if (status === 'idle') return 'status-dot status-warn';
+  return 'status-dot status-bad';
+}
+
+async function refresh() {
+  try {
+    const data = await fetch('/api/health').then(r => r.json());
+
+    const banner = document.getElementById('health-banner');
+    banner.className = 'vision-banner ' + (data.status === 'ok' ? 'vision-ok' : 'vision-bad');
+    banner.textContent = data.status === 'ok' ? 'System healthy' : 'System degraded';
+
+    document.getElementById('h-fps').textContent = data.fps ?? '--';
+    document.getElementById('h-vis').innerHTML = (data.vision_ms ?? '--') + '<span class="stat-unit">ms</span>';
+    document.getElementById('h-det').textContent = data.detections ?? '--';
+    document.getElementById('h-stale').textContent = data.loop_stale_s ?? '--';
+    document.getElementById('h-loops').textContent = data.loop_count ?? '--';
+    document.getElementById('h-up').textContent = fmtUptime(data.uptime_s);
+
+    const cams = data.cameras || [];
+    document.getElementById('h-cameras').innerHTML = cams.length === 0
+      ? '<div class="empty-state">No cameras configured</div>'
+      : cams.map(c => `
+        <div class="cam-item">
+          <span class="status-dot ${c.ok ? 'status-ok' : 'status-bad'}"></span>
+          <span class="cam-name">${c.name}</span>
+          <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}</span>
+        </div>`).join('');
+
+    const nt = data.network_tables || {};
+    document.getElementById('h-nt-enabled').textContent = nt.enabled;
+    document.getElementById('h-nt-connected').textContent = nt.connected;
+
+    const plugins = data.plugins || [];
+    document.getElementById('h-plugins').innerHTML = plugins.length === 0
+      ? '<div class="empty-state">No plugins loaded</div>'
+      : plugins.map(p => `
+        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
+          <span class="${statusDot(p.status)}"></span>
+          <strong>${p.name}</strong>
+          ${typeBadge(p.type)}
+          <span style="margin-left:auto;color:var(--text-dim);font-size:0.85rem;">${p.status}</span>
+        </div>`).join('');
+  } catch (e) {
+    console.error('Health refresh failed', e);
+  }
+}
+setInterval(refresh, 1000);
+refresh();
+</script>
+{% endblock %}

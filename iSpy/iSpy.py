@@ -1,37 +1,21 @@
 from pathlib import Path
-from iSpy.plugins.trackers.BuiltIn.PathPlanner import PathPlanner
-from iSpy.plugins.utilities.BuiltIn import VideoRecorder
 from iSpy.utilities.MultipleCameraHandler import MultipleCameraHandler
 import time
-from iSpy.web.CameraApp import CameraApp
 import threading
 import logging
 import os
-import numpy as np
-from iSpy.web.Metrics import Metrics
 from iSpy.config.iSpyConfig import iSpyConfig
 import signal
 from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
-from iSpy.vision.Object import Object
 from iSpy.validations.model_validator import (
     enforce_model_organization,
     validate_model_organization,
 )
 from iSpy.plugins._loader import load_plugins
-from iSpy.plugins.bases import TrackerBase, UtilityBase
+from iSpy.plugins.bases import TrackerBase, UtilityBase, FrameProcessorBase
 from wpimath.geometry import Pose2d
-from iSpy.plugins.utilities.BuiltIn.NetworkHandler import NetworkTableHandler
-from iSpy.plugins.utilities.BuiltIn.HealthReporter import HealthReporter
+from iSpy.web.Backend.WebApp import create_app
 
-
-try:
-    from rknnlite.api import RKNNLite
-
-    RKNN_FOUND = True
-except ImportError:
-    RKNN_FOUND = False
-
-from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve()
 while not (PROJECT_ROOT / "plugins").exists():
@@ -45,19 +29,14 @@ class iSpy:
     def __init__(self, cameras: list[ObjectDetectionCamera], config: iSpyConfig):
         self.cameras = cameras
         self.config = config
-        
+
         self.shutdown_event = threading.Event()
+        self.pause_event = threading.Event()
         os.makedirs("Outputs", exist_ok=True)
         self.logger = logging.getLogger(__name__)
 
         signal.signal(signal.SIGINT, lambda *_: self._handle_shutdown())
         signal.signal(signal.SIGTERM, lambda *_: self._handle_shutdown())
-
-        self.metrics = Metrics() if config["metrics"] else None
-
-        self.camera_app = (
-            CameraApp(cameras=cameras, config=config) if config["app_mode"] else None
-        )
 
         if len(cameras) == 0:
             self.logger.warning("No cameras provided - vision will not run.")
@@ -67,76 +46,76 @@ class iSpy:
             self.camera_handler = None
         else:
             self.logger.info("%d cameras - multi mode.", len(cameras))
-            self.camera_handler = MultipleCameraHandler(cameras)
-
+            self.camera_handler = MultipleCameraHandler(cameras, config)
         tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)
-        self.trackers = {} # No default trackers
+        self.trackers = {}  # No default trackers
         for name in config.get_nested("plugins", "trackers", default=[]):
             if name in tracker_classes:
                 self.trackers[name] = tracker_classes[name](config)
             else:
                 self.logger.warning("Unknown tracker: %s", name)
 
-        # Grab the two built-in trackers by name for use in the loop
-        # self._fuel_tracker = self.trackers.get("object_tracker")
-        # self._detection_cleanup = self.trackers.get("path_planner")
+        self.web_app = create_app(cameras=cameras, config=config) if config["app_mode"] else None
 
         context = {
             "config": config,
-            "camera_app": self.camera_app,
             "cameras": self.cameras,
-            "flask_app": self.camera_app.app if self.camera_app else None,
+            "flask_app": self.web_app.flask_app if self.web_app else None,
+            # HealthModule/PluginStatusModule read this lazily per-request,
+            # so it's fine that it's set for real a few lines down.
+            "vision_instance": self,
         }
 
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
         self.utilities = {}
-        # for name, cls in (("health_reporter", HealthReporter), ("video_recorder", VideoRecorder)):
-        #     try:
-        #         self.utilities[name] = cls(context)
-        #     except Exception:
-        #         self.logger.exception("Failed to initialize built-in utility: %s", name)
 
         for name in config.get_nested("plugins", "utilities", default=[]):
             if name in utility_classes:
                 try:
                     self.utilities[name] = utility_classes[name](context)
                 except Exception:
-                    self.logger.exception("Failed to initialize utility: %s", name)
+                    self.logger.exception("Failed to initialize utility plugin: %s", name)
             else:
-                self.logger.warning("Unknown utility: %s", name)
+                self.logger.warning("Unknown utility plugin: %s", name)
 
-        frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", UtilityBase)
+        frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", FrameProcessorBase)
         self.frame_processors = {}
         for name in config.get_nested("plugins", "frame_processors", default=[]):
             if name in frame_processor_classes:
                 try:
                     self.frame_processors[name] = frame_processor_classes[name](context)
-                    
-
                 except Exception:
                     self.logger.exception("Failed to initialize frame processor: %s", name)
             else:
                 self.logger.warning("Unknown frame processor: %s", name)
 
-
-        # Wire health reporter to network handler if both exist
-        health = self.utilities.get("health_reporter")
+        # Wire the NetworkTables handler (if the user enabled that plugin)
+        # into the merged HealthModule so /api/health can report NT status.
         nt = self.utilities.get("network_table_handler")
-        if health and nt:
-            health.set_network_handler(nt)
+        health_mod = self.web_app.modules.get("health") if self.web_app else None
+        if health_mod and nt:
+            health_mod.set_network_handler(nt)
 
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
-        if config["app_mode"]:
-            threading.Thread(target=self.camera_app.run, daemon=True).start()
+        if self.web_app:
+            threading.Thread(target=self.web_app.run, daemon=True).start()
+            dash = self.web_app.modules.get("dashboard")
+            if dash and hasattr(dash, "set_plugins"):
+                dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
+            self.web_app.set_vision_instance(self)
 
         self._silence_external_loggers()
-        
+
         # Make sure cameras get frame processors if any are configured
         if self.frame_processors:
             for camera in self.cameras:
                 for name, processor in self.frame_processors.items():
                     camera.add_frame_processor(processor)
+
+        # I think has to be at very bottom
+        if self.web_app:
+            self.web_app.set_vision_instance(self)
 
     def _silence_external_loggers(self):
         for name in logging.root.manager.loggerDict:
@@ -159,23 +138,12 @@ class iSpy:
                 except Exception:
                     self.logger.exception("Error stopping plugin '%s'", name)
 
-    def _record_metrics(self, **kwargs):
-        if self.metrics:
-            self.metrics.record(**kwargs)
-
-    def _tick_metrics(self):
-        if self.metrics:
-            self.metrics.tick()
-
-    def _destroy_metrics(self):
-        if self.metrics:
-            self.metrics.destroy()
-
     def _get_pose(self) -> Pose2d:
         for util in self.utilities.values():
-            pose = util.get_robot_pose()
-            if pose is not None:
-                return pose
+            if hasattr(util, "get_robot_pose"):
+                pose = util.get_robot_pose()
+                if pose is not None:
+                    return pose
         return Pose2d()
 
     def _update_utilities(self, frame_data: dict):
@@ -185,25 +153,9 @@ class iSpy:
             except Exception:
                 self.logger.exception("Utility update failed")
 
-    def _update_camera_app(self, frame, camera=None, handler=None):
-        if not self.camera_app or frame is None:
-            return
-        if camera:
-            cam_name = camera.config.get("name", "Camera 1") if hasattr(camera, "config") else "Camera 1"
-            self.camera_app.set_frame(frame, camera_name=cam_name)
-        else:
-            self.camera_app.set_frame(frame)
-        if handler:
-            for i, cam in enumerate(handler.cameras):
-                cam_name = (
-                    cam.config.get("name", f"Camera {i+1}")
-                    if hasattr(cam, "config")
-                    else f"Camera {i+1}"
-                )
-                with handler._locks[i]:
-                    cached = handler._frames[i]
-                if cached is not None:
-                    self.camera_app.set_frame(cached.copy(), camera_name=cam_name)
+    def _update_web(self, frame_data: dict):
+        if self.web_app:
+            self.web_app.update(frame_data)
 
     def run_multi_vision(self, handler):
         try:
@@ -259,18 +211,6 @@ class iSpy:
         vision_s = time.perf_counter() - t_vis
 
         pose = self._get_pose()
-        # fuel_list = (
-        #     self._fuel_tracker.update(
-        #         fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
-        #     )
-        #     if self._fuel_tracker
-        #     else fuel_list
-        # )
-
-        self._update_camera_app(frame, camera=camera)
-
-        # if self._detection_cleanup and fuel_list:
-        #     _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
 
         for tracker in self.trackers.values():
             fuel_list = tracker.update(
@@ -278,17 +218,13 @@ class iSpy:
             )
 
         loop_s = time.perf_counter() - t0
-
-        return {
-            "fuel_list": fuel_list,
-            "frame": frame,
+        frame_data = {
+            "fuel_list": fuel_list, "frame": frame,
             "fps": 1 / loop_s if loop_s > 0 else 0,
-            "loop_s": loop_s,
-            "vision_s": vision_s,
-            "camera_lag_s": camera_lag_s,
-            "detections": len(fuel_list),
-            "cameras": self.cameras,
+            "loop_s": loop_s, "vision_s": vision_s, "camera_lag_s": camera_lag_s,
+            "detections": len(fuel_list), "cameras": self.cameras,
         }
+        return frame_data
 
     def _run_loop_body_multi(self, handler) -> dict:
         t0 = time.perf_counter()
@@ -300,18 +236,6 @@ class iSpy:
         vision_s = time.perf_counter() - t_vis
 
         pose = self._get_pose()
-        # fuel_list = (
-        #     self._fuel_tracker.update(
-        #         fuel_list, pose.X(), pose.Y(), pose.rotation().radians()
-        #     )
-        #     if self._fuel_tracker
-        #     else fuel_list
-        # )
-
-        self._update_camera_app(frame, handler=handler)
-
-        # if self._detection_cleanup and fuel_list:
-        #     _, fuel_list = self._detection_cleanup.update(fuel_list, pose.X(), pose.Y(), pose.rotation().radians())
 
         for tracker in self.trackers.values():
             fuel_list = tracker.update(
@@ -320,7 +244,7 @@ class iSpy:
 
         loop_s = time.perf_counter() - t0
 
-        return {
+        frame_data = {
             "fuel_list": fuel_list,
             "frame": frame,
             "fps": 1 / loop_s if loop_s > 0 else 0,
@@ -329,57 +253,85 @@ class iSpy:
             "camera_lag_s": camera_lag_s,
             "detections": len(fuel_list),
             "cameras": self.cameras,
+            "camera_frames": handler.get_camera_frames(),
         }
 
-    def run_solo_mode(self):
-        # Tell them where to lood for web stuff
-        self.logger.info("Check out the web interface at http://localhost:5000/")
-        camera = self.cameras[0]
-        try:
-            self.logger.info("Solo mode - warming up...")
-            self.run_solo_vision(camera)
-            self.logger.info("Warm-up complete.")
+        return frame_data
 
+    def run_solo_mode(self):
+        camera = self.cameras[0]
+        last_frame_data = None
+        max_fps = self.config.get("max_fps", 0)
+        try:
+            self.run_solo_vision(camera)
             while not self.shutdown_event.is_set():
+                if self.pause_event.is_set():
+                    if last_frame_data is not None:
+                        frozen = {**last_frame_data, "fps": 0}
+                        self._update_utilities(frozen)
+                        self._update_web(frozen)
+                    time.sleep(0.05)
+                    continue
+
+                t_start = time.perf_counter()
                 frame_data = self._run_loop_body_solo(camera)
+                last_frame_data = frame_data
                 self._update_utilities(frame_data)
-                self._record_metrics(
-                    loop_s=frame_data["loop_s"],
-                    vision_s=frame_data["vision_s"],
-                    camera_lag_s=frame_data["camera_lag_s"],
-                )
-                self._tick_metrics()
-                print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")
+                self._update_web(frame_data)
+
+                if max_fps > 0:
+                    elapsed = time.perf_counter() - t_start
+                    sleep_time = max(0, 1.0 / max_fps - elapsed)
+                    time.sleep(sleep_time)
+
+                actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
+                print(f"\rFPS: {actual_fps:.1f}   ", end="")
 
         finally:
             print()
             self._stop_all_plugins()
+            if self.web_app:
+                self.web_app.stop()
             camera.destroy()
-            self._destroy_metrics()
 
     def run_multi_mode(self):
         handler = self.camera_handler
         if handler is None:
             self.logger.error("Multi-camera handler not initialized.")
             return
+        max_fps = self.config.get("max_fps", 0)
         try:
             self.logger.info("Multi mode - warming up...")
             self.run_multi_vision(handler)
             self.logger.info("Warm-up complete.")
 
+            last_frame_data = None
             while not self.shutdown_event.is_set():
+                if self.pause_event.is_set():
+                    if last_frame_data is not None:
+                        frozen = {**last_frame_data, "fps": 0}
+                        self._update_utilities(frozen)
+                        self._update_web(frozen)
+                    time.sleep(0.05)
+                    continue
+
+                t_start = time.perf_counter()
                 frame_data = self._run_loop_body_multi(handler)
+                last_frame_data = frame_data
                 self._update_utilities(frame_data)
-                self._record_metrics(
-                    loop_s=frame_data["loop_s"],
-                    vision_s=frame_data["vision_s"],
-                    camera_lag_s=frame_data["camera_lag_s"],
-                )
-                self._tick_metrics()
-                print(f"\rFPS: {frame_data['fps']:.1f}   ", end="")
+                self._update_web(frame_data)
+
+                if max_fps > 0:
+                    elapsed = time.perf_counter() - t_start
+                    sleep_time = max(0, 1.0 / max_fps - elapsed)
+                    time.sleep(sleep_time)
+
+                actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
+                print(f"\rFPS: {actual_fps:.1f}   ", end="")
 
         finally:
             print()
             self._stop_all_plugins()
+            if self.web_app:
+                self.web_app.stop()
             handler.destroy()
-            self._destroy_metrics()
