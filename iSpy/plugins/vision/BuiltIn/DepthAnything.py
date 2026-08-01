@@ -1,8 +1,11 @@
 import logging
+import cv2
+import numpy as np
 
 from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+from iSpy.vision.Object import Object
 
 
 class DepthAnythingCamera(Camera, VisionBase):
@@ -33,7 +36,21 @@ class DepthAnythingCamera(Camera, VisionBase):
         frame = self.get_frame()
         if frame is None:
             return [], None
-        return self.get_demo_objects(frame), frame
+
+        h, w = frame.shape[:2]
+        cv2.circle(frame, (w // 2, h // 2), 20, (0, 255, 255), 2)
+        cv2.putText(frame, "Depth", (w // 2 - 24, h // 2 + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        obj = Object(
+            x=0.0,
+            y=0.0,
+            z=0.5,
+            name="demo_depth",
+            confidence=0.8,
+            vis_type="generic",
+            vis_meta={"kind": "depth"},
+        )
+        return [obj], frame
 
     def plot(self, frame):
         if frame is None:

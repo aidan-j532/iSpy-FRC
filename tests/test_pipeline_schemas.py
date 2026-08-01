@@ -86,6 +86,39 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         self.assertEqual(objects[0].vis_type, "planar")
         self.assertEqual(objects[0].name, "demo_april_tag")
 
+    def test_april_tag_run_prefers_real_detection_over_demo_placeholder(self):
+        import numpy as np
+
+        from iSpy.vision.Object import Object
+
+        class DummyDetector:
+            def detectMarkers(self, gray):
+                return [], None, []
+
+        camera = AprilTagCamera.__new__(AprilTagCamera)
+        camera.get_frame = lambda: np.zeros((20, 20, 3), dtype=np.uint8)
+        camera.detector = DummyDetector()
+        camera.get_demo_objects = lambda frame: [Object(0.0, 0.0, 0.0, name="demo", vis_type="planar")]
+
+        objects, frame = camera.run()
+        self.assertEqual(objects, [])
+        self.assertIsNotNone(frame)
+
+    def test_builtin_plugins_emit_visible_objects_and_annotations(self):
+        import numpy as np
+
+        for plugin_cls in (QRCodeCamera, DepthAnythingCamera, LineTrackingCamera):
+            camera = plugin_cls.__new__(plugin_cls)
+            camera.get_frame = lambda: np.zeros((80, 80, 3), dtype=np.uint8)
+            camera.logger = None
+            camera._last_frame = None
+            objects, frame = camera.run()
+            self.assertTrue(objects, f"{plugin_cls.__name__} should emit at least one object")
+            self.assertIsNotNone(frame)
+            annotated = camera.plot(frame)
+            self.assertIsNotNone(annotated)
+            self.assertTrue(np.any(annotated != frame))
+
 
 if __name__ == "__main__":
     unittest.main()

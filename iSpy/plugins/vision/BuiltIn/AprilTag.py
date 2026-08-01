@@ -129,12 +129,6 @@ class AprilTagCamera(Camera, VisionBase):
         if frame is None:
             return [], None
 
-        if frame is not None and frame.shape[0] > 0:
-            objects = self.get_demo_objects(frame)
-            if objects:
-                self._last_objects = objects
-                return objects, frame
-
         # Convert to grayscale if it isn't already
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
@@ -223,9 +217,10 @@ class AprilTagCamera(Camera, VisionBase):
         if frame is None:
             return None
         try:
-            import cv2
             overlay = frame.copy()
+            h, w = overlay.shape[:2]
             cv2.putText(overlay, "AprilTag", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.rectangle(overlay, (12, 40), (w - 12, h - 12), (0, 255, 0), 2)
             return overlay
         except Exception:
             return frame

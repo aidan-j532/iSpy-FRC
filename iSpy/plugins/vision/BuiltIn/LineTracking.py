@@ -1,8 +1,11 @@
 import logging
+import cv2
+import numpy as np
 
 from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+from iSpy.vision.Object import Object
 
 
 class LineTrackingCamera(Camera, VisionBase):
@@ -33,7 +36,21 @@ class LineTrackingCamera(Camera, VisionBase):
         frame = self.get_frame()
         if frame is None:
             return [], None
-        return self.get_demo_objects(frame), frame
+
+        h, w = frame.shape[:2]
+        cv2.line(frame, (10, h // 2), (w - 10, h // 2), (255, 255, 0), 3)
+        cv2.putText(frame, "Line", (w // 2 - 20, h // 2 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+
+        obj = Object(
+            x=0.0,
+            y=0.0,
+            z=0.0,
+            name="demo_line_tracking",
+            confidence=0.75,
+            vis_type="generic",
+            vis_meta={"kind": "line"},
+        )
+        return [obj], frame
 
     def plot(self, frame):
         if frame is None:

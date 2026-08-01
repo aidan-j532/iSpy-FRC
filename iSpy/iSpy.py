@@ -231,6 +231,7 @@ class iSpy:
             "detections": len(fuel_list), "cameras": self.cameras,
             "code_times": code_times,
             "debug_data": {},
+            "objects": fuel_list,
         }
         if hasattr(camera, "get_debug_data"):
             frame_data["debug_data"] = camera.get_debug_data() or {}
@@ -281,6 +282,7 @@ class iSpy:
             "camera_frames": handler.get_camera_frames(),
             "code_times": code_times,
             "debug_data": {},
+            "objects": fuel_list,
         }
         if hasattr(handler, "get_camera_debug_data"):
             frame_data["debug_data"] = handler.get_camera_debug_data() or {}
