@@ -38,27 +38,41 @@ class DepthAnythingCamera(Camera, VisionBase):
             return [], None
 
         h, w = frame.shape[:2]
-        cv2.circle(frame, (w // 2, h // 2), 20, (0, 255, 255), 2)
-        cv2.putText(frame, "Depth", (w // 2 - 24, h // 2 + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        normalized = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        heatmap = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+        blended = cv2.addWeighted(frame, 0.55, heatmap, 0.45, 0)
 
+        center_x, center_y = w // 2, h // 2
+        radius = max(12, min(w, h) // 6)
+        cv2.circle(blended, (center_x, center_y), radius, (255, 255, 255), 2)
+        cv2.putText(blended, "Depth", (center_x - 24, center_y + radius + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+        depth_estimate = 1.0 - (normalized[center_y, center_x] / 255.0)
         obj = Object(
             x=0.0,
             y=0.0,
-            z=0.5,
+            z=float(depth_estimate),
             name="demo_depth",
             confidence=0.8,
             vis_type="generic",
-            vis_meta={"kind": "depth"},
+            vis_meta={
+                "kind": "depth",
+                "heatmap": True,
+                "depth_estimate": round(depth_estimate, 3),
+                "radius": radius / max(w, h),
+            },
         )
-        return [obj], frame
+        return [obj], blended
 
     def plot(self, frame):
         if frame is None:
             return None
         try:
-            import cv2
             overlay = frame.copy()
-            cv2.putText(overlay, "Depth", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            h, w = overlay.shape[:2]
+            cv2.putText(overlay, "Depth", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.rectangle(overlay, (8, 38), (w - 8, h - 8), (255, 255, 255), 1)
             return overlay
         except Exception:
             return frame

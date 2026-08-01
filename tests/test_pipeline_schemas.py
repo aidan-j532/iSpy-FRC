@@ -119,6 +119,20 @@ class VisionPipelineSchemaTests(unittest.TestCase):
             self.assertIsNotNone(annotated)
             self.assertTrue(np.any(annotated != frame))
 
+    def test_depth_plugin_emits_heatmap_metadata(self):
+        import numpy as np
+
+        camera = DepthAnythingCamera.__new__(DepthAnythingCamera)
+        camera.get_frame = lambda: np.zeros((80, 80, 3), dtype=np.uint8)
+        camera.logger = None
+        camera._last_frame = None
+
+        objects, frame = camera.run()
+        self.assertTrue(objects)
+        self.assertIsNotNone(frame)
+        self.assertIn("depth_estimate", objects[0].vis_meta)
+        self.assertTrue(objects[0].vis_meta["heatmap"])
+
 
 if __name__ == "__main__":
     unittest.main()
