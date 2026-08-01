@@ -291,13 +291,26 @@ class CamerasModule(WebModule):
                     "device_id": _resolve_device_id(path),
                 })
             if not devices:
-                for i in range(0, 64):
+                for i in range(0, 16):
                     if str(i) in claimed:
                         devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
                         continue
+                    # Avoid repeated index-based OpenCV probe attempts on Windows,
+                    # which trigger the noisy DSHOW errors when no device is present.
+                    if platform.system() == "Windows":
+                        break
                     try:
-                        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY)
-                        if cap.isOpened():
+                        cap = None
+                        for backend in [cv2.CAP_ANY]:
+                            try:
+                                cap = cv2.VideoCapture(i, backend)
+                            except Exception:
+                                cap = None
+                                continue
+                            if cap is not None and cap.isOpened():
+                                break
+                            cap = None
+                        if cap is not None and cap.isOpened():
                             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                             devices.append({
@@ -305,7 +318,8 @@ class CamerasModule(WebModule):
                                 "resolution": f"{w}x{h}" if w and h else None,
                                 "device_id": None,
                             })
-                        cap.release()
+                        if cap is not None:
+                            cap.release()
                     except Exception:
                         continue
 

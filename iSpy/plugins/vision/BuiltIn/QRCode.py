@@ -31,7 +31,10 @@ class QRCodeCamera(Camera, VisionBase):
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
 
     def run(self):
-        return [], None
+        frame = self.get_frame()
+        if frame is None:
+            return [], None
+        return self.get_demo_objects(frame), frame
 
     def plot(self, frame):
         if frame is None:

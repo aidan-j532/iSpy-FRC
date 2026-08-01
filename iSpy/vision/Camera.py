@@ -8,6 +8,7 @@ from iSpy.config.iSpyConfig import iSpyCameraConfig
 import platform
 from pathlib import Path
 from iSpy.utilities.device_id import _resolve_device_id
+from iSpy.vision.Object import Object
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
@@ -21,6 +22,15 @@ class Camera:
     # Resolution used for the synthetic "no camera" placeholder frame.
     _PLACEHOLDER_W = 640
     _PLACEHOLDER_H = 480
+
+    @staticmethod
+    def _get_capture_backend_candidates(sys_platform: str | None = None):
+        platform_name = (sys_platform or platform.system()).lower()
+        if platform_name == "windows":
+            return [None, cv2.CAP_ANY, cv2.CAP_DSHOW]
+        if platform_name == "linux":
+            return [cv2.CAP_V4L2, cv2.CAP_ANY]
+        return [cv2.CAP_ANY]
 
     def __init__(self, camera_config: iSpyCameraConfig, input_size: tuple, grayscale: bool):
         self.logger = logging.getLogger(__name__)
@@ -165,17 +175,30 @@ class Camera:
 
             time.sleep(0.15)
 
-        # CROSS-PLATFORM FIX: Map proper backends explicitly by OS type
-        if is_windows:
-            self.cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
-        elif is_linux:
-            self.cap = cv2.VideoCapture(self.source, cv2.CAP_V4L2)
-        else:
-            # Fallback backend (e.g. AVFoundation on macOS, or generic CAP_ANY)
-            self.cap = cv2.VideoCapture(self.source, cv2.CAP_ANY)
+        # CROSS-PLATFORM FIX: Try a safe backend order first and only fall back
+        # to DSHOW if the generic path cannot open the device.
+        backend_candidates = self._get_capture_backend_candidates(sys_platform)
+        self.cap = None
+        last_error = None
+        for backend in backend_candidates:
+            try:
+                if backend is None:
+                    self.cap = cv2.VideoCapture(self.source)
+                else:
+                    self.cap = cv2.VideoCapture(self.source, backend)
+            except Exception as exc:
+                last_error = exc
+                self.cap = None
+                continue
 
-        if not self.cap.isOpened():
-            raise ValueError(f"Camera failed to open: {self.source}")
+            if self.cap is not None and self.cap.isOpened():
+                break
+
+            last_error = ValueError(f"Camera failed to open with backend {backend}: {self.source}")
+            self.cap = None
+
+        if self.cap is None or not self.cap.isOpened():
+            raise ValueError(f"Camera failed to open: {self.source} ({last_error})")
 
         for _ in range(10):
             self.cap.grab()
@@ -303,6 +326,23 @@ class Camera:
 
     def plot(self, frame):
         return frame
+
+    def get_demo_objects(self, frame):
+        if frame is None:
+            return []
+        h, w = frame.shape[:2]
+        plugin_name = getattr(self, "plugin_name", "demo_object")
+        return [
+            Object(
+                x=0.0,
+                y=0.0,
+                z=0.0,
+                name=f"demo_{plugin_name}",
+                confidence=0.5,
+                vis_type="planar",
+                vis_meta={"size": max(0.2, min(w, h) / 200.0)},
+            )
+        ]
         
     def destroy(self):
         self.stopped = True

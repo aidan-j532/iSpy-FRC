@@ -1,11 +1,14 @@
 import unittest
 
+import cv2
+
 from iSpy.plugins.bases import VisionBase
 from iSpy.plugins.vision.BuiltIn.AprilTag import AprilTagCamera
 from iSpy.plugins.vision.BuiltIn.QRCode import QRCodeCamera
 from iSpy.plugins.vision.BuiltIn.DepthAnything import DepthAnythingCamera
 from iSpy.plugins.vision.BuiltIn.LineTracking import LineTrackingCamera
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
+from iSpy.vision.Camera import Camera
 
 
 class VisionPipelineSchemaTests(unittest.TestCase):
@@ -65,6 +68,23 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         annotated = AprilTagCamera.__new__(AprilTagCamera).plot(frame)
         self.assertIsNotNone(annotated)
         self.assertTrue(np.array_equal(annotated, frame) or annotated.shape == frame.shape)
+
+    def test_windows_capture_backend_candidates_prefer_generic_backend(self):
+        candidates = Camera._get_capture_backend_candidates("Windows")
+        self.assertEqual(candidates[0], None)
+        self.assertEqual(candidates[1], cv2.CAP_ANY)
+        self.assertEqual(candidates[2], cv2.CAP_DSHOW)
+
+    def test_camera_demo_objects_are_emitted_for_placeholder_visualization(self):
+        import numpy as np
+
+        camera = Camera.__new__(Camera)
+        camera.plugin_name = "april_tag"
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        objects = camera.get_demo_objects(frame)
+        self.assertTrue(objects)
+        self.assertEqual(objects[0].vis_type, "planar")
+        self.assertEqual(objects[0].name, "demo_april_tag")
 
 
 if __name__ == "__main__":

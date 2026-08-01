@@ -129,6 +129,12 @@ class AprilTagCamera(Camera, VisionBase):
         if frame is None:
             return [], None
 
+        if frame is not None and frame.shape[0] > 0:
+            objects = self.get_demo_objects(frame)
+            if objects:
+                self._last_objects = objects
+                return objects, frame
+
         # Convert to grayscale if it isn't already
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
