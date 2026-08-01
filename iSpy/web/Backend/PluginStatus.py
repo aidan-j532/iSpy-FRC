@@ -22,9 +22,21 @@ _NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 def _build_vision_pipeline_payloads():
-    vision_classes = load_plugins(_PLUGIN_ROOT / "vision", VisionBase)
     pipelines = []
+    try:
+        from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
+        pipelines.append({
+            "name": "object_detection",
+            "class_name": ObjectDetectionCamera.__name__,
+            "config_schema": {},
+        })
+    except Exception:
+        logger.warning("Failed to include built-in object_detection pipeline")
+
+    vision_classes = load_plugins(_PLUGIN_ROOT / "vision", VisionBase)
     for name, cls in sorted(vision_classes.items()):
+        if name == "object_detection":
+            continue
         try:
             schema = cls.config_schema()
         except Exception:
