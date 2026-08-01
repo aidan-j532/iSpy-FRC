@@ -40,14 +40,33 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/profile/<device_id>", "api_cameras_profile", self._get_profile, methods=["GET"])
         flask_app.add_url_rule("/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines)
 
+    def _camera_display_name(self, cam, fallback: str = "camera") -> str:
+        if hasattr(cam, "config") and cam.config is not None:
+            name = cam.config.get("name") if hasattr(cam.config, "get") else None
+            if name:
+                return str(name)
+        source = getattr(cam, "source", None)
+        if source is not None:
+            return str(source)
+        return fallback
+
+    def _camera_aliases(self, cam) -> set[str]:
+        aliases = {self._camera_display_name(cam, "camera")}
+        source = getattr(cam, "source", None)
+        if source is not None:
+            aliases.add(str(source))
+        device_id = getattr(cam, "device_id", None)
+        if device_id:
+            aliases.add(str(device_id))
+        return aliases
+
     def update(self, frame_data: dict):
         frame = frame_data.get("frame")
         if frame is None:
             return
         cameras = frame_data.get("cameras") or []
         cam_by_name = {
-            (cam.config.get("name", str(getattr(cam, "source", ""))) if hasattr(cam, "config")
-            else str(getattr(cam, "source", ""))): cam
+            self._camera_display_name(cam, str(getattr(cam, "source", ""))): cam
             for cam in cameras
         }
         per_cam = frame_data.get("camera_frames")
@@ -57,15 +76,26 @@ class CamerasModule(WebModule):
                 for name, f in per_cam.items():
                     if f is None:
                         continue
-                    self.frames[name] = f
-                    self.dims[name] = f.shape[1], f.shape[0]
-                    self.last_seen[name] = now
-                    cam = cam_by_name.get(name)
-                    if cam is not None:
-                        self.sources[name] = self._device_key(cam)
+                    matched_cams = []
+                    if name in cam_by_name:
+                        matched_cams.append(cam_by_name[name])
+                    else:
+                        for cam in cameras:
+                            if name in self._camera_aliases(cam):
+                                matched_cams.append(cam)
+                                break
+                    if not matched_cams and cameras:
+                        matched_cams = [cameras[0]]
+
+                    for cam in matched_cams:
+                        display_name = self._camera_display_name(cam, str(name))
+                        self.frames[display_name] = f
+                        self.dims[display_name] = f.shape[1], f.shape[0]
+                        self.last_seen[display_name] = now
+                        self.sources[display_name] = self._device_key(cam)
             elif cameras:
                 cam = cameras[0]
-                name = cam.config.get("name", "camera_1") if hasattr(cam, "config") else "camera_1"
+                name = self._camera_display_name(cam, "camera_1")
                 self.frames[name] = frame
                 self.dims[name] = frame.shape[1], frame.shape[0]
                 self.last_seen[name] = now
@@ -242,6 +272,15 @@ class CamerasModule(WebModule):
                             "name": current_name or line,
                             "device_id": _resolve_device_id(line),
                         })
+
+            for path in sorted(glob.glob("/dev/video*")):
+                if any(existing.get("path") == path for existing in devices):
+                    continue
+                devices.append({
+                    "path": path,
+                    "name": path,
+                    "device_id": _resolve_device_id(path),
+                })
         else:
             with self.lock:
                 claimed = {s for s in self.sources.values() if s}
@@ -252,12 +291,12 @@ class CamerasModule(WebModule):
                     "device_id": _resolve_device_id(path),
                 })
             if not devices:
-                for i in range(10):
+                for i in range(0, 64):
                     if str(i) in claimed:
                         devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
                         continue
                     try:
-                        cap = cv2.VideoCapture(i)
+                        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY)
                         if cap.isOpened():
                             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -269,7 +308,14 @@ class CamerasModule(WebModule):
                         cap.release()
                     except Exception:
                         continue
-        return devices
+
+        seen = {}
+        for dev in devices:
+            key = dev.get("device_id") or dev.get("path")
+            if key in seen:
+                continue
+            seen[key] = dev
+        return list(seen.values())
 
     def _video_feed(self, camera_name):
         return Response(
