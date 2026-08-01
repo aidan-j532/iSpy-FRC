@@ -2,6 +2,9 @@ import unittest
 
 from iSpy.plugins.bases import VisionBase
 from iSpy.plugins.vision.BuiltIn.AprilTag import AprilTagCamera
+from iSpy.plugins.vision.BuiltIn.QRCode import QRCodeCamera
+from iSpy.plugins.vision.BuiltIn.DepthAnything import DepthAnythingCamera
+from iSpy.plugins.vision.BuiltIn.LineTracking import LineTrackingCamera
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 
 
@@ -25,6 +28,22 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         april_tag = next((p for p in pipelines if p["name"] == "april_tag"), None)
         self.assertIsNotNone(april_tag)
         self.assertFalse(april_tag["show_common_fields"])
+
+    def test_additional_pipeline_schemas_are_discovered(self):
+        pipelines = _build_vision_pipeline_payloads()
+        pipeline_names = {p["name"] for p in pipelines}
+        self.assertIn("qr_code", pipeline_names)
+        self.assertIn("depth_anything", pipeline_names)
+        self.assertIn("line_tracking", pipeline_names)
+
+        qr_schema = QRCodeCamera.config_schema()
+        self.assertIn("decode_mode", qr_schema)
+
+        depth_schema = DepthAnythingCamera.config_schema()
+        self.assertIn("estimate_depth", depth_schema)
+
+        line_schema = LineTrackingCamera.config_schema()
+        self.assertIn("line_color", line_schema)
 
 
 if __name__ == "__main__":

@@ -5,23 +5,22 @@ from iSpy.plugins.bases import VisionBase
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 
 
-class QRCodeCamera(Camera, VisionBase):
-    plugin_name = "qr_code"
+class DepthAnythingCamera(Camera, VisionBase):
+    plugin_name = "depth_anything"
 
     @classmethod
     def config_schema(cls) -> dict:
         return {
-            "qr_size": {
-                "type": "number",
-                "label": "QR Size",
-                "default": 0.1,
-                "step": 0.01,
-            },
-            "decode_mode": {
+            "model_size": {
                 "type": "select",
-                "label": "Decode Mode",
-                "options": ["standard", "fast"],
-                "default": "standard",
+                "label": "Model Size",
+                "options": ["small", "base", "large"],
+                "default": "base",
+            },
+            "estimate_depth": {
+                "type": "boolean",
+                "label": "Estimate Depth",
+                "default": True,
             },
         }
 

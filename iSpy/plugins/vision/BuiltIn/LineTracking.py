@@ -5,23 +5,22 @@ from iSpy.plugins.bases import VisionBase
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 
 
-class QRCodeCamera(Camera, VisionBase):
-    plugin_name = "qr_code"
+class LineTrackingCamera(Camera, VisionBase):
+    plugin_name = "line_tracking"
 
     @classmethod
     def config_schema(cls) -> dict:
         return {
-            "qr_size": {
-                "type": "number",
-                "label": "QR Size",
-                "default": 0.1,
-                "step": 0.01,
+            "line_color": {
+                "type": "text",
+                "label": "Line Color",
+                "default": "white",
             },
-            "decode_mode": {
-                "type": "select",
-                "label": "Decode Mode",
-                "options": ["standard", "fast"],
-                "default": "standard",
+            "threshold": {
+                "type": "number",
+                "label": "Threshold",
+                "default": 0.5,
+                "step": 0.1,
             },
         }
 
