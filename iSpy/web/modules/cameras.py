@@ -192,11 +192,11 @@ class CamerasModule(WebModule):
                 self._discover_cache = devices
                 self._discover_cache_ts = now
 
-        # Cross-reference against configured cameras BY DEVICE ID, not by
-        # path/name - a camera configured as source=0 and a discovered
-        # /dev/video0 device are the same hardware only if their resolved
-        # device_id matches (or, if resolution failed for both, their raw
-        # source strings match as a fallback).
+        # Cross-reference against configured cameras using the same identity
+        # that the add-camera flow writes into config. A discovered device is
+        # considered active if either its resolved device_id matches a
+        # configured camera, or (when device_id resolution failed) its raw
+        # source/path matches a configured camera source.
         config = self.context.get("config")
         configured_device_ids = set()
         configured_sources = set()
@@ -205,15 +205,19 @@ class CamerasModule(WebModule):
                 dev_id = cam_cfg.get("device_id")
                 if dev_id:
                     configured_device_ids.add(dev_id)
-                else:
-                    configured_sources.add(str(cam_cfg.get("source", "")))
+                source = cam_cfg.get("source")
+                if source is not None:
+                    configured_sources.add(str(source))
+                if source is None and cam_cfg.get("path") is not None:
+                    configured_sources.add(str(cam_cfg.get("path")))
 
         for dev in devices:
             dev_id = dev.get("device_id")
+            source = dev.get("path")
             if dev_id:
                 dev["active"] = dev_id in configured_device_ids
             else:
-                dev["active"] = str(dev["path"]) in configured_sources
+                dev["active"] = str(source) in configured_sources
 
         return jsonify(devices=devices)
 
