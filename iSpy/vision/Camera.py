@@ -294,6 +294,12 @@ class Camera:
                     break
 
             return frame
+
+    def get_debug_frame(self, frame):
+        return None
+
+    def get_debug_data(self) -> dict:
+        return {}
         
     def destroy(self):
         self.stopped = True

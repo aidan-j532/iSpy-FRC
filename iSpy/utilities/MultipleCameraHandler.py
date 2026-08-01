@@ -140,6 +140,19 @@ class MultipleCameraHandler:
             result[name] = f.copy()
         return result
 
+    def get_camera_debug_data(self) -> dict:
+        result = {}
+        for i, cam in enumerate(self.cameras):
+            if hasattr(cam, "get_debug_data"):
+                data = cam.get_debug_data() or {}
+                if data:
+                    name = cam.config.get("name", f"Camera {i+1}") if hasattr(cam, "config") else f"Camera {i+1}"
+                    result[name] = data
+        return result
+
+    def get_camera_debug_frame(self, frame):
+        return frame
+
     def destroy(self):
         self._stopped = True
         for cam in self.cameras:

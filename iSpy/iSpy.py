@@ -230,7 +230,14 @@ class iSpy:
             "loop_s": loop_s, "vision_s": vision_s, "camera_lag_s": camera_lag_s,
             "detections": len(fuel_list), "cameras": self.cameras,
             "code_times": code_times,
+            "debug_data": {},
         }
+        if hasattr(camera, "get_debug_data"):
+            frame_data["debug_data"] = camera.get_debug_data() or {}
+        if hasattr(camera, "get_debug_frame"):
+            debug_frame = camera.get_debug_frame(frame)
+            if debug_frame is not None:
+                frame_data["debug_frame"] = debug_frame
         return frame_data
 
     def _run_loop_body_multi(self, handler) -> dict:
@@ -268,7 +275,14 @@ class iSpy:
             "cameras": self.cameras,
             "camera_frames": handler.get_camera_frames(),
             "code_times": code_times,
+            "debug_data": {},
         }
+        if hasattr(handler, "get_camera_debug_data"):
+            frame_data["debug_data"] = handler.get_camera_debug_data() or {}
+        if hasattr(handler, "get_camera_debug_frame"):
+            debug_frame = handler.get_camera_debug_frame(frame)
+            if debug_frame is not None:
+                frame_data["debug_frame"] = debug_frame
 
         return frame_data
 

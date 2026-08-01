@@ -66,6 +66,12 @@ class VisionBase(ABC):
     def start(self):
         pass
 
+    def get_debug_data(self) -> dict:
+        return {}
+
+    def get_debug_frame(self, frame):
+        return None
+
     @abstractmethod
     def run(self):
         pass

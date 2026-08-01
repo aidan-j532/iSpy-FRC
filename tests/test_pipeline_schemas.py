@@ -45,6 +45,18 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         line_schema = LineTrackingCamera.config_schema()
         self.assertIn("line_color", line_schema)
 
+    def test_vision_base_exposes_debug_contract(self):
+        class DummyVision(VisionBase):
+            def run(self):
+                return [], None
+
+            def destroy(self):
+                pass
+
+        base = DummyVision.__new__(DummyVision)
+        self.assertEqual(base.get_debug_data(), {})
+        self.assertIsNone(base.get_debug_frame(None))
+
 
 if __name__ == "__main__":
     unittest.main()
