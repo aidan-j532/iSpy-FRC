@@ -98,7 +98,8 @@ class DashboardModule(WebModule):
                     "memory_total_mb": None, "temperature": None}
 
         try:
-            cpu = psutil.cpu_percent(interval=0.05)
+            # cpu = psutil.cpu_percent(interval=0.05)
+            cpu = psutil.cpu_percent(interval=None)
         except Exception:
             cpu = None
 

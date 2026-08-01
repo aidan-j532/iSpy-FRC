@@ -1,10 +1,5 @@
 # iSpy/web/test_web.py
-"""Run the entire web stack with fabricated data - no cameras, no models,
-no RKNN/ONNX/etc. required. Useful for iterating on frontend/pages without
-booting real hardware.
-
-Usage: python -m iSpy.web.test_web
-"""
+# Made by claude
 import logging
 import math
 import random
