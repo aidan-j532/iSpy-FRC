@@ -29,6 +29,7 @@ def _build_vision_pipeline_payloads():
             "name": "object_detection",
             "class_name": ObjectDetectionCamera.__name__,
             "config_schema": {},
+            "show_common_fields": True,
         })
     except Exception:
         logger.warning("Failed to include built-in object_detection pipeline")
@@ -48,6 +49,7 @@ def _build_vision_pipeline_payloads():
             "name": name,
             "class_name": cls.__name__,
             "config_schema": schema,
+            "show_common_fields": False,
         })
     return pipelines
 

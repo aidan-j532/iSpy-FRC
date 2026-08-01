@@ -123,12 +123,29 @@ function humanizeFieldName(name) {
   return String(name || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
+function setCommonFieldVisibility(show) {
+  const commonFields = [
+    'new-cam-x',
+    'new-cam-y',
+    'new-cam-height',
+    'new-cam-yaw',
+    'new-cam-pitch',
+  ];
+  commonFields.forEach(fieldId => {
+    const row = document.getElementById(fieldId).closest('.form-row');
+    if (row) {
+      row.style.display = show ? '' : 'none';
+    }
+  });
+}
+
 function renderDynamicPipelineFields() {
   const container = document.getElementById('dynamic-pipeline-fields');
   container.innerHTML = '';
   const pipelineSelect = document.getElementById('new-cam-pipeline');
   const pipeline = pipelineSchemas[pipelineSelect.value] || {};
   const schema = pipeline.config_schema || {};
+  setCommonFieldVisibility(Boolean(pipeline.show_common_fields));
   Object.entries(schema).forEach(([fieldName, fieldDef]) => {
     const row = document.createElement('div');
     row.className = 'form-row';
@@ -213,14 +230,14 @@ async function openAddCameraModal(preselectPath) {
       fallback.value = 'object_detection';
       fallback.textContent = 'Object Detection';
       pipelineSel.appendChild(fallback);
-      pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {} };
+      pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {}, show_common_fields: true };
     }
     if (!pipelineSchemas[pipelineSel.value]) {
       pipelineSel.value = pipelineSel.options[0].value;
     }
   } catch (e) {
     console.warn('Failed to load pipeline schemas', e);
-    pipelineSchemas = { object_detection: { name: 'object_detection', config_schema: {} } };
+    pipelineSchemas = { object_detection: { name: 'object_detection', config_schema: {}, show_common_fields: true } };
     const pipelineSel = document.getElementById('new-cam-pipeline');
     pipelineSel.innerHTML = '<option value="object_detection">Object Detection</option>';
     pipelineSel.value = 'object_detection';

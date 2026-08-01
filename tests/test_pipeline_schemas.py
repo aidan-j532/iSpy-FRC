@@ -18,7 +18,13 @@ class VisionPipelineSchemaTests(unittest.TestCase):
 
     def test_object_detection_pipeline_is_exposed(self):
         pipelines = _build_vision_pipeline_payloads()
-        self.assertTrue(any(p["name"] == "object_detection" for p in pipelines))
+        object_detection = next((p for p in pipelines if p["name"] == "object_detection"), None)
+        self.assertIsNotNone(object_detection)
+        self.assertTrue(object_detection["show_common_fields"])
+
+        april_tag = next((p for p in pipelines if p["name"] == "april_tag"), None)
+        self.assertIsNotNone(april_tag)
+        self.assertFalse(april_tag["show_common_fields"])
 
 
 if __name__ == "__main__":
