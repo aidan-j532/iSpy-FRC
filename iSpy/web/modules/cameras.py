@@ -9,6 +9,7 @@ from flask import Response, jsonify, render_template, request
 import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.save_store import read, write
+from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 from iSpy.utilities.device_id import _resolve_device_id
 from pathlib import Path
 
@@ -37,6 +38,7 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/config", "api_cameras_config_add", self._add_camera, methods=["POST"])
         flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_delete", self._remove_camera, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/profile/<device_id>", "api_cameras_profile", self._get_profile, methods=["GET"])
+        flask_app.add_url_rule("/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines)
 
     def update(self, frame_data: dict):
         frame = frame_data.get("frame")
@@ -89,6 +91,9 @@ class CamerasModule(WebModule):
         profiles = read("camera_profiles", {})
         return jsonify(profile=profiles.get(device_id))
 
+    def _vision_pipelines(self):
+        return jsonify(pipelines=_build_vision_pipeline_payloads())
+
     def _add_camera(self):
         data = request.get_json(force=True) or {}
         name = data.get("name")
@@ -118,6 +123,10 @@ class CamerasModule(WebModule):
             "subsystem": data.get("subsystem", "field"),
             "calibration": data.get("calibration", {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0}),
         }
+        handled = {"name", "source", "device_id", "pipeline", "yaw", "pitch", "height", "x", "y", "z", "grayscale", "subsystem", "calibration"}
+        for k, v in data.items():
+            if k not in handled:
+                cam_entry[k] = v
         cams[name] = cam_entry
         config.set("camera_configs", cams)
         config.save()

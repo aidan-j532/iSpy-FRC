@@ -13,6 +13,17 @@ from iSpy.vision import triangulation
 class AprilTagCamera(Camera, VisionBase):
     plugin_name = "april_tag"
 
+    @classmethod
+    def config_schema(cls) -> dict:
+        return {
+            "tag_size_inches": {
+                "type": "number",
+                "label": "Tag Size (in)",
+                "default": 6.5,
+                "step": 0.1,
+            }
+        }
+
     def __init__(self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
@@ -30,7 +41,11 @@ class AprilTagCamera(Camera, VisionBase):
             calib = camera_config.get("calibration", {})
             self.known_calibration_distance = calib.get("distance", 1.0)
             self.known_calibration_pixel_height = calib.get("size", 100)
-            self.ball_d_inches = calib.get("game_piece_size", 6.5) # FRC tag default is ~6.5 in
+            tag_size_inches = camera_config.get("tag_size_inches")
+            if tag_size_inches is None:
+                tag_size_inches = calib.get("game_piece_size", 6.5)
+            self.tag_size_inches = float(tag_size_inches)
+            self.ball_d_inches = self.tag_size_inches
             self.fov = calib.get("fov", 0.0)
             self.grayscale = camera_config.get("grayscale", False)
         except KeyError as e:
@@ -67,7 +82,6 @@ class AprilTagCamera(Camera, VisionBase):
         
         # FRC AprilTags are exactly 16.5cm (~6.5 inches)
         # We work in inches internally before converting to output unit
-        self.tag_size_inches = 6.5
         half = self.tag_size_inches / 2.0
         self.obj_pts = np.array([
             [-half,  half, 0],

@@ -31,10 +31,11 @@
       </div>
       <div class="form-row">
         <span class="form-label">Pipeline</span>
-        <select id="new-cam-pipeline" class="form-input">
+        <select id="new-cam-pipeline" class="form-input" onchange="renderDynamicPipelineFields()">
           <option value="object_detection">Object Detection</option>
         </select>
       </div>
+      <div id="dynamic-pipeline-fields"></div>
       <div class="form-row">
         <span class="form-label">X offset</span>
         <input id="new-cam-x" class="form-input" type="number" step="0.01" value="0">
@@ -101,6 +102,7 @@
 let refreshTimer = null;
 let currentRate = 1000;
 let knownCameras = new Map();
+let pipelineSchemas = {};
 
 function setRefreshRate() {
   currentRate = Number(document.getElementById('refresh-rate').value);
@@ -110,6 +112,77 @@ function setRefreshRate() {
 
 function closeAddCameraModal() {
   document.getElementById('add-camera-modal').style.display = 'none';
+  document.getElementById('dynamic-pipeline-fields').innerHTML = '';
+}
+
+function humanizePipelineName(name) {
+  return String(name || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function humanizeFieldName(name) {
+  return String(name || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function renderDynamicPipelineFields() {
+  const container = document.getElementById('dynamic-pipeline-fields');
+  container.innerHTML = '';
+  const pipelineSelect = document.getElementById('new-cam-pipeline');
+  const pipeline = pipelineSchemas[pipelineSelect.value] || {};
+  const schema = pipeline.config_schema || {};
+  Object.entries(schema).forEach(([fieldName, fieldDef]) => {
+    const row = document.createElement('div');
+    row.className = 'form-row';
+
+    const label = document.createElement('span');
+    label.className = 'form-label';
+    label.textContent = fieldDef.label || humanizeFieldName(fieldName);
+
+    let control;
+    const fieldType = fieldDef.type || 'text';
+    if (fieldType === 'select') {
+      control = document.createElement('select');
+      control.className = 'form-input';
+      (fieldDef.options || []).forEach(optionValue => {
+        const option = document.createElement('option');
+        option.value = optionValue;
+        option.textContent = optionValue;
+        control.appendChild(option);
+      });
+    } else if (fieldType === 'boolean') {
+      control = document.createElement('select');
+      control.className = 'form-input';
+      const yesOption = document.createElement('option');
+      yesOption.value = 'true';
+      yesOption.textContent = 'Yes';
+      const noOption = document.createElement('option');
+      noOption.value = 'false';
+      noOption.textContent = 'No';
+      control.appendChild(yesOption);
+      control.appendChild(noOption);
+    } else {
+      control = document.createElement('input');
+      control.className = 'form-input';
+      control.type = fieldType === 'number' ? 'number' : 'text';
+      if (fieldType === 'number' && fieldDef.step != null) {
+        control.step = fieldDef.step;
+      }
+    }
+
+    control.id = `dyn-${fieldName}`;
+    if (fieldDef.default != null) {
+      if (fieldType === 'boolean') {
+        control.value = String(fieldDef.default);
+      } else if (fieldType === 'select') {
+        control.value = String(fieldDef.default);
+      } else {
+        control.value = fieldDef.default;
+      }
+    }
+
+    row.appendChild(label);
+    row.appendChild(control);
+    container.appendChild(row);
+  });
 }
 
 async function openAddCameraModal(preselectPath) {
@@ -122,6 +195,38 @@ async function openAddCameraModal(preselectPath) {
   if (preselectPath) {
     sel.value = preselectPath;
   }
+
+  try {
+    const pipelineData = await fetch('/api/vision_pipelines').then(r => r.json());
+    pipelineSchemas = {};
+    const pipelineSel = document.getElementById('new-cam-pipeline');
+    pipelineSel.innerHTML = '';
+    (pipelineData.pipelines || []).forEach(pipeline => {
+      pipelineSchemas[pipeline.name] = pipeline;
+      const option = document.createElement('option');
+      option.value = pipeline.name;
+      option.textContent = humanizePipelineName(pipeline.name);
+      pipelineSel.appendChild(option);
+    });
+    if (!pipelineSel.options.length) {
+      const fallback = document.createElement('option');
+      fallback.value = 'object_detection';
+      fallback.textContent = 'Object Detection';
+      pipelineSel.appendChild(fallback);
+      pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {} };
+    }
+    if (!pipelineSchemas[pipelineSel.value]) {
+      pipelineSel.value = pipelineSel.options[0].value;
+    }
+  } catch (e) {
+    console.warn('Failed to load pipeline schemas', e);
+    pipelineSchemas = { object_detection: { name: 'object_detection', config_schema: {} } };
+    const pipelineSel = document.getElementById('new-cam-pipeline');
+    pipelineSel.innerHTML = '<option value="object_detection">Object Detection</option>';
+    pipelineSel.value = 'object_detection';
+  }
+
+  renderDynamicPipelineFields();
   document.getElementById('add-camera-modal').style.display = 'flex';
   onDeviceSelected();
 }
@@ -179,6 +284,18 @@ async function submitAddCamera() {
       fov: Number(document.getElementById('new-cam-cal-fov').value),
     },
   };
+  const schema = (pipelineSchemas[document.getElementById('new-cam-pipeline').value] || {}).config_schema || {};
+  document.querySelectorAll('#dynamic-pipeline-fields [id^="dyn-"]').forEach(el => {
+    const key = el.id.slice(4);
+    const fieldDef = schema[key] || {};
+    let value = el.value;
+    if (fieldDef.type === 'number') {
+      value = el.value === '' ? null : Number(el.value);
+    } else if (fieldDef.type === 'boolean') {
+      value = el.value === 'true';
+    }
+    payload[key] = value;
+  });
   const r = await fetch('/api/cameras/config', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload),

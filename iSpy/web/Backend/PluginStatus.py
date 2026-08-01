@@ -1,11 +1,14 @@
+import logging
 import re
 from flask import jsonify, render_template, request
 from pathlib import Path
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.plugins._loader import load_plugins
-from iSpy.plugins.bases import TrackerBase, UtilityBase, FrameProcessorBase
+from iSpy.plugins.bases import TrackerBase, UtilityBase, FrameProcessorBase, VisionBase
 
 import iSpy.plugins as _plugins_pkg
+
+logger = logging.getLogger(__name__)
 
 _PLUGIN_ROOT = Path(_plugins_pkg.__file__).resolve().parent
 
@@ -16,6 +19,25 @@ _TYPE_MAP = {
 }
 
 _NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _build_vision_pipeline_payloads():
+    vision_classes = load_plugins(_PLUGIN_ROOT / "vision", VisionBase)
+    pipelines = []
+    for name, cls in sorted(vision_classes.items()):
+        try:
+            schema = cls.config_schema()
+        except Exception:
+            logger.warning("Failed to load config schema for vision plugin '%s'", name)
+            continue
+        if schema is None:
+            schema = {}
+        pipelines.append({
+            "name": name,
+            "class_name": cls.__name__,
+            "config_schema": schema,
+        })
+    return pipelines
 
 
 class PluginStatusModule(WebModule):
@@ -53,6 +75,9 @@ class PluginStatusModule(WebModule):
                     "status": inst.get_status() if hasattr(inst, "get_status") else "unknown",
                 })
         return jsonify(plugins=out)
+
+    def _vision_pipelines(self):
+        return jsonify(pipelines=_build_vision_pipeline_payloads())
 
     def _available(self):
         config = self.context.get("config")

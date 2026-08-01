@@ -56,6 +56,12 @@ class VisionBase(ABC):
     
     def __init__(self, context: dict):
         self.context = context
+
+    @classmethod
+    def config_schema(cls) -> dict:
+        """Return {} if this plugin needs no extra config beyond the
+        standard camera fields."""
+        return {}
     
     def start(self):
         pass
