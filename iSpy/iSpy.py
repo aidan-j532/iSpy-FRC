@@ -238,6 +238,11 @@ class iSpy:
             debug_frame = camera.get_debug_frame(frame)
             if debug_frame is not None:
                 frame_data["debug_frame"] = debug_frame
+        if hasattr(camera, "plot"):
+            plotted_frame = camera.plot(frame)
+            if plotted_frame is not None:
+                frame_data["frame"] = plotted_frame
+                frame_data["debug_frame"] = plotted_frame
         return frame_data
 
     def _run_loop_body_multi(self, handler) -> dict:

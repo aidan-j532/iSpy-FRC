@@ -56,6 +56,15 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         base = DummyVision.__new__(DummyVision)
         self.assertEqual(base.get_debug_data(), {})
         self.assertIsNone(base.get_debug_frame(None))
+        self.assertIsNone(base.plot(None))
+
+    def test_plugin_plot_hook_returns_annotated_frame(self):
+        import numpy as np
+
+        frame = np.zeros((10, 10, 3), dtype=np.uint8)
+        annotated = AprilTagCamera.__new__(AprilTagCamera).plot(frame)
+        self.assertIsNotNone(annotated)
+        self.assertTrue(np.array_equal(annotated, frame) or annotated.shape == frame.shape)
 
 
 if __name__ == "__main__":

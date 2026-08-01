@@ -72,6 +72,10 @@ class VisionBase(ABC):
     def get_debug_frame(self, frame):
         return None
 
+    def plot(self, frame):
+        """Return a frame annotated by the vision pipeline for display."""
+        return frame
+
     @abstractmethod
     def run(self):
         pass

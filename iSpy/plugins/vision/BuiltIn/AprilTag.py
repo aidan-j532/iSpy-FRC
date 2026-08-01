@@ -213,5 +213,16 @@ class AprilTagCamera(Camera, VisionBase):
             return len(positions) > 0
         return positions
 
+    def plot(self, frame):
+        if frame is None:
+            return None
+        try:
+            import cv2
+            overlay = frame.copy()
+            cv2.putText(overlay, "AprilTag", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            return overlay
+        except Exception:
+            return frame
+
     def destroy(self):
         super().destroy()

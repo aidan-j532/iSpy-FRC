@@ -300,6 +300,9 @@ class Camera:
 
     def get_debug_data(self) -> dict:
         return {}
+
+    def plot(self, frame):
+        return frame
         
     def destroy(self):
         self.stopped = True
