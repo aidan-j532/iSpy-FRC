@@ -82,7 +82,7 @@ class LineTrackingCamera(Camera, VisionBase):
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
+        frame = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         objects = []
 
