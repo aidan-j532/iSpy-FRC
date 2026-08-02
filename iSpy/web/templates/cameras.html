@@ -98,6 +98,104 @@
   </div>
 </div>
 
+<div id="edit-camera-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeEditCameraModal()">
+  <div class="modal" style="max-width:520px;">
+    <h3>Edit Camera</h3>
+    <div class="settings-section">
+      <div class="form-row">
+        <span class="form-label">Source</span>
+        <input id="edit-cam-source" class="form-input" type="text">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Name</span>
+        <input id="edit-cam-name" class="form-input" type="text">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Pipeline</span>
+        <select id="edit-cam-pipeline" class="form-input" onchange="renderEditPipelineFields()"></select>
+      </div>
+      <div id="edit-dynamic-pipeline-fields"></div>
+      <div class="form-row">
+        <span class="form-label">X offset</span>
+        <input id="edit-cam-x" class="form-input" type="number" step="0.01">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Y offset</span>
+        <input id="edit-cam-y" class="form-input" type="number" step="0.01">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Height (m)</span>
+        <input id="edit-cam-height" class="form-input" type="number" step="0.01">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Yaw (deg)</span>
+        <input id="edit-cam-yaw" class="form-input" type="number" step="0.1">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Pitch (deg)</span>
+        <input id="edit-cam-pitch" class="form-input" type="number" step="0.1">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Subsystem</span>
+        <select id="edit-cam-subsystem" class="form-input">
+          <option value="field">Field</option>
+          <option value="robot">Robot</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <span class="form-label">Grayscale</span>
+        <select id="edit-cam-grayscale" class="form-input">
+          <option value="false">No</option>
+          <option value="true">Yes</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <span class="form-label">Auto Brightness</span>
+        <select id="edit-cam-auto-brightness" class="form-input">
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <span class="form-label">Exposure Time (us)</span>
+        <input id="edit-cam-exposure" class="form-input" type="number" step="1">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Gain</span>
+        <input id="edit-cam-gain" class="form-input" type="number" step="1">
+      </div>
+      <div class="form-row">
+        <span class="form-label">FPS Cap</span>
+        <input id="edit-cam-fps-cap" class="form-input" type="number" step="1">
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>Calibration</h3>
+      <div class="form-row">
+        <span class="form-label">Distance (m)</span>
+        <input id="edit-cam-cal-distance" class="form-input" type="number" step="0.01">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Game Piece Size (m)</span>
+        <input id="edit-cam-cal-gpsize" class="form-input" type="number" step="0.01">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Size (px)</span>
+        <input id="edit-cam-cal-size" class="form-input" type="number" step="1">
+      </div>
+      <div class="form-row">
+        <span class="form-label">FOV (deg)</span>
+        <input id="edit-cam-cal-fov" class="form-input" type="number" step="0.1">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button onclick="closeEditCameraModal()" style="background:var(--border);">Cancel</button>
+      <button onclick="submitEditCamera()" class="btn-ok">Save Settings</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let refreshTimer = null;
 let currentRate = 1000;
@@ -327,6 +425,209 @@ async function submitAddCamera() {
   }
 }
 
+let editCamData = null;
+
+function closeEditCameraModal() {
+  document.getElementById('edit-camera-modal').style.display = 'none';
+  document.getElementById('edit-dynamic-pipeline-fields').innerHTML = '';
+  editCamData = null;
+}
+
+function setEditCommonFieldVisibility(show) {
+  const commonFields = [
+    'edit-cam-x',
+    'edit-cam-y',
+    'edit-cam-height',
+    'edit-cam-yaw',
+    'edit-cam-pitch',
+  ];
+  commonFields.forEach(fieldId => {
+    const row = document.getElementById(fieldId).closest('.form-row');
+    if (row) row.style.display = show ? '' : 'none';
+  });
+}
+
+function renderEditPipelineFields() {
+  const container = document.getElementById('edit-dynamic-pipeline-fields');
+  container.innerHTML = '';
+  const pipeline = pipelineSchemas[document.getElementById('edit-cam-pipeline').value] || {};
+  const schema = pipeline.config_schema || {};
+  setEditCommonFieldVisibility(Boolean(pipeline.show_common_fields));
+  Object.entries(schema).forEach(([fieldName, fieldDef]) => {
+    const row = document.createElement('div');
+    row.className = 'form-row';
+
+    const label = document.createElement('span');
+    label.className = 'form-label';
+    label.textContent = fieldDef.label || humanizeFieldName(fieldName);
+
+    let control;
+    const fieldType = fieldDef.type || 'text';
+    if (fieldType === 'select') {
+      control = document.createElement('select');
+      control.className = 'form-input';
+      (fieldDef.options || []).forEach(optionValue => {
+        const option = document.createElement('option');
+        option.value = optionValue;
+        option.textContent = optionValue;
+        control.appendChild(option);
+      });
+    } else if (fieldType === 'boolean') {
+      control = document.createElement('select');
+      control.className = 'form-input';
+      const yesOption = document.createElement('option');
+      yesOption.value = 'true';
+      yesOption.textContent = 'Yes';
+      const noOption = document.createElement('option');
+      noOption.value = 'false';
+      noOption.textContent = 'No';
+      control.appendChild(yesOption);
+      control.appendChild(noOption);
+    } else {
+      control = document.createElement('input');
+      control.className = 'form-input';
+      control.type = fieldType === 'number' ? 'number' : 'text';
+      if (fieldType === 'number' && fieldDef.step != null) {
+        control.step = fieldDef.step;
+      }
+    }
+
+    control.id = `edit-dyn-${fieldName}`;
+    const current = editCamData && editCamData[fieldName] != null ? editCamData[fieldName] : fieldDef.default;
+    if (current != null) {
+      if (fieldType === 'boolean') {
+        control.value = String(current);
+      } else if (fieldType === 'select') {
+        control.value = String(current);
+      } else {
+        control.value = current;
+      }
+    }
+
+    row.appendChild(label);
+    row.appendChild(control);
+    container.appendChild(row);
+  });
+}
+
+async function openEditCameraModal(name) {
+  try {
+    const [camRes, pipelineRes] = await Promise.all([
+      fetch(`/api/cameras/config/${encodeURIComponent(name)}`).then(r => r.json()),
+      fetch('/api/vision_pipelines').then(r => r.json()),
+    ]);
+    const cam = camRes.camera;
+    if (!cam) {
+      showToast(camRes.error || 'Camera not found', 'error');
+      return;
+    }
+    editCamData = cam;
+
+    pipelineSchemas = {};
+    const pipelineSel = document.getElementById('edit-cam-pipeline');
+    pipelineSel.innerHTML = '';
+    (pipelineRes.pipelines || []).forEach(pipeline => {
+      pipelineSchemas[pipeline.name] = pipeline;
+      const option = document.createElement('option');
+      option.value = pipeline.name;
+      option.textContent = humanizePipelineName(pipeline.name);
+      pipelineSel.appendChild(option);
+    });
+    if (!pipelineSel.options.length) {
+      const fallback = document.createElement('option');
+      fallback.value = 'object_detection';
+      fallback.textContent = 'Object Detection';
+      pipelineSel.appendChild(fallback);
+      pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {}, show_common_fields: true };
+    }
+    pipelineSel.value = cam.pipeline || pipelineSel.options[0].value;
+
+    document.getElementById('edit-cam-source').value = cam.source != null ? cam.source : '';
+    document.getElementById('edit-cam-name').value = cam.name || '';
+    document.getElementById('edit-cam-x').value = cam.x ?? 0;
+    document.getElementById('edit-cam-y').value = cam.y ?? 0;
+    document.getElementById('edit-cam-height').value = cam.height ?? 0;
+    document.getElementById('edit-cam-yaw').value = cam.yaw ?? 0;
+    document.getElementById('edit-cam-pitch').value = cam.pitch ?? 0;
+    document.getElementById('edit-cam-subsystem').value = cam.subsystem || 'field';
+    document.getElementById('edit-cam-grayscale').value = String(!!cam.grayscale);
+    document.getElementById('edit-cam-auto-brightness').value = String(cam.auto_brightness !== false);
+    document.getElementById('edit-cam-exposure').value = cam.exposure_time != null ? cam.exposure_time : '';
+    document.getElementById('edit-cam-gain').value = cam.gain != null ? cam.gain : '';
+    document.getElementById('edit-cam-fps-cap').value = cam.fps_cap != null ? cam.fps_cap : '';
+    if (cam.calibration) {
+      document.getElementById('edit-cam-cal-distance').value = cam.calibration.distance ?? 0;
+      document.getElementById('edit-cam-cal-gpsize').value = cam.calibration.game_piece_size ?? 0;
+      document.getElementById('edit-cam-cal-size').value = cam.calibration.size ?? 0;
+      document.getElementById('edit-cam-cal-fov').value = cam.calibration.fov ?? 0;
+    } else {
+      document.getElementById('edit-cam-cal-distance').value = 0;
+      document.getElementById('edit-cam-cal-gpsize').value = 0;
+      document.getElementById('edit-cam-cal-size').value = 0;
+      document.getElementById('edit-cam-cal-fov').value = 0;
+    }
+
+    renderEditPipelineFields();
+    document.getElementById('edit-camera-modal').style.display = 'flex';
+  } catch (e) {
+    showToast('Failed to load camera settings', 'error');
+    console.error(e);
+  }
+}
+
+async function submitEditCamera() {
+  if (!editCamData) return;
+  const srcVal = document.getElementById('edit-cam-source').value.trim();
+  const payload = {
+    source: (srcVal !== '' && !isNaN(Number(srcVal))) ? Number(srcVal) : srcVal,
+    name: document.getElementById('edit-cam-name').value.trim(),
+    pipeline: document.getElementById('edit-cam-pipeline').value,
+    x: Number(document.getElementById('edit-cam-x').value),
+    y: Number(document.getElementById('edit-cam-y').value),
+    height: Number(document.getElementById('edit-cam-height').value),
+    yaw: Number(document.getElementById('edit-cam-yaw').value),
+    pitch: Number(document.getElementById('edit-cam-pitch').value),
+    subsystem: document.getElementById('edit-cam-subsystem').value,
+    grayscale: document.getElementById('edit-cam-grayscale').value === 'true',
+    auto_brightness: document.getElementById('edit-cam-auto-brightness').value === 'true',
+    exposure_time: document.getElementById('edit-cam-exposure').value === '' ? null : Number(document.getElementById('edit-cam-exposure').value),
+    gain: document.getElementById('edit-cam-gain').value === '' ? null : Number(document.getElementById('edit-cam-gain').value),
+    fps_cap: document.getElementById('edit-cam-fps-cap').value === '' ? null : Number(document.getElementById('edit-cam-fps-cap').value),
+    calibration: {
+      distance: Number(document.getElementById('edit-cam-cal-distance').value),
+      game_piece_size: Number(document.getElementById('edit-cam-cal-gpsize').value),
+      size: Number(document.getElementById('edit-cam-cal-size').value),
+      fov: Number(document.getElementById('edit-cam-cal-fov').value),
+    },
+  };
+  const schema = (pipelineSchemas[payload.pipeline] || {}).config_schema || {};
+  document.querySelectorAll('#edit-dynamic-pipeline-fields [id^="edit-dyn-"]').forEach(el => {
+    const key = el.id.slice('edit-dyn-'.length);
+    const fieldDef = schema[key] || {};
+    let value = el.value;
+    if (fieldDef.type === 'number') {
+      value = el.value === '' ? null : Number(el.value);
+    } else if (fieldDef.type === 'boolean') {
+      value = el.value === 'true';
+    }
+    payload[key] = value;
+  });
+
+  const originalName = editCamData.name || '';
+  const r = await fetch(`/api/cameras/config/${encodeURIComponent(originalName)}`, {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const j = await r.json();
+  if (r.ok) {
+    showToast('Settings saved - restart vision to apply', 'success');
+    closeEditCameraModal();
+    refreshCameras();
+  } else {
+    showToast(j.error, 'error');
+  }
+}
+
 function confirmRemoveCamera(name) {
   if (!confirm(`Remove camera "${name}"? Its settings will be saved for next time you add it back.`)) return;
   fetch(`/api/cameras/config/${encodeURIComponent(name)}`, { method: 'DELETE' })
@@ -343,7 +644,8 @@ function buildCameraCard(name, isStreaming, ageText) {
       <span class="status-dot ${isStreaming ? 'status-ok' : 'status-warn'}"></span>
       <strong>${name}</strong>
       <span class="cam-meta">${ageText}</span>
-      <button class="btn-sm btn-bad" onclick="confirmRemoveCamera('${name}')" style="margin-left:auto;">Remove</button>
+      <button class="btn-sm btn-ok" onclick="openEditCameraModal('${name}')" style="margin-left:auto;">Edit</button>
+      <button class="btn-sm btn-bad" onclick="confirmRemoveCamera('${name}')">Remove</button>
     </div>
     ${isStreaming
       ? `<div class="camera-feed-wrap">

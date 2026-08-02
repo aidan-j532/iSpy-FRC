@@ -1,3 +1,4 @@
+import copy
 import glob
 import os
 import platform
@@ -36,6 +37,8 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/discover", "api_cameras_discover", self._discover)
         flask_app.add_url_rule("/video/<camera_name>", "video_feed", self._video_feed)
         flask_app.add_url_rule("/api/cameras/config", "api_cameras_config_add", self._add_camera, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_get", self._get_camera, methods=["GET"])
+        flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_update", self._update_camera, methods=["PUT"])
         flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_delete", self._remove_camera, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/profile/<device_id>", "api_cameras_profile", self._get_profile, methods=["GET"])
         flask_app.add_url_rule("/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines)
@@ -167,6 +170,57 @@ class CamerasModule(WebModule):
             write("camera_profiles", profiles)
 
         return jsonify(success=True, note="Restart vision to apply.")
+
+    def _find_camera_entry(self, cam_name):
+        """Locate a camera config entry by its config key, name, or source."""
+        cams = self.context["config"].get("camera_configs", {})
+        entry = cams.get(cam_name)
+        if entry is not None:
+            return cams, cam_name, entry
+        for key, existing in cams.items():
+            if existing.get("name") == cam_name or str(existing.get("source")) == cam_name:
+                return cams, key, existing
+        return None, None, None
+
+    def _get_camera(self, cam_name):
+        cams, entry_key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        return jsonify(camera=entry)
+
+    def _update_camera(self, cam_name):
+        data = request.get_json(force=True) or {}
+        config = self.context["config"]
+        cams, entry_key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+
+        new_entry = copy.deepcopy(entry)
+        for key, value in data.items():
+            if value is None:
+                new_entry.pop(key, None)
+                continue
+            if isinstance(value, dict) and isinstance(new_entry.get(key), dict):
+                merged = dict(new_entry[key])
+                merged.update(value)
+                new_entry[key] = merged
+            else:
+                new_entry[key] = value
+
+        new_name = str(new_entry.get("name") or "").strip()
+        if not new_name:
+            return jsonify(error="Camera name is required"), 400
+        if new_entry.get("source") is None:
+            return jsonify(error="Camera source is required"), 400
+        if new_name != entry_key and new_name in cams:
+            return jsonify(error=f"Camera '{new_name}' already exists"), 409
+
+        cams.pop(entry_key)
+        cams[new_name] = new_entry
+        config.set("camera_configs", cams)
+        config.save()
+
+        return jsonify(success=True, note="Restart vision to apply.", camera=new_entry)
 
     def _remove_camera(self, cam_name):
         config = self.context["config"]
