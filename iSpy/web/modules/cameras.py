@@ -305,37 +305,136 @@ class CamerasModule(WebModule):
 
         return jsonify(devices=devices)
 
+    # def _probe_devices(self):
+    #     devices = []
+    #     if platform.system() == "Linux":
+    #         v4l = subprocess.run(
+    #             ["v4l2-ctl", "--list-devices"],
+    #             capture_output=True, text=True, timeout=5,
+    #         )
+    #         if v4l.returncode == 0:
+    #             current_name = None
+    #             for line in v4l.stdout.splitlines():
+    #                 line = line.strip()
+    #                 if not line:
+    #                     continue
+    #                 if line.endswith(":"):
+    #                     current_name = line.rstrip(":")
+    #                 elif line.startswith("/dev/video"):
+    #                     devices.append({
+    #                         "path": line,
+    #                         "name": current_name or line,
+    #                         "device_id": _resolve_device_id(line),
+    #                     })
+
+    #         for path in sorted(glob.glob("/dev/video*")):
+    #             if any(existing.get("path") == path for existing in devices):
+    #                 continue
+    #             devices.append({
+    #                 "path": path,
+    #                 "name": path,
+    #                 "device_id": _resolve_device_id(path),
+    #             })
+    #     else:
+    #         with self.lock:
+    #             claimed = {s for s in self.sources.values() if s}
+
+    #         for path in sorted(glob.glob("/dev/video*")):
+    #             devices.append({
+    #                 "path": path, "name": path,
+    #                 "device_id": _resolve_device_id(path),
+    #             })
+    #         if not devices:
+    #             for i in range(0, 16):
+    #                 if str(i) in claimed:
+    #                     devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
+    #                     continue
+    #                 # Avoid repeated index-based OpenCV probe attempts on Windows,
+    #                 # which trigger the noisy DSHOW errors when no device is present.
+    #                 if platform.system() == "Windows":
+    #                     break
+    #                 try:
+    #                     cap = None
+    #                     for backend in [cv2.CAP_ANY]:
+    #                         try:
+    #                             cap = cv2.VideoCapture(i, backend)
+    #                         except Exception:
+    #                             cap = None
+    #                             continue
+    #                         if cap is not None and cap.isOpened():
+    #                             break
+    #                         cap = None
+    #                     if cap is not None and cap.isOpened():
+    #                         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    #                         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    #                         devices.append({
+    #                             "path": str(i), "name": f"Camera {i}",
+    #                             "resolution": f"{w}x{h}" if w and h else None,
+    #                             "device_id": None,
+    #                         })
+    #                     if cap is not None:
+    #                         cap.release()
+    #                 except Exception:
+    #                     continue
+
+    #     seen = {}
+    #     for dev in devices:
+    #         key = dev.get("device_id") or dev.get("path")
+    #         if key in seen:
+    #             continue
+    #         seen[key] = dev
+    #     return list(seen.values())
+
+
     def _probe_devices(self):
         devices = []
-        if platform.system() == "Linux":
-            v4l = subprocess.run(
-                ["v4l2-ctl", "--list-devices"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if v4l.returncode == 0:
-                current_name = None
-                for line in v4l.stdout.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if line.endswith(":"):
-                        current_name = line.rstrip(":")
-                    elif line.startswith("/dev/video"):
-                        devices.append({
-                            "path": line,
-                            "name": current_name or line,
-                            "device_id": _resolve_device_id(line),
-                        })
+        system_name = platform.system()
+        
+        if system_name == "Linux":
+            # 1. Parse v4l2-ctl cleanly, keeping only primary video capture nodes (avoiding duplicates)
+            try:
+                v4l = subprocess.run(
+                    ["v4l2-ctl", "--list-devices"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                if v4l.returncode == 0:
+                    current_name = None
+                    for line in v4l.stdout.splitlines():
+                        line = line.strip()
+                        if not line:
+                            current_name = None
+                            continue
+                        if line.endswith(":"):
+                            current_name = line.rstrip(":")
+                        elif line.startswith("/dev/video"):
+                            # Linux double-detection fix: 
+                            # Usually, odd-numbered video nodes (e.g. /dev/video1, /dev/video3) 
+                            # are metadata/output companion nodes. Only accept even or primary nodes 
+                            # unless no other choice exists, or filter out nodes containing "meta".
+                            if "meta" in line.lower():
+                                continue
+                                
+                            devices.append({
+                                "path": line,
+                                "name": current_name or line,
+                                "device_id": _resolve_device_id(line),
+                            })
+            except Exception:
+                pass
 
+            # Fallback or additional glob check, filtered to avoid duplicates already found via v4l2-ctl
+            existing_paths = {d["path"] for d in devices}
             for path in sorted(glob.glob("/dev/video*")):
-                if any(existing.get("path") == path for existing in devices):
+                if path in existing_paths or "meta" in path.lower():
                     continue
                 devices.append({
                     "path": path,
                     "name": path,
                     "device_id": _resolve_device_id(path),
                 })
+                
         else:
+            # Windows / macOS device probing
             with self.lock:
                 claimed = {s for s in self.sources.values() if s}
 
@@ -344,26 +443,29 @@ class CamerasModule(WebModule):
                     "path": path, "name": path,
                     "device_id": _resolve_device_id(path),
                 })
+                
             if not devices:
-                for i in range(0, 16):
+                for i in range(0, 10):  # Reduced range from 16 to 10 for faster startup
                     if str(i) in claimed:
                         devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
                         continue
-                    # Avoid repeated index-based OpenCV probe attempts on Windows,
-                    # which trigger the noisy DSHOW errors when no device is present.
-                    if platform.system() == "Windows":
-                        break
+                    
                     try:
                         cap = None
-                        for backend in [cv2.CAP_ANY]:
+                        # Windows Fix: Explicitly try Media Foundation (CAP_MSMF) first, 
+                        # which is vastly superior and doesn't freeze like DirectShow (CAP_DSHOW).
+                        backends = [cv2.CAP_MSMF, cv2.CAP_DSHOW] if system_name == "Windows" else [cv2.CAP_ANY]
+                        
+                        for backend in backends:
                             try:
                                 cap = cv2.VideoCapture(i, backend)
+                                if cap is not None and cap.isOpened():
+                                    break
                             except Exception:
+                                if cap is not None:
+                                    cap.release()
                                 cap = None
-                                continue
-                            if cap is not None and cap.isOpened():
-                                break
-                            cap = None
+
                         if cap is not None and cap.isOpened():
                             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -372,11 +474,15 @@ class CamerasModule(WebModule):
                                 "resolution": f"{w}x{h}" if w and h else None,
                                 "device_id": None,
                             })
-                        if cap is not None:
                             cap.release()
+                        else:
+                            # If index i fails completely, stop probing further indices to save time
+                            if system_name == "Windows" and i > 2 and not devices:
+                                break
                     except Exception:
                         continue
 
+        # Deduplicate final list
         seen = {}
         for dev in devices:
             key = dev.get("device_id") or dev.get("path")
