@@ -3,11 +3,20 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import requests
 
 from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
+
+_WORLD_MODEL_CACHE = Path.home() / ".cache" / "ispy"
+
+_WORLD_MODEL_URLS = {
+    "s": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8s-worldv2.pt",
+    "m": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8m-worldv2.pt",
+    "l": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8l-worldv2.pt",
+}
 
 
 class YoloWorldCamera(Camera, VisionBase):
@@ -20,6 +29,13 @@ class YoloWorldCamera(Camera, VisionBase):
                 "type": "text",
                 "label": "Prompt",
                 "default": "A dog.",
+            },
+            "model_size": {
+                "type": "select",
+                "label": "Model Size",
+                "options": ["s", "m", "l"],
+                "default": "s",
+                "help": "YOLO World v2 weights are downloaded automatically from Ultralytics on first use.",
             },
         }
 
@@ -48,20 +64,46 @@ class YoloWorldCamera(Camera, VisionBase):
         self.core_mask = core_mask
         self.prompt = str(camera_config.get("prompt") or "A dog.")
         self.classes = self._parse_classes(self.prompt)
+        self.model_size = str(camera_config.get("model_size") or "s").lower()
         self.model = None
         self._model_path = None
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
 
         self._load_model()
 
-    def _load_model(self):
-        asset_path = Path(__file__).resolve().parents[3] / "assets" / "yolo-world.pt"
-        self._model_path = asset_path
-        if not asset_path.exists():
-            self.logger.error("YOLO World weights not found at %s", asset_path)
-            self.model = None
-            return
+    def _ensure_world_model(self, size: str) -> str | None:
+        """Download YOLO World weights into the iSpy cache on first use."""
+        url = _WORLD_MODEL_URLS.get(size, _WORLD_MODEL_URLS["s"])
+        filename = url.rsplit("/", 1)[-1]
+        target = _WORLD_MODEL_CACHE / filename
 
+        if target.exists() and target.stat().st_size >= 1024:
+            return str(target)
+
+        self.logger.info("Downloading YOLO World weights %s to %s ...", filename, target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".part")
+        try:
+            with requests.get(url, stream=True, timeout=60) as resp:
+                resp.raise_for_status()
+                with open(tmp, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=1 << 16):
+                        fh.write(chunk)
+            tmp.replace(target)
+        except Exception as exc:  # pragma: no cover - network dependent
+            self.logger.exception("Failed to download YOLO World weights: %s", exc)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return None
+
+        if target.stat().st_size < 1024:
+            self.logger.error("YOLO World weights appear truncated (%s bytes).", target.stat().st_size)
+            return None
+        return str(target)
+
+    def _load_model(self):
         try:
             from ultralytics import YOLOWorld
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
@@ -69,10 +111,22 @@ class YoloWorldCamera(Camera, VisionBase):
             self.model = None
             return
 
+        asset_path = Path(__file__).resolve().parents[3] / "assets" / "yolo-world.pt"
+        if asset_path.exists():
+            weights = str(asset_path)
+            self.logger.info("Using bundled YOLO World weights at %s", asset_path)
+        else:
+            weights = self._ensure_world_model(self.model_size)
+
+        if not weights:
+            self.model = None
+            return
+
         try:
-            self.model = YOLOWorld(str(asset_path), verbose=False)
+            self.model = YOLOWorld(weights, verbose=False)
             self.model.set_classes(self.classes)
-            self.logger.info("Loaded YOLO World model from %s (classes=%s)", asset_path, self.classes)
+            self._model_path = weights
+            self.logger.info("Loaded YOLO World model from %s (classes=%s)", weights, self.classes)
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
             self.logger.exception("Failed to load YOLO World model: %s", exc)
             self.model = None

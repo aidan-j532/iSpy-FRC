@@ -28,7 +28,6 @@ class AprilTagCamera(Camera, VisionBase):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
 
-        # 1. Load Camera & Calibration Settings
         try:
             self.subsystem = camera_config["subsystem"]
             self.camera_bot_relative_yaw = camera_config.get("yaw", 0.0)
@@ -70,18 +69,14 @@ class AprilTagCamera(Camera, VisionBase):
         except ZeroDivisionError:
             self.focal_length_pixels = 1.0
 
-        # Note: We request 640x480 by default, though you can adjust this based on your camera
         super().__init__(camera_config, (640, 480), self.grayscale)
 
-        # 2. Setup OpenCV Aruco Detector (FRC uses tag36h11)
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
         self.aruco_params = cv2.aruco.DetectorParameters()
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
 
         self._last_objects: list[Object] = []
         
-        # FRC AprilTags are exactly 16.5cm (~6.5 inches)
-        # We work in inches internally before converting to output unit
         half = self.tag_size_inches / 2.0
         self.obj_pts = np.array([
             [-half,  half, 0],
@@ -124,15 +119,12 @@ class AprilTagCamera(Camera, VisionBase):
         return roll, pitch, yaw
 
     def run(self):
-        """Main pipeline step: get frame, detect tags, build Object list."""
         frame = self.get_frame()
         if frame is None:
             return [], None
 
-        # Convert to grayscale if it isn't already
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-        # Run detection
         corners, ids, rejected = self.detector.detectMarkers(gray)
         objects = []
 
@@ -147,12 +139,10 @@ class AprilTagCamera(Camera, VisionBase):
                 tag_id = int(ids[i][0])
                 tag_corners = corners[i][0]
 
-                # Draw bounding box and ID on the frame for debugging
                 cv2.polylines(frame, [tag_corners.astype(np.int32)], True, (0, 255, 0), 2)
                 cv2.putText(frame, f"ID: {tag_id}", tuple(tag_corners[0].astype(int)), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                # Solve PnP for Tag pose
                 ok, rvec, tvec = cv2.solvePnP(
                     self.obj_pts, 
                     tag_corners, 
@@ -162,7 +152,6 @@ class AprilTagCamera(Camera, VisionBase):
                 )
 
                 if ok:
-                    # Draw 3D axis on tag
                     cv2.drawFrameAxes(frame, cam_mat, dist_coeffs, rvec, tvec, 3.25)
                     
                     tvec = tvec.reshape(3)
@@ -171,13 +160,12 @@ class AprilTagCamera(Camera, VisionBase):
 
                     scale = self.conversions.get(self.unit, self.conversions["meter"])
 
-                    # Map properties to iSpy Object
                     obj = Object(
                         x=float(robot_pt[0]),
                         y=float(robot_pt[1]),
                         z=float(robot_pt[2]),
                         name=f"tag_{tag_id}",
-                        confidence=1.0, # AprilTags are highly confident if detected
+                        confidence=1.0, # April tags come at a very high confidence if detected
                         roll=roll,
                         pitch=pitch,
                         yaw=yaw,
@@ -189,7 +177,6 @@ class AprilTagCamera(Camera, VisionBase):
                         },
                     )
                     
-                    # Optional: Add ray origins for triangulation across multiple cameras
                     center_px = np.mean(tag_corners, axis=0)
                     ray = triangulation.pixel_to_ray(
                         center_px[0], center_px[1], img_w, img_h, f,
