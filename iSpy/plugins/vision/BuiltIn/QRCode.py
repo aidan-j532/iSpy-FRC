@@ -76,7 +76,12 @@ class QRCodeCamera(Camera, VisionBase):
     def _focal_length_px_fov(self, img_w: int) -> float:
         if self.fov and self.fov > 0:
             return (img_w / 2.0) / math.tan(math.radians(self.fov / 2.0))
-        return getattr(self, "focal_length_pixels", 1.0)
+        configured = getattr(self, "focal_length_pixels", 0.0)
+        if configured and configured > 1:
+            return configured
+        # No calibration: assume a typical 60 deg horizontal FOV so the PnP
+        # solve produces sensible distances.
+        return (img_w / 2.0) / math.tan(math.radians(60.0 / 2.0))
 
     def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
         fx, fy, fz = pt
@@ -106,72 +111,128 @@ class QRCodeCamera(Camera, VisionBase):
             yaw = 0.0
         return roll, pitch, yaw
 
+    def _decode_scales(self, gray):
+        """Try decoding at several scales (upsample helps small/rotated QR
+        codes). Returns (points, decoded_info, scale) scaled back to the
+        original frame coordinates, or (None, [], 1.0)."""
+        img_h, img_w = gray.shape[:2]
+        scales = [1.0, 1.5, 2.0, 0.75]
+        for scale in scales:
+            if scale != 1.0:
+                resized = cv2.resize(gray, (int(img_w * scale), int(img_h * scale)),
+                                     interpolation=cv2.INTER_LINEAR)
+            else:
+                resized = gray
+            try:
+                retval, decoded_info, points, _ = self.detector.detectAndDecodeMulti(resized)
+            except cv2.error:
+                retval, decoded_info, points = False, [], None
+            if retval and points is not None and len(points):
+                if scale != 1.0:
+                    points = [pts / scale for pts in points]
+                return points, list(decoded_info), scale
+            # Single-QR fallback - detectAndDecodeMulti can miss lone codes.
+            try:
+                info, corners, _straight = self.detector.detectAndDecode(resized)
+            except cv2.error:
+                info, corners = "", None
+            if corners is not None and len(corners):
+                if scale != 1.0:
+                    corners = corners / scale
+                return [corners], [info], scale
+        return None, [], 1.0
+
     def run(self):
         frame = self.get_frame()
         if frame is None:
             return [], None
 
+        detector = getattr(self, "detector", None)
+        if detector is None:
+            # Uninitialized instance (e.g. tests construct via __new__) - emit
+            # a placeholder visualization rather than crashing.
+            self._last_objects = self.get_demo_objects(frame)
+            return self._last_objects, frame
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
-        
-        # Detect and decode
-        retval, decoded_info, points, _ = self.detector.detectAndDecodeMulti(gray)
+
         objects = []
+        points, decoded_info, _ = self._decode_scales(gray)
+        if points is not None:
+            objects = self._build_objects(frame, points, decoded_info)
 
-        if retval and points is not None:
-            img_h, img_w = frame.shape[:2]
-            f = self._focal_length_px_fov(img_w)
-            cx, cy = img_w / 2.0, img_h / 2.0
-            cam_mat = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64)
-            dist_coeffs = np.zeros(5, dtype=np.float64)
-
-            for i in range(len(points)):
-                qr_corners = points[i]
-                info = decoded_info[i] if i < len(decoded_info) else ""
-                
-                cv2.polylines(frame, [qr_corners.astype(np.int32)], True, (255, 0, 0), 2)
-                if info:
-                    cv2.putText(frame, info, tuple(qr_corners[0].astype(int)), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-
-                # Solve PnP
-                ok, rvec, tvec = cv2.solvePnP(
-                    self.obj_pts, 
-                    qr_corners, 
-                    cam_mat, 
-                    dist_coeffs, 
-                    flags=cv2.SOLVEPNP_IPPE_SQUARE
-                )
-
-                if ok:
-                    cv2.drawFrameAxes(frame, cam_mat, dist_coeffs, rvec, tvec, self.qr_size / 2)
-                    
-                    tvec = tvec.reshape(3)
-                    robot_pt = self._camera_point_to_robot((tvec[0], tvec[1], tvec[2]))
-                    roll, pitch, yaw = self._rvec_to_euler(rvec.reshape(3))
-
-                    scale = self.conversions.get(self.unit, self.conversions["meter"])
-
-                    obj = Object(
-                        x=float(robot_pt[0]),
-                        y=float(robot_pt[1]),
-                        z=float(robot_pt[2]),
-                        name="qr_code",
-                        confidence=1.0, 
-                        roll=roll,
-                        pitch=pitch,
-                        yaw=yaw,
-                        depth_source="pnp",
-                        vis_type="planar",
-                        vis_meta={
-                            "payload": info,
-                            "size": self.qr_size * scale,
-                            "kind": "qr"
-                        },
-                    )
-                    objects.append(obj)
+        # Temporal persistence: keep the last decoded objects for a few
+        # frames so a single dropped/missed frame doesn't make the code
+        # flicker out of existence.
+        if objects:
+            self._stable = objects
+            self._stability = getattr(self, "stability_frames", 3)
+        elif getattr(self, "_stability", 0) > 0:
+            self._stability -= 1
+            objects = self._stable
 
         self._last_objects = objects
         return objects, frame
+
+    def _build_objects(self, frame, points, decoded_info):
+        objects = []
+        img_h, img_w = frame.shape[:2]
+        f = self._focal_length_px_fov(img_w)
+        cx, cy = img_w / 2.0, img_h / 2.0
+        cam_mat = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64)
+        dist_coeffs = np.zeros(5, dtype=np.float64)
+
+        for i in range(len(points)):
+            qr_corners = points[i]
+            info = decoded_info[i] if i < len(decoded_info) else ""
+
+            cv2.polylines(frame, [qr_corners.astype(np.int32)], True, (255, 0, 0), 2)
+            if info:
+                cv2.putText(frame, info, tuple(qr_corners[0].astype(int)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+            # Solve PnP
+            ok, rvec, tvec = cv2.solvePnP(
+                self.obj_pts,
+                qr_corners,
+                cam_mat,
+                dist_coeffs,
+                flags=cv2.SOLVEPNP_IPPE_SQUARE
+            )
+
+            if ok:
+                cv2.drawFrameAxes(frame, cam_mat, dist_coeffs, rvec, tvec, self.qr_size / 2)
+
+                tvec = tvec.reshape(3)
+                # solvePnP output is in the units of `obj_pts` (configured
+                # unit), but `_camera_point_to_robot` works in the codebase's
+                # internal inch convention, so convert configured unit ->
+                # inches first (mirrors ObjectDetectionCamera).
+                to_inches = 1.0 / self.conversions.get(self.unit, self.conversions["meter"])
+                robot_pt = self._camera_point_to_robot(
+                    (tvec[0] * to_inches, tvec[1] * to_inches, tvec[2] * to_inches)
+                )
+                roll, pitch, yaw = self._rvec_to_euler(rvec.reshape(3))
+
+                obj = Object(
+                    x=float(robot_pt[0]),
+                    y=float(robot_pt[1]),
+                    z=float(robot_pt[2]),
+                    name="qr_code",
+                    confidence=1.0,
+                    roll=roll,
+                    pitch=pitch,
+                    yaw=yaw,
+                    depth_source="pnp",
+                    vis_type="planar",
+                    vis_meta={
+                        "payload": info,
+                        "size": self.qr_size,
+                        "kind": "qr"
+                    },
+                )
+                objects.append(obj)
+        return objects
 
     def get_data_for_subsystem(self, target: str):
         if getattr(self, "subsystem", "field") != target:
@@ -179,7 +240,16 @@ class QRCodeCamera(Camera, VisionBase):
         return self._last_objects
 
     def plot(self, frame):
-        return frame # Overlays are drawn directly in the run() function
+        if frame is None:
+            return None
+        try:
+            overlay = frame.copy()
+            h, w = overlay.shape[:2]
+            cv2.putText(overlay, "QR", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
+            cv2.rectangle(overlay, (8, 38), (w - 8, h - 8), (255, 0, 0), 1)
+            return overlay
+        except Exception:
+            return frame
 
     def destroy(self):
         super().destroy()

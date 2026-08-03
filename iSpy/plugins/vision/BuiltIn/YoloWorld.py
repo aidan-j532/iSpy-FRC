@@ -23,11 +23,31 @@ class YoloWorldCamera(Camera, VisionBase):
             },
         }
 
+    @staticmethod
+    def _parse_classes(prompt: str) -> list[str]:
+        """Split a comma-separated prompt into YOLO World class tokens,
+        stripping leading articles and trailing punctuation."""
+        classes = []
+        for part in str(prompt).split(","):
+            token = part.strip().rstrip(".!?").strip()
+            if not token:
+                continue
+            lower = token.lower()
+            for article in ("a ", "an ", "the "):
+                if lower.startswith(article):
+                    token = token[len(article):]
+                    break
+            token = token.strip()
+            if token and token not in classes:
+                classes.append(token)
+        return classes or ["object"]
+
     def __init__(self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
         self.core_mask = core_mask
         self.prompt = str(camera_config.get("prompt") or "A dog.")
+        self.classes = self._parse_classes(self.prompt)
         self.model = None
         self._model_path = None
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
@@ -51,8 +71,8 @@ class YoloWorldCamera(Camera, VisionBase):
 
         try:
             self.model = YOLOWorld(str(asset_path), verbose=False)
-            self.model.set_classes([self.prompt])
-            self.logger.info("Loaded YOLO World model from %s", asset_path)
+            self.model.set_classes(self.classes)
+            self.logger.info("Loaded YOLO World model from %s (classes=%s)", asset_path, self.classes)
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
             self.logger.exception("Failed to load YOLO World model: %s", exc)
             self.model = None
@@ -78,7 +98,13 @@ class YoloWorldCamera(Camera, VisionBase):
                     x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
                     conf = float(box.conf[0])
                     cls_id = int(box.cls[0])
-                    name = getattr(result.names, str(cls_id), str(cls_id)) if hasattr(result, "names") else str(cls_id)
+                    names = getattr(result, "names", None)
+                    if isinstance(names, dict):
+                        name = names.get(cls_id, names.get(str(cls_id), str(cls_id)))
+                    elif isinstance(names, (list, tuple)) and 0 <= cls_id < len(names):
+                        name = names[cls_id]
+                    else:
+                        name = str(cls_id)
                     objects.append(
                         Object(
                             x=float((x1 + x2) / 2.0),
@@ -87,7 +113,7 @@ class YoloWorldCamera(Camera, VisionBase):
                             name=name,
                             confidence=conf,
                             vis_type="generic",
-                            vis_meta={"prompt": self.prompt, "kind": "detection"},
+                            vis_meta={"prompt": self.prompt, "classes": self.classes, "kind": "detection"},
                         )
                     )
 

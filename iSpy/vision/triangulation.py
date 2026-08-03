@@ -33,11 +33,13 @@ def pixel_to_ray(
     norm = math.sqrt(dx * dx + dy * dy + dz * dz)
     dx, dy, dz = dx / norm, dy / norm, dz / norm
 
-    # pitch: rotate (down, forward) about the camera's local right axis
+    # pitch: rotate (down, forward) about the camera's local right axis.
+    # Positive pitch tilts the camera DOWN toward the ground (the FRC
+    # convention), so a forward ray gains a negative world-z component.
     pitch = math.radians(pitch_deg)
     cp, sp = math.cos(pitch), math.sin(pitch)
-    dy2 = dy * cp - dz * sp
-    dz2 = dy * sp + dz * cp
+    dy2 = dy * cp + dz * sp
+    dz2 = -dy * sp + dz * cp
     dx2 = dx
 
     # yaw: same convention as ObjectDetectionCamera._camera_point_to_robot

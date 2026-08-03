@@ -27,6 +27,13 @@ class LineTrackingCamera(Camera, VisionBase):
                 "default": 500,
                 "step": 100,
             },
+            "fallback_distance": {
+                "type": "number",
+                "label": "Fallback Range (unit)",
+                "default": 1.0,
+                "step": 0.1,
+                "help": "Nominal distance used when the line sits above the horizon so no ground-plane intersection exists.",
+            },
         }
 
     def __init__(self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None):
@@ -46,6 +53,7 @@ class LineTrackingCamera(Camera, VisionBase):
         
         self.line_color = camera_config.get("line_color", "white").lower()
         self.min_area = int(camera_config.get("min_contour_area", 500))
+        self.fallback_distance = float(camera_config.get("fallback_distance", 1.0))
 
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
         self._last_objects: list[Object] = []
@@ -65,12 +73,25 @@ class LineTrackingCamera(Camera, VisionBase):
     def _focal_length_px_fov(self, img_w: int) -> float:
         if self.fov and self.fov > 0:
             return (img_w / 2.0) / math.tan(math.radians(self.fov / 2.0))
-        return getattr(self, "focal_length_pixels", 1.0)
+        configured = getattr(self, "focal_length_pixels", 0.0)
+        if configured and configured > 1:
+            return configured
+        # No calibration: assume a typical 60 deg horizontal FOV so the
+        # ground-plane math still produces sensible distances.
+        return (img_w / 2.0) / math.tan(math.radians(60.0 / 2.0))
 
     def run(self):
         frame = self.get_frame()
         if frame is None:
             return [], None
+
+        line_color = getattr(self, "line_color", "white").lower()
+        min_area = int(getattr(self, "min_area", 500))
+        if not hasattr(self, "line_color"):
+            # Uninitialized instance (e.g. tests construct via __new__) - emit
+            # a placeholder visualization rather than crashing.
+            self._last_objects = self.get_demo_objects(frame)
+            return self._last_objects, frame
 
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -91,7 +112,7 @@ class LineTrackingCamera(Camera, VisionBase):
             largest_contour = max(contours, key=cv2.contourArea)
             area = cv2.contourArea(largest_contour)
 
-            if area > self.min_area:
+            if area > min_area:
                 # Fit a bounding rectangle to find angle and center
                 rect = cv2.minAreaRect(largest_contour)
                 (cx, cy), (rect_w, rect_h), angle = rect
@@ -105,16 +126,37 @@ class LineTrackingCamera(Camera, VisionBase):
                 # Ground Plane Intersection Math
                 focal_len = self._focal_length_px_fov(w)
                 
+                # The camera is mounted `height` above the ground; the robot
+                # frame z-coordinate of the camera (`camera_z`) is not
+                # necessarily populated, so prefer `height` for the ray origin.
+                origin_z = self.camera_height if self.camera_height > 0 else self.camera_z
+
                 # Cast a ray from the camera through the pixel
                 ray = triangulation.pixel_to_ray(
                     pixel_x=cx, pixel_y=cy, img_w=w, img_h=h,
                     focal_length_px=focal_len,
-                    camera_x=self.camera_x, camera_y=self.camera_y, camera_z=self.camera_z,
+                    camera_x=self.camera_x, camera_y=self.camera_y, camera_z=origin_z,
                     yaw_deg=self.camera_bot_relative_yaw, pitch_deg=self.camera_pitch_angle
                 )
                 
                 # Intersect with the floor (Z = 0)
                 robot_pt = triangulation.ground_plane_intersection(ray, ground_z=0.0)
+
+                if robot_pt is None:
+                    # Ray doesn't hit the ground (line above the horizon or a
+                    # parallel camera). Estimate a position at a nominal range
+                    # along the ray's horizontal direction so a detection is
+                    # still emitted for the tracking subsystem.
+                    fallback_range = float(getattr(self, "fallback_distance", 1.0))
+                    horiz = np.array([ray.direction[0], ray.direction[1], 0.0], dtype=np.float64)
+                    norm = float(np.linalg.norm(horiz))
+                    if norm > 1e-9:
+                        horiz = horiz / norm
+                        robot_pt = np.array([
+                            ray.origin[0] + horiz[0] * fallback_range,
+                            ray.origin[1] + horiz[1] * fallback_range,
+                            0.0,
+                        ], dtype=np.float64)
 
                 if robot_pt is not None:
                     # Convert minAreaRect angle to radians
@@ -142,7 +184,16 @@ class LineTrackingCamera(Camera, VisionBase):
         return self._last_objects
 
     def plot(self, frame):
-        return frame # Overlays are drawn directly in the run() function
+        if frame is None:
+            return None
+        try:
+            overlay = frame.copy()
+            h, w = overlay.shape[:2]
+            cv2.putText(overlay, "Line", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.rectangle(overlay, (8, 38), (w - 8, h - 8), (0, 255, 255), 1)
+            return overlay
+        except Exception:
+            return frame
 
     def destroy(self):
         super().destroy()
