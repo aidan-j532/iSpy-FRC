@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from pathlib import Path
 
@@ -37,6 +38,25 @@ class YoloWorldCamera(Camera, VisionBase):
                 "default": "s",
                 "help": "YOLO World v2 weights are downloaded automatically from Ultralytics on first use.",
             },
+            "quantize": {
+                "type": "boolean",
+                "label": "Quantize",
+                "default": False,
+                "help": "Convert the YOLO World model to a quantized backend artifact using iSpy's export framework.",
+            },
+            "target_format": {
+                "type": "select",
+                "label": "Target Format",
+                "options": ["auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"],
+                "default": "auto",
+                "help": "'auto' picks the best format for this device (rknn on Rockchip NPUs, tflite on Edge TPU, engine on NVIDIA, onnx elsewhere).",
+            },
+            "input_size": {
+                "type": "number",
+                "label": "Input Size",
+                "default": 640,
+                "help": "Letterbox resolution used for the quantized model conversion and inference.",
+            },
         }
 
     @staticmethod
@@ -61,12 +81,23 @@ class YoloWorldCamera(Camera, VisionBase):
     def __init__(self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
+        self._ispy_config = config
         self.core_mask = core_mask
         self.prompt = str(camera_config.get("prompt") or "A dog.")
         self.classes = self._parse_classes(self.prompt)
         self.model_size = str(camera_config.get("model_size") or "s").lower()
+
+        raw_quantize = camera_config.get("quantize", False)
+        if isinstance(raw_quantize, str):
+            raw_quantize = raw_quantize.strip().lower() in ("1", "true", "yes", "on")
+        self.quantize = bool(raw_quantize)
+
+        self.target_format = str(camera_config.get("target_format") or "auto").lower()
+        self._model_input_size = int(camera_config.get("input_size") or 640)
         self.model = None
         self._model_path = None
+        self._quantized = False
+        self._class_names = {i: name for i, name in enumerate(self.classes)}
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
 
         self._load_model()
@@ -103,7 +134,54 @@ class YoloWorldCamera(Camera, VisionBase):
             return None
         return str(target)
 
+    def _resolve_weights(self) -> str | None:
+        """Bundled asset takes priority, then auto-downloaded weights."""
+        asset_path = Path(__file__).resolve().parents[3] / "assets" / "yolo-world.pt"
+        if asset_path.exists():
+            self.logger.info("Using bundled YOLO World weights at %s", asset_path)
+            return str(asset_path)
+        return self._ensure_world_model(self.model_size)
+
+    def _reparameterize_world(self, weights: str) -> str | None:
+        """Bake the configured classes into the open-vocabulary YOLO World
+        weights so the result is a standard fixed-vocabulary detector that the
+        conversion framework can export and quantize."""
+        try:
+            from ultralytics import YOLOWorld, YOLO
+        except Exception as exc:  # pragma: no cover - runtime dependency fallback
+            self.logger.error("Ultralytics is required to reparameterize YOLO World: %s", exc)
+            return None
+
+        classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[:8]
+        fixed = _WORLD_MODEL_CACHE / "world" / f"{Path(weights).stem}-{classes_key}.pt"
+        if fixed.exists() and fixed.stat().st_size >= 1024:
+            return str(fixed)
+
+        fixed.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            model = YOLOWorld(weights, verbose=False)
+            model.set_classes(self.classes)
+            model.save(str(fixed))
+            YOLO(str(fixed), task="detect", verbose=False)
+            self.logger.info("Reparameterized YOLO World model -> %s (classes=%s)", fixed, self.classes)
+            return str(fixed)
+        except Exception as exc:  # pragma: no cover - runtime dependency fallback
+            self.logger.exception("Failed to reparameterize YOLO World model: %s", exc)
+            return None
+
     def _load_model(self):
+        if self.quantize:
+            self._load_quantized_model()
+            if self.model is not None:
+                return
+            self.logger.warning(
+                "Quantized YOLO World model failed to load for camera '%s' - "
+                "falling back to full-precision inference.",
+                self.config.get("name", "?"),
+            )
+        self._load_full_precision()
+
+    def _load_full_precision(self):
         try:
             from ultralytics import YOLOWorld
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
@@ -111,13 +189,7 @@ class YoloWorldCamera(Camera, VisionBase):
             self.model = None
             return
 
-        asset_path = Path(__file__).resolve().parents[3] / "assets" / "yolo-world.pt"
-        if asset_path.exists():
-            weights = str(asset_path)
-            self.logger.info("Using bundled YOLO World weights at %s", asset_path)
-        else:
-            weights = self._ensure_world_model(self.model_size)
-
+        weights = self._resolve_weights()
         if not weights:
             self.model = None
             return
@@ -126,9 +198,61 @@ class YoloWorldCamera(Camera, VisionBase):
             self.model = YOLOWorld(weights, verbose=False)
             self.model.set_classes(self.classes)
             self._model_path = weights
+            self._quantized = False
             self.logger.info("Loaded YOLO World model from %s (classes=%s)", weights, self.classes)
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
             self.logger.exception("Failed to load YOLO World model: %s", exc)
+            self.model = None
+
+    def _load_quantized_model(self):
+        try:
+            weights = self._resolve_weights()
+            if not weights:
+                self.model = None
+                return
+
+            fixed = self._reparameterize_world(weights)
+            if not fixed:
+                self.model = None
+                return
+
+            from iSpy.vision.QuantizedModel import ensure_quantized_model
+            artifact, converted = ensure_quantized_model(
+                fixed,
+                self.target_format,
+                (self._model_input_size, self._model_input_size),
+                quantize=True,
+            )
+            if not converted:
+                self.logger.error(
+                    "Quantized conversion of %s produced no artifact.", Path(fixed).name
+                )
+                self.model = None
+                return
+
+            from iSpy.vision.genericYolo import GenericYolo
+            from iSpy.vision.metadata import read_metadata
+            self.model = GenericYolo(
+                {
+                    "file_path": artifact,
+                    "input_size": [self._model_input_size, self._model_input_size],
+                    "min_conf": 0.25,
+                },
+                self.core_mask,
+                iSpy_config=self._ispy_config,
+            )
+            self._model_path = artifact
+            self._quantized = True
+
+            meta = read_metadata(Path(artifact))
+            if meta and isinstance(meta.get("names"), dict):
+                self._class_names = {int(k): str(v) for k, v in meta["names"].items()}
+            self.logger.info(
+                "Loaded quantized YOLO World model from %s (classes=%s)",
+                artifact, self.classes,
+            )
+        except Exception as exc:  # pragma: no cover - runtime dependency fallback
+            self.logger.exception("Failed to load quantized YOLO World model: %s", exc)
             self.model = None
 
     def run(self):
@@ -140,6 +264,33 @@ class YoloWorldCamera(Camera, VisionBase):
             return [], frame
 
         try:
+            if self._quantized:
+                results = self.model.predict(frame, orig_shape=frame.shape)
+                objects: list[Object] = []
+                for box in results.boxes:
+                    x1, y1, x2, y2 = [float(v) for v in box.xyxy]
+                    conf = float(box.conf)
+                    cls_id = int(box.cls_id)
+                    name = self._class_names.get(cls_id, str(cls_id))
+                    objects.append(
+                        Object(
+                            x=float((x1 + x2) / 2.0),
+                            y=float((y1 + y2) / 2.0),
+                            z=0.0,
+                            name=name,
+                            confidence=conf,
+                            vis_type="generic",
+                            vis_meta={
+                                "prompt": self.prompt,
+                                "classes": self.classes,
+                                "kind": "detection",
+                                "quantized": True,
+                            },
+                        )
+                    )
+                annotated = results.plot(frame.copy())
+                return objects, annotated
+
             results = self.model(frame, stream=False, conf=0.25, imgsz=640)
             objects: list[Object] = []
             annotated = frame.copy()

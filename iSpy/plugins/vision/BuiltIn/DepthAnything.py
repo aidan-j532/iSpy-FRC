@@ -10,6 +10,13 @@ from iSpy.plugins.bases import VisionBase
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 
+_DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+_DEPTH_INPUT_SIZE = 518
+_DEPTH_ARTIFACT_STEM = "depth_anything_v2_small"
+
+_IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+_IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+
 
 class DepthAnythingCamera(Camera, VisionBase):
     plugin_name = "depth_anything"
@@ -23,6 +30,12 @@ class DepthAnythingCamera(Camera, VisionBase):
                 "options": ["small"],
                 "default": "small",
                 "help": "Depth Anything V2 Small is downloaded automatically from Hugging Face.",
+            },
+            "optimize": {
+                "type": "boolean",
+                "label": "Optimize",
+                "default": True,
+                "help": "Export the model once to an int8-quantized ONNX via iSpy's export framework and run it through onnxruntime for fast CPU inference.",
             },
             "estimate_depth": {
                 "type": "boolean",
@@ -53,6 +66,8 @@ class DepthAnythingCamera(Camera, VisionBase):
         self.config = camera_config
 
         self._model = None
+        self._session = None
+        self._onnx = False
         self._frame_count = 0
         self._every = 5
         self._last_depth = None
@@ -62,6 +77,11 @@ class DepthAnythingCamera(Camera, VisionBase):
         self.unit = config.get("unit", "meter")
         self.max_depth = float(camera_config.get("max_depth", 10.0))
         self.estimate_depth = bool(camera_config.get("estimate_depth", True))
+
+        raw_optimize = camera_config.get("optimize", True)
+        if isinstance(raw_optimize, str):
+            raw_optimize = raw_optimize.strip().lower() in ("1", "true", "yes", "on")
+        self.optimize = bool(raw_optimize)
 
         try:
             self._every = max(1, int(camera_config.get("process_every", 5)))
@@ -81,6 +101,66 @@ class DepthAnythingCamera(Camera, VisionBase):
             self.logger.info("Depth estimation disabled by config.")
             return
 
+        if self.optimize:
+            try:
+                self._load_optimized()
+            except Exception:
+                self.logger.exception("Optimized ONNX depth model failed to load.")
+            if self._session is not None:
+                return
+            self.logger.warning(
+                "Optimized ONNX depth model unavailable for camera '%s' - "
+                "falling back to the transformers pipeline.",
+                self.config.get("name", "?"),
+            )
+
+        self._load_pipeline()
+
+    def _load_optimized(self):
+        import torch.nn as nn
+
+        from transformers import AutoModelForDepthEstimation
+
+        from iSpy.vision.QuantizedModel import ensure_onnx_model
+
+        class _DepthModule(nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+
+            def forward(self, pixel_values):
+                return self.model(pixel_values=pixel_values).predicted_depth
+
+        def build():
+            self.logger.info(
+                "Loading Depth Anything V2 Small weights from Hugging Face..."
+            )
+            model = AutoModelForDepthEstimation.from_pretrained(_DEPTH_MODEL_ID)
+            model.eval()
+            return _DepthModule(model)
+
+        artifact, converted = ensure_onnx_model(
+            build,
+            _DEPTH_ARTIFACT_STEM,
+            input_size=(_DEPTH_INPUT_SIZE, _DEPTH_INPUT_SIZE),
+            quantize=True,
+        )
+        if not converted or not artifact:
+            self._session = None
+            return
+
+        import onnxruntime as ort
+
+        providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in ort.get_available_providers()]
+        self._session = ort.InferenceSession(artifact, providers=providers)
+        self._onnx = True
+        self.logger.info("Loaded optimized Depth Anything ONNX from %s", artifact)
+
+    def _load_pipeline(self):
+        if not self.estimate_depth:
+            self.logger.info("Depth estimation disabled by config.")
+            return
+
         try:
             self.logger.info(
                 "Loading Depth Anything V2 Small from Hugging Face..."
@@ -88,7 +168,7 @@ class DepthAnythingCamera(Camera, VisionBase):
 
             self._model = pipeline(
                 "depth-estimation",
-                model="depth-anything/Depth-Anything-V2-Small-hf",
+                model=_DEPTH_MODEL_ID,
             )
 
             self.logger.info("Loaded Depth Anything V2 Small.")
@@ -100,6 +180,9 @@ class DepthAnythingCamera(Camera, VisionBase):
             self._model = None
 
     def _infer_depth(self, frame: np.ndarray):
+        if self._onnx and self._session is not None:
+            return self._infer_depth_onnx(frame)
+
         image = Image.fromarray(
             cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         )
@@ -129,6 +212,26 @@ class DepthAnythingCamera(Camera, VisionBase):
 
         raise RuntimeError(
             "Depth Anything pipeline returned no depth output."
+        )
+
+    def _infer_depth_onnx(self, frame: np.ndarray) -> np.ndarray:
+        size = _DEPTH_INPUT_SIZE
+        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = (
+            cv2.resize(img, (size, size), interpolation=cv2.INTER_CUBIC)
+            .astype(np.float32)
+            / 255.0
+        )
+        pixel_values = (
+            (img.transpose(2, 0, 1) - _IMAGENET_MEAN) / _IMAGENET_STD
+        ).astype(np.float32)[None]
+
+        depth = self._session.run(None, {"pixel_values": pixel_values})[0][0]
+
+        return cv2.resize(
+            np.asarray(depth, dtype=np.float32),
+            (frame.shape[1], frame.shape[0]),
+            interpolation=cv2.INTER_LINEAR,
         )
 
     def _distance_from_depth(self, raw: float) -> float:
@@ -379,7 +482,7 @@ class DepthAnythingCamera(Camera, VisionBase):
 
         self._frame_count += 1
 
-        if model is None:
+        if model is None and self._session is None:
             return self._fallback_run(frame)
 
         every = max(1, self._every)
@@ -477,6 +580,8 @@ class DepthAnythingCamera(Camera, VisionBase):
 
     def destroy(self):
         self._model = None
+        self._session = None
+        self._onnx = False
         self._last_depth = None
         self._last_objects = []
         self._last_annotated = None
