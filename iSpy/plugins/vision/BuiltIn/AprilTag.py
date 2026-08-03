@@ -205,7 +205,6 @@ class AprilTagCamera(Camera, VisionBase):
         return objects, frame
 
     def get_data_for_subsystem(self, target: str):
-        """Required method to satisfy the NetworkHandler routing subsystem data."""
         if self.subsystem != target:
             return None
         positions = self._last_objects
@@ -218,9 +217,10 @@ class AprilTagCamera(Camera, VisionBase):
             return None
         try:
             overlay = frame.copy()
-            h, w = overlay.shape[:2]
-            cv2.putText(overlay, "AprilTag", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.rectangle(overlay, (12, 40), (w - 12, h - 12), (0, 255, 0), 2)
+            cv2.putText(
+                overlay, "AprilTag", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2
+            )
             return overlay
         except Exception:
             return frame

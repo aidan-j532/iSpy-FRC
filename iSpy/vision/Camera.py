@@ -7,7 +7,6 @@ import subprocess
 from iSpy.config.iSpyConfig import iSpyCameraConfig
 import platform
 from pathlib import Path
-from iSpy.utilities.device_id import _resolve_device_id
 from iSpy.vision.Object import Object
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -27,7 +26,12 @@ class Camera:
     def _get_capture_backend_candidates(sys_platform: str | None = None):
         platform_name = (sys_platform or platform.system()).lower()
         if platform_name == "windows":
-            return [None, cv2.CAP_ANY, cv2.CAP_DSHOW]
+            # Media Foundation is the most stable Windows backend for OpenCV.
+            # The generic CAP_ANY path probes obsensor/DSHOW on every index and
+            # spams stderr (obsensor "Camera index out of range", DSHOW "can't be
+            # used to capture by index") while CAP_DSHOW is prone to freezing.
+            # A single backend keeps the stream from being disrupted on open.
+            return [cv2.CAP_MSMF]
         if platform_name == "linux":
             return [cv2.CAP_V4L2, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
@@ -44,11 +48,6 @@ class Camera:
 
         self.is_image = isinstance(self.source, str) and self.source.lower().endswith(
             (".png", ".jpg", ".jpeg", ".bmp")
-        )
-        self.device_id = (
-            _resolve_device_id(self.source)
-            if isinstance(self.source, (str, int)) and not self.is_image
-            else None
         )
 
         self.stopped = False
@@ -176,7 +175,7 @@ class Camera:
             time.sleep(0.15)
 
         # CROSS-PLATFORM FIX: Try a safe backend order first and only fall back
-        # to DSHOW if the generic path cannot open the device.
+        # to another backend if the first cannot open the device.
         backend_candidates = self._get_capture_backend_candidates(sys_platform)
         self.cap = None
         last_error = None

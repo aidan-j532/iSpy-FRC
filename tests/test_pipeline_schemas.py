@@ -69,11 +69,9 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         self.assertIsNotNone(annotated)
         self.assertTrue(np.array_equal(annotated, frame) or annotated.shape == frame.shape)
 
-    def test_windows_capture_backend_candidates_prefer_generic_backend(self):
+    def test_windows_capture_backend_candidates_use_msmf_only(self):
         candidates = Camera._get_capture_backend_candidates("Windows")
-        self.assertEqual(candidates[0], None)
-        self.assertEqual(candidates[1], cv2.CAP_ANY)
-        self.assertEqual(candidates[2], cv2.CAP_DSHOW)
+        self.assertEqual(candidates, [cv2.CAP_MSMF])
 
     def test_camera_demo_objects_are_emitted_for_placeholder_visualization(self):
         import numpy as np

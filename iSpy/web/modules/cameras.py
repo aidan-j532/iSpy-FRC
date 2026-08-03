@@ -11,11 +11,86 @@ import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.save_store import read, write
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
-from iSpy.utilities.device_id import _resolve_device_id
 from pathlib import Path
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
+
+
+def _windows_cameras_from_registry():
+    """Discover video capture sources from the Windows registry without opening cameras.
+
+    Reads the KSCATEGORY_VIDEO_CAMERA device-interface class, whose key order is
+    the same order cv2.VideoCapture(i, cv2.CAP_MSMF) assigns indices (index 0 is
+    the first camera). Returns a list of {"index": int, "name": str} dicts.
+    """
+    devices = []
+    try:
+        import winreg
+    except ImportError:
+        return devices
+
+    class_key = r"SYSTEM\CurrentControlSet\Control\DeviceClasses\{e5323777-f976-4f5b-9b55-b94699c46e44}"
+    try:
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, class_key)
+    except OSError:
+        return devices
+
+    try:
+        subkey_pos = 0
+        camera_index = 0
+        while True:
+            try:
+                iface = winreg.EnumKey(key, subkey_pos)
+            except OSError:
+                break
+            subkey_pos += 1
+            if "#{" not in iface:
+                continue
+            devices.append({
+                "index": camera_index,
+                "name": _windows_camera_name(iface) or f"Camera {camera_index}",
+            })
+            camera_index += 1
+    finally:
+        winreg.CloseKey(key)
+    return devices
+
+
+def _windows_camera_name(iface):
+    """Resolve a friendly camera name from a DeviceClasses interface key name."""
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    end = iface.find("#{")
+    if end == -1:
+        return None
+    body = iface[:end]
+    for prefix in ("##?#", "#?#"):
+        if body.startswith(prefix):
+            body = body[len(prefix):]
+            break
+    instance = "SYSTEM\\CurrentControlSet\\Enum\\" + body.replace("#", "\\")
+    try:
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, instance)
+    except OSError:
+        return None
+    try:
+        for value in ("FriendlyName", "DeviceDesc"):
+            try:
+                name, _ = winreg.QueryValueEx(key, value)
+            except OSError:
+                continue
+            if isinstance(name, str) and name.startswith("@"):
+                name = name.rsplit(";", 1)[-1]
+            name = name.strip() if isinstance(name, str) else ""
+            if name:
+                return name
+    finally:
+        winreg.CloseKey(key)
+    return None
 
 class CamerasModule(WebModule):
     plugin_name = "cameras"
@@ -298,10 +373,7 @@ class CamerasModule(WebModule):
         for dev in devices:
             dev_id = dev.get("device_id")
             source = dev.get("path")
-            if dev_id:
-                dev["active"] = dev_id in configured_device_ids
-            else:
-                dev["active"] = str(source) in configured_sources
+            dev["active"] = bool(dev_id and dev_id in configured_device_ids) or str(source) in configured_sources
 
         return jsonify(devices=devices)
 
@@ -389,7 +461,7 @@ class CamerasModule(WebModule):
     def _probe_devices(self):
         devices = []
         system_name = platform.system()
-        
+
         if system_name == "Linux":
             # 1. Parse v4l2-ctl cleanly, keeping only primary video capture nodes (avoiding duplicates)
             try:
@@ -417,7 +489,7 @@ class CamerasModule(WebModule):
                             devices.append({
                                 "path": line,
                                 "name": current_name or line,
-                                "device_id": _resolve_device_id(line),
+                                "device_id": None,
                             })
             except Exception:
                 pass
@@ -430,42 +502,43 @@ class CamerasModule(WebModule):
                 devices.append({
                     "path": path,
                     "name": path,
-                    "device_id": _resolve_device_id(path),
+                    "device_id": None,
                 })
-                
+
+        elif system_name == "Windows":
+            # Registry enumeration of video capture sources - no index-range
+            # probing and no transient VideoCapture opens (which would flicker
+            # the stream and spam stderr). Index order matches CAP_MSMF.
+            with self.lock:
+                claimed = {s for s in self.sources.values() if s}
+            for cam in _windows_cameras_from_registry():
+                index = str(cam["index"])
+                if index in claimed:
+                    continue
+                devices.append({
+                    "path": index,
+                    "name": cam["name"],
+                    "device_id": None,
+                })
+
         else:
-            # Windows / macOS device probing
+            # macOS / other: best-effort /dev/video glob plus index probing.
             with self.lock:
                 claimed = {s for s in self.sources.values() if s}
 
             for path in sorted(glob.glob("/dev/video*")):
                 devices.append({
                     "path": path, "name": path,
-                    "device_id": _resolve_device_id(path),
+                    "device_id": None,
                 })
-                
+
             if not devices:
-                for i in range(0, 10):  # Reduced range from 16 to 10 for faster startup
+                for i in range(0, 10):
                     if str(i) in claimed:
                         devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
                         continue
-                    
                     try:
-                        cap = None
-                        # Windows Fix: Explicitly try Media Foundation (CAP_MSMF) first, 
-                        # which is vastly superior and doesn't freeze like DirectShow (CAP_DSHOW).
-                        backends = [cv2.CAP_MSMF, cv2.CAP_DSHOW] if system_name == "Windows" else [cv2.CAP_ANY]
-                        
-                        for backend in backends:
-                            try:
-                                cap = cv2.VideoCapture(i, backend)
-                                if cap is not None and cap.isOpened():
-                                    break
-                            except Exception:
-                                if cap is not None:
-                                    cap.release()
-                                cap = None
-
+                        cap = cv2.VideoCapture(i, cv2.CAP_ANY)
                         if cap is not None and cap.isOpened():
                             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -475,10 +548,6 @@ class CamerasModule(WebModule):
                                 "device_id": None,
                             })
                             cap.release()
-                        else:
-                            # If index i fails completely, stop probing further indices to save time
-                            if system_name == "Windows" and i > 2 and not devices:
-                                break
                     except Exception:
                         continue
 

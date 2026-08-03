@@ -37,6 +37,7 @@ dependencies = [
     "robotpy>=2024.0.0",
     "plotly>=5.0",
     "onnxruntime>=1.16.0",  # CPU ONNX fallback - works everywhere, used until boot picks a better backend
+    "transformers",
 ]
 
 [project.optional-dependencies]
