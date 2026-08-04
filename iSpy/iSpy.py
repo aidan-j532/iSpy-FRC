@@ -6,7 +6,7 @@ import logging
 import os
 from iSpy.config.iSpyConfig import iSpyConfig
 import signal
-from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
+from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
 from iSpy.validations.model_validator import (
     enforce_model_organization,
     validate_model_organization,

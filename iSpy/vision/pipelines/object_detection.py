@@ -7,12 +7,18 @@ import time
 import logging
 import threading
 import queue
+import json
 from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
-from iSpy.vision.genericYolo import Box, Results, GenericYolo
-from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.genericYolo import Box, Results, GenericYolo, ModelFileError
+from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision import triangulation
+
+# In-process registry of per-camera optimization jobs, keyed by camera name.
+# Mirrors the state-in-dict pattern used by service_daemon.VisionSupervisor:
+# only the status string and the worker thread live here.
+_OPTIMIZE_JOBS: dict[str, dict] = {}
+_OPTIMIZE_LOCK = threading.Lock()
 
 class ObjectDetectionCamera(Camera, VisionBase):
     plugin_name = "object_detection"
@@ -26,6 +32,9 @@ class ObjectDetectionCamera(Camera, VisionBase):
         self.logger = logging.getLogger(__name__)
 
         self.config = camera_config
+        self._ispy_config = config
+        self._cam_name = camera_config.get("name", "?")
+        self._preproc_thread: threading.Thread | None = None
 
         try:
             self.known_calibration_distance = camera_config["calibration"]["distance"]
@@ -45,15 +54,30 @@ class ObjectDetectionCamera(Camera, VisionBase):
             raise ValueError(f"Missing camera config key: {e}")
 
         # Model architecture fields come exclusively from metadata sidecars,
-        # not from config.  Config holds only user-preference fields.
+        # not from config.  Config holds only user-preference fields.  The
+        # vision_model block is per-camera (migrated from the legacy top-level
+        # key in a prior pass).
         from iSpy.vision.ModelInspector import fill_missing_config
-        vm_filled = fill_missing_config(dict(config["vision_model"]))
-        self.margin = vm_filled.get("margin", config["vision_model"].get("margin", 0))
-        self.min_confidence = float(vm_filled.get("min_conf", config["vision_model"].get("min_conf", 0.5)))
-        self.z_mode = config["vision_model"].get("z_mode", "size_based")  # "size_based" | "ground_plane"
+        vm_cfg = camera_config.get("vision_model")
+        if not isinstance(vm_cfg, dict) or not vm_cfg:
+            raise RuntimeError(
+                f"Camera '{self._cam_name}' uses pipeline 'object_detection' "
+                "but has no per-camera vision_model block."
+            )
+        # Schema fields set via the config UI live at the camera level; merge
+        # them into the model config so they drive loading, readiness gating
+        # and optimization identically to the nested vision_model keys.
+        for _k in ("quantized", "min_conf", "target_format", "input_size"):
+            if _k in camera_config.data and _k not in vm_cfg:
+                vm_cfg[_k] = camera_config.data[_k]
+        camera_config.data["vision_model"] = vm_cfg
+        vm_filled = fill_missing_config(dict(vm_cfg))
+        self.margin = vm_filled.get("margin", vm_cfg.get("margin", 0))
+        self.min_confidence = float(vm_filled.get("min_conf", vm_cfg.get("min_conf", 0.5)))
+        self.z_mode = vm_cfg.get("z_mode", "size_based")  # "size_based" | "ground_plane"
         self.yolo_model_file = vm_filled["file_path"]
         self.input_size = tuple(vm_filled["input_size"])
-        self.quantized = vm_filled.get("quantized", config["vision_model"].get("quantized", False))
+        self.quantized = vm_filled.get("quantized", vm_cfg.get("quantized", False))
         self.frame_sync = config.get("frame_sync", False)
         if self.frame_sync:
             self.logger.warning("Frame sync is enabled. This may introduce latency in detection (you probaly don't want this).")
@@ -117,11 +141,256 @@ class ObjectDetectionCamera(Camera, VisionBase):
         self._last_objects: list[Object] = []
         
         if self._use_pipeline:
-            threading.Thread(
+            self._preproc_thread = threading.Thread(
                 target=self._preprocess_worker,
                 daemon=True,
                 name=f"PreProc-{self.source}",
-            ).start()
+            )
+            self._preproc_thread.start()
+
+        # The pipeline kicks off its own readiness work: if the config
+        # requests quantization/optimization and the optimized artifact
+        # isn't loaded yet, start the background RKNN build right here so
+        # is_ready() reports "optimizing (rknn build)" and boot only has to
+        # wait for it to finish.
+        if self._optimization_requested() and not self._optimized_active():
+            self.logger.info(
+                "Camera '%s': quantization requested - starting background "
+                "RKNN build", self._cam_name,
+            )
+            self.request_optimize()
+
+    @classmethod
+    def config_schema(cls) -> dict:
+        return {
+            "quantized": {
+                "type": "boolean",
+                "label": "Quantize / optimize model",
+                "default": False,
+                "help": "Build an optimized RKNN artifact from source_pt in the "
+                        "background; camera reports ready once the build finishes.",
+            },
+            "min_conf": {
+                "type": "number",
+                "label": "Min confidence",
+                "default": 0.5,
+                "step": 0.05,
+            },
+        }
+
+    @classmethod
+    def needs_model_backend(cls) -> bool:
+        return True
+
+    def _resolve_model_path(self, path: str) -> Path | None:
+        if not path:
+            return None
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(__file__).resolve().parents[3] / p
+        return p
+
+    def _has_fallback(self) -> bool:
+        """True if ANY loadable model artifact exists for this camera's
+        configured vision_model (file_path or source_pt) - including a raw
+        .pt that runs on CPU/ONNX. Purely filesystem-level; never converts."""
+        vm = self.config.get("vision_model") or {}
+        for key in ("file_path", "source_pt"):
+            p = self._resolve_model_path(str(vm.get(key, "")))
+            if p is not None and p.exists():
+                return True
+        return False
+
+    def _model_file_is_pt(self) -> bool:
+        return str(getattr(self, "yolo_model_file", "")).lower().endswith(".pt")
+
+    def _current_job(self) -> dict | None:
+        with _OPTIMIZE_LOCK:
+            return _OPTIMIZE_JOBS.get(self._cam_name)
+
+    def _optimization_requested(self) -> bool:
+        vm = self.config.get("vision_model") or {}
+        return bool(vm.get("quantized"))
+
+    def _optimized_active(self) -> bool:
+        model = getattr(self, "model", None)
+        return (
+            model is not None
+            and getattr(model, "model_type", "") in ("rknn", "onnx", "tflite")
+        )
+
+    def is_ready(self) -> tuple[bool, str]:
+        job = self._current_job()
+        in_flight = job is not None and job["thread"].is_alive()
+
+        # Optimization configured: only "ready" once the optimized build
+        # finishes. Kicks the build off as a background job if none is
+        # running. A finished-but-failed build still leaves the camera
+        # usable on its fallback, reported with the error status.
+        if self._optimization_requested():
+            if self._optimized_active():
+                return True, "ready"
+            if in_flight:
+                return False, "optimizing (rknn build)"
+            if job is not None and job["status"].startswith("error: optimize failed"):
+                return True, job["status"]
+            if self.model is None and not self._has_fallback():
+                return False, "error: no model configured/found"
+            status = self.request_optimize()
+            if status.startswith("optimizing"):
+                return False, status
+            return True, status
+
+        if in_flight:
+            if self.model is not None or self._has_fallback():
+                return True, "optimizing (rknn build)"
+            return False, "optimizing (rknn build)"
+
+        if self.model is not None:
+            if job is not None and job["status"].startswith("error: optimize failed"):
+                return True, job["status"]
+            if job is not None and job["status"] == "ready":
+                return True, "ready"
+            if self._model_file_is_pt():
+                return True, "using unoptimized .pt fallback"
+            return True, "ready"
+
+        if job is not None and job["status"].startswith("error: optimize failed"):
+            if self._has_fallback():
+                return True, job["status"]
+            return False, job["status"]
+
+        if self._has_fallback():
+            return True, "using unoptimized .pt fallback"
+        return False, "error: no model configured/found"
+
+    def request_optimize(self) -> str:
+        """Start an RKNN build of this camera's source .pt as a background
+        job (via the existing boot conversion subprocess). No-op if a job is
+        already in flight for this camera. Never blocks."""
+        with _OPTIMIZE_LOCK:
+            existing = _OPTIMIZE_JOBS.get(self._cam_name)
+            if existing is not None and existing["thread"].is_alive():
+                return existing["status"]
+
+            vm_cfg = self.config.get("vision_model") or {}
+            source_pt = vm_cfg.get("source_pt") or vm_cfg.get("file_path")
+            pt_path = self._resolve_model_path(str(source_pt or ""))
+            if pt_path is None or not pt_path.exists() or pt_path.suffix.lower() != ".pt":
+                return "error: optimize failed - source .pt not found, using fallback"
+            if self.model is None and not self._has_fallback():
+                return "error: no model configured/found"
+
+            job = {"status": "optimizing (rknn build)", "thread": None}
+            thread = threading.Thread(
+                target=self._optimize_worker,
+                args=(str(pt_path),),
+                daemon=True,
+                name=f"Optimize-{self._cam_name}",
+            )
+            job["thread"] = thread
+            _OPTIMIZE_JOBS[self._cam_name] = job
+            thread.start()
+            return job["status"]
+
+    def _optimize_worker(self, pt_path: str):
+        try:
+            from iSpy.boot.boot import _convert_model_subprocess, _RKNN_QUANTIZE
+
+            input_size = list(getattr(self, "input_size", (640, 640)))
+            converted = _convert_model_subprocess(
+                pt_path,
+                "rknn",
+                input_size,
+                quantize=_RKNN_QUANTIZE,
+                force=True,
+            )
+            converted_path = self._resolve_model_path(str(converted or ""))
+            if converted_path is None or not converted_path.exists() or converted_path.suffix.lower() != ".rknn":
+                raise RuntimeError(
+                    f"RKNN build produced no .rknn artifact (got '{converted}')"
+                )
+            self._activate_optimized_model(str(converted_path))
+            self._set_optimize_status("ready")
+        except Exception as exc:
+            self.logger.exception(
+                "Optimization failed for camera '%s': %s", self._cam_name, exc
+            )
+            self._set_optimize_status(
+                f"error: optimize failed - {exc}, using fallback"
+            )
+
+    def _set_optimize_status(self, status: str):
+        with _OPTIMIZE_LOCK:
+            job = _OPTIMIZE_JOBS.get(self._cam_name)
+            if job is not None:
+                job["status"] = status
+
+    def _current_vm_config(self) -> dict:
+        vm = self.config.get("vision_model")
+        if isinstance(vm, dict):
+            return json.loads(json.dumps(vm))
+        return {
+            "file_path": getattr(self, "yolo_model_file", ""),
+            "input_size": list(getattr(self, "input_size", (640, 640))),
+        }
+
+    def _activate_optimized_model(self, artifact_path: str):
+        """Swap this camera onto the freshly built RKNN artifact: reload the
+        model, start the pipeline worker if needed, and persist the per-camera
+        file_path. Raises RuntimeError if the optimized model fails to load -
+        the camera then stays on its fallback."""
+        vm = self._current_vm_config()
+        vm["file_path"] = artifact_path
+        vm["quantized"] = True
+
+        from iSpy.vision.ModelInspector import fill_missing_config
+        new_model = GenericYolo(
+            fill_missing_config(vm),
+            self.core_mask,
+            iSpy_config=self._ispy_config,
+        )
+        self.model = new_model
+        self.yolo_model_file = artifact_path
+        self.quantized = True
+        self._use_pipeline = new_model.model_type in ("rknn", "onnx", "tflite")
+        if self._use_pipeline and (
+            self._preproc_thread is None or not self._preproc_thread.is_alive()
+        ):
+            self._preproc_thread = threading.Thread(
+                target=self._preprocess_worker,
+                daemon=True,
+                name=f"PreProc-{self.source}",
+            )
+            self._preproc_thread.start()
+
+        try:
+            from iSpy.vision.metadata import read_metadata
+            meta = read_metadata(Path(artifact_path))
+            if meta and isinstance(meta.get("names"), dict):
+                self._class_names = {int(k): str(v) for k, v in meta["names"].items()}
+        except Exception:
+            pass
+
+        vm_out = self.config.get("vision_model")
+        if isinstance(vm_out, dict):
+            vm_out["file_path"] = artifact_path
+        if self._ispy_config is not None:
+            cams = self._ispy_config.config.get("camera_configs", {})
+            for key, entry in cams.items():
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("name") == self._cam_name or key == self._cam_name:
+                    entry_vm = entry.get("vision_model")
+                    if isinstance(entry_vm, dict):
+                        entry_vm["file_path"] = artifact_path
+            try:
+                self._ispy_config.save(quiet=True)
+            except Exception:
+                pass
+        self.logger.info(
+            "Camera '%s': optimized model active at %s", self._cam_name, artifact_path
+        )
 
     def _letterbox(self, img: np.ndarray, target_size: tuple) -> tuple:
         h, w = img.shape[:2]

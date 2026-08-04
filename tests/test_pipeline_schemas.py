@@ -3,10 +3,10 @@ import unittest
 import cv2
 
 from iSpy.plugins.bases import VisionBase
-from iSpy.plugins.vision.BuiltIn.AprilTag import AprilTagCamera
-from iSpy.plugins.vision.BuiltIn.QRCode import QRCodeCamera
-from iSpy.plugins.vision.BuiltIn.DepthAnything import DepthAnythingCamera
-from iSpy.plugins.vision.BuiltIn.LineTracking import LineTrackingCamera
+from iSpy.vision.pipelines.april_tag import AprilTagCamera
+from iSpy.vision.pipelines.qr_code import QRCodeCamera
+from iSpy.vision.pipelines.depth_anything import DepthAnythingCamera
+from iSpy.vision.pipelines.line_tracking import LineTrackingCamera
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 from iSpy.vision.Camera import Camera
 

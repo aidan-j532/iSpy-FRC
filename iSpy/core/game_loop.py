@@ -46,10 +46,7 @@ from iSpy.iSpy import iSpy
 from iSpy.config.iSpyConfig import iSpyConfig
 from iSpy.validations.ez import unit_tests
 from iSpy.validations.model_validator import enforce_model_organization
-from iSpy.plugins._loader import load_plugins
-from iSpy.plugins.bases import VisionBase
-import iSpy.plugins as _plugins_pkg
-from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
+from iSpy.vision.pipelines import get_pipeline_classes
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +73,6 @@ def _stdin_reader(pause_event: threading.Event, shutdown_event: threading.Event)
 
 def main():
     repo_root = Path.cwd()
-    plugin_root = Path(_plugins_pkg.__file__).resolve().parent
-
-    vision_classes = load_plugins(plugin_root / "vision", VisionBase)
 
     config_path = repo_root / "Config" / "config.json"
     logger.info(f"Using config file: {config_path}")
@@ -87,19 +81,20 @@ def main():
 
     is_valid, corrected_model_path = enforce_model_organization(repo_root, config.config)
     if corrected_model_path:
-        config.config["vision_model"]["file_path"] = corrected_model_path
+        for cam_cfg in config.config["camera_configs"].values():
+            if isinstance(cam_cfg.get("vision_model"), dict):
+                cam_cfg["vision_model"]["file_path"] = corrected_model_path
 
+    pipeline_classes = get_pipeline_classes()
     cameras = []
     for cam_name in config.camera_configs:
         cam_config = config.camera_config(cam_name)
         pipeline = cam_config.get("pipeline", "object_detection")
-
-        if pipeline == "object_detection":
-            cameras.append(ObjectDetectionCamera(cam_config, config))
-        elif pipeline in vision_classes:
-            cameras.append(vision_classes[pipeline](cam_config, config))
-        else:
+        cls = pipeline_classes.get(pipeline)
+        if cls is None:
             logger.warning("Unknown pipeline '%s' for camera '%s'", pipeline, cam_name)
+            continue
+        cameras.append(cls(cam_config, config))
 
     if not cameras:
         logger.error("No cameras configured or detected. Cannot run iSpy.")

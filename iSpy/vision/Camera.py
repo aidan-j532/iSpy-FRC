@@ -91,11 +91,19 @@ class Camera:
                 self.image = self._make_placeholder_frame()
                 return
 
-            threading.Thread(
+            self._reader_thread: threading.Thread | None = None
+            self._reader_thread = threading.Thread(
                 target=self._reader,
                 daemon=True,
                 name=f"CamReader-{self.source}",
-            ).start()
+            )
+            self._reader_thread.start()
+
+            try:
+                import atexit
+                atexit.register(self.destroy)
+            except Exception:
+                pass
 
     def _make_placeholder_frame(
         self, width: int = _PLACEHOLDER_W,
@@ -345,6 +353,9 @@ class Camera:
         
     def destroy(self):
         self.stopped = True
+        reader = getattr(self, "_reader_thread", None)
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=2.0)
         if not self.is_image and hasattr(self, "cap") and self.cap:
             self.cap.release()
         cv2.destroyAllWindows()

@@ -33,12 +33,14 @@ def _bootstrap_default_camera(config: iSpyConfig):
         return
     dev = devices[0]
     name = "camera_1"
+    default_vm = config.default_config["camera_configs"]["default_cam"]["vision_model"]
     config.set("camera_configs", {
         name: {
             "name": name, "source": dev["path"], "device_id": dev.get("device_id"),
             "pipeline": "object_detection", "yaw": 0, "pitch": 0, "height": 1.0,
             "x": 0, "y": 0, "z": 0, "grayscale": False, "subsystem": "field",
             "calibration": {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
+            "vision_model": json.loads(json.dumps(default_vm)),
         }
     })
     config.save()
@@ -173,8 +175,6 @@ import subprocess
 import platform
 import importlib.util
 import importlib.metadata
-import ultralytics
-from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.metadata import (
     get_calibration_keywords,
     metadata_path_for,
@@ -183,15 +183,14 @@ from iSpy.vision.metadata import (
     read_metadata,
     derive_format_metadata,
 )
-from iSpy.config.AutoOpt import recommend_format
+from iSpy.config.AutoOpt import recommend_format, has_jetson
 from iSpy.validations.validate_system import validate_system
 from iSpy.config.iSpyConfig import iSpyConfig
 from iSpy.dataset.dataset import calib_count_for_format, prepare_quantization_dataset
-from iSpy.config.AutoOpt import recommend_format, has_jetson
 import argparse
-from iSpy.config.AutoOpt import has_jetson
 from iSpy.boot.opencv_fix import ensure_csi_capable_opencv
-from iSpy.validations.tests.compare_models import compare_models
+from iSpy.validations.model_validator import enforce_model_organization
+from iSpy.vision.pipelines import get_pipeline_classes
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -252,6 +251,13 @@ def _strip_boot_managed_fields(cfg: dict) -> dict:
     if isinstance(vm, dict):
         for key in _BOOT_MANAGED_VISION_FIELDS:
             vm.pop(key, None)
+    for cam in cfg.get("camera_configs", {}).values():
+        if not isinstance(cam, dict):
+            continue
+        cam_vm = cam.get("vision_model")
+        if isinstance(cam_vm, dict):
+            for key in _BOOT_MANAGED_VISION_FIELDS:
+                cam_vm.pop(key, None)
     return cfg
 
 
@@ -553,6 +559,8 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
     logger.info("Running optimized-model comparison for %s...", converted_path.name)
 
     try:
+        from iSpy.validations.tests.compare_models import compare_models  # lazy: heavy import chain
+
         results = compare_models(
             base_path=str(pt_file),
             optimized_path=str(converted_path),
@@ -704,6 +712,8 @@ def search_for_config():
 
 
 def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, device=0):
+    import ultralytics  # lazy: boot imports cleanly without ultralytics installed
+
     model = ultralytics.YOLO(model_file)
     has_e2e = _model_supports_end2end(model)
     task = getattr(model, "task", None) or "detect"
@@ -1555,14 +1565,18 @@ def setup_files(first_boot: bool = False):
                 if comparable_existing != comparable_default:
                     # Real user customization (camera geometry, NT settings,
                     # thresholds, plugins, min_conf, etc.) - keep it, but
-                    # reset the boot-derived vision_model fields to fresh
-                    # defaults since YoloModels (and the artifacts file_path/
-                    # task/output/input describe) is about to be deleted.
+                    # reset each camera's boot-derived vision_model fields to
+                    # fresh defaults since YoloModels (and the artifacts
+                    # file_path describes) is about to be deleted.
                     saved_config = comparable_existing
-                    saved_config["vision_model"] = {
-                        **default_cfg.get("vision_model", {}),
-                        **comparable_existing.get("vision_model", {}),
-                    }
+                    default_vm = (
+                        default_cfg.get("camera_configs", {})
+                        .get("default_cam", {})
+                        .get("vision_model", {})
+                    )
+                    for cam in saved_config.get("camera_configs", {}).values():
+                        if isinstance(cam.get("vision_model"), dict):
+                            cam["vision_model"] = {**default_vm, **cam["vision_model"]}
                     logger.info("Preserving user config (differs from default)")
                 else:
                     logger.info("Existing config matches defaults - nothing to preserve")
@@ -1588,12 +1602,18 @@ def setup_files(first_boot: bool = False):
     dataset_dir.mkdir(parents=True, exist_ok=True)
     for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml", "engine"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
-    prepare_quantization_dataset(str(dataset_dir), boot=True, keywords=keywords)
+    # Calibration images are only needed for RKNN quantization, which is no
+    # longer run at boot. Never download data during boot - the quantization
+    # dataset is prepared on demand by the conversion flow (convert_model).
+    logger.info(
+        "Quantization dataset dir ready (%s) - image download deferred to "
+        "conversion time", dataset_dir,
+    )
     if saved_config is not None:
         config_path = config_dir / "config.json"
         with open(str(config_path), "w") as f:
             json.dump(saved_config, f, indent=4)
-        logger.info("Restored user config (vision_model artifact paths reset for fresh conversion)")
+        logger.info("Restored user config (per-camera vision_model paths reset for fresh staging)")
 
     pytorch_dir = yolo_dir / "pytorch"
     _SKIP_DIRS = {
@@ -1652,16 +1672,155 @@ def setup_files(first_boot: bool = False):
     except Exception:
         pass
 
+
+def _ensure_object_detection_models(config: iSpyConfig) -> None:
+    """Make sure every object_detection camera references an existing model
+    artifact. If a configured path is missing, fall back to the newest staged
+    .pt in YoloModels/pytorch (never triggers a conversion at boot)."""
+    pytorch_dir = _PROJECT_ROOT / "YoloModels" / "pytorch"
+    candidates = sorted(
+        pytorch_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    user_models = [p for p in candidates if p.name not in _BUNDLED_DEFAULT_MODELS]
+    fallback = user_models[0] if user_models else (candidates[0] if candidates else None)
+
+    dirty = False
+    for name, cam_cfg in config.config.get("camera_configs", {}).items():
+        if cam_cfg.get("pipeline") != "object_detection":
+            continue
+        vm = cam_cfg.get("vision_model")
+        if not isinstance(vm, dict):
+            raise RuntimeError(
+                f"Camera '{name}' uses pipeline 'object_detection' but has no "
+                "vision_model block - cannot determine a model file."
+            )
+        if fallback is None:
+            raise RuntimeError(
+                f"Camera '{name}' uses pipeline 'object_detection' but no model "
+                f"exists in {pytorch_dir} to fall back to."
+            )
+        rel = str(fallback.relative_to(_PROJECT_ROOT))
+        changed = False
+        for key in ("file_path", "source_pt"):
+            current = vm.get(key)
+            if current:
+                p = Path(current)
+                if not p.is_absolute():
+                    p = _PROJECT_ROOT / p
+                if p.exists():
+                    continue
+            vm[key] = rel
+            changed = True
+        if changed:
+            logger.info(
+                "Camera '%s': model path(s) pointed at missing artifacts - "
+                "using unoptimized .pt fallback %s",
+                name, rel,
+            )
+            dirty = True
+    if dirty:
+        config.save(quiet=True)
+
+
+_READINESS_POLL_S = 2.0
+_READINESS_WAIT_TIMEOUT_S = 1200  # 20 minutes
+
+
+def _wait_for_pipeline_ready(
+    config: iSpyConfig, pipeline_classes: dict[str, type]
+) -> None:
+    """Construct every configured camera pipeline (which triggers each
+    __init__'s own background readiness work) and wait until every camera's
+    is_ready() reports ready. Boot proceeds after _READINESS_WAIT_TIMEOUT_S
+    with a loud warning - nothing here blocks forever, but the expectation is
+    that quantization/optimization jobs finish before that deadline."""
+    from iSpy.config.iSpyConfig import iSpyCameraConfig
+
+    cams = {k: v for k, v in config.config.get("camera_configs", {}).items() if isinstance(v, dict)}
+    if not cams:
+        logger.info("No cameras configured - skipping readiness wait.")
+        return
+
+    instances: dict[str, object] = {}
+    for name, cam_cfg in cams.items():
+        pipeline = cam_cfg.get("pipeline", "object_detection")
+        cls = pipeline_classes.get(pipeline)
+        if cls is None:
+            logger.warning(
+                "  camera %-16s -> pipeline %-16s -> NOT LOADED (unknown pipeline)",
+                name, pipeline,
+            )
+            continue
+        try:
+            inst = cls(iSpyCameraConfig(cam_cfg), config, None)
+        except Exception as e:
+            logger.error(
+                "  camera %-16s -> pipeline %-16s -> failed to construct: %s",
+                name, pipeline, e,
+            )
+            continue
+        instances[name] = inst
+
+    if not instances:
+        logger.info("No loadable pipelines to wait on - proceeding.")
+        return
+
+    last_status: dict[str, str] = {n: "" for n in instances}
+    deadline = _time.monotonic() + _READINESS_WAIT_TIMEOUT_S
+    logger.info(
+        "Waiting up to %d s for camera pipelines to become ready "
+        "(background builds may be running)...", _READINESS_WAIT_TIMEOUT_S,
+    )
+    pending = set(instances)
+    while pending and _time.monotonic() < deadline:
+        still: set[str] = set()
+        for name in tuple(pending):
+            inst = instances[name]
+            try:
+                ready, status = inst.is_ready()
+            except Exception as e:
+                ready, status = False, f"error: {e}"
+            if status != last_status[name]:
+                logger.info("  camera %-16s -> %s", name, status)
+                last_status[name] = status
+            if not ready:
+                still.add(name)
+        if not still:
+            break
+        pending = still
+        _time.sleep(_READINESS_POLL_S)
+    not_ready = []
+    for name in sorted(pending):
+        try:
+            ready, status = instances[name].is_ready()
+        except Exception as e:
+            ready, status = False, str(e)
+        if not ready:
+            not_ready.append((name, status))
+        else:
+            logger.info("  camera %-16s -> ready", name)
+
+    if not_ready:
+        logger.warning(
+            "Timed out waiting for camera readiness after %d s - proceeding:",
+            _READINESS_WAIT_TIMEOUT_S,
+        )
+        for name, status in not_ready:
+            logger.warning("  camera %-16s -> still not ready: %s", name, status)
+    else:
+        logger.info("All camera pipelines ready.")
+
+
 def on_boot(install_service: bool = False, first_boot: bool = False):
     if first_boot:
-        logger.info("First boot mode - ensuring fresh conversion for selected model")
+        logger.info("First boot mode - staging fresh models and configuration")
     setup_files(first_boot=first_boot)
     config_path = search_for_config()
     config = None
     if not config_path:
         logger.info("No config found. Creating default config...")
         config_path = _PROJECT_ROOT / "Config" / "config.json"
-        config = iSpyConfig(str(config_path), create=True)
+        config = iSpyConfig(str(config_path), create=True, strict_migration=False)
     else:
         logger.info("Using existing config: %s", config_path)
 
@@ -1669,172 +1828,15 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
         raise RuntimeError("System validation failed. Aborting boot.")
 
     if config is None:
-        config = iSpyConfig(str(config_path))
+        config = iSpyConfig(str(config_path), strict_migration=False)
 
     _bootstrap_default_camera(config)
 
-    best_format = None
-
-    best_format = None
-    if config.get("auto_opt"):
-        install_special_dependencies(auto_install=True)
-
-        best_format = recommend_format(ignore_dependencies=True)
-        logger.info("Auto-opt enabled. Recommended format: %s", best_format)
-
-        def _cached_output(pt_path: Path) -> Path | None:
-            desired = _desired_output_path(pt_path, best_format)
-            if desired.exists():
-                if best_format == "rknn":
-                    old_meta = read_metadata(desired) or {}
-                    stored_q = old_meta.get("quantize")
-                    if stored_q is None:
-                        stored_q = old_meta.get("quantization")
-                        stored_q = stored_q != "none" if stored_q is not None else None
-                    if stored_q is not None and stored_q != _RKNN_QUANTIZE:
-                        logger.info(
-                            "Cached rknn model %s has quantize=%s but boot says %s. Re-converting.",
-                            desired.name, stored_q, _RKNN_QUANTIZE,
-                        )
-                        return None
-                if best_format == "tflite":
-                    if desired.is_file():
-                        return desired
-                    tflite_artifact = _find_tflite_artifact(desired)
-                    if tflite_artifact:
-                        return tflite_artifact
-                else:
-                    return desired
-            return None
-
-        pytorch_dir = _PROJECT_ROOT / "YoloModels/pytorch"
-        pt_path = config.get("vision_model", {}).get("source_pt")
-        pt_full = None
-        if pt_path:
-            pt_full = Path(pt_path)
-            if not pt_full.is_absolute():
-                pt_full = _PROJECT_ROOT / pt_full
-
-        if pt_full and pt_full.exists():
-            cached = _cached_output(pt_full)
-            if cached:
-                logger.info("Found cached %s model: %s", best_format, cached)
-                config.set("vision_model", "file_path", str(cached))
-                need_conversion = False
-            else:
-                logger.info(
-                    "No cached %s model for %s. Converting...", best_format, pt_full.name
-                )
-                need_conversion = True
-        else:
-            if pt_full and not pt_full.exists():
-                logger.warning("Configured source_pt %s not found, scanning...", pt_full)
-            candidates = sorted(pytorch_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
-            user_models = [p for p in candidates if p.name not in _BUNDLED_DEFAULT_MODELS]
-            if user_models:
-                pt_full = user_models[0]
-                logger.info("Auto-detected user model: %s", pt_full.name)
-            elif candidates:
-                pt_full = candidates[0]
-                logger.info("Using default model: %s", pt_full.name)
-            else:
-                logger.warning("No .pt found, copying bundled _default_v26_detect_for_fuel.pt")
-                bundled = _ASSETS_DIR / "_default_v26_detect_for_fuel.pt"
-                pt_full = pytorch_dir / "_default_v26_detect_for_fuel.pt"
-                pt_full.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy(bundled, pt_full)
-            config.set("vision_model", "source_pt", str(pt_full))
-            need_conversion = True
-
-        if need_conversion:
-            input_size = config.get("input_size") or [640, 640]
-            converted = _convert_model_subprocess(
-                str(pt_full),
-                best_format,
-                input_size,
-                quantize=_RKNN_QUANTIZE,
-                force=first_boot,
-            )
-            if converted != pt_full:
-                logger.info("Conversion successful: %s", converted)
-                config.set("vision_model", "file_path", str(converted))
-            else:
-                logger.warning(
-                    "Conversion to %s failed or was skipped. Using .pt model.",
-                    best_format,
-                )
-
-        # Convert all other .pt models too (ensures correct metadata for bench/run)
-        if pytorch_dir.exists():
-            other_input_size = config.get("input_size") or [640, 640]
-            for other in pytorch_dir.glob("*.pt"):
-                if pt_full and other.resolve() == pt_full.resolve():
-                    continue
-                try:
-                    _convert_model_subprocess(
-                        str(other),
-                        best_format,
-                        other_input_size,
-                        quantize=_RKNN_QUANTIZE,
-                        force=first_boot,
-                    )
-                except Exception as e:
-                    logger.warning("Could not convert %s: %s", other.name, e)
-    else:
-        logger.info("Auto-opt disabled.")
-
-    model_path = config.get("vision_model", {}).get("file_path")
-    if not model_path:
-        raise FileNotFoundError(
-            "No model path specified in config or found by auto-opt"
-        )
-    model_full_path = Path(model_path)
-    if not model_full_path.is_absolute():
-        model_full_path = _PROJECT_ROOT / model_full_path
-    if not model_full_path.exists():
-        raise FileNotFoundError(f"Model file not found: {model_full_path}")
-
-    if best_format == "tpu":
-        config.set("vision_model", "device", "tpu")
-        logger.info("TPU backend configured - device set to 'tpu'")
-
-    vision_cfg = config.get("vision_model", {})
-    filled = fill_missing_config(vision_cfg)
-    
-    try:
-        full_config_path = _PROJECT_ROOT / "Outputs" / "full_config.json"
-        full_config_path.parent.mkdir(parents=True, exist_ok=True)
-        full_resolved = json.loads(json.dumps(config.config))  # deep copy
-        full_resolved["vision_model"] = filled
-        with open(full_config_path, "w") as f:
-            json.dump(full_resolved, f, indent=4)
-        logger.info("Full resolved config (debug only) written to %s", full_config_path)
-    except Exception as e:
-        logger.warning("Could not write full_config.json: %s", e)
-
-    # Save only user-facing fields to config; model architecture (task, input_size,
-    # output.*, input.*, num_classes) lives exclusively in metadata sidecars.
-    minimal = {
-        "file_path": filled.get("file_path", vision_cfg.get("file_path", "")),
-        "min_conf": filled.get("min_conf", vision_cfg.get("min_conf", 0.25)),
-        "margin": filled.get("margin", vision_cfg.get("margin", 0)),
-    }
-    for key in ("device", "quantized"):
-        val = filled.get(key, vision_cfg.get(key))
-        if val is not None:
-            minimal[key] = val
-    # Preserve any unknown user-defined fields from original config
-    for key in vision_cfg:
-        if key not in _METADATA_ONLY_FIELDS and key not in minimal:
-            minimal[key] = vision_cfg[key]
-    config.set("vision_model", minimal)
+    pipeline_classes = get_pipeline_classes()
+    _ensure_object_detection_models(config)
+    _wait_for_pipeline_ready(config, pipeline_classes)
     config.save(quiet=True)
-    logger.info("Minimal model config saved to config (architecture in metadata only).")
-    logger.info(
-        "Boot sequence complete. Final model path: %s",
-        config.get("vision_model", {}).get("file_path"),
-    )
-    config.save(quiet=True)
+    logger.info("Boot sequence complete.")
 
     if install_service:
         install_script = str(_BOOT_DIR / "install.py")

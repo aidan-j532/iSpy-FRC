@@ -272,6 +272,15 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
 def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset") -> bool:
     root = Path(dataset_path)
 
+    from iSpy.dataset.dataset import _find_images
+
+    if not root.exists() or not _find_images(root):
+        logger.warning(
+            "No quantization dataset found at %s - skipping (only needed for "
+            "RKNN conversion, which runs on demand, not at boot).", dataset_path,
+        )
+        return True
+
     # Per-model datasets live at QuantizeDataset/<pt_stem>/. If any exist,
     # validate those instead of (or in addition to) the flat root, since
     # that's what conversions actually use now.

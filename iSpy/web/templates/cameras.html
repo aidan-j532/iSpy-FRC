@@ -656,7 +656,56 @@ function confirmRemoveCamera(name) {
     .then(j => { showToast(j.success ? 'Camera removed' : j.error, j.success ? 'success' : 'error'); refreshCameras(); });
 }
 
-function buildCameraCard(name, isStreaming, ageText) {
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function statusDotClass(ready, status) {
+  if (ready) return 'status-ok';
+  if (typeof status === 'string' && status.startsWith('optimizing')) return 'status-warn';
+  return 'status-bad';
+}
+
+function updateCameraFooter(card, cam) {
+  let footer = card.querySelector('.camera-footer');
+  if (cam.ready == null) {
+    if (footer) footer.remove();
+    return;
+  }
+  const status = cam.status ?? 'unknown';
+  if (!footer) {
+    footer = document.createElement('div');
+    footer.className = 'camera-footer';
+    card.appendChild(footer);
+  }
+  footer.innerHTML = `
+    <span class="status-dot ${statusDotClass(cam.ready, status)}"></span>
+    <span class="cam-status">${escapeHtml(status)}</span>
+    <button class="btn-sm btn-ok btn-optimize" onclick="optimizeCamera('${escapeHtml(cam.name)}')" style="margin-left:auto;">Optimize</button>
+  `;
+  footer.querySelector('.btn-optimize').disabled = status.startsWith('optimizing');
+}
+
+async function optimizeCamera(name) {
+  const btn = document.querySelector(`[data-camera="${name}"] .btn-optimize`);
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/cameras/${encodeURIComponent(name)}/optimize`, { method: 'POST' });
+    const j = await r.json();
+    if (r.ok) {
+      showToast(`Optimization started: ${j.status}`, 'success');
+    } else {
+      showToast(j.error || 'Optimization failed', 'error');
+    }
+  } catch (e) {
+    showToast('Network error starting optimization', 'error');
+  }
+  refreshCameras();
+}
+
+function buildCameraCard(name, isStreaming, ageText, cam) {
   const card = document.createElement('div');
   card.className = 'card camera-card';
   card.dataset.camera = name;
@@ -678,6 +727,7 @@ function buildCameraCard(name, isStreaming, ageText) {
       : `<div class="camera-not-streaming">Not streaming. Start vision to view.</div>`
     }
   `;
+  updateCameraFooter(card, cam);
   return card;
 }
 
@@ -722,18 +772,20 @@ async function refreshCameras() {
       const name = cam.name;
       const age = cam.age_ms != null ? cam.age_ms + 'ms' : '';
       if (!knownCameras.has(name)) {
-        const card = buildCameraCard(name, true, age);
+        const card = buildCameraCard(name, true, age, cam);
         grid.appendChild(card);
         knownCameras.set(name, { streaming: true });
       } else {
         const known = knownCameras.get(name);
         if (!known.streaming) {
           const oldCard = grid.querySelector(`[data-camera="${name}"]`);
-          if (oldCard) oldCard.replaceWith(buildCameraCard(name, true, age));
+          if (oldCard) oldCard.replaceWith(buildCameraCard(name, true, age, cam));
           knownCameras.set(name, { streaming: true });
         } else {
           const meta = grid.querySelector(`[data-camera="${name}"] .cam-meta`);
           if (meta) meta.textContent = age;
+          const card = grid.querySelector(`[data-camera="${name}"]`);
+          if (card) updateCameraFooter(card, cam);
         }
       }
     });

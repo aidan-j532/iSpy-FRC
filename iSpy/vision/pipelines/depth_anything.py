@@ -3,7 +3,6 @@ import logging
 import cv2
 import numpy as np
 from PIL import Image
-from transformers import pipeline
 
 from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
@@ -20,6 +19,29 @@ _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 
 
 class DepthAnythingCamera(Camera, VisionBase):
     plugin_name = "depth_anything"
+
+    @classmethod
+    def needs_model_backend(cls) -> bool:
+        return True
+
+    def is_ready(self) -> tuple[bool, str]:
+        if not self.estimate_depth:
+            return True, "ready"
+        if self.optimize:
+            if self._session is not None:
+                return True, "ready"
+            if getattr(self, "_optimize_fallback", False):
+                return True, "error: optimized ONNX build failed - using unoptimized fallback"
+            reason = getattr(self, "_load_error", None)
+            if reason:
+                return False, f"error: {reason}"
+            return False, "error: optimized ONNX model not built"
+        if self._model is not None:
+            return True, "ready"
+        reason = getattr(self, "_load_error", None)
+        if reason:
+            return False, f"error: {reason}"
+        return False, "error: model weights not downloaded/loaded"
 
     @classmethod
     def config_schema(cls) -> dict:
@@ -68,6 +90,8 @@ class DepthAnythingCamera(Camera, VisionBase):
         self._model = None
         self._session = None
         self._onnx = False
+        self._load_error = None
+        self._optimize_fallback = False
         self._frame_count = 0
         self._every = 5
         self._last_depth = None
@@ -104,9 +128,11 @@ class DepthAnythingCamera(Camera, VisionBase):
         if self.optimize:
             try:
                 self._load_optimized()
-            except Exception:
+            except Exception as exc:
+                self._load_error = f"optimized ONNX export/load failed: {exc}"
                 self.logger.exception("Optimized ONNX depth model failed to load.")
             if self._session is not None:
+                self._load_error = None
                 return
             self.logger.warning(
                 "Optimized ONNX depth model unavailable for camera '%s' - "
@@ -114,6 +140,7 @@ class DepthAnythingCamera(Camera, VisionBase):
                 self.config.get("name", "?"),
             )
 
+        self._optimize_fallback = self.optimize and self._session is None
         self._load_pipeline()
 
     def _load_optimized(self):
@@ -147,6 +174,7 @@ class DepthAnythingCamera(Camera, VisionBase):
         )
         if not converted or not artifact:
             self._session = None
+            self._load_error = "optimized ONNX conversion produced no artifact"
             return
 
         import onnxruntime as ort
@@ -154,6 +182,7 @@ class DepthAnythingCamera(Camera, VisionBase):
         providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in ort.get_available_providers()]
         self._session = ort.InferenceSession(artifact, providers=providers)
         self._onnx = True
+        self._load_error = None
         self.logger.info("Loaded optimized Depth Anything ONNX from %s", artifact)
 
     def _load_pipeline(self):
@@ -166,14 +195,17 @@ class DepthAnythingCamera(Camera, VisionBase):
                 "Loading Depth Anything V2 Small from Hugging Face..."
             )
 
+            from transformers import pipeline
             self._model = pipeline(
                 "depth-estimation",
                 model=_DEPTH_MODEL_ID,
             )
 
+            self._load_error = None
             self.logger.info("Loaded Depth Anything V2 Small.")
 
-        except Exception:
+        except Exception as exc:
+            self._load_error = f"failed to load Depth Anything V2 from Hugging Face: {exc}"
             self.logger.exception(
                 "Failed to load Depth Anything V2 from Hugging Face."
             )
@@ -479,10 +511,11 @@ class DepthAnythingCamera(Camera, VisionBase):
             return [], None
 
         model = getattr(self, "_model", None)
+        session = getattr(self, "_session", None)
 
-        self._frame_count += 1
+        self._frame_count = getattr(self, "_frame_count", 0) + 1
 
-        if model is None and self._session is None:
+        if model is None and session is None:
             return self._fallback_run(frame)
 
         every = max(1, self._every)

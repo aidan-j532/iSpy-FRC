@@ -1,7 +1,7 @@
 import time
 import math
 
-from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
+from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
 from iSpy.vision.Object import Object
 from iSpy.vision import triangulation
 import cv2

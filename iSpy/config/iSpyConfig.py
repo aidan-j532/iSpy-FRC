@@ -7,52 +7,13 @@ _REPO_ROOT = Path.cwd()
 
 
 class iSpyConfig:
-    def __init__(self, file_path: str = None, create: bool = True):
+    def __init__(
+        self, file_path: str = None, create: bool = True, strict_migration: bool = True
+    ):
         self.logger = logging.getLogger(__name__)
+        self._strict_migration = strict_migration
 
         self.default_config = {
-            "vision_model": {
-                # output.* and input.* vision model fields are auto-detected
-                # from the model's _metadata.yaml sidecar file. You do not need to set them.
-                # Override here only if you know the metadata is wrong.
-                "file_path": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
-                "source_pt": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
-                "min_conf": 0.5,
-            },
-                # Optional PnP for pose (translation stored on Box; rotation stored as roll/pitch/yaw on Box).
-                # Enable to get 3D position + orientation from 2D keypoints, and to render a 3D human
-                # skeleton in the web viewer (when keypoints_3d is present on the Object).
-                # "pnp": {
-                #     # Canonical COCO 17-keypoint skeleton (~1.8 m tall, origin at mid-hip).
-                #     # Indices match the model's kpt_shape ordering (typically COCO format).
-                #     "object_points": [
-                #         [0.0, 1.0, 0.1],       # 0  nose
-                #         [-0.03, 0.95, 0.1],    # 1  left_eye
-                #         [0.03, 0.95, 0.1],     # 2  right_eye
-                #         [-0.08, 0.93, 0.0],    # 3  left_ear
-                #         [0.08, 0.93, 0.0],     # 4  right_ear
-                #         [-0.2, 0.8, 0.0],      # 5  left_shoulder
-                #         [0.2, 0.8, 0.0],       # 6  right_shoulder
-                #         [-0.35, 0.55, -0.05],  # 7  left_elbow
-                #         [0.35, 0.55, -0.05],   # 8  right_elbow
-                #         [-0.4, 0.3, -0.1],     # 9  left_wrist
-                #         [0.4, 0.3, -0.1],      # 10 right_wrist
-                #         [-0.15, 0.0, 0.0],     # 11 left_hip
-                #         [0.15, 0.0, 0.0],      # 12 right_hip
-                #         [-0.15, -0.45, 0.0],   # 13 left_knee
-                #         [0.15, -0.45, 0.0],    # 14 right_knee
-                #         [-0.15, -0.9, 0.0],    # 15 left_ankle
-                #         [0.15, -0.9, 0.0],     # 16 right_ankle
-                #     ],
-                #     "camera_matrix": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
-                #     "dist_coeffs": [0, 0, 0, 0, 0],
-                #     "min_keypoint_conf": 0.5,
-                #     # "mode": "flexible",  # "flexible" (deformable: keep detected 2D keypoint shape
-                #     #                       #   inflated to 3D at the PnP depth) or "rigid"
-                #     #                       #   (rigid object: keypoints = fitted model, full
-                #     #                       #   xyz + roll/pitch/yaw).  Solver is auto-selected.
-                # },
-            # },
             "num_gpus": "auto",
             "device": 0,
             "unit": "meter",
@@ -76,6 +37,50 @@ class iSpyConfig:
                     "name": "default_cam",
                     "source": 0,
                     "pipeline": "object_detection",
+                    "vision_model": {
+                        # output.* and input.* vision model fields are auto-detected
+                        # from the model's _metadata.yaml sidecar file. You do not need to set them.
+                        # Override here only if you know the metadata is wrong.
+                        "file_path": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
+                        "source_pt": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
+                        "min_conf": 0.5,
+                        # Build the optimized RKNN artifact on first boot; the
+                        # camera reports ready once the background build lands.
+                        "quantized": True,
+                    },
+                    # Optional PnP for pose (translation stored on Box; rotation stored as roll/pitch/yaw on Box).
+                    # Enable to get 3D position + orientation from 2D keypoints, and to render a 3D human
+                    # skeleton in the web viewer (when keypoints_3d is present on the Object).
+                    # "pnp": {
+                    #     # Canonical COCO 17-keypoint skeleton (~1.8 m tall, origin at mid-hip).
+                    #     # Indices match the model's kpt_shape ordering (typically COCO format).
+                    #     "object_points": [
+                    #         [0.0, 1.0, 0.1],       # 0  nose
+                    #         [-0.03, 0.95, 0.1],    # 1  left_eye
+                    #         [0.03, 0.95, 0.1],     # 2  right_eye
+                    #         [-0.08, 0.93, 0.0],    # 3  left_ear
+                    #         [0.08, 0.93, 0.0],     # 4  right_ear
+                    #         [-0.2, 0.8, 0.0],      # 5  left_shoulder
+                    #         [0.2, 0.8, 0.0],       # 6  right_shoulder
+                    #         [-0.35, 0.55, -0.05],  # 7  left_elbow
+                    #         [0.35, 0.55, -0.05],   # 8  right_elbow
+                    #         [-0.4, 0.3, -0.1],     # 9  left_wrist
+                    #         [0.4, 0.3, -0.1],      # 10 right_wrist
+                    #         [-0.15, 0.0, 0.0],     # 11 left_hip
+                    #         [0.15, 0.0, 0.0],      # 12 right_hip
+                    #         [-0.15, -0.45, 0.0],   # 13 left_knee
+                    #         [0.15, -0.45, 0.0],    # 14 right_knee
+                    #         [-0.15, -0.9, 0.0],    # 15 left_ankle
+                    #         [0.15, -0.9, 0.0],     # 16 right_ankle
+                    #     ],
+                    #     "camera_matrix": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+                    #     "dist_coeffs": [0, 0, 0, 0, 0],
+                    #     "min_keypoint_conf": 0.5,
+                    #     # "mode": "flexible",  # "flexible" (deformable: keep detected 2D keypoint shape
+                    #     #                       #   inflated to 3D at the PnP depth) or "rigid"
+                    #     #                       #   (rigid object: keypoints = fitted model, full
+                    #     #                       #   xyz + roll/pitch/yaw).  Solver is auto-selected.
+                    # },
                     "yaw": 0,
                     "pitch": 0,
                     "height": 1.0,
@@ -106,7 +111,7 @@ class iSpyConfig:
             self.save()
 
         if file_path:
-            self.load_from_file(file_path)
+            self.load_from_file(file_path, strict_migration=strict_migration)
 
         self.camera_configs: dict[str, iSpyCameraConfig] = {
             name: iSpyCameraConfig(cam_cfg)
@@ -129,6 +134,55 @@ class iSpyConfig:
         chosen = str(config_files[0])
         self.logger.info("Found config files: %s  ->  using %s", config_files, chosen)
         return chosen
+
+    def _migrate_legacy_vision_model(self, strict: bool = True):
+        legacy = self.config.get("vision_model")
+        if not isinstance(legacy, dict):
+            return
+
+        cams = self.config.get("camera_configs")
+        if not isinstance(cams, dict):
+            raise RuntimeError(
+                "Legacy top-level vision_model found but camera_configs is not a "
+                "dict - cannot migrate vision_model to per-camera form."
+            )
+
+        targets = []
+        for name, cam in cams.items():
+            if not isinstance(cam, dict):
+                raise RuntimeError(
+                    f"Camera config '{name}' is not a dict - cannot migrate "
+                    "vision_model into it."
+                )
+            pipeline = cam.get("pipeline")
+            if pipeline in (None, "", "object_detection") and "vision_model" not in cam:
+                targets.append(name)
+
+        if not targets:
+            if strict:
+                raise RuntimeError(
+                    "Legacy top-level vision_model found but no camera_configs entry "
+                    "with pipeline 'object_detection' (or unset) exists without its "
+                    "own vision_model - refusing to drop the model config silently."
+                )
+            self.logger.warning(
+                "Dropping legacy top-level vision_model with no per-camera "
+                "consumer (no object_detection camera without its own "
+                "vision_model). No model config was lost for any camera."
+            )
+            self.config.pop("vision_model", None)
+            self.save()
+            return
+
+        for name in targets:
+            cams[name]["vision_model"] = json.loads(json.dumps(legacy))
+
+        self.config.pop("vision_model", None)
+        self.logger.info(
+            "Migrated legacy top-level vision_model to per-camera vision_model on: %s",
+            ", ".join(targets),
+        )
+        self.save()
 
     def _check_config(self):
         if self.config.get("vision_model") and self.config.get("april_tag"):
@@ -167,11 +221,12 @@ class iSpyConfig:
             )
         return cfg
 
-    def load_from_file(self, file_path: str):
+    def load_from_file(self, file_path: str, strict_migration: bool = True):
         try:
             with open(file_path, "r") as f:
                 data = json.load(f)
             self._update_config(data)
+            self._migrate_legacy_vision_model(strict=strict_migration)
         except json.JSONDecodeError as e:
             # Back up the corrupt file instead of silently discarding it or
             # re-searching the same broken path.

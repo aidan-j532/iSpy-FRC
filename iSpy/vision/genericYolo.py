@@ -3,7 +3,6 @@ import math
 import os
 import cv2
 import numpy as np
-from ultralytics import YOLO
 from iSpy.vision.ModelInspector import fill_missing_config
 import threading
 import queue
@@ -147,6 +146,7 @@ class _GPUInferencePool:
     def _worker(self, device):
         # Load model INSIDE the worker thread so TensorRT creates a context on this GPU
         import torch
+        from ultralytics import YOLO
         torch.cuda.set_device(device)
         model = YOLO(self._model_file, task=self._task, verbose=False)
         if self._model_file.endswith(".pt"):
@@ -477,6 +477,7 @@ class GenericYolo:
             or self.model_file.endswith(".engine")
         ):
             self.model_type = "yolo"
+            from ultralytics import YOLO
             self.model = YOLO(self.model_file, task=self.task, verbose=False)
             if self.model_file.endswith(".pt"):
                 self.model.to("cpu" if self.device == "cpu" else f"cuda:{self.device}")

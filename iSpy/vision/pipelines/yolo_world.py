@@ -24,6 +24,24 @@ class YoloWorldCamera(Camera, VisionBase):
     plugin_name = "yolo_world"
 
     @classmethod
+    def needs_model_backend(cls) -> bool:
+        return True
+
+    def is_ready(self) -> tuple[bool, str]:
+        if self.model is not None:
+            if self.quantize and not self._quantized:
+                return True, "error: quantized build failed - using full precision fallback"
+            return True, "ready"
+        reason = getattr(self, "_load_error", None)
+        if reason:
+            return False, f"error: {reason}"
+        return False, "error: model weights not downloaded/loaded"
+
+    def _set_load_error(self, reason: str):
+        self._load_error = reason
+        self.logger.error("YOLO World camera '%s': %s", self.config.get("name", "?"), reason)
+
+    @classmethod
     def config_schema(cls) -> dict:
         return {
             "prompt": {
@@ -97,6 +115,7 @@ class YoloWorldCamera(Camera, VisionBase):
         self.model = None
         self._model_path = None
         self._quantized = False
+        self._load_error = None
         self._class_names = {i: name for i, name in enumerate(self.classes)}
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
 
@@ -136,7 +155,10 @@ class YoloWorldCamera(Camera, VisionBase):
 
     def _resolve_weights(self) -> str | None:
         """Bundled asset takes priority, then auto-downloaded weights."""
-        asset_path = Path(__file__).resolve().parents[3] / "assets" / "yolo-world.pt"
+        # Bundled asset takes priority, then auto-downloaded weights.
+        # assets lives at iSpy/assets; this file moved to iSpy/vision/pipelines/,
+        # so parents[2] resolves to the iSpy package directory.
+        asset_path = Path(__file__).resolve().parents[2] / "assets" / "yolo-world.pt"
         if asset_path.exists():
             self.logger.info("Using bundled YOLO World weights at %s", asset_path)
             return str(asset_path)
@@ -185,12 +207,18 @@ class YoloWorldCamera(Camera, VisionBase):
         try:
             from ultralytics import YOLOWorld
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
-            self.logger.error("Ultralytics is required for YOLO World inference: %s", exc)
+            self._set_load_error(
+                f"ultralytics is required for YOLO World inference: {exc}"
+            )
             self.model = None
             return
 
         weights = self._resolve_weights()
         if not weights:
+            self._set_load_error(
+                "failed to resolve YOLO World weights (bundled asset missing "
+                "and download failed)"
+            )
             self.model = None
             return
 
@@ -199,20 +227,26 @@ class YoloWorldCamera(Camera, VisionBase):
             self.model.set_classes(self.classes)
             self._model_path = weights
             self._quantized = False
+            self._load_error = None
             self.logger.info("Loaded YOLO World model from %s (classes=%s)", weights, self.classes)
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
-            self.logger.exception("Failed to load YOLO World model: %s", exc)
+            self._set_load_error(f"failed to load YOLO World model: {exc}")
             self.model = None
 
     def _load_quantized_model(self):
         try:
             weights = self._resolve_weights()
             if not weights:
+                self._set_load_error(
+                    "failed to resolve YOLO World weights (bundled asset "
+                    "missing and download failed)"
+                )
                 self.model = None
                 return
 
             fixed = self._reparameterize_world(weights)
             if not fixed:
+                self._set_load_error("failed to reparameterize YOLO World model")
                 self.model = None
                 return
 
@@ -224,8 +258,8 @@ class YoloWorldCamera(Camera, VisionBase):
                 quantize=True,
             )
             if not converted:
-                self.logger.error(
-                    "Quantized conversion of %s produced no artifact.", Path(fixed).name
+                self._set_load_error(
+                    f"quantized conversion of {Path(fixed).name} produced no artifact"
                 )
                 self.model = None
                 return
@@ -243,6 +277,7 @@ class YoloWorldCamera(Camera, VisionBase):
             )
             self._model_path = artifact
             self._quantized = True
+            self._load_error = None
 
             meta = read_metadata(Path(artifact))
             if meta and isinstance(meta.get("names"), dict):
@@ -252,7 +287,7 @@ class YoloWorldCamera(Camera, VisionBase):
                 artifact, self.classes,
             )
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
-            self.logger.exception("Failed to load quantized YOLO World model: %s", exc)
+            self._set_load_error(f"failed to load quantized YOLO World model: {exc}")
             self.model = None
 
     def run(self):

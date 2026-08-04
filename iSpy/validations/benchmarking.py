@@ -284,7 +284,7 @@ def make_base_config(pt_path, model_path, device):
 
 
 def benchmark(model_config, core_mask, duration=5.0):
-    from iSpy.vision.ObjectDetectionCamera import ObjectDetectionCamera
+    from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
     from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 
     config = iSpyConfig()

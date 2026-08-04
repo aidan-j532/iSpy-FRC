@@ -62,7 +62,25 @@ class VisionBase(ABC):
         """Return {} if this plugin needs no extra config beyond the
         standard camera fields."""
         return {}
-    
+
+    def is_ready(self) -> tuple[bool, str]:
+        """Cheap, idempotent, safe to call every boot cycle. Returns
+        (ready: bool, status: str) where status is a short human-readable
+        state like "ready", "loading weights", "optimizing (rknn build)",
+        "using unoptimized .pt fallback", "error: <reason>". Must NEVER
+        block on a multi-minute operation - if work is needed and isn't
+        already running, kick it off as a background job/subprocess and
+        return (False, "..."). If already in flight, just report status.
+        Default: ready immediately, no background work needed."""
+        return True, "ready"
+
+    @classmethod
+    def needs_model_backend(cls) -> bool:
+        """True if this pipeline requires a model file, download, or
+        conversion step and should participate in the readiness scan
+        beyond simple __init__ success."""
+        return False
+
     def start(self):
         pass
 

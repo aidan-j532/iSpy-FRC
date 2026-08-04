@@ -102,6 +102,7 @@ class CamerasModule(WebModule):
         self.dims: dict[str, tuple[int, int]] = {}
         self.last_seen: dict[str, float] = {}
         self.sources: dict[str, str] = {}
+        self.live_cameras: dict[str, object] = {}
         self._discover_cache: list = []
         self._discover_cache_ts: float = 0.0
         self._discover_lock = threading.Lock()
@@ -116,6 +117,7 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_update", self._update_camera, methods=["PUT"])
         flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_delete", self._remove_camera, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/profile/<device_id>", "api_cameras_profile", self._get_profile, methods=["GET"])
+        flask_app.add_url_rule("/api/cameras/<name>/optimize", "api_cameras_optimize", self._optimize_camera, methods=["POST"])
         flask_app.add_url_rule("/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines)
 
     def _camera_display_name(self, cam, fallback: str = "camera") -> str:
@@ -147,6 +149,7 @@ class CamerasModule(WebModule):
             self._camera_display_name(cam, str(getattr(cam, "source", ""))): cam
             for cam in cameras
         }
+        self.live_cameras = cam_by_name
         per_cam = frame_data.get("camera_frames")
         now = time.monotonic()
         with self.lock:
@@ -329,17 +332,40 @@ class CamerasModule(WebModule):
         now = time.monotonic()
         with self.lock:
             self._evict_stale(now)
-            cameras = [
-                {
+            cameras = []
+            for n, d in self.dims.items():
+                payload = {
                     "name": n,
                     "w": d[0],
                     "h": d[1],
                     "age_ms": round((now - self.last_seen.get(n, now)) * 1000, 1),
                     "source": self.sources.get(n),
                 }
-                for n, d in self.dims.items()
-            ]
+                inst = self.live_cameras.get(n)
+                if inst is not None and hasattr(inst, "is_ready"):
+                    try:
+                        ready, status = inst.is_ready()
+                    except Exception:
+                        ready, status = False, "error: is_ready() raised"
+                    payload["ready"] = bool(ready)
+                    payload["status"] = str(status)
+                else:
+                    payload["ready"] = None
+                    payload["status"] = None
+                cameras.append(payload)
         return jsonify(cameras=cameras)
+
+    def _optimize_camera(self, camera_name):
+        inst = self.live_cameras.get(camera_name)
+        if inst is None:
+            return jsonify(error=f"Camera '{camera_name}' is not running"), 404
+        if not hasattr(inst, "request_optimize"):
+            pipeline = getattr(inst, "plugin_name", "?")
+            return jsonify(
+                error=f"Pipeline '{pipeline}' does not support on-demand optimization"
+            ), 400
+        status = inst.request_optimize()
+        return jsonify(status=status)
 
     def _discover(self):
         now = time.monotonic()
