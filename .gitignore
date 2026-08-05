@@ -42,7 +42,6 @@ iSpy/assets/*.onnx
 rknn_log.txt
 *config.json
 Config/config.json
-Config/active_dataset.json
 prompt.txt
 *.zip
 repomix-output.txt

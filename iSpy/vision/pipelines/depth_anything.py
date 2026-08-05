@@ -67,6 +67,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 "type": "boolean",
                 "label": "Optimize",
                 "default": True,
+                "optimize_toggle": True,
                 "help": "Export the model once to an int8-quantized ONNX via iSpy's export framework and run it through onnxruntime for fast CPU inference.",
             },
             "estimate_depth": {
@@ -501,82 +502,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
 
         return blended
 
-    def _fallback_run(self, frame: np.ndarray):
-        """Synthetic heatmap used when the model cannot be loaded."""
-        h, w = frame.shape[:2]
-
-        gray = cv2.cvtColor(
-            frame,
-            cv2.COLOR_BGR2GRAY,
-        )
-
-        normalized = cv2.normalize(
-            gray,
-            None,
-            0,
-            255,
-            cv2.NORM_MINMAX,
-        ).astype(np.uint8)
-
-        heatmap = cv2.applyColorMap(
-            normalized,
-            cv2.COLORMAP_JET,
-        )
-
-        blended = cv2.addWeighted(
-            frame,
-            0.55,
-            heatmap,
-            0.45,
-            0,
-        )
-
-        center_x, center_y = w // 2, h // 2
-        radius = max(12, min(w, h) // 6)
-
-        cv2.circle(
-            blended,
-            (center_x, center_y),
-            radius,
-            (255, 255, 255),
-            2,
-        )
-
-        cv2.putText(
-            blended,
-            "Depth (no model)",
-            (center_x - 90, center_y + radius + 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-        )
-
-        depth_estimate = 1.0 - (
-            normalized[center_y, center_x] / 255.0
-        )
-
-        objects = [
-            Object(
-                x=0.0,
-                y=0.0,
-                z=float(depth_estimate),
-                name="demo_depth",
-                confidence=0.8,
-                vis_type="generic",
-                vis_meta={
-                    "kind": "depth",
-                    "heatmap": True,
-                    "depth_estimate": round(depth_estimate, 3),
-                    "radius": radius / max(w, h),
-                },
-            )
-        ]
-
-        self._last_objects = objects
-
-        return objects, blended
-
     def run(self):
         frame = self.get_frame()
 
@@ -589,7 +514,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self._frame_count = getattr(self, "_frame_count", 0) + 1
 
         if model is None and session is None:
-            return self._fallback_run(frame)
+            return [], frame
 
         every = max(1, self._every)
         last_depth = self._last_depth
@@ -623,7 +548,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             if last_depth is not None:
                 depth = last_depth
             else:
-                return self._fallback_run(frame)
+                return [], frame
 
         if depth is None:
             return [], frame

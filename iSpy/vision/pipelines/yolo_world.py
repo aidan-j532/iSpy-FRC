@@ -67,14 +67,16 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
             },
             "quantize": {
                 "type": "boolean",
-                "label": "Quantize",
+                "label": "Optimize",
                 "default": False,
+                "optimize_toggle": True,
                 "help": "Convert the YOLO World model to a quantized backend artifact using iSpy's export framework.",
             },
             "quantization_dataset": {
                 "type": "text",
                 "label": "Quantization dataset",
                 "default": "",
+                "quantization": True,
                 "help": "Optional path to a folder of calibration images used "
                         "for quantization. Leave empty to auto-download images "
                         "from the model's calibration keywords.",
@@ -84,12 +86,14 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
                 "label": "Target Format",
                 "options": ["auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"],
                 "default": "auto",
+                "quantization": True,
                 "help": "'auto' picks the best format for this device (rknn on Rockchip NPUs, tflite on Edge TPU, engine on NVIDIA, onnx elsewhere).",
             },
             "input_size": {
                 "type": "number",
                 "label": "Input Size",
                 "default": 640,
+                "quantization": True,
                 "help": "Letterbox resolution used for the quantized model conversion and inference.",
             },
         }

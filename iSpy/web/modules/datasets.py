@@ -1,4 +1,3 @@
-import json
 import logging
 from pathlib import Path
 from flask import jsonify, render_template, request, send_from_directory
@@ -8,7 +7,6 @@ from iSpy.dataset.dataset import add_image_to_dataset_txt, remove_image_from_dat
 logger = logging.getLogger(__name__)
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
-_ACTIVE_DATASET_FILE = Path.cwd() / "Config" / "active_dataset.json"
 
 
 def _is_safe_path(base: Path, target: Path) -> bool:
@@ -31,38 +29,20 @@ class DatasetsModule(WebModule):
         super().__init__(context)
         self.dataset_root = Path.cwd() / "QuantizeDataset"
         self.dataset_root.mkdir(parents=True, exist_ok=True)
-        # A quantization dataset is a reusable resource, not tied to any one
-        # vision model. `default` is the built-in dataset every pipeline falls
-        # back to when none is selected.
+        # A quantization dataset is a reusable folder of calibration images.
+        # `default` is the built-in dataset every pipeline falls back to when
+        # none is configured.
         (self.dataset_root / "default" / "images").mkdir(parents=True, exist_ok=True)
-        self._active: str = self._load_active()
-        if not self._active and (self.dataset_root / "default").exists():
-            self._active = "default"
-            self._save_active("default")
-
-    def _load_active(self) -> str:
-        try:
-            if _ACTIVE_DATASET_FILE.exists():
-                data = json.loads(_ACTIVE_DATASET_FILE.read_text())
-                return data.get("active", "")
-        except Exception:
-            pass
-        return ""
-
-    def _save_active(self, name: str):
-        _ACTIVE_DATASET_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _ACTIVE_DATASET_FILE.write_text(json.dumps({"active": name}))
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/datasets", "datasets_page", lambda: render_template("datasets.html"))
         flask_app.add_url_rule("/api/datasets", "api_datasets_list", self._list, methods=["GET"])
         flask_app.add_url_rule("/api/datasets", "api_datasets_create", self._create, methods=["POST"])
-        flask_app.add_url_rule("/api/datasets/active", "api_datasets_active_get", self._get_active, methods=["GET"])
-        flask_app.add_url_rule("/api/datasets/active", "api_datasets_active_set", self._set_active, methods=["POST"])
         flask_app.add_url_rule("/api/datasets/<name>/images", "api_ds_images", self._list_images, methods=["GET"])
         flask_app.add_url_rule("/api/datasets/<name>/images", "api_ds_upload", self._upload_image, methods=["POST"])
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_get", self._get_image, methods=["GET"])
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_delete", self._delete_image, methods=["DELETE"])
+        flask_app.add_url_rule("/api/fs/dirs", "api_fs_dirs", self._browse_dirs, methods=["GET"])
 
     def _images_dir(self, name: str) -> Path:
         return self.dataset_root / name / "images"
@@ -75,11 +55,8 @@ class DatasetsModule(WebModule):
                     continue
                 images_dir = d / "images"
                 count = len(list(images_dir.glob("*"))) if images_dir.exists() else 0
-                out.append({"name": d.name, "image_count": count, "active": d.name == self._active})
-        return jsonify(datasets=out, active=self._active)
-
-    def _get_active(self):
-        return jsonify(active=self._active)
+                out.append({"name": d.name, "image_count": count})
+        return jsonify(datasets=out)
 
     def _create(self):
         data = request.get_json(force=True) or {}
@@ -94,14 +71,36 @@ class DatasetsModule(WebModule):
         (target / "images").mkdir(parents=True, exist_ok=True)
         return jsonify(success=True, name=name)
 
-    def _set_active(self):
-        data = request.get_json(force=True) or {}
-        name = data.get("name", "")
-        if name and not (self.dataset_root / name).exists():
-            return jsonify(error=f"Dataset '{name}' not found"), 404
-        self._active = name
-        self._save_active(name)
-        return jsonify(success=True, active=name)
+    def _browse_dirs(self):
+        """List the subdirectories of a folder for the interactive dataset
+        picker in the camera settings UI."""
+        raw = request.args.get("path", "").strip()
+        try:
+            base = Path(raw) if raw else Path.cwd()
+            if not base.is_absolute():
+                base = (Path.cwd() / base).resolve()
+            base = base.resolve()
+        except Exception:
+            return jsonify(error="Invalid path"), 400
+
+        if not base.is_dir():
+            return jsonify(error="Folder not found"), 404
+
+        dirs = []
+        try:
+            for d in sorted(base.iterdir()):
+                if d.is_dir() and not d.name.startswith("."):
+                    dirs.append({"name": d.name, "path": str(d)})
+        except PermissionError:
+            pass
+
+        parent = str(base.parent) if base.parent != base else None
+        return jsonify(
+            path=str(base),
+            name=base.name or str(base),
+            parent=parent,
+            dirs=dirs,
+        )
 
     def _list_images(self, name):
         d = self._images_dir(name)

@@ -174,10 +174,10 @@ class ObjectDetectionCamera(VisionPipeline):
         return {
             "auto_opt": {
                 "type": "boolean",
-                "label": "Auto-optimize (recommend backend)",
+                "label": "Optimize",
                 "default": False,
-                "help": "Use iSpy's hardware detection (recommend_format) to build "
-                        "the best optimized backend artifact for this device "
+                "optimize_toggle": True,
+                "help": "Build the best optimized backend artifact for this device "
                         "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
                         "etc.) in the background. Falls back to the top-level "
                         "config 'auto_opt' when unset.",
@@ -187,6 +187,7 @@ class ObjectDetectionCamera(VisionPipeline):
                 "label": "Target format",
                 "options": ["auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"],
                 "default": "auto",
+                "quantization": True,
                 "help": "'auto' picks the best backend for this device via "
                         "recommend_format(). Set an explicit format to override.",
             },
@@ -194,6 +195,7 @@ class ObjectDetectionCamera(VisionPipeline):
                 "type": "boolean",
                 "label": "Quantize model",
                 "default": False,
+                "quantization": True,
                 "help": "Quantize the optimized artifact (int8). Only meaningful "
                         "with auto_opt or target_format set.",
             },
@@ -201,6 +203,7 @@ class ObjectDetectionCamera(VisionPipeline):
                 "type": "text",
                 "label": "Quantization dataset",
                 "default": "",
+                "quantization": True,
                 "help": "Optional path to a folder of calibration images used "
                         "for quantization. Leave empty to auto-download images "
                         "from the model's calibration keywords.",

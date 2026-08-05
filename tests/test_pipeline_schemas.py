@@ -105,7 +105,7 @@ class VisionPipelineSchemaTests(unittest.TestCase):
     def test_builtin_plugins_emit_visible_objects_and_annotations(self):
         import numpy as np
 
-        for plugin_cls in (QRCodeCamera, DepthAnythingCamera, LineTrackingCamera):
+        for plugin_cls in (QRCodeCamera, LineTrackingCamera):
             camera = plugin_cls.__new__(plugin_cls)
             camera.get_frame = lambda: np.zeros((80, 80, 3), dtype=np.uint8)
             camera.logger = None
@@ -117,7 +117,7 @@ class VisionPipelineSchemaTests(unittest.TestCase):
             self.assertIsNotNone(annotated)
             self.assertTrue(np.any(annotated != frame))
 
-    def test_depth_plugin_emits_heatmap_metadata(self):
+    def test_depth_plugin_unloaded_returns_raw_frame(self):
         import numpy as np
 
         camera = DepthAnythingCamera.__new__(DepthAnythingCamera)
@@ -125,11 +125,12 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         camera.logger = None
         camera._last_frame = None
 
+        # With no model/session loaded, the pipeline must pass the raw camera
+        # frame through unchanged instead of faking a depth result.
         objects, frame = camera.run()
-        self.assertTrue(objects)
+        self.assertEqual(objects, [])
         self.assertIsNotNone(frame)
-        self.assertIn("depth_estimate", objects[0].vis_meta)
-        self.assertTrue(objects[0].vis_meta["heatmap"])
+        self.assertTrue(np.all(frame == 0))
 
 
 if __name__ == "__main__":

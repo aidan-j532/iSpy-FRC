@@ -16,7 +16,6 @@
     <button onclick="backToList()" style="background:var(--border);">&larr; Back</button>
     <h2 id="detail-title" style="margin:0;"></h2>
     <span id="detail-count" class="text-dim"></span>
-    <button id="select-active-btn" onclick="selectActive()" style="margin-left:auto;">Set as Active</button>
   </div>
 
   <div class="upload-zone" id="upload-zone">
@@ -41,13 +40,11 @@
 <script>
 let currentDataset = null;
 let pendingDelImg = null;
-let activeDataset = '';
 
 async function loadDatasets() {
   const data = await fetch('/api/datasets').then(r => r.json());
   const grid = document.getElementById('datasets-grid');
   const datasets = data.datasets || [];
-  activeDataset = data.active || '';
 
   if (datasets.length === 0) {
     grid.innerHTML = '<div class="card empty-state">No datasets yet. Create one with the form above.</div>';
@@ -56,7 +53,7 @@ async function loadDatasets() {
 
   grid.innerHTML = datasets.map(d => `
     <div class="card dataset-card" onclick="openDataset('${d.name}')">
-      <div class="dataset-name">${d.name} ${d.active ? '<span class="badge-ok">ACTIVE</span>' : ''}</div>
+      <div class="dataset-name">${d.name}</div>
       <div class="dataset-count">${d.image_count} image${d.image_count !== 1 ? 's' : ''}</div>
     </div>
   `).join('');
@@ -90,8 +87,6 @@ async function openDataset(name) {
   document.getElementById('datasets-view').style.display = 'none';
   document.getElementById('dataset-detail').style.display = 'block';
   document.getElementById('detail-title').textContent = name;
-  document.getElementById('select-active-btn').textContent = name === activeDataset ? 'Currently Active' : 'Set as Active';
-  document.getElementById('select-active-btn').disabled = name === activeDataset;
   await loadImages();
 }
 
@@ -100,28 +95,6 @@ function backToList() {
   document.getElementById('datasets-view').style.display = '';
   document.getElementById('dataset-detail').style.display = 'none';
   loadDatasets();
-}
-
-async function selectActive() {
-  if (!currentDataset) return;
-  try {
-    const resp = await fetch('/api/datasets/active', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: currentDataset}),
-    });
-    const data = await resp.json();
-    if (resp.ok) {
-      activeDataset = data.active;
-      document.getElementById('select-active-btn').textContent = 'Currently Active';
-      document.getElementById('select-active-btn').disabled = true;
-      showToast(`"${currentDataset}" set as active dataset`, 'success');
-    } else {
-      showToast(data.error || 'Failed to set active', 'error');
-    }
-  } catch(e) {
-    showToast('Failed to set active dataset', 'error');
-  }
 }
 
 async function loadImages() {

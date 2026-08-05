@@ -214,6 +214,46 @@
   </div>
 </div>
 
+<div id="folder-picker-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeFolderPicker()">
+  <div class="modal" style="max-width:560px;">
+    <h3>Select Folder</h3>
+    <div class="form-row">
+      <span class="form-label">Path</span>
+      <span id="folder-picker-path" class="text-dim" style="word-break:break-all;padding-top:8px;"></span>
+    </div>
+    <div id="folder-picker-list" class="folder-picker-list"></div>
+    <div class="modal-actions">
+      <button onclick="closeFolderPicker()" style="background:var(--border);">Cancel</button>
+      <button onclick="confirmFolderPick()" class="btn-ok">Select This Folder</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .folder-picker-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    margin: 8px 0;
+  }
+  .folder-picker-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 8px;
+    margin: 2px 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .folder-picker-item:hover {
+    border-color: var(--accent);
+  }
+</style>
+
 <script>
 let refreshTimer = null;
 let currentRate = 1000;
@@ -266,6 +306,83 @@ function setCommonFieldVisibility(show) {
   });
 }
 
+function createPipelineFieldRow(fieldName, fieldDef, idPrefix, currentValue) {
+  const row = document.createElement('div');
+  row.className = 'form-row';
+  if (fieldDef.quantization) row.classList.add('quantization-field');
+  if (fieldDef.optimize_toggle) row.setAttribute('data-optimize-toggle', '');
+
+  const label = document.createElement('span');
+  label.className = 'form-label';
+  label.textContent = fieldDef.label || humanizeFieldName(fieldName);
+
+  let control;
+  const fieldType = fieldDef.type || 'text';
+  if (fieldType === 'select') {
+    control = document.createElement('select');
+    control.className = 'form-input';
+    (fieldDef.options || []).forEach(optionValue => {
+      const option = document.createElement('option');
+      option.value = optionValue;
+      option.textContent = optionValue;
+      control.appendChild(option);
+    });
+  } else if (fieldType === 'boolean') {
+    control = document.createElement('select');
+    control.className = 'form-input';
+    const yesOption = document.createElement('option');
+    yesOption.value = 'true';
+    yesOption.textContent = 'Yes';
+    const noOption = document.createElement('option');
+    noOption.value = 'false';
+    noOption.textContent = 'No';
+    control.appendChild(yesOption);
+    control.appendChild(noOption);
+  } else {
+    control = document.createElement('input');
+    control.className = 'form-input';
+    control.type = fieldType === 'number' ? 'number' : 'text';
+    if (fieldType === 'number' && fieldDef.step != null) {
+      control.step = fieldDef.step;
+    }
+  }
+
+  control.id = `${idPrefix}-${fieldName}`;
+  if (currentValue != null) {
+    control.value = String(currentValue);
+  }
+  if (fieldDef.optimize_toggle) {
+    control.onchange = () => syncQuantizationVisibility(idPrefix);
+  }
+
+  row.appendChild(label);
+  row.appendChild(control);
+
+  if (fieldDef.quantization && fieldName === 'quantization_dataset') {
+    const browseBtn = document.createElement('button');
+    browseBtn.type = 'button';
+    browseBtn.id = `browse-${idPrefix}-${fieldName}`;
+    browseBtn.className = 'btn-sm';
+    browseBtn.textContent = 'Browse...';
+    browseBtn.onclick = () => openFolderPicker(control.id);
+    row.appendChild(browseBtn);
+  }
+
+  return row;
+}
+
+function syncQuantizationVisibility(idPrefix) {
+  const container = document.getElementById(
+    idPrefix === 'edit-dyn' ? 'edit-dynamic-pipeline-fields' : 'dynamic-pipeline-fields'
+  );
+  const toggleRow = container.querySelector('[data-optimize-toggle]');
+  const toggleControl = toggleRow ? toggleRow.querySelector('select') : null;
+  const on = toggleControl ? toggleControl.value === 'true' : false;
+  container.querySelectorAll('.quantization-field').forEach(row => {
+    row.style.display = on ? '' : 'none';
+  });
+}
+
 function renderDynamicPipelineFields() {
   const container = document.getElementById('dynamic-pipeline-fields');
   container.innerHTML = '';
@@ -274,59 +391,9 @@ function renderDynamicPipelineFields() {
   const schema = pipeline.config_schema || {};
   setCommonFieldVisibility(Boolean(pipeline.show_common_fields));
   Object.entries(schema).forEach(([fieldName, fieldDef]) => {
-    const row = document.createElement('div');
-    row.className = 'form-row';
-
-    const label = document.createElement('span');
-    label.className = 'form-label';
-    label.textContent = fieldDef.label || humanizeFieldName(fieldName);
-
-    let control;
-    const fieldType = fieldDef.type || 'text';
-    if (fieldType === 'select') {
-      control = document.createElement('select');
-      control.className = 'form-input';
-      (fieldDef.options || []).forEach(optionValue => {
-        const option = document.createElement('option');
-        option.value = optionValue;
-        option.textContent = optionValue;
-        control.appendChild(option);
-      });
-    } else if (fieldType === 'boolean') {
-      control = document.createElement('select');
-      control.className = 'form-input';
-      const yesOption = document.createElement('option');
-      yesOption.value = 'true';
-      yesOption.textContent = 'Yes';
-      const noOption = document.createElement('option');
-      noOption.value = 'false';
-      noOption.textContent = 'No';
-      control.appendChild(yesOption);
-      control.appendChild(noOption);
-    } else {
-      control = document.createElement('input');
-      control.className = 'form-input';
-      control.type = fieldType === 'number' ? 'number' : 'text';
-      if (fieldType === 'number' && fieldDef.step != null) {
-        control.step = fieldDef.step;
-      }
-    }
-
-    control.id = `dyn-${fieldName}`;
-    if (fieldDef.default != null) {
-      if (fieldType === 'boolean') {
-        control.value = String(fieldDef.default);
-      } else if (fieldType === 'select') {
-        control.value = String(fieldDef.default);
-      } else {
-        control.value = fieldDef.default;
-      }
-    }
-
-    row.appendChild(label);
-    row.appendChild(control);
-    container.appendChild(row);
+    container.appendChild(createPipelineFieldRow(fieldName, fieldDef, 'dyn', fieldDef.default));
   });
+  syncQuantizationVisibility('dyn');
 }
 
 async function openAddCameraModal(preselectPath) {
@@ -487,60 +554,10 @@ function renderEditPipelineFields() {
   }
   setEditCommonFieldVisibility(Boolean(pipeline.show_common_fields));
   Object.entries(schema).forEach(([fieldName, fieldDef]) => {
-    const row = document.createElement('div');
-    row.className = 'form-row';
-
-    const label = document.createElement('span');
-    label.className = 'form-label';
-    label.textContent = fieldDef.label || humanizeFieldName(fieldName);
-
-    let control;
-    const fieldType = fieldDef.type || 'text';
-    if (fieldType === 'select') {
-      control = document.createElement('select');
-      control.className = 'form-input';
-      (fieldDef.options || []).forEach(optionValue => {
-        const option = document.createElement('option');
-        option.value = optionValue;
-        option.textContent = optionValue;
-        control.appendChild(option);
-      });
-    } else if (fieldType === 'boolean') {
-      control = document.createElement('select');
-      control.className = 'form-input';
-      const yesOption = document.createElement('option');
-      yesOption.value = 'true';
-      yesOption.textContent = 'Yes';
-      const noOption = document.createElement('option');
-      noOption.value = 'false';
-      noOption.textContent = 'No';
-      control.appendChild(yesOption);
-      control.appendChild(noOption);
-    } else {
-      control = document.createElement('input');
-      control.className = 'form-input';
-      control.type = fieldType === 'number' ? 'number' : 'text';
-      if (fieldType === 'number' && fieldDef.step != null) {
-        control.step = fieldDef.step;
-      }
-    }
-
-    control.id = `edit-dyn-${fieldName}`;
     const current = editCamData && editCamData[fieldName] != null ? editCamData[fieldName] : fieldDef.default;
-    if (current != null) {
-      if (fieldType === 'boolean') {
-        control.value = String(current);
-      } else if (fieldType === 'select') {
-        control.value = String(current);
-      } else {
-        control.value = current;
-      }
-    }
-
-    row.appendChild(label);
-    row.appendChild(control);
-    container.appendChild(row);
+    container.appendChild(createPipelineFieldRow(fieldName, fieldDef, 'edit-dyn', current));
   });
+  syncQuantizationVisibility('edit-dyn');
 }
 
 async function openEditCameraModal(name) {
@@ -720,6 +737,68 @@ async function optimizeCamera(name) {
 function optimizeFromEdit() {
   if (!editCamData) return;
   optimizeCamera(editCamData.name);
+}
+
+let folderPickerTarget = null;
+let folderPickerPath = '';
+
+async function openFolderPicker(inputId) {
+  folderPickerTarget = inputId;
+  const input = document.getElementById(inputId);
+  const start = input && input.value ? input.value : '';
+  await loadFolderPicker(start);
+  document.getElementById('folder-picker-modal').style.display = 'flex';
+}
+
+async function loadFolderPicker(path) {
+  try {
+    const r = await fetch(`/api/fs/dirs?path=${encodeURIComponent(path || '')}`);
+    const data = await r.json();
+    if (!r.ok) {
+      showToast(data.error || 'Failed to browse folder', 'error');
+      return;
+    }
+    folderPickerPath = data.path;
+    document.getElementById('folder-picker-path').textContent = data.path;
+
+    const list = document.getElementById('folder-picker-list');
+    list.innerHTML = '';
+    if (data.parent) {
+      const upBtn = document.createElement('button');
+      upBtn.className = 'folder-picker-item';
+      upBtn.textContent = '.. (up one level)';
+      upBtn.onclick = () => loadFolderPicker(data.parent);
+      list.appendChild(upBtn);
+    }
+    if (!data.dirs.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = 'No subfolders';
+      list.appendChild(empty);
+    }
+    data.dirs.forEach(d => {
+      const btn = document.createElement('button');
+      btn.className = 'folder-picker-item';
+      btn.textContent = d.name;
+      btn.onclick = () => loadFolderPicker(d.path);
+      list.appendChild(btn);
+    });
+  } catch (e) {
+    showToast('Failed to browse folder', 'error');
+  }
+}
+
+function confirmFolderPick() {
+  if (folderPickerTarget && folderPickerPath) {
+    document.getElementById(folderPickerTarget).value = folderPickerPath;
+  }
+  closeFolderPicker();
+}
+
+function closeFolderPicker() {
+  document.getElementById('folder-picker-modal').style.display = 'none';
+  folderPickerTarget = null;
+  folderPickerPath = '';
 }
 
 function buildCameraCard(name, isStreaming, ageText, cam) {
