@@ -122,6 +122,57 @@ class iSpy:
             if not name.startswith("iSpy"):
                 logging.getLogger(name).setLevel(logging.WARNING)
 
+    def reload_camera(self, cam_key: str, new_config: dict):
+        """Rebuild one camera's pipeline instance from new_config and swap it
+        into the running vision loop (solo and multi mode alike).
+
+        Constructing the new pipeline runs its __init__, which kicks off
+        whatever background work the pipeline needs with the new settings
+        (optimization builds, model downloads, etc.). Mirrors the construction
+        in game_loop.main()."""
+        import copy
+        from iSpy.config.iSpyConfig import iSpyCameraConfig
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        idx = None
+        for i, cam in enumerate(self.cameras):
+            cam_cfg = getattr(cam, "config", None)
+            names = {
+                (cam_cfg.get("name") if hasattr(cam_cfg, "get") else None),
+                str(getattr(cam, "source", "")),
+            }
+            if cam_key in names:
+                idx = i
+                break
+        if idx is None:
+            self.logger.warning("reload_camera: camera '%s' not found", cam_key)
+            return
+
+        pipeline = new_config.get("pipeline", "object_detection")
+        cls = get_pipeline_classes().get(pipeline)
+        if cls is None:
+            self.logger.error("reload_camera: unknown pipeline '%s' for camera '%s'", pipeline, cam_key)
+            return
+
+        new_cam = cls(iSpyCameraConfig(copy.deepcopy(new_config)), self.config)
+        for processor in self.frame_processors.values():
+            new_cam.add_frame_processor(processor)
+
+        if self.camera_handler is not None:
+            # Multi mode: stop the camera's processing thread, swap in the new
+            # instance and restart its loop; the handler tears down the old
+            # camera so its capture device is released.
+            self.camera_handler.reload_camera(idx, new_cam)
+        else:
+            try:
+                self.cameras[idx].destroy()
+            except Exception:
+                self.logger.exception("Error destroying old pipeline for camera '%s'", cam_key)
+            self.cameras[idx] = new_cam
+        self.logger.info(
+            "Camera '%s' reloaded with new settings (%s pipeline)", cam_key, pipeline
+        )
+
     def _handle_shutdown(self):
         if self.shutdown_event.is_set():
             return
@@ -171,7 +222,9 @@ class iSpy:
             return objects, frame
         except Exception:
             self.logger.exception("Solo-vision exception")
-            return [], None
+            # Never kill the loop because one pipeline hiccuped - fall back
+            # to the raw camera frame so the feed keeps flowing.
+            return [], camera.get_frame() if hasattr(camera, "get_frame") else None
 
     def validate_vision_model(self, repo_root: Path | None = None):
         if repo_root is None:
@@ -298,12 +351,15 @@ class iSpy:
         return frame_data
 
     def run_solo_mode(self):
-        camera = self.cameras[0]
-        last_frame_data = None
         max_fps = self.config.get("max_fps", 0)
+        last_frame_data = None
         try:
+            # Read the camera each iteration so a web-triggered reload_camera()
+            # swap takes effect without a restart.
+            camera = self.cameras[0]
             self.run_solo_vision(camera)
             while not self.shutdown_event.is_set():
+                camera = self.cameras[0]
                 if self.pause_event.is_set():
                     if last_frame_data is not None:
                         frozen = {**last_frame_data, "fps": 0}
@@ -337,7 +393,8 @@ class iSpy:
             self._stop_all_plugins()
             if self.web_app:
                 self.web_app.stop()
-            camera.destroy()
+            if self.cameras:
+                self.cameras[0].destroy()
 
     def run_multi_mode(self):
         handler = self.camera_handler

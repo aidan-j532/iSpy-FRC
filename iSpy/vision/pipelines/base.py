@@ -120,6 +120,14 @@ class VisionPipeline(Camera, VisionBase):
         picker."""
         return False
 
+    @classmethod
+    def show_common_fields(cls) -> bool:
+        """True if the camera settings UI should show the shared mount/
+        calibration fields (x/y/z/height/yaw/pitch) for this pipeline. These
+        feed every pipeline's camera-to-robot transform, so they default to
+        on; pipelines that never use the transform may opt out."""
+        return True
+
 
 class BackgroundPreparedPipeline(VisionPipeline):
     """VisionPipeline whose preparation runs on a background thread.

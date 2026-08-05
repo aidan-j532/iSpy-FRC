@@ -22,23 +22,73 @@ class MultipleCameraHandler:
         self._frames = [None] * len(cameras)
         self._locks = [threading.Lock() for _ in cameras]
         self._fresh = [threading.Event() for _ in cameras]
+        self._stop_events = [threading.Event() for _ in cameras]
+        self._threads = []
 
         for i, cam in enumerate(cameras):
-            threading.Thread(
-                target=self._camera_loop, args=(i, cam), daemon=True
-            ).start()
+            self._threads.append(
+                threading.Thread(
+                    target=self._camera_loop, args=(i, cam), daemon=True
+                )
+            )
+            self._threads[-1].start()
 
     def _camera_loop(self, i: int, camera: VisionPipeline):
-        while not self._stopped:
+        stop_event = self._stop_events[i]
+        while not self._stopped and not stop_event.is_set():
             try:
                 objects, frame = camera.run()
+                if frame is None:
+                    objects, frame = [], camera.get_frame()
+            except Exception as e:
+                self.logger.warning(f"Camera {camera.source} error: {e}")
+                objects, frame = [], camera.get_frame()
+                time.sleep(0.05) # Dont starve CPU
+            try:
                 with self._locks[i]:
                     self._objects[i] = objects if objects is not None else []
                     self._frames[i] = frame
                 self._fresh[i].set()
-            except Exception as e:
-                self.logger.warning(f"Camera {camera.source} error: {e}")
-                time.sleep(0.05) # Dont starve CPU
+            except Exception:
+                pass
+
+    def reload_camera(self, index: int, new_camera: VisionPipeline):
+        """Replace the camera at ``index`` and restart its processing thread.
+
+        Used by the web layer when a camera's settings change: the new
+        pipeline instance has already been constructed (its __init__ kicked
+        off any background work), so this only has to swap it in and restart
+        that camera's loop without touching the other cameras. The replaced
+        instance is destroyed so its capture device is released."""
+        if index < 0 or index >= len(self.cameras):
+            raise IndexError(f"Cannot reload camera at index {index}")
+
+        self._stop_events[index].set()
+        thread = self._threads[index]
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=3.0)
+
+        old_camera = self.cameras[index]
+        self.cameras[index] = new_camera
+        with self._locks[index]:
+            self._objects[index] = []
+            self._frames[index] = None
+        self._fresh[index].clear()
+
+        self._stop_events[index] = threading.Event()
+        self._threads[index] = threading.Thread(
+            target=self._camera_loop,
+            args=(index, new_camera),
+            daemon=True,
+            name=f"CameraLoop-{getattr(new_camera, 'source', index)}",
+        )
+        self._threads[index].start()
+
+        if old_camera is not new_camera:
+            try:
+                old_camera.destroy()
+            except Exception:
+                self.logger.exception("Error destroying replaced camera at index %d", index)
 
     def predict(self) -> list[Object]:
         for event in self._fresh:

@@ -282,6 +282,7 @@ pre {
 .modal {
   background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 24px; max-width: 420px; width: 90%; box-shadow: var(--shadow-lg);
+  max-height: 90vh; overflow-y: auto;
 }
 .modal h3 { margin: 0 0 12px 0; }
 .modal p { color: var(--text-dim); font-size: 0.9rem; margin: 0 0 16px 0; }
@@ -298,6 +299,12 @@ pre {
 .form-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .form-label { min-width: 180px; font-size: 0.88rem; color: var(--text-dim); }
 .form-input { flex: 1; }
+.toggle-input { flex: none; width: 44px; height: 22px; appearance: none; cursor: pointer; position: relative;
+  background: var(--border); border-radius: 11px; transition: background 0.2s; outline: none; }
+.toggle-input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--bg-elevated); transition: transform 0.2s; }
+.toggle-input:checked { background: var(--ok); }
+.toggle-input:checked::after { transform: translateX(22px); }
 .restart-badge {
   display: inline-block; padding: 2px 8px; border-radius: var(--radius-sm);
   background: var(--warn); color: #000; font-size: 0.7rem; font-weight: 600;

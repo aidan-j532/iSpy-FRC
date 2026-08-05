@@ -91,8 +91,9 @@ function switchNewTab(name, btn) {
 }
 
 function typeBadge(type) {
-  const colors = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#ff9800' };
-  const label = type === 'frame_processor' ? 'frame processor' : type;
+  const colors = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#ff9800', vision_pipeline: '#9c27b0' };
+  const labels = { frame_processor: 'frame processor', vision_pipeline: 'vision pipeline' };
+  const label = labels[type] || type;
   return `<span class="plugin-pill" style="background:${colors[type] || '#666'}">${label}</span>`;
 }
 
@@ -128,14 +129,16 @@ async function loadStatus() {
       ? '<div class="empty-state">No add-ons found.</div>'
       : available.map(p => `
         <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          ${p.builtin ? '' : `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
             <input type="checkbox" ${p.enabled ? 'checked' : ''}
               onchange="togglePlugin('${p.name}', '${p.type}', this.checked)">
-          </label>
+          </label>`}
           <strong>${p.name}</strong>
           ${typeBadge(p.type)}
           ${p.doc ? `<span style="margin-left:8px;color:var(--text-dim);font-size:0.8rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${p.doc.replace(/"/g, '&quot;')}">${p.doc}</span>` : ''}
-          <button class="btn-sm btn-bad" style="margin-left:auto;" onclick="openDeleteAddonModal('${p.type}','${p.filename || p.name}','${p.name}')" title="Delete">&#10005;</button>
+          ${p.builtin
+            ? `<span style="margin-left:auto;color:var(--text-dim);font-size:0.8rem;">built-in</span>`
+            : `<button class="btn-sm btn-bad" style="margin-left:auto;" onclick="openDeleteAddonModal('${p.type}','${p.filename || p.name}','${p.name}')" title="Delete">&#10005;</button>`}
         </div>`).join('');
   } catch (e) {
     console.error('Failed to load add-ons', e);

@@ -46,6 +46,7 @@ class QRCodeCamera(VisionPipeline):
             self.fov = calib.get("fov", 0.0)
             self.grayscale = camera_config.get("grayscale", False)
             self.qr_size = float(camera_config.get("qr_size", 0.1))
+            self.decode_mode = str(camera_config.get("decode_mode", "standard")).lower()
         except KeyError as e:
             raise ValueError(f"Missing camera config key for QRCode: {e}")
 
@@ -110,9 +111,10 @@ class QRCodeCamera(VisionPipeline):
     def _decode_scales(self, gray):
         """Try decoding at several scales (upsample helps small/rotated QR
         codes). Returns (points, decoded_info, scale) scaled back to the
-        original frame coordinates, or (None, [], 1.0)."""
+        original frame coordinates, or (None, [], 1.0). In 'fast' decode
+        mode only the native resolution is tried."""
         img_h, img_w = gray.shape[:2]
-        scales = [1.0, 1.5, 2.0, 0.75]
+        scales = [1.0] if self.decode_mode == "fast" else [1.0, 1.5, 2.0, 0.75]
         for scale in scales:
             if scale != 1.0:
                 resized = cv2.resize(gray, (int(img_w * scale), int(img_h * scale)),

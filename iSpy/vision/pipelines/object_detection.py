@@ -70,15 +70,16 @@ class ObjectDetectionCamera(VisionPipeline):
             "quantized", "min_conf", "target_format", "input_size",
             "quantization_dataset", "auto_opt",
         ):
-            if _k in camera_config.data and _k not in vm_cfg:
+            if _k in camera_config.data:
                 vm_cfg[_k] = camera_config.data[_k]
         camera_config.data["vision_model"] = vm_cfg
         vm_filled = fill_missing_config(dict(vm_cfg))
         self.margin = vm_filled.get("margin", vm_cfg.get("margin", 0))
-        self.min_confidence = float(vm_filled.get("min_conf", vm_cfg.get("min_conf", 0.5)))
+        raw_min_conf = vm_filled.get("min_conf", vm_cfg.get("min_conf", 0.5))
+        self.min_confidence = float(raw_min_conf) if raw_min_conf is not None else 0.5
         self.z_mode = vm_cfg.get("z_mode", "size_based")  # "size_based" | "ground_plane"
-        self.yolo_model_file = vm_filled["file_path"]
-        self.input_size = tuple(vm_filled["input_size"])
+        self.yolo_model_file = vm_filled.get("file_path", vm_cfg.get("file_path", ""))
+        self.input_size = tuple(vm_filled.get("input_size", (640, 640)))
         self.quantized = vm_filled.get("quantized", vm_cfg.get("quantized", False))
         cam_auto_opt = vm_cfg.get("auto_opt")
         if cam_auto_opt is None:
@@ -172,8 +173,16 @@ class ObjectDetectionCamera(VisionPipeline):
     @classmethod
     def config_schema(cls) -> dict:
         return {
+            "vision_model": {
+                "type": "model",
+                "label": "YOLO Model (.pt)",
+                "default": "",
+                "help": "Pick a .pt model from the Yolo Models library. The "
+                        "chosen file is used for detection and as the source "
+                        "for optimization builds.",
+            },
             "auto_opt": {
-                "type": "boolean",
+                "type": "toggle",
                 "label": "Optimize",
                 "default": False,
                 "optimize_toggle": True,
@@ -192,7 +201,7 @@ class ObjectDetectionCamera(VisionPipeline):
                         "recommend_format(). Set an explicit format to override.",
             },
             "quantized": {
-                "type": "boolean",
+                "type": "toggle",
                 "label": "Quantize model",
                 "default": False,
                 "quantization": True,
@@ -200,12 +209,13 @@ class ObjectDetectionCamera(VisionPipeline):
                         "with auto_opt or target_format set.",
             },
             "quantization_dataset": {
-                "type": "text",
+                "type": "browse",
                 "label": "Quantization dataset",
                 "default": "",
+                "browse_root": "QuantizeDataset",
                 "quantization": True,
-                "help": "Optional path to a folder of calibration images used "
-                        "for quantization. Leave empty to auto-download images "
+                "help": "Optional folder of calibration images used for "
+                        "quantization. Leave empty to auto-download images "
                         "from the model's calibration keywords.",
             },
             "min_conf": {

@@ -66,19 +66,20 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
                 "help": "YOLO World v2 weights are downloaded automatically from Ultralytics on first use.",
             },
             "quantize": {
-                "type": "boolean",
+                "type": "toggle",
                 "label": "Optimize",
                 "default": False,
                 "optimize_toggle": True,
                 "help": "Convert the YOLO World model to a quantized backend artifact using iSpy's export framework.",
             },
             "quantization_dataset": {
-                "type": "text",
+                "type": "browse",
                 "label": "Quantization dataset",
                 "default": "",
+                "browse_root": "QuantizeDataset",
                 "quantization": True,
-                "help": "Optional path to a folder of calibration images used "
-                        "for quantization. Leave empty to auto-download images "
+                "help": "Optional folder of calibration images used for "
+                        "quantization. Leave empty to auto-download images "
                         "from the model's calibration keywords.",
             },
             "target_format": {

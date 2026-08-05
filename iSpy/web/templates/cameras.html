@@ -180,14 +180,6 @@
         <input id="edit-cam-fps-cap" class="form-input" type="number" step="1">
       </div>
     </div>
-    <div class="settings-section" id="edit-optimize-section" style="display:none;">
-      <h3>Optimization</h3>
-      <div class="form-row">
-        <span class="form-label">Optimize</span>
-        <button onclick="optimizeFromEdit()" class="btn-ok" id="edit-optimize-btn">Optimize Model</button>
-      </div>
-      <p style="opacity:0.65;font-size:12px;margin:6px 0 0;">Builds a hardware-optimized model artifact for this camera's pipeline. Runs in the background - the camera stays ready when it can fall back.</p>
-    </div>
     <div class="settings-section">
       <h3>Calibration</h3>
       <div class="form-row">
@@ -225,6 +217,19 @@
     <div class="modal-actions">
       <button onclick="closeFolderPicker()" style="background:var(--border);">Cancel</button>
       <button onclick="confirmFolderPick()" class="btn-ok">Select This Folder</button>
+    </div>
+  </div>
+</div>
+
+<div id="model-picker-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeModelPicker()">
+  <div class="modal" style="max-width:560px;">
+    <h3>Select YOLO Model (.pt)</h3>
+    <p>Choose a model from the Yolo Models library. To use a new model, upload it first on the Models page.</p>
+    <div id="model-picker-list" class="folder-picker-list"></div>
+    <div class="modal-actions">
+      <a href="/models" class="btn-sm" style="text-decoration:none;">Upload a model&hellip;</a>
+      <span style="flex:1"></span>
+      <button onclick="closeModelPicker()" style="background:var(--border);">Cancel</button>
     </div>
   </div>
 </div>
@@ -338,6 +343,36 @@ function createPipelineFieldRow(fieldName, fieldDef, idPrefix, currentValue) {
     noOption.textContent = 'No';
     control.appendChild(yesOption);
     control.appendChild(noOption);
+  } else if (fieldType === 'toggle') {
+    // On/off switch backed by a checkbox.
+    control = document.createElement('input');
+    control.type = 'checkbox';
+    control.className = 'toggle-input';
+    if (currentValue === true || currentValue === 'true' || currentValue === 1) {
+      control.checked = true;
+    }
+  } else if (fieldType === 'model') {
+    // Model picker: read-only display + Browse button. The value is the
+    // model file name (basename) from the Yolo Models library.
+    control = document.createElement('input');
+    control.className = 'form-input model-field';
+    control.type = 'text';
+    control.readOnly = true;
+    control.placeholder = 'Browse to select a model...';
+    if (currentValue && typeof currentValue === 'object') {
+      currentValue = currentValue.source_pt || currentValue.file_path || '';
+    }
+    if (currentValue) {
+      currentValue = String(currentValue).split('/').pop();
+    }
+  } else if (fieldType === 'browse') {
+    // Folder picker: read-only text + Browse button. The user picks a
+    // directory (e.g. a named QuantizeDataset) instead of typing a path.
+    control = document.createElement('input');
+    control.className = 'form-input';
+    control.type = 'text';
+    control.readOnly = true;
+    control.placeholder = 'Browse to select a folder...';
   } else {
     control = document.createElement('input');
     control.className = 'form-input';
@@ -350,6 +385,7 @@ function createPipelineFieldRow(fieldName, fieldDef, idPrefix, currentValue) {
   control.id = `${idPrefix}-${fieldName}`;
   if (currentValue != null) {
     control.value = String(currentValue);
+    control.dataset.original = String(currentValue);
   }
   if (fieldDef.optimize_toggle) {
     control.onchange = () => syncQuantizationVisibility(idPrefix);
@@ -358,13 +394,19 @@ function createPipelineFieldRow(fieldName, fieldDef, idPrefix, currentValue) {
   row.appendChild(label);
   row.appendChild(control);
 
-  if (fieldDef.quantization && fieldName === 'quantization_dataset') {
+  if (fieldDef.type === 'model') {
     const browseBtn = document.createElement('button');
     browseBtn.type = 'button';
-    browseBtn.id = `browse-${idPrefix}-${fieldName}`;
     browseBtn.className = 'btn-sm';
     browseBtn.textContent = 'Browse...';
-    browseBtn.onclick = () => openFolderPicker(control.id);
+    browseBtn.onclick = () => openModelPicker(control.id);
+    row.appendChild(browseBtn);
+  } else if (fieldDef.type === 'browse') {
+    const browseBtn = document.createElement('button');
+    browseBtn.type = 'button';
+    browseBtn.className = 'btn-sm';
+    browseBtn.textContent = 'Browse...';
+    browseBtn.onclick = () => openFolderPicker(control.id, fieldDef.browse_root);
     row.appendChild(browseBtn);
   }
 
@@ -376,8 +418,13 @@ function syncQuantizationVisibility(idPrefix) {
     idPrefix === 'edit-dyn' ? 'edit-dynamic-pipeline-fields' : 'dynamic-pipeline-fields'
   );
   const toggleRow = container.querySelector('[data-optimize-toggle]');
-  const toggleControl = toggleRow ? toggleRow.querySelector('select') : null;
-  const on = toggleControl ? toggleControl.value === 'true' : false;
+  let on = false;
+  if (toggleRow) {
+    const toggleControl = toggleRow.querySelector('select, input[type="checkbox"]');
+    if (toggleControl) {
+      on = toggleControl.type === 'checkbox' ? toggleControl.checked : toggleControl.value === 'true';
+    }
+  }
   container.querySelectorAll('.quantization-field').forEach(row => {
     row.style.display = on ? '' : 'none';
   });
@@ -438,6 +485,7 @@ async function openAddCameraModal(preselectPath) {
   }
 
   renderDynamicPipelineFields();
+  prefillFirstModel();
   document.getElementById('add-camera-modal').style.display = 'flex';
   onDeviceSelected();
 }
@@ -499,11 +547,19 @@ async function submitAddCamera() {
   document.querySelectorAll('#dynamic-pipeline-fields [id^="dyn-"]').forEach(el => {
     const key = el.id.slice(4);
     const fieldDef = schema[key] || {};
+    const modelPayload = modelFieldPayload(el, fieldDef, /* changedOnly */ false);
+    if (modelPayload) {
+      payload[key] = modelPayload;
+      return;
+    }
+    if (fieldDef.type === 'model') return;
     let value = el.value;
     if (fieldDef.type === 'number') {
       value = el.value === '' ? null : Number(el.value);
     } else if (fieldDef.type === 'boolean') {
       value = el.value === 'true';
+    } else if (fieldDef.type === 'toggle') {
+      value = el.checked;
     }
     payload[key] = value;
   });
@@ -548,13 +604,19 @@ function renderEditPipelineFields() {
   container.innerHTML = '';
   const pipeline = pipelineSchemas[document.getElementById('edit-cam-pipeline').value] || {};
   const schema = pipeline.config_schema || {};
-  const optimizeSection = document.getElementById('edit-optimize-section');
-  if (optimizeSection) {
-    optimizeSection.style.display = pipeline.can_optimize ? '' : 'none';
-  }
   setEditCommonFieldVisibility(Boolean(pipeline.show_common_fields));
   Object.entries(schema).forEach(([fieldName, fieldDef]) => {
-    const current = editCamData && editCamData[fieldName] != null ? editCamData[fieldName] : fieldDef.default;
+    // Pipeline settings may live at the camera level OR nested inside the
+    // camera's vision_model block (legacy/optimization fields). Read the
+    // effective value so toggles/selects reflect what actually runs.
+    let current = fieldDef.default;
+    if (editCamData) {
+      if (editCamData[fieldName] != null) {
+        current = editCamData[fieldName];
+      } else if (editCamData.vision_model && editCamData.vision_model[fieldName] != null) {
+        current = editCamData.vision_model[fieldName];
+      }
+    }
     container.appendChild(createPipelineFieldRow(fieldName, fieldDef, 'edit-dyn', current));
   });
   syncQuantizationVisibility('edit-dyn');
@@ -654,12 +716,25 @@ async function submitEditCamera() {
   document.querySelectorAll('#edit-dynamic-pipeline-fields [id^="edit-dyn-"]').forEach(el => {
     const key = el.id.slice('edit-dyn-'.length);
     const fieldDef = schema[key] || {};
+    const modelPayload = modelFieldPayload(el, fieldDef, /* changedOnly */ true);
+    if (modelPayload) {
+      payload[key] = modelPayload;
+      return;
+    }
+    if (fieldDef.type === 'model') return;
     let value = el.value;
     if (fieldDef.type === 'number') {
       value = el.value === '' ? null : Number(el.value);
     } else if (fieldDef.type === 'boolean') {
       value = el.value === 'true';
+    } else if (fieldDef.type === 'toggle') {
+      value = el.checked;
     }
+    // Only send pipeline settings the user actually changed. Fields that
+    // live in the camera's vision_model block (quantized, min_conf, ...)
+    // would otherwise be clobbered by stale defaults on every save.
+    const original = el.dataset.original;
+    if (original !== undefined && String(value) === original) return;
     payload[key] = value;
   });
 
@@ -670,7 +745,7 @@ async function submitEditCamera() {
   });
   const j = await r.json();
   if (r.ok) {
-    showToast('Settings saved - restart vision to apply', 'success');
+    showToast('Settings saved - pipeline reloaded', 'success');
     closeEditCameraModal();
     refreshCameras();
   } else {
@@ -716,36 +791,13 @@ function updateCameraFooter(card, cam) {
   `;
 }
 
-async function optimizeCamera(name) {
-  const btn = document.getElementById('edit-optimize-btn');
-  if (btn) btn.disabled = true;
-  try {
-    const r = await fetch(`/api/cameras/${encodeURIComponent(name)}/optimize`, { method: 'POST' });
-    const j = await r.json();
-    if (r.ok) {
-      showToast(`Optimization started: ${j.status}`, 'success');
-    } else {
-      showToast(j.error || 'Optimization failed', 'error');
-    }
-  } catch (e) {
-    showToast('Network error starting optimization', 'error');
-  }
-  if (btn) btn.disabled = false;
-  refreshCameras();
-}
-
-function optimizeFromEdit() {
-  if (!editCamData) return;
-  optimizeCamera(editCamData.name);
-}
-
 let folderPickerTarget = null;
 let folderPickerPath = '';
 
-async function openFolderPicker(inputId) {
+async function openFolderPicker(inputId, startPath) {
   folderPickerTarget = inputId;
   const input = document.getElementById(inputId);
-  const start = input && input.value ? input.value : '';
+  const start = (input && input.value) ? input.value : (startPath || '');
   await loadFolderPicker(start);
   document.getElementById('folder-picker-modal').style.display = 'flex';
 }
@@ -801,6 +853,72 @@ function closeFolderPicker() {
   folderPickerPath = '';
 }
 
+let modelPickerTarget = null;
+
+async function openModelPicker(inputId) {
+  modelPickerTarget = inputId;
+  const list = document.getElementById('model-picker-list');
+  list.innerHTML = '<div class="empty-state">Loading models...</div>';
+  document.getElementById('model-picker-modal').style.display = 'flex';
+  try {
+    const data = await fetch('/api/models').then(r => r.json());
+    const models = data.models || [];
+    if (!models.length) {
+      list.innerHTML = '<div class="empty-state">No .pt models in the Yolo Models library yet. Upload one on the Models page first.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    models.forEach(m => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'folder-picker-item';
+      const details = [m.task || 'detect', m.nc != null ? m.nc + ' classes' : null, m.size_mb + ' MB']
+        .filter(Boolean).join(' · ');
+      btn.innerHTML = `<strong>${escapeHtml(m.name)}</strong><span class="text-dim" style="display:block;font-size:12px;">${escapeHtml(details)}</span>`;
+      btn.onclick = () => {
+        const input = document.getElementById(modelPickerTarget);
+        if (input) {
+          input.value = m.name;
+          input.dataset.original = m.name;
+        }
+        closeModelPicker();
+      };
+      list.appendChild(btn);
+    });
+  } catch (e) {
+    list.innerHTML = '<div class="empty-state">Failed to load models.</div>';
+  }
+}
+
+function closeModelPicker() {
+  document.getElementById('model-picker-modal').style.display = 'none';
+  modelPickerTarget = null;
+}
+
+function modelFieldPayload(el, schemaKey, changedOnly) {
+  const fieldDef = schemaKey || {};
+  if (fieldDef.type !== 'model' || !el.value) return null;
+  // For the edit flow, only send the vision_model block when the user
+  // actually changed the selection, so unrelated settings saves don't
+  // clobber an optimized artifact's file_path back to the raw .pt. For
+  // the add flow always send it - the prefilled picker IS the choice.
+  if (changedOnly && el.value === el.dataset.original) return null;
+  const modelPath = 'YoloModels/pytorch/' + el.value.split('/').pop();
+  return { file_path: modelPath, source_pt: modelPath };
+}
+
+function prefillFirstModel() {
+  const modelField = document.querySelector('#dynamic-pipeline-fields .model-field');
+  if (!modelField) return;
+  fetch('/api/models').then(r => r.json()).then(data => {
+    const models = data.models || [];
+    if (models.length) {
+      modelField.value = models[0].name;
+      modelField.dataset.original = models[0].name;
+    }
+  }).catch(() => {});
+}
+
 function buildCameraCard(name, isStreaming, ageText, cam) {
   const card = document.createElement('div');
   card.className = 'card camera-card';
@@ -808,15 +926,15 @@ function buildCameraCard(name, isStreaming, ageText, cam) {
   card.innerHTML = `
     <div class="camera-header">
       <span class="status-dot ${isStreaming ? 'status-ok' : 'status-warn'}"></span>
-      <strong>${name}</strong>
-      <span class="cam-meta">${ageText}</span>
-      <button class="btn-sm btn-ok" onclick="openEditCameraModal('${name}')" style="margin-left:auto;">Edit</button>
-      <button class="btn-sm btn-bad" onclick="confirmRemoveCamera('${name}')">Remove</button>
+      <strong>${escapeHtml(name)}</strong>
+      <span class="cam-meta">${escapeHtml(ageText)}</span>
+      <button class="btn-sm btn-ok" onclick="openEditCameraModal(this.closest('.camera-card').dataset.camera)" style="margin-left:auto;">Edit</button>
+      <button class="btn-sm btn-bad" onclick="confirmRemoveCamera(this.closest('.camera-card').dataset.camera)">Remove</button>
     </div>
     ${isStreaming
       ? `<div class="camera-feed-wrap">
-          <img class="camera-feed" src="/video/${encodeURIComponent(name)}" alt="${name}"
-            onclick="openCameraLightbox('${name}')"
+          <img class="camera-feed" src="/video/${encodeURIComponent(name)}" alt="${escapeHtml(name)}"
+            onclick="openCameraLightbox(this.closest('.camera-card').dataset.camera)"
             onload="this.closest('.camera-feed-wrap').classList.add('feed-ok')"
             onerror="this.classList.add('feed-error'); this.closest('.camera-feed-wrap').classList.remove('feed-ok')">
         </div>`
@@ -835,9 +953,9 @@ function buildDiscoverCard(device) {
   card.innerHTML = `
     <div class="camera-header">
       <span class="status-dot status-ok"></span>
-      <strong>${device.name}</strong>
-      <span class="cam-meta">${device.resolution || device.path}</span>
-      <button class="btn-sm btn-ok" onclick="openAddCameraModal('${device.path}')" style="margin-left:auto;">Add</button>
+      <strong>${escapeHtml(device.name)}</strong>
+      <span class="cam-meta">${escapeHtml(device.resolution || device.path)}</span>
+      <button class="btn-sm btn-ok" onclick="openAddCameraModal(this.closest('.camera-card').dataset.discover)" style="margin-left:auto;">Add</button>
     </div>
     <div class="camera-not-streaming">Discovered but not configured.</div>
   `;

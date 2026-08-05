@@ -5,6 +5,29 @@ from pathlib import Path
 _BOOT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = Path.cwd()
 
+_MODEL_BACKED_PIPELINES = ("object_detection",)
+
+
+def default_vision_model() -> dict:
+    """Per-camera vision_model block for model-backed pipelines.
+
+    Used when a config predates the per-camera vision_model restructure (or a
+    camera was added without one). User-uploaded models (anything not prefixed
+    with ``_default``) take priority; otherwise fall back to the same bundled
+    pose model the default config ships with."""
+    pts = sorted((_REPO_ROOT / "YoloModels" / "pytorch").glob("*.pt"))
+    user_pts = [p for p in pts if not p.name.startswith("_default")]
+    if user_pts:
+        rel = f"YoloModels/pytorch/{user_pts[0].name}"
+    else:
+        pose = next((p for p in pts if p.name == "_default_pose.pt"), None)
+        rel = f"YoloModels/pytorch/{pose.name}" if pose else "YoloModels/pytorch/_default_pose.pt"
+    return {"file_path": rel, "source_pt": rel, "min_conf": 0.5}
+
+
+def is_model_backed_pipeline(pipeline: str) -> bool:
+    return str(pipeline or "") in _MODEL_BACKED_PIPELINES
+
 
 class iSpyConfig:
     def __init__(
@@ -23,7 +46,7 @@ class iSpyConfig:
             "record_mode": True,
             "record_dir": "VideoRecordings",
             "frame_sync": False,
-            "auto_opt": True,
+            "auto_opt": False,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
             "use_network_tables": False,
@@ -43,9 +66,11 @@ class iSpyConfig:
                         "file_path": "YoloModels/pytorch/_default_pose.pt",
                         "source_pt": "YoloModels/pytorch/_default_pose.pt",
                         "min_conf": 0.5,
-                        # Build the optimized backend artifact on first boot; the
-                        # camera reports ready once the background build lands.
-                        "quantized": True,
+                        # Optimization (quantization/RKNN builds) is opt-in per
+                        # camera via the Optimize toggle in the web UI - a fresh
+                        # install should boot instantly, not kick off a
+                        # multi-minute backend build.
+                        "quantized": False,
                     },
                     # Optional PnP for pose (translation stored on Box; rotation stored as roll/pitch/yaw on Box).
                     # Enable to get 3D position + orientation from 2D keypoints, and to render a 3D human
@@ -112,12 +137,12 @@ class iSpyConfig:
         if file_path:
             self.load_from_file(file_path)
 
+        self._check_config()
+        self._migrate_camera_configs()
         self.camera_configs: dict[str, iSpyCameraConfig] = {
             name: iSpyCameraConfig(cam_cfg)
             for name, cam_cfg in self.config["camera_configs"].items()
         }
-
-        self._check_config()
         try:
             self._configure_logging()
         except Exception:
@@ -135,10 +160,32 @@ class iSpyConfig:
         return chosen
 
     def _check_config(self):
+        self.config.setdefault("camera_configs", {})
         self.config.setdefault("plugins", {})
         self.config["plugins"].setdefault("trackers", [])
         self.config["plugins"].setdefault("utilities", [])
         self.config["plugins"].setdefault("frame_processors", [])
+
+    def _migrate_camera_configs(self):
+        """Bring legacy camera entries up to date with the per-camera
+        vision_model restructure.
+
+        Model-backed pipelines (object_detection) require a vision_model dict
+        in every camera entry; before the restructure that block lived at the
+        top level of the config, so existing configs (and cameras added by
+        older web builds) boot with it missing and crash at pipeline
+        construction. Inject a default so those configs keep working."""
+        for name, cam_cfg in self.config.get("camera_configs", {}).items():
+            if not isinstance(cam_cfg, dict):
+                continue
+            if is_model_backed_pipeline(cam_cfg.get("pipeline")) and not isinstance(
+                cam_cfg.get("vision_model"), dict
+            ):
+                self.logger.info(
+                    "Camera '%s' is missing a vision_model block - adding default.",
+                    name,
+                )
+                cam_cfg["vision_model"] = default_vision_model()
 
         # required_trackers = ["path_planner"]
         # missing = False
@@ -170,6 +217,13 @@ class iSpyConfig:
         try:
             with open(file_path, "r") as f:
                 data = json.load(f)
+            if isinstance(data, dict) and "vision_model" in data:
+                raise RuntimeError(
+                    f"Config at {file_path} uses the legacy top-level "
+                    "'vision_model' layout, which is no longer supported - "
+                    "vision model settings now live inside each camera entry. "
+                    "Run 'boot -f' to start from a fresh default configuration."
+                )
             self._update_config(data)
         except json.JSONDecodeError as e:
             # Invalid config is an error - boot never silently regenerates it.

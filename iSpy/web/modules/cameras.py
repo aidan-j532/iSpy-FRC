@@ -1,5 +1,6 @@
 import copy
 import glob
+import logging
 import os
 import platform
 import subprocess
@@ -11,7 +12,11 @@ import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.save_store import read, write
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
+from iSpy.config.iSpyConfig import default_vision_model, is_model_backed_pipeline
+from iSpy.vision.pipelines import get_pipeline_classes
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
@@ -117,7 +122,6 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_update", self._update_camera, methods=["PUT"])
         flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_delete", self._remove_camera, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/profile/<device_id>", "api_cameras_profile", self._get_profile, methods=["GET"])
-        flask_app.add_url_rule("/api/cameras/<name>/optimize", "api_cameras_optimize", self._optimize_camera, methods=["POST"])
         flask_app.add_url_rule("/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines)
 
     def _camera_display_name(self, cam, fallback: str = "camera") -> str:
@@ -224,9 +228,10 @@ class CamerasModule(WebModule):
                 if existing.get("device_id") == device_id:
                     return jsonify(error=f"Device already in use by camera '{existing.get('name')}'"), 409
 
+        pipeline = data.get("pipeline", "object_detection")
         cam_entry = {
             "name": name, "source": source, "device_id": device_id,
-            "pipeline": data.get("pipeline", "object_detection"),
+            "pipeline": pipeline,
             "yaw": data.get("yaw", 0), "pitch": data.get("pitch", 0),
             "height": data.get("height", 0), "x": data.get("x", 0),
             "y": data.get("y", 0), "z": data.get("z", 0),
@@ -234,7 +239,20 @@ class CamerasModule(WebModule):
             "subsystem": data.get("subsystem", "field"),
             "calibration": data.get("calibration", {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0}),
         }
-        handled = {"name", "source", "device_id", "pipeline", "yaw", "pitch", "height", "x", "y", "z", "grayscale", "subsystem", "calibration"}
+
+        # Model-backed pipelines need a per-camera vision_model block or the
+        # pipeline crashes at construction. Accept the model picker's dict
+        # ({file_path, source_pt}), a raw path string, or default to the
+        # first .pt in the YoloModels library.
+        vm = data.get("vision_model")
+        if isinstance(vm, dict) and vm.get("file_path"):
+            cam_entry["vision_model"] = vm
+        elif isinstance(vm, str) and vm:
+            cam_entry["vision_model"] = {"file_path": vm, "source_pt": vm}
+        elif is_model_backed_pipeline(pipeline):
+            cam_entry["vision_model"] = default_vision_model()
+
+        handled = {"name", "source", "device_id", "pipeline", "vision_model", "yaw", "pitch", "height", "x", "y", "z", "grayscale", "subsystem", "calibration"}
         for k, v in data.items():
             if k not in handled:
                 cam_entry[k] = v
@@ -293,12 +311,46 @@ class CamerasModule(WebModule):
         if new_name != entry_key and new_name in cams:
             return jsonify(error=f"Camera '{new_name}' already exists"), 409
 
+        # Switching a camera onto a model-backed pipeline (e.g. from
+        # april_tag to object_detection) needs a vision_model block or the
+        # new pipeline instance crashes at construction.
+        if is_model_backed_pipeline(new_entry.get("pipeline")) and not isinstance(
+            new_entry.get("vision_model"), dict
+        ):
+            new_entry["vision_model"] = default_vision_model()
+
         cams.pop(entry_key)
         cams[new_name] = new_entry
         config.set("camera_configs", cams)
         config.save()
 
-        return jsonify(success=True, note="Restart vision to apply.", camera=new_entry)
+        # Rebuild the camera's pipeline in place with the new settings. The
+        # pipeline __init__ kicks off whatever background work it needs
+        # (optimization builds, model downloads, etc.) - no restart required.
+        vision = self.context.get("vision_instance")
+        reloaded = False
+        if vision is not None and hasattr(vision, "reload_camera"):
+            # Match the RUNNING pipeline instance by its current name/source
+            # (the config key and the camera name can diverge in legacy
+            # configs, and the instance still holds the pre-rename name).
+            old_name = entry.get("name") or entry_key
+            try:
+                vision.reload_camera(old_name, dict(new_entry))
+                reloaded = True
+            except Exception as exc:
+                logger.exception("Failed to reload camera '%s' after config save", new_name)
+
+        if reloaded:
+            return jsonify(
+                success=True,
+                note="Settings saved - pipeline reloaded.",
+                camera=new_entry,
+            )
+        return jsonify(
+            success=True,
+            note="Settings saved - restart vision to apply.",
+            camera=new_entry,
+        )
 
     def _remove_camera(self, cam_name):
         config = self.context["config"]
@@ -351,26 +403,12 @@ class CamerasModule(WebModule):
                     payload["status"] = str(status)
                     state = getattr(inst, "get_state", None)
                     payload["state"] = state() if callable(state) else None
-                    options = getattr(inst, "get_optimization_options", None)
-                    payload["can_optimize"] = bool(options() if callable(options) else {})
                 else:
                     payload["ready"] = None
                     payload["status"] = None
                     payload["state"] = None
                 cameras.append(payload)
         return jsonify(cameras=cameras)
-
-    def _optimize_camera(self, name):
-        inst = self.live_cameras.get(name)
-        if inst is None:
-            return jsonify(error=f"Camera '{name}' is not running"), 404
-        if not hasattr(inst, "request_optimize"):
-            pipeline = getattr(inst, "plugin_name", "?")
-            return jsonify(
-                error=f"Pipeline '{pipeline}' does not support on-demand optimization"
-            ), 400
-        status = inst.request_optimize()
-        return jsonify(status=status)
 
     def _discover(self):
         now = time.monotonic()

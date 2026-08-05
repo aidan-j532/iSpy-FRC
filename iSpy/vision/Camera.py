@@ -68,6 +68,13 @@ class Camera:
         self._exposure_time = camera_config.get("exposure_time", 100)   # 10 ms
         self._gain = camera_config.get("gain", 200)
 
+        # Optional per-camera FPS cap (0 = uncapped). The reader thread
+        # sleeps to hold the average capture rate at or below this value.
+        try:
+            self._fps_cap = max(0, float(camera_config.get("fps_cap", 0) or 0))
+        except (TypeError, ValueError):
+            self._fps_cap = 0.0
+
         if self.is_image:
             self.image = cv2.imread(self.source)
             if self.image is None:
@@ -260,7 +267,14 @@ class Camera:
         self._frame_processors = []
 
     def _reader(self):
+        frame_interval = 1.0 / self._fps_cap if self._fps_cap > 0 else 0.0
+        next_frame_time = 0.0
         while not self.stopped:
+            if frame_interval > 0:
+                now = time.perf_counter()
+                if now < next_frame_time:
+                    time.sleep(min(next_frame_time - now, 0.05))
+                    continue
             ret, frame = self.cap.read()
             if not ret:
                 self.logger.warning(f"Frame read failed on {self.source}, retrying...")
@@ -292,6 +306,8 @@ class Camera:
                 self.frame = frame
                 self.frame_timestamp = time.perf_counter()
             self._frame_event.set()
+            if frame_interval > 0:
+                next_frame_time = time.perf_counter() + frame_interval
 
     def get_frame_age(self) -> float:
         if self.is_image:

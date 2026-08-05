@@ -64,14 +64,14 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 "help": "Depth Anything V2 Small is downloaded automatically from Hugging Face.",
             },
             "optimize": {
-                "type": "boolean",
+                "type": "toggle",
                 "label": "Optimize",
                 "default": True,
                 "optimize_toggle": True,
                 "help": "Export the model once to an int8-quantized ONNX via iSpy's export framework and run it through onnxruntime for fast CPU inference.",
             },
             "estimate_depth": {
-                "type": "boolean",
+                "type": "toggle",
                 "label": "Estimate Depth",
                 "default": True,
             },

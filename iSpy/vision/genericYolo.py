@@ -411,7 +411,8 @@ class GenericYolo:
         self.task = cfg["task"]
         self.num_classes = int(cfg["num_classes"])
         self.input_size = tuple(cfg["input_size"])
-        self.min_conf = float(cfg["min_conf"]) if "min_conf" in cfg else 0.25
+        raw_min_conf = cfg.get("min_conf")
+        self.min_conf = float(raw_min_conf) if raw_min_conf is not None else 0.25
         self.frame_batches = cfg.get("frame_batches", 1)
         self.output = cfg["output"]
         self.pnp_config = cfg.get("pnp")

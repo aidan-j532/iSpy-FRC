@@ -91,7 +91,8 @@ class PipelineConfigTests(unittest.TestCase):
         self.assertEqual(cam_cfg.get("tag_size_inches"), 6.5)
 
     def test_no_legacy_migration_happens(self):
-        # Legacy top-level vision_model must NOT be migrated into cameras.
+        # Legacy top-level vision_model must NOT be migrated into cameras -
+        # it is rejected loudly with a pointer to 'boot -f'.
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             data = {
@@ -102,9 +103,10 @@ class PipelineConfigTests(unittest.TestCase):
                 },
             }
             path.write_text(json.dumps(data))
-            cfg = iSpyConfig(str(path), create=False)
-            self.assertIsNone(cfg.camera_config("cam_tags").get("vision_model"))
-            self.assertFalse(hasattr(cfg, "_migrate_legacy_vision_model"))
+            with self.assertRaises(RuntimeError) as ctx:
+                iSpyConfig(str(path), create=False)
+            self.assertIn("boot -f", str(ctx.exception))
+            self.assertFalse(hasattr(iSpyConfig(), "_migrate_legacy_vision_model"))
 
     def test_missing_config_raises_instead_of_silent_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,11 +124,13 @@ class PipelineConfigTests(unittest.TestCase):
 
     def test_pipeline_own_optimization_config(self):
         # Optimization settings belong to the object_detection pipeline config
-        # (its per-camera vision_model block) - not the global config.
+        # (its per-camera vision_model block) - not the global config. A fresh
+        # default config is opt-in: no background build on first boot.
         cfg = iSpyConfig()
         self.assertIsNone(cfg.get("vision_model"))
         cam = cfg.camera_config("default_cam")
-        self.assertTrue(cam["vision_model"]["quantized"])
+        self.assertFalse(cam["vision_model"]["quantized"])
+        self.assertFalse(cfg.get("auto_opt", True))
 
 
 # ---------------------------------------------------------------------------

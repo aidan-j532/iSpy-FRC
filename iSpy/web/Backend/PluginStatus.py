@@ -12,10 +12,20 @@ logger = logging.getLogger(__name__)
 
 _PLUGIN_ROOT = Path(_plugins_pkg.__file__).resolve().parent
 
+# Vision pipelines use a different loading strategy than the other plugin
+# types: they are imported directly and registered in a static PIPELINES dict
+# (iSpy/vision/pipelines/__init__.py), not discovered by scanning a directory
+# with load_plugins(). The _TYPE_MAP entry below makes them visible in /addons
+# as read-only built-ins: they are listed from the static registry, never
+# toggled/uploaded/created/deleted from the web UI (config selects one per
+# camera via the 'pipeline' key instead).
+_VISION_PIPELINE_DIR = Path(__file__).resolve().parent.parent.parent / "vision" / "pipelines"
+
 _TYPE_MAP = {
     "tracker": ("trackers", TrackerBase, "TrackerBase", "update"),
     "utility": ("utilities", UtilityBase, "UtilityBase", "update"),
     "frame_processor": ("frame_processors", FrameProcessorBase, "FrameProcessorBase", "process"),
+    "vision_pipeline": ("pipelines", VisionBase, "VisionBase", "run"),
 }
 
 _NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -42,13 +52,8 @@ def _build_vision_pipeline_payloads():
             "name": name,
             "class_name": cls.__name__,
             "config_schema": schema,
-            "show_common_fields": bool(getattr(cls, "uses_user_model", lambda: False)()),
-            "can_optimize": False,
+            "show_common_fields": bool(getattr(cls, "show_common_fields", lambda: True)()),
         }
-        try:
-            payload["can_optimize"] = bool(cls.get_optimization_options(cls))
-        except Exception:
-            pass
         if hasattr(cls, "recommended_format"):
             try:
                 payload["recommended_format"] = cls.recommended_format()
@@ -107,12 +112,27 @@ class PluginStatusModule(WebModule):
 
         available = []
         for ptype, (subdir, base_cls, _, _) in _TYPE_MAP.items():
+            if ptype == "vision_pipeline":
+                # Built-in pipelines are core code, listed from the static
+                # registry instead of a directory scan - shown read-only.
+                from iSpy.vision.pipelines import get_pipeline_classes
+                for name, cls in sorted(get_pipeline_classes().items()):
+                    available.append({
+                        "name": name,
+                        "type": ptype,
+                        "enabled": False,
+                        "builtin": True,
+                        "doc": (cls.__doc__ or "").strip()[:200],
+                        "filename": f"{name}.py",
+                    })
+                continue
             discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
             for name, cls in discovered.items():
                 available.append({
                     "name": name,
                     "type": ptype,
                     "enabled": name in enabled[ptype],
+                    "builtin": False,
                     "doc": (cls.__doc__ or "").strip()[:200],
                     "filename": self._filename_for(subdir, name),
                 })
@@ -141,6 +161,15 @@ class PluginStatusModule(WebModule):
         info = _TYPE_MAP.get(ptype)
         if not info:
             return jsonify(error="Unknown addon type"), 400
+        if ptype == "vision_pipeline":
+            path = (_VISION_PIPELINE_DIR / f"{name}.py").resolve()
+            try:
+                path.relative_to(_VISION_PIPELINE_DIR)
+            except ValueError:
+                return jsonify(error="Invalid filename"), 400
+            if not path.exists():
+                return jsonify(error="Not found"), 404
+            return jsonify(source=path.read_text(errors="ignore"), filename=path.name)
         subdir = info[0]
         path = self._resolve_safe_path(subdir, name)
         if path is None or not path.exists():
@@ -157,6 +186,12 @@ class PluginStatusModule(WebModule):
 
         if not name or plugin_type not in _TYPE_MAP:
             return jsonify(error="Missing/invalid name or type"), 400
+
+        if plugin_type == "vision_pipeline":
+            return jsonify(
+                error="Vision pipelines are selected per camera in Camera "
+                      "Settings - they are not toggled here."
+            ), 400
 
         subdir, base_cls, _, _ = _TYPE_MAP[plugin_type]
         discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
@@ -216,6 +251,11 @@ class PluginStatusModule(WebModule):
 
         if ptype not in _TYPE_MAP:
             return jsonify(error="type must be tracker, utility, or frame_processor"), 400
+        if ptype == "vision_pipeline":
+            return jsonify(
+                error="Vision pipelines are built into iSpy and selected per "
+                      "camera - user-authored pipelines are not supported."
+            ), 400
         if not filename:
             return jsonify(error="filename/name required"), 400
         if not code.strip():
@@ -247,6 +287,11 @@ class PluginStatusModule(WebModule):
 
         if ptype not in _TYPE_MAP:
             return jsonify(error="type must be tracker, utility, or frame_processor"), 400
+        if ptype == "vision_pipeline":
+            return jsonify(
+                error="Vision pipelines are built into iSpy and selected per "
+                      "camera - user-authored pipelines are not supported."
+            ), 400
         if not f or not f.filename.endswith(".py"):
             return jsonify(error="Upload a .py file"), 400
 
@@ -274,6 +319,8 @@ class PluginStatusModule(WebModule):
     def _delete(self, ptype, name):
         if ptype not in _TYPE_MAP:
             return jsonify(error="Unknown addon type"), 400
+        if ptype == "vision_pipeline":
+            return jsonify(error="Cannot delete a built-in add-on."), 403
 
         subdir, base_cls, _, _ = _TYPE_MAP[ptype]
         path = self._resolve_safe_path(subdir, name)

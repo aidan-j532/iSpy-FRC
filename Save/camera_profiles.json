@@ -1,0 +1,68 @@
+{
+  "usb-Microsoft_Microsoft\u00ae_LifeCam_Cinema_TM_-video-index0": {
+    "name": "camera",
+    "source": "/dev/video0",
+    "device_id": "usb-Microsoft_Microsoft\u00ae_LifeCam_Cinema_TM_-video-index0",
+    "pipeline": "line_tracking",
+    "yaw": 0,
+    "pitch": 0,
+    "height": 0,
+    "x": 0,
+    "y": 0,
+    "z": 0,
+    "grayscale": false,
+    "subsystem": "field",
+    "calibration": {
+      "distance": 0,
+      "game_piece_size": 0,
+      "size": 0,
+      "fov": 0
+    },
+    "line_color": "white",
+    "min_contour_area": 100
+  },
+  "usb-Microsoft_Microsoft\u00ae_LifeCam_Cinema_TM_-video-index1": {
+    "name": "camera_2",
+    "source": "/dev/video1",
+    "device_id": "usb-Microsoft_Microsoft\u00ae_LifeCam_Cinema_TM_-video-index1",
+    "pipeline": "depth_anything",
+    "yaw": 0,
+    "pitch": 0,
+    "height": 0,
+    "x": 0,
+    "y": 0,
+    "z": 0,
+    "grayscale": false,
+    "subsystem": "field",
+    "calibration": {
+      "distance": 0,
+      "game_piece_size": 0,
+      "size": 0,
+      "fov": 0
+    },
+    "estimate_depth": true,
+    "model_size": "small"
+  },
+  "usb-Google_Pixel_7a_2C261JEHN13987-video-index0": {
+    "name": "pixel phone",
+    "source": "/dev/video2",
+    "device_id": "usb-Google_Pixel_7a_2C261JEHN13987-video-index0",
+    "pipeline": "depth_anything",
+    "yaw": 0,
+    "pitch": 0,
+    "height": 0,
+    "x": 0,
+    "y": 0,
+    "z": 0,
+    "grayscale": false,
+    "subsystem": "field",
+    "calibration": {
+      "distance": 0,
+      "game_piece_size": 0,
+      "size": 0,
+      "fov": 0
+    },
+    "estimate_depth": true,
+    "model_size": "base"
+  }
+}

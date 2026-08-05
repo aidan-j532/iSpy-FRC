@@ -30,7 +30,9 @@ class VisionPipelineSchemaTests(unittest.TestCase):
 
         april_tag = next((p for p in pipelines if p["name"] == "april_tag"), None)
         self.assertIsNotNone(april_tag)
-        self.assertFalse(april_tag["show_common_fields"])
+        # Camera mount/calibration fields are shown for every pipeline - each
+        # one computes robot coordinates from the camera transform.
+        self.assertTrue(april_tag["show_common_fields"])
 
     def test_additional_pipeline_schemas_are_discovered(self):
         pipelines = _build_vision_pipeline_payloads()

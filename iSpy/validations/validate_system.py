@@ -281,8 +281,10 @@ def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset")
         )
         return True
 
-    # Per-model datasets live at QuantizeDataset/<pt_stem>/. If any exist,
-    # validate those instead of (or in addition to) the flat root, since
+    # Named datasets live at QuantizeDataset/<name>/ - they are reusable
+    # calibration resources selected per camera via the camera's
+    # 'quantization_dataset' setting, never derived from a model filename.
+    # Validate each one instead of (or in addition to) the flat root, since
     # that's what conversions actually use now.
     per_model_dirs = [
         d for d in root.iterdir()
