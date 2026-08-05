@@ -63,12 +63,23 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 "default": "small",
                 "help": "Depth Anything V2 Small is downloaded automatically from Hugging Face.",
             },
-            "optimize": {
+            "auto_opt": {
                 "type": "toggle",
-                "label": "Optimize",
-                "default": True,
+                "label": "Optimize/Convert",
+                "default": False,
                 "optimize_toggle": True,
-                "help": "Export the model once to an int8-quantized ONNX via iSpy's export framework and run it through onnxruntime for fast CPU inference.",
+                "help": "Build the best optimized backend artifact for this device "
+                        "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
+                        "etc.) in the background. Falls back to the top-level "
+                        "config 'auto_opt' when unset.",
+            },
+            "quantized": {
+                "type": "toggle",
+                "label": "Quantize model",
+                "default": False,
+                "quantization": True,
+                "help": "Quantize the optimized artifact (int8). Only meaningful "
+                        "with auto_opt or target_format set.",
             },
             "estimate_depth": {
                 "type": "toggle",

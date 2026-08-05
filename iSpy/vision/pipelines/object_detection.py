@@ -183,7 +183,7 @@ class ObjectDetectionCamera(VisionPipeline):
             },
             "auto_opt": {
                 "type": "toggle",
-                "label": "Optimize",
+                "label": "Optimize/Convert",
                 "default": False,
                 "optimize_toggle": True,
                 "help": "Build the best optimized backend artifact for this device "
