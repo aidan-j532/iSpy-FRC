@@ -4,13 +4,12 @@ import numpy as np
 import logging
 import time
 
-from iSpy.vision.Camera import Camera
-from iSpy.plugins.bases import VisionBase
+from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.Object import Object
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision import triangulation
 
-class AprilTagCamera(Camera, VisionBase):
+class AprilTagCamera(VisionPipeline):
     plugin_name = "april_tag"
 
     @classmethod
@@ -84,6 +83,8 @@ class AprilTagCamera(Camera, VisionBase):
             [ half, -half, 0],
             [-half, -half, 0]
         ], dtype=np.float32)
+
+        self._set_status("ready")
 
     def _focal_length_px_fov(self, img_w: int) -> float:
         if self.fov and self.fov > 0:

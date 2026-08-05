@@ -53,7 +53,7 @@ def ensure_quantized_model(
         return source_pt, False
 
     from iSpy.config.AutoOpt import recommend_format
-    from iSpy.boot import boot
+    from iSpy.vision import optimizer
 
     if target_format in (None, "", "auto"):
         target_format = recommend_format()
@@ -75,7 +75,7 @@ def ensure_quantized_model(
         input_size = [int(input_size), int(input_size)]
 
     try:
-        artifact = boot.convert_model(
+        artifact = optimizer.convert_model(
             source_pt,
             target_format,
             input_size,

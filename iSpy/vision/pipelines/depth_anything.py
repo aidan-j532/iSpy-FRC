@@ -1,11 +1,11 @@
 import logging
+import threading
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from iSpy.vision.Camera import Camera
-from iSpy.plugins.bases import VisionBase
+from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 
@@ -17,7 +17,7 @@ _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1,
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
 
-class DepthAnythingCamera(Camera, VisionBase):
+class DepthAnythingCamera(BackgroundPreparedPipeline):
     plugin_name = "depth_anything"
 
     @classmethod
@@ -25,8 +25,18 @@ class DepthAnythingCamera(Camera, VisionBase):
         return True
 
     def is_ready(self) -> tuple[bool, str]:
+        ready, status = self._readiness()
+        self._set_status(status)
+        return ready, status
+
+    def _readiness(self) -> tuple[bool, str]:
         if not self.estimate_depth:
             return True, "ready"
+        if getattr(self, "_optimizing", False):
+            return False, "optimizing (onnx build)"
+        if self._preparing():
+            status = "optimizing (onnx build)" if self.optimize else "downloading (model weights)"
+            return False, status
         if self.optimize:
             if self._session is not None:
                 return True, "ready"
@@ -92,6 +102,7 @@ class DepthAnythingCamera(Camera, VisionBase):
         self._onnx = False
         self._load_error = None
         self._optimize_fallback = False
+        self._optimizing = False
         self._frame_count = 0
         self._every = 5
         self._last_depth = None
@@ -127,7 +138,59 @@ class DepthAnythingCamera(Camera, VisionBase):
             camera_config.get("grayscale", False),
         )
 
+        self.prepare()
+
+    def _prepare(self):
+        """Background preparation: download/export the depth model without
+        blocking construction of the other cameras."""
         self._load_model()
+
+    def get_optimization_options(self) -> dict:
+        schema = self.config_schema()
+        return {
+            key: schema[key]
+            for key in ("optimize", "model_size")
+            if key in schema
+        }
+
+    def optimize(self, **kwargs) -> str:
+        """Start a forced ONNX rebuild of the depth model as a background
+        job (generic entry point over request_optimize())."""
+        return self.request_optimize()
+
+    def request_optimize(self) -> str:
+        """Force-rebuild the optimized ONNX artifact (downloads the base
+        weights again if needed) without blocking. No-op if a rebuild is
+        already running. Never blocks."""
+        if not self.optimize:
+            return "optimization disabled for this camera (set 'Optimize' in camera settings)"
+        if getattr(self, "_optimizing", False):
+            return "optimizing (onnx build)"
+        if self._preparing():
+            return "initializing (model preparation in progress)"
+        self._optimizing = True
+        self._set_status("optimizing (onnx build)")
+        thread = threading.Thread(
+            target=self._optimize_worker,
+            daemon=True,
+            name="Optimize-DepthAnything",
+        )
+        thread.start()
+        return "optimizing (onnx build)"
+
+    def _optimize_worker(self):
+        try:
+            self._load_optimized(force=True)
+        except Exception as exc:
+            self._load_error = f"optimized ONNX rebuild failed: {exc}"
+            self.logger.exception("Optimized ONNX depth model rebuild failed.")
+        finally:
+            self._optimizing = False
+        if self._session is not None:
+            self._load_error = None
+            self._set_status("ready")
+        else:
+            self._set_status("error: optimized ONNX build failed")
 
     def _load_model(self):
         if not self.estimate_depth:
@@ -152,7 +215,7 @@ class DepthAnythingCamera(Camera, VisionBase):
         self._optimize_fallback = self.optimize and self._session is None
         self._load_pipeline()
 
-    def _load_optimized(self):
+    def _load_optimized(self, force: bool = False):
         import torch.nn as nn
 
         from transformers import AutoModelForDepthEstimation
@@ -180,6 +243,7 @@ class DepthAnythingCamera(Camera, VisionBase):
             _DEPTH_ARTIFACT_STEM,
             input_size=(_DEPTH_INPUT_SIZE, _DEPTH_INPUT_SIZE),
             quantize=True,
+            force=force,
         )
         if not converted or not artifact:
             self._session = None

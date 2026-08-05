@@ -8,8 +8,7 @@ import logging
 import threading
 import queue
 import json
-from iSpy.vision.Camera import Camera
-from iSpy.plugins.bases import VisionBase
+from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.genericYolo import Box, Results, GenericYolo, ModelFileError
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision import triangulation
@@ -20,7 +19,7 @@ from iSpy.vision import triangulation
 _OPTIMIZE_JOBS: dict[str, dict] = {}
 _OPTIMIZE_LOCK = threading.Lock()
 
-class ObjectDetectionCamera(Camera, VisionBase):
+class ObjectDetectionCamera(VisionPipeline):
     plugin_name = "object_detection"
 
     def __init__(
@@ -228,6 +227,10 @@ class ObjectDetectionCamera(Camera, VisionBase):
     def needs_model_backend(cls) -> bool:
         return True
 
+    @classmethod
+    def uses_user_model(cls) -> bool:
+        return True
+
     def _resolve_model_path(self, path: str) -> Path | None:
         if not path:
             return None
@@ -299,6 +302,11 @@ class ObjectDetectionCamera(Camera, VisionBase):
         return bool(path) and not path.lower().endswith(".pt")
 
     def is_ready(self) -> tuple[bool, str]:
+        ready, status = self._readiness()
+        self._set_status(status)
+        return ready, status
+
+    def _readiness(self) -> tuple[bool, str]:
         job = self._current_job()
         in_flight = job is not None and job["thread"].is_alive()
 
@@ -343,6 +351,19 @@ class ObjectDetectionCamera(Camera, VisionBase):
             return True, "using unoptimized .pt fallback"
         return False, "error: no model configured/found"
 
+    def get_optimization_options(self) -> dict:
+        schema = self.config_schema()
+        return {
+            key: schema[key]
+            for key in ("auto_opt", "target_format", "quantized", "quantization_dataset")
+            if key in schema
+        }
+
+    def optimize(self, **kwargs) -> str:
+        """Start a backend build of this camera's source .pt as a background
+        job (generic entry point over request_optimize())."""
+        return self.request_optimize()
+
     def request_optimize(self) -> str:
         """Start a backend build (rknn/onnx/engine/...) of this camera's
         source .pt as a background job (via the existing boot conversion
@@ -376,7 +397,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
     def _optimize_worker(self, pt_path: str):
         try:
-            from iSpy.boot.boot import _convert_model_subprocess
+            from iSpy.vision.optimizer import _convert_model_subprocess
 
             input_size = list(getattr(self, "input_size", (640, 640)))
             vm_cfg = self.config.get("vision_model") or {}

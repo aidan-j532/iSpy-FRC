@@ -1,13 +1,13 @@
 import hashlib
 import logging
+import threading
 from pathlib import Path
 
 import cv2
 import numpy as np
 import requests
 
-from iSpy.vision.Camera import Camera
-from iSpy.plugins.bases import VisionBase
+from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 
@@ -20,7 +20,7 @@ _WORLD_MODEL_URLS = {
 }
 
 
-class YoloWorldCamera(Camera, VisionBase):
+class YoloWorldCamera(BackgroundPreparedPipeline):
     plugin_name = "yolo_world"
 
     @classmethod
@@ -28,6 +28,15 @@ class YoloWorldCamera(Camera, VisionBase):
         return True
 
     def is_ready(self) -> tuple[bool, str]:
+        ready, status = self._readiness()
+        self._set_status(status)
+        return ready, status
+
+    def _readiness(self) -> tuple[bool, str]:
+        if getattr(self, "_optimizing", False):
+            return False, "optimizing (backend build)"
+        if self._preparing():
+            return False, "downloading (model weights)"
         if self.model is not None:
             if self.quantize and not self._quantized:
                 return True, "error: quantized build failed - using full precision fallback"
@@ -126,9 +135,61 @@ class YoloWorldCamera(Camera, VisionBase):
         self._quantized = False
         self._load_error = None
         self._class_names = {i: name for i, name in enumerate(self.classes)}
+        self._optimizing = False
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
 
+        self.prepare()
+
+    def _prepare(self):
+        """Background preparation: download/convert the YOLO World model
+        without blocking construction of the other cameras."""
         self._load_model()
+
+    def get_optimization_options(self) -> dict:
+        schema = self.config_schema()
+        return {
+            key: schema[key]
+            for key in ("quantize", "target_format", "quantization_dataset", "input_size")
+            if key in schema
+        }
+
+    def optimize(self, **kwargs) -> str:
+        """Start a forced backend build of this camera's YOLO World model
+        as a background job (generic entry point over request_optimize())."""
+        return self.request_optimize()
+
+    def request_optimize(self) -> str:
+        """Force-rebuild the quantized backend artifact (re-downloading or
+        re-reparameterizing weights if needed) without blocking. No-op if a
+        rebuild is already running. Never blocks."""
+        if not self.quantize:
+            return "optimization disabled for this camera (set 'Quantize' in camera settings)"
+        if getattr(self, "_optimizing", False):
+            return "optimizing (backend build)"
+        if self._preparing():
+            return "initializing (model preparation in progress)"
+        self._optimizing = True
+        self._set_status("optimizing (backend build)")
+        thread = threading.Thread(
+            target=self._optimize_worker,
+            daemon=True,
+            name="Optimize-YoloWorld",
+        )
+        thread.start()
+        return "optimizing (backend build)"
+
+    def _optimize_worker(self):
+        try:
+            self._load_quantized_model(force=True)
+        except Exception as exc:
+            self._set_load_error(f"quantized rebuild failed: {exc}")
+        finally:
+            self._optimizing = False
+        if self.model is not None and self._quantized:
+            self._load_error = None
+            self._set_status("ready")
+        else:
+            self._set_status("error: quantized build failed - using fallback")
 
     def _ensure_world_model(self, size: str) -> str | None:
         """Download YOLO World weights into the iSpy cache on first use."""
@@ -214,7 +275,7 @@ class YoloWorldCamera(Camera, VisionBase):
 
     def _load_full_precision(self):
         try:
-            from ultralytics import YOLOWorld
+            from ultralytics import YOLO
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
             self._set_load_error(
                 f"ultralytics is required for YOLO World inference: {exc}"
@@ -232,17 +293,31 @@ class YoloWorldCamera(Camera, VisionBase):
             return
 
         try:
-            self.model = YOLOWorld(weights, verbose=False)
-            self.model.set_classes(self.classes)
-            self._model_path = weights
+            # Bake the configured classes into the open-vocabulary weights and
+            # run the result as a plain fixed-vocabulary detector. Running the
+            # world head directly after set_classes() hits an ultralytics
+            # channel mismatch (convs built for the checkpoint's nc=80, head
+            # switched to nc=len(classes) at runtime) -> RuntimeError:
+            # shape '[1, <nc+64>, -1]' is invalid for input of size <n>.
+            fixed = self._reparameterize_world(weights)
+            if not fixed:
+                self._set_load_error("failed to reparameterize YOLO World model")
+                self.model = None
+                return
+
+            self.model = YOLO(fixed, task="detect", verbose=False)
+            self._model_path = fixed
             self._quantized = False
             self._load_error = None
-            self.logger.info("Loaded YOLO World model from %s (classes=%s)", weights, self.classes)
+            self.logger.info(
+                "Loaded YOLO World model from %s (classes=%s)",
+                fixed, self.classes,
+            )
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
             self._set_load_error(f"failed to load YOLO World model: {exc}")
             self.model = None
 
-    def _load_quantized_model(self):
+    def _load_quantized_model(self, force: bool = False):
         try:
             weights = self._resolve_weights()
             if not weights:
@@ -266,6 +341,7 @@ class YoloWorldCamera(Camera, VisionBase):
                 (self._model_input_size, self._model_input_size),
                 quantize=True,
                 dataset_path=self._quantization_dataset,
+                force=force,
             )
             if not converted:
                 self._set_load_error(
@@ -336,7 +412,7 @@ class YoloWorldCamera(Camera, VisionBase):
                 annotated = results.plot(frame.copy())
                 return objects, annotated
 
-            results = self.model(frame, stream=False, conf=0.25, imgsz=640)
+            results = self.model(frame, stream=False, conf=0.25, imgsz=640, verbose=False)
             objects: list[Object] = []
             annotated = frame.copy()
 

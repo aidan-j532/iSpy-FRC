@@ -180,6 +180,14 @@
         <input id="edit-cam-fps-cap" class="form-input" type="number" step="1">
       </div>
     </div>
+    <div class="settings-section" id="edit-optimize-section" style="display:none;">
+      <h3>Optimization</h3>
+      <div class="form-row">
+        <span class="form-label">Optimize</span>
+        <button onclick="optimizeFromEdit()" class="btn-ok" id="edit-optimize-btn">Optimize Model</button>
+      </div>
+      <p style="opacity:0.65;font-size:12px;margin:6px 0 0;">Builds a hardware-optimized model artifact for this camera's pipeline. Runs in the background - the camera stays ready when it can fall back.</p>
+    </div>
     <div class="settings-section">
       <h3>Calibration</h3>
       <div class="form-row">
@@ -473,6 +481,10 @@ function renderEditPipelineFields() {
   container.innerHTML = '';
   const pipeline = pipelineSchemas[document.getElementById('edit-cam-pipeline').value] || {};
   const schema = pipeline.config_schema || {};
+  const optimizeSection = document.getElementById('edit-optimize-section');
+  if (optimizeSection) {
+    optimizeSection.style.display = pipeline.can_optimize ? '' : 'none';
+  }
   setEditCommonFieldVisibility(Boolean(pipeline.show_common_fields));
   Object.entries(schema).forEach(([fieldName, fieldDef]) => {
     const row = document.createElement('div');
@@ -662,9 +674,10 @@ function escapeHtml(s) {
   }[c]));
 }
 
-function statusDotClass(ready, status) {
-  if (ready) return 'status-ok';
-  if (typeof status === 'string' && status.startsWith('optimizing')) return 'status-warn';
+function statusDotClass(cam) {
+  if (cam.ready) return 'status-ok';
+  const state = cam.state;
+  if (state === 'optimizing' || state === 'downloading' || state === 'initializing') return 'status-warn';
   return 'status-bad';
 }
 
@@ -681,15 +694,13 @@ function updateCameraFooter(card, cam) {
     card.appendChild(footer);
   }
   footer.innerHTML = `
-    <span class="status-dot ${statusDotClass(cam.ready, status)}"></span>
+    <span class="status-dot ${statusDotClass(cam)}"></span>
     <span class="cam-status">${escapeHtml(status)}</span>
-    <button class="btn-sm btn-ok btn-optimize" onclick="optimizeCamera('${escapeHtml(cam.name)}')" style="margin-left:auto;">Optimize</button>
   `;
-  footer.querySelector('.btn-optimize').disabled = status.startsWith('optimizing');
 }
 
 async function optimizeCamera(name) {
-  const btn = document.querySelector(`[data-camera="${name}"] .btn-optimize`);
+  const btn = document.getElementById('edit-optimize-btn');
   if (btn) btn.disabled = true;
   try {
     const r = await fetch(`/api/cameras/${encodeURIComponent(name)}/optimize`, { method: 'POST' });
@@ -702,7 +713,13 @@ async function optimizeCamera(name) {
   } catch (e) {
     showToast('Network error starting optimization', 'error');
   }
+  if (btn) btn.disabled = false;
   refreshCameras();
+}
+
+function optimizeFromEdit() {
+  if (!editCamData) return;
+  optimizeCamera(editCamData.name);
 }
 
 function buildCameraCard(name, isStreaming, ageText, cam) {

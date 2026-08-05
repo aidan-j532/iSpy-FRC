@@ -1,7 +1,7 @@
 import time
 import math
 
-from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
+from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.Object import Object
 from iSpy.vision import triangulation
 import cv2
@@ -11,7 +11,7 @@ import threading
 
 
 class MultipleCameraHandler:
-    def __init__(self, cameras: list[ObjectDetectionCamera], config=None):
+    def __init__(self, cameras: list[VisionPipeline], config=None):
         self.cameras = cameras
         self.logger = logging.getLogger(__name__)
         self._stopped = False
@@ -28,7 +28,7 @@ class MultipleCameraHandler:
                 target=self._camera_loop, args=(i, cam), daemon=True
             ).start()
 
-    def _camera_loop(self, i: int, camera: ObjectDetectionCamera):
+    def _camera_loop(self, i: int, camera: VisionPipeline):
         while not self._stopped:
             try:
                 objects, frame = camera.run()

@@ -3,13 +3,12 @@ import cv2
 import numpy as np
 import math
 
-from iSpy.vision.Camera import Camera
-from iSpy.plugins.bases import VisionBase
+from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 from iSpy.vision import triangulation
 
-class LineTrackingCamera(Camera, VisionBase):
+class LineTrackingCamera(VisionPipeline):
     plugin_name = "line_tracking"
 
     @classmethod
@@ -61,6 +60,8 @@ class LineTrackingCamera(Camera, VisionBase):
 
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
         self._last_objects: list[Object] = []
+
+        self._set_status("ready")
 
     def _get_hsv_bounds(self):
         """Returns (lower_bound, upper_bound) for HSV masking based on color selection."""

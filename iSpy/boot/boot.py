@@ -1,26 +1,57 @@
 import sys
 import os
-import contextlib
-import warnings
-os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
-
+import json
+import shutil
+import subprocess
 import logging
+import argparse
+import time as _time
 from pathlib import Path
-from functools import lru_cache
-import io
-from iSpy.dataset.dataset import get_active_dataset_dir
-import iSpy.config.iSpyConfig as iSpyConfig
 
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+os.environ["YOLO_VERBOSE"] = "False"
+
+from iSpy.config.iSpyConfig import iSpyConfig
+from iSpy.config.AutoOpt import has_jetson
+from iSpy.validations.validate_system import validate_system
+from iSpy.dataset.dataset import get_active_dataset_dir
+from iSpy.vision.metadata import (
+    metadata_path_for,
+    metadata_from_pt,
+    write_metadata,
+    read_metadata,
+)
+from iSpy.boot.opencv_fix import ensure_csi_capable_opencv
+from iSpy.vision.pipelines import get_pipeline_classes
+
+logger = logging.getLogger(__name__)
+logging.getLogger().setLevel(logging.INFO)
+
+_BOOT_DIR = Path(__file__).resolve().parent
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+_PROJECT_ROOT = Path.cwd().resolve()
+_ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
+
+_READINESS_POLL_S = 2.0
+_READINESS_WAIT_TIMEOUT_S = int(os.environ.get("ISPY_READINESS_TIMEOUT_S", "1200"))  # default 20 min
+
+# Bound to the real stdout/stderr before anything can swap sys.stdout, so
+# silencing third-party libs later can't take iSpy's own logging down with it.
 _REAL_STDOUT_FD = os.dup(1)
 _REAL_STDERR_FD = os.dup(2)
 _REAL_STDOUT = os.fdopen(_REAL_STDOUT_FD, "w", buffering=1, closefd=False)
 _REAL_STDERR = os.fdopen(_REAL_STDERR_FD, "w", buffering=1, closefd=False)
 
-class _NullWriter(io.TextIOBase):
-    def write(self, s):
-        return len(s)
-    def flush(self):
-        pass
+
+def _remove_path_for_cleanup(path: Path) -> None:
+    def onerror(func, p, exc_info):
+        try:
+            os.chmod(p, 0o777)
+            func(p)
+        except OSError:
+            pass
+    shutil.rmtree(str(path), onerror=onerror)
+
 
 def _bootstrap_default_camera(config: iSpyConfig):
     cams = config.get("camera_configs", {})
@@ -44,6 +75,7 @@ def _bootstrap_default_camera(config: iSpyConfig):
         "First boot: auto-configured camera '%s' -> %s (pipeline=%s)",
         name, dev["path"], cam_cfg.get("pipeline", "?"),
     )
+
 
 def _close_logging_handlers() -> None:
     root = logging.getLogger()
@@ -92,610 +124,6 @@ def _configure_quiet_logging() -> None:
         if not name.startswith("iSpy"):
             logging.getLogger(name).setLevel(logging.WARNING)
 
-import threading
-import time as _time
-
-@contextlib.contextmanager
-def _progress_spinner(label: str):
-    stop = threading.Event()
-    def _spin():
-        frames = "|/-\\"
-        i = 0
-        start = _time.time()
-        while not stop.is_set():
-            elapsed = _time.time() - start
-            print(f"\r  {label} {frames[i % 4]} ({elapsed:.0f}s)", end="", file=_REAL_STDOUT, flush=True)
-            i += 1
-            stop.wait(0.2)
-        print(f"\r  {label} done ({_time.time() - start:.0f}s)" + " " * 10, file=_REAL_STDOUT)
-    t = threading.Thread(target=_spin, daemon=True)
-    t.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        t.join()
-
-@contextlib.contextmanager
-def _silence_third_party():
-    devnull = "nul" if os.name == "nt" else "/dev/null"
-    fd = os.open(devnull, os.O_WRONLY)
-    old_out_fd = os.dup(1)
-    old_err_fd = os.dup(2)
-    os.dup2(fd, 1)
-    os.dup2(fd, 2)
-    os.close(fd)
-
-    old_out, old_err = sys.stdout, sys.stderr
-    sys.stdout = _NullWriter()
-    sys.stderr = _NullWriter()
-
-    _muted_loggers = ("ultralytics", "nncf")
-    _saved_levels, _saved_disabled = {}, {}
-    for name in _muted_loggers:
-        lg = logging.getLogger(name)
-        _saved_levels[name] = lg.level
-        _saved_disabled[name] = lg.disabled
-        lg.setLevel(logging.CRITICAL + 1)
-        lg.disabled = True
-
-    try:
-        yield
-    finally:
-        sys.stdout, sys.stderr = old_out, old_err
-        os.dup2(old_out_fd, 1)
-        os.dup2(old_err_fd, 2)
-        os.close(old_out_fd)
-        os.close(old_err_fd)
-        for name in _muted_loggers:
-            lg = logging.getLogger(name)
-            lg.setLevel(_saved_levels[name])
-            lg.disabled = _saved_disabled[name]
-            
-@contextlib.contextmanager
-def _quiet_ispy_logging():
-    """Suppress iSpy's own INFO-level logging for the duration of a
-    comparison run, so only the clean section()/subline() print output
-    shows - no interleaved '[iSpy] INFO:...' lines from GenericYolo,
-    ModelInspector, etc."""
-    ispy_logger = logging.getLogger("iSpy")
-    old_level = ispy_logger.level
-    ispy_logger.setLevel(logging.WARNING)
-    try:
-        yield
-    finally:
-        ispy_logger.setLevel(old_level)
-
-logger = logging.getLogger(__name__)
-os.environ["YOLO_VERBOSE"] = "False"
-import json
-import shutil
-import subprocess
-import platform
-import importlib.util
-import importlib.metadata
-from iSpy.vision.metadata import (
-    get_calibration_keywords,
-    metadata_path_for,
-    metadata_from_pt,
-    write_metadata,
-    read_metadata,
-    derive_format_metadata,
-)
-from iSpy.config.AutoOpt import recommend_format, has_jetson
-from iSpy.validations.validate_system import validate_system
-from iSpy.config.iSpyConfig import iSpyConfig
-from iSpy.dataset.dataset import calib_count_for_format, prepare_quantization_dataset
-import argparse
-from iSpy.boot.opencv_fix import ensure_csi_capable_opencv
-from iSpy.validations.model_validator import enforce_model_organization
-from iSpy.vision.pipelines import get_pipeline_classes
-
-logging.getLogger().setLevel(logging.INFO)
-
-_BOOT_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = Path.cwd().resolve()
-_PACKAGE_ROOT = Path(__file__).resolve().parent
-_ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
-
-FORMAT_MATCHERS = {
-    "onnx": lambda p: p.suffix == ".onnx",
-    "rknn": lambda p: p.suffix == ".rknn",
-    "tflite": lambda p: p.suffix == ".tflite",
-    "coreml": lambda p: p.suffix == ".mlpackage",
-    "openvino": lambda p: p.is_dir() and p.name.endswith("_openvino_model"),
-    "engine": lambda p: p.suffix == ".engine",
-    "tpu": lambda p: p.suffix == ".pt",
-}
-
-_BUNDLED_DEFAULT_MODELS = {"_default_pose.pt", "_default_box.pt", "_default_v26_detect_for_fuel.pt"}
-
-_JETSON_SYSTEM_MANAGED = {"tensorrt", "onnxruntime"}
-
-_ARCH = platform.machine().lower()
-_IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
-_PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
-
-keywords = ["frc game piece", "frc 2025 REBUILT", "frc 2025 fuel"]
-
-_RKNN_QUANTIZE = True
-_RKNN_KNOWN_CHIPS = (
-    "rk3588", "rk3576", "rk3399", "rk3568", "rk3566",
-    "rk3562", "rk3528", "rv1103", "rv1106",
-)
-
-_BOOT_MANAGED_VISION_FIELDS = {
-    "file_path", "task", "num_classes", "input_size",
-    "output", "input", "frame_batches", "device",
-}
-
-# Fields that must come from metadata, never stored in config.
-_METADATA_ONLY_FIELDS = {
-    "task", "num_classes", "input_size", "output", "input", "frame_batches",
-}
-
-_MANUAL_POSTPROCESS_FORMATS = {"onnx", "tflite"}
-
-
-def _model_supports_end2end(model: "ultralytics.YOLO") -> bool:
-    # Set by Ultralytics on every DetectionModel/SegmentationModel/PoseModel/
-    # OBBModel: self.end2end = getattr(self.model[-1], "end2end", False).
-    # Reflects the actual trained head - not a version guess.
-    return bool(getattr(model.model, "end2end", False))
-
-
-def _strip_boot_managed_fields(cfg: dict) -> dict:
-    cfg = json.loads(json.dumps(cfg))  # deep copy, don't mutate caller's dict
-    vm = cfg.get("vision_model")
-    if isinstance(vm, dict):
-        for key in _BOOT_MANAGED_VISION_FIELDS:
-            vm.pop(key, None)
-    for cam in cfg.get("camera_configs", {}).values():
-        if not isinstance(cam, dict):
-            continue
-        cam_vm = cam.get("vision_model")
-        if isinstance(cam_vm, dict):
-            for key in _BOOT_MANAGED_VISION_FIELDS:
-                cam_vm.pop(key, None)
-    return cfg
-
-
-def _default_config_dict() -> dict:
-    root = logging.getLogger()
-    saved_handlers = root.handlers[:]
-    saved_level = root.level
-    try:
-        return iSpyConfig().default_config
-    finally:
-        root.handlers = saved_handlers
-        root.setLevel(saved_level)
-
-def _find_lite_wheel_dir() -> Path:
-    local = _PACKAGE_ROOT.parent / "rknn_wheels"
-    if local.exists():
-        return local
-    try:
-        spec = importlib.util.find_spec("iSpy")
-        if spec and spec.origin:
-            pkg = Path(spec.origin).parent / "rknn_wheels"
-            if pkg.exists():
-                return pkg
-    except Exception:
-        pass
-    return local
-
-
-_RKNN_LITE_DIR = _find_lite_wheel_dir()
-
-_RKNN_FULL_BASE = os.environ.get(
-    "iSpy_RKNN_WHEELS_URL",
-    "https://github.com/aidan-j532/iSpy-FRC/releases/download/v1.0.2",
-).rstrip("/")
-
-_RKNN_FULL_WHEELS: dict[tuple[str, str], str] = {
-    (
-        "aarch64",
-        "cp310",
-    ): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    (
-        "aarch64",
-        "cp311",
-    ): "rknn_toolkit2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    (
-        "aarch64",
-        "cp312",
-    ): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    (
-        "x86_64",
-        "cp310",
-    ): "rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    (
-        "x86_64",
-        "cp311",
-    ): "rknn_toolkit2-2.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    (
-        "x86_64",
-        "cp312",
-    ): "rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-}
-
-_RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
-    (
-        "aarch64",
-        "cp310",
-    ): "rknn_toolkit_lite2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    (
-        "aarch64",
-        "cp311",
-    ): "rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-    (
-        "aarch64",
-        "cp312",
-    ): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
-}
-
-
-@lru_cache()
-def _detect_rknn_target_platform() -> str:
-    for path in (
-        "/proc/device-tree/compatible",
-        "/proc/device-tree/model",
-        "/sys/firmware/devicetree/base/model",
-    ):
-        try:
-            content = open(path, "rb").read().decode(errors="ignore").lower()
-            for chip in _RKNN_KNOWN_CHIPS:
-                if chip in content:
-                    logger.info("Detected RKNN target_platform: %s (from %s)", chip, path)
-                    return chip
-        except Exception:
-            continue
-
-    try:
-        cpuinfo = open("/proc/cpuinfo").read().lower()
-        for chip in _RKNN_KNOWN_CHIPS:
-            if chip in cpuinfo:
-                logger.info("Detected RKNN target_platform: %s (from /proc/cpuinfo)", chip)
-                return chip
-    except Exception:
-        pass
-
-    logger.warning(
-        "Could not detect Rockchip SoC from device-tree or /proc/cpuinfo - "
-        "defaulting RKNN target_platform to 'rk3588'. If converting for a "
-        "different board (rk3566, rk3576, etc.), run boot.py directly on "
-        "that board so detection can find it - conversion on non-Rockchip "
-        "hardware (e.g. your dev laptop) can't determine the real target "
-        "and will silently default."
-    )
-    return "rk3588"
-
-
-_CALIB_DOWNSCALE_SIZE = 320
-
-
-def _downscale_calib_images(dataset_path: Path, calib_size: int = _CALIB_DOWNSCALE_SIZE) -> Path:
-    import tempfile
-    import cv2
-
-    orig_txt = dataset_path / "dataset.txt"
-    if not orig_txt.exists():
-        return dataset_path
-
-    lines = [l.strip() for l in orig_txt.read_text().splitlines() if l.strip()]
-    if not lines:
-        return dataset_path
-
-    tmp_dir = Path(tempfile.mkdtemp(prefix="ispy_rknn_calib_"))
-    resized_dir = tmp_dir / "images"
-    resized_dir.mkdir(parents=True, exist_ok=True)
-
-    resized_lines = []
-    resized_count = 0
-    for line in lines:
-        img_path = dataset_path / line if not Path(line).is_absolute() else Path(line)
-        if not img_path.exists():
-            continue
-        try:
-            img = cv2.imread(str(img_path))
-            if img is None:
-                continue
-            h, w = img.shape[:2]
-            if h == calib_size and w == calib_size:
-                dest = resized_dir / img_path.name
-                shutil.copy2(str(img_path), str(dest))
-            else:
-                resized = cv2.resize(img, (calib_size, calib_size), interpolation=cv2.INTER_LINEAR)
-                dest = resized_dir / f"{img_path.stem}_{calib_size}.jpg"
-                cv2.imwrite(str(dest), resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            resized_lines.append(f"images/{dest.name}")
-            resized_count += 1
-        except Exception:
-            continue
-
-    if resized_count == 0:
-        shutil.rmtree(str(tmp_dir), ignore_errors=True)
-        return dataset_path
-
-    (tmp_dir / "dataset.txt").write_text("\n".join(resized_lines) + "\n")
-    logger.info(
-        "Downscaled %d calibration images from original to %dx%d (saves ~4x RAM during RKNN build)",
-        resized_count, calib_size, calib_size,
-    )
-    return tmp_dir
-
-
-def _rknn_wheel_targets() -> list[tuple[str, str]]:
-    key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
-    targets: list[tuple[str, str]] = []
-
-    full_fn = _RKNN_FULL_WHEELS.get(key)
-    if full_fn:
-        targets.append(("rknn", f"{_RKNN_FULL_BASE}/{full_fn}"))
-
-    lite_fn = _RKNN_LITE_FILENAMES.get(key)
-    if lite_fn:
-        local_lite = _RKNN_LITE_DIR / lite_fn
-        if local_lite.exists():
-            targets.append(("rknnlite", str(local_lite)))
-        else:
-            logger.warning("Lite wheel not found in package: %s", local_lite)
-
-    if not targets:
-        supported = sorted(f"{a} {v}" for (a, v) in _RKNN_FULL_WHEELS if a == key[0])
-        logger.error(
-            "No RKNN wheel for %s (Python %s). Supported: %s",
-            key[0],
-            _PY_TAG,
-            ", ".join(supported),
-        )
-    return targets
-
-
-def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
-    from iSpy.config.AutoOpt import has_nvidia, has_amd_gpu
-
-    if has_nvidia():
-        onnx_dep = ("onnxruntime", "onnxruntime-gpu")
-    elif platform.system() == "Windows":
-        onnx_dep = ("onnxruntime", "onnxruntime-directml")  # covers AMD/Intel/Nvidia on Windows
-    else:
-        onnx_dep = ("onnxruntime", "onnxruntime")
-        if has_amd_gpu():
-            logger.warning(
-                "AMD GPU on Linux: the standard 'onnxruntime' wheel is CPU-only. "
-                "ROCm onnxruntime builds aren't reliably on PyPI for every ROCm "
-                "version - install one manually matching your ROCm version."
-            )
-
-    deps: dict[str, list[tuple[str, str]]] = {
-        "onnx": [onnx_dep],
-        "engine": [("tensorrt", "tensorrt==10.16.1.11")],
-        "openvino": [("openvino", "openvino")],
-        "coreml": [("coremltools", "coremltools")],
-        "tflite": [("tflite_runtime", "tflite-runtime")],
-        "tpu": [("torch_xla", "torch_xla[tpu]", ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"])],
-    }
-    rknn_targets = _rknn_wheel_targets()
-    if rknn_targets:
-        deps["rknn"] = rknn_targets + [("onnx", "onnx<1.17"), ("google.protobuf", "protobuf<4.0")]
-    return deps
-
-
-BACKEND_DEPENDENCIES = _backend_dependencies()
-
-
-def _in_virtualenv() -> bool:
-    return (
-        hasattr(sys, "real_prefix")
-        or (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
-        or os.environ.get("VIRTUAL_ENV") is not None
-        or os.environ.get("CONDA_DEFAULT_ENV") is not None
-    )
-
-
-def _is_installed(module_name: str) -> bool:
-    return importlib.util.find_spec(module_name) is not None
-
-
-def _get_installed_version(package_name: str) -> str | None:
-    try:
-        return importlib.metadata.version(package_name)
-    except Exception:
-        return None
-
-
-def _check_version_constraint(package_name: str, constraint: str) -> bool:
-    if not constraint:
-        return True
-    installed = _get_installed_version(package_name)
-    if installed is None:
-        return False
-    try:
-        from packaging.version import Version
-
-        inst = Version(installed)
-        bound = constraint.lstrip("<>=!~")
-        if constraint.startswith("<="):
-            return inst <= Version(bound)
-        if constraint.startswith(">="):
-            return inst >= Version(bound)
-        if constraint.startswith("!="):
-            return inst != Version(bound)
-        if constraint.startswith("=="):
-            return inst == Version(bound)
-        if constraint.startswith("<"):
-            return inst < Version(bound)
-        if constraint.startswith(">"):
-            return inst > Version(bound)
-        if constraint.startswith("~="):
-            return inst.release[: len(Version(bound).release)] == Version(
-                bound
-            ).release and inst >= Version(bound)
-    except Exception:
-        pass
-    return True
-
-def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None:
-    converted_path = Path(converted_result)
-    if converted_path == Path(pt_file) or converted_path.suffix.lower() == ".pt":
-        logger.info(
-            "Skipping optimized-model comparison for %s - conversion fell back "
-            "to the source .pt (no optimized artifact was produced).",
-            Path(pt_file).name,
-        )
-        return
-
-    valid_dir = _dataset_dir_for(Path(pt_file)) / "valid"
-    if not valid_dir.exists():
-        logger.info(
-            "Skipping optimized-model comparison for %s - no %s found.",
-            converted_path.name,
-            valid_dir,
-        )
-        return
-
-    logger.info("Running optimized-model comparison for %s...", converted_path.name)
-
-    try:
-        from iSpy.validations.tests.compare_models import compare_models  # lazy: heavy import chain
-
-        results = compare_models(
-            base_path=str(pt_file),
-            optimized_path=str(converted_path),
-            images_dir=str(valid_dir),
-            quiet=False,
-        )
-    except (Exception, SystemExit) as e:
-        logger.warning("Optimized-model comparison failed for %s: %s", converted_path.name, e)
-        return
-
-    if results is None:
-        return  # compare_models already logged why it skipped
-
-    if results.overall_verdict == "NOT READY":
-        logger.warning(
-            "Optimized model %s scored NOT READY vs its base .pt: %s. "
-            "Conversion is still being used - review Outputs/optimized_model_report.json.",
-            converted_path.name,
-            "; ".join(results.verdict_reasons),
-        )
-    elif results.overall_verdict == "REVIEW RECOMMENDED":
-        logger.info(
-            "Optimized model %s: REVIEW RECOMMENDED (%s). See Outputs/optimized_model_report.json.",
-            converted_path.name,
-            "; ".join(results.verdict_reasons),
-        )
-    else:
-        logger.info("Optimized model %s: READY.", converted_path.name)
-
-def _pip_install(
-    install_target: str,
-    force_reinstall: bool = False,
-    extra_args: list[str] | None = None,
-) -> bool:
-    cmd = [sys.executable, "-m", "pip", "install"]
-    if install_target.startswith("http") or install_target.endswith(".whl"):
-        cmd.append("--no-deps")
-    if force_reinstall:
-        cmd.append("--force-reinstall")
-    if extra_args:
-        cmd.extend(extra_args)
-    cmd.append(install_target)
-    if not _in_virtualenv():
-        cmd.append("--break-system-packages")
-    try:
-        logger.info("Installing: %s", install_target)
-        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        return True
-    except subprocess.CalledProcessError:
-        logger.warning("pip install failed for: %s", install_target)
-        return False
-
-
-def _parse_pip_target(pip_target: str) -> tuple[str, str]:
-    parts = pip_target.split("[")
-    base = parts[0]
-    for sep in ("<=", ">=", "!=", "==", "<", ">", "~="):
-        if sep in base:
-            name, ver = base.split(sep, 1)
-            return name, sep + ver
-    return base, ""
-
-
-def install_special_dependencies(auto_install: bool = False):
-    backend = recommend_format(ignore_dependencies=True)
-    logger.info("Recommended backend: %s", backend)
-
-    deps = BACKEND_DEPENDENCIES.get(backend)
-    if not deps:
-        logger.info("No extra dependencies required for %s", backend)
-        return
-
-    on_jetson = has_jetson()
-    missing = []
-    for entry in deps:
-        mod, target = entry[0], entry[1]
-        extra_args = list(entry[2]) if len(entry) > 2 else None
-        pkg_name, constraint = _parse_pip_target(target)
-
-        if on_jetson and mod in _JETSON_SYSTEM_MANAGED:
-            if _is_installed(mod):
-                logger.debug("Dependency %s satisfied (JetPack system package).", mod)
-            else:
-                logger.error(
-                    "%s is not importable. On Jetson this must come from JetPack "
-                    "(apt), not pip — pip has no matching GPU-enabled build for "
-                    "this board. Verify it with the L4T-provided python3, and "
-                    "make sure your venv was created with --system-site-packages "
-                    "so it can see it.",
-                    mod,
-                )
-            continue
-
-        if not _is_installed(mod):
-            missing.append((mod, target, False, extra_args))
-        elif constraint and not _check_version_constraint(pkg_name, constraint):
-            logger.warning(
-                "Installed %s (%s) does not satisfy %s. Will reinstall.",
-                pkg_name, _get_installed_version(pkg_name), target,
-            )
-            missing.append((mod, target, True, extra_args))
-        else:
-            logger.debug("Dependency %s satisfied: %s", mod, target)
-
-    if not missing:
-        logger.info("All pip-installable dependencies already satisfied for %s", backend)
-        return
-
-    logger.warning("Missing dependencies for %s: %s", backend, [t for _, t, _, _ in missing])
-
-    if not auto_install:
-        logger.info("auto_install=False - skipping installation")
-        return
-
-    if backend == "rknn":
-        arch = platform.machine()
-        if not (_IS_AARCH64 or "x86_64" in arch or "amd64" in arch):
-            logger.error(
-                "RKNN wheels are only available for aarch64 and x86_64. "
-                "Your architecture (%s) is not supported.", arch,
-            )
-            return
-
-    if backend in {"rknn", "engine"}:
-        logger.warning(
-            "%s is a hardware/vendor backend - installation may require "
-            "system-level setup and can take a few minutes.", backend,
-        )
-
-    for mod, target, force, extra_args in missing:
-        if _pip_install(target, force_reinstall=force, extra_args=extra_args):
-            logger.info("Installed %s successfully.", target)
-        else:
-            logger.error("Failed to install %s. You may need to install it manually.", target)
-
-    logger.info("Dependency installation complete for %s", backend)
 
 def search_for_config():
     config_dir = _PROJECT_ROOT / "Config"
@@ -710,971 +138,22 @@ def search_for_config():
     return str(chosen)
 
 
-def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, device=0):
-    import ultralytics  # lazy: boot imports cleanly without ultralytics installed
-
-    model = ultralytics.YOLO(model_file)
-    has_e2e = _model_supports_end2end(model)
-    task = getattr(model, "task", None) or "detect"
-    
-    native_kwargs = {
-        "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=17, dynamic=False),
-        "tflite": dict(format="tflite", imgsz=input_size, int8=True),
-        "openvino": dict(format="openvino", imgsz=input_size, half=True),
-        "coreml": dict(format="coreml", imgsz=input_size, nms=True),
-        "engine": dict(format="engine", imgsz=input_size, half=True, device=device),
-    }
-
-    kwargs = native_kwargs.get(target_format)
-    if not kwargs:
-        raise ValueError(f"Unsupported native format: {target_format}")
-
-    if has_e2e and target_format in _MANUAL_POSTPROCESS_FORMATS:
-        kwargs["end2end"] = False
-        logger.info(
-            "%s has an end-to-end (dual-head) architecture - forcing "
-            "end2end=False for %s export so the raw-tensor parser gets "
-            "the traditional (1, nc+4, N) output instead of (1, 300, 6).",
-            Path(model_file).name, target_format,
-        )
-    elif has_e2e:
-        logger.info(
-            "%s has an end-to-end architecture; leaving the default head for "
-            "%s export (Ultralytics decodes it natively at runtime - no "
-            "speed reason to disable it here).",
-            Path(model_file).name, target_format,
-        )
-
-    if data_yaml and target_format in ("tflite", "openvino", "engine"):
-        effective_data_yaml = data_yaml
-        if task == "pose":
-            try:
-                kpt_shape = model.model.model[-1].kpt_shape
-            except Exception:
-                kpt_shape = [17, 3]
-            pose_yaml = Path(data_yaml).parent / "data_pose.yaml"
-            try:
-                base = Path(data_yaml).read_text()
-            except OSError:
-                base = "train: images\nval: valid/images\nnc: 1\nnames: ['object']\n"
-            if not base.strip():
-                base = "train: images\nval: valid/images\nnc: 1\nnames: ['object']\n"
-            pose_yaml.write_text(base.rstrip() + f"\nkpt_shape: {list(kpt_shape)}\n")
-            effective_data_yaml = str(pose_yaml)
-            logger.info("Pose task detected - using kpt_shape-aware data.yaml: %s", pose_yaml)
-
-        kwargs = dict(format=target_format, imgsz=input_size, int8=True, data=effective_data_yaml)
-        if has_e2e and target_format in _MANUAL_POSTPROCESS_FORMATS:
-            kwargs["end2end"] = False
-        if target_format == "engine":
-            kwargs["device"] = device
-            kwargs["half"] = True
-
-        logger.info(
-            "Dataset-aware %s quantization enabled (data=%s)", target_format, effective_data_yaml
-        )
-
-    logger.info("Exporting %s -> %s with kwargs: %s", model_file, target_format, kwargs)
-    with _silence_third_party():
-        return model.export(**kwargs)
-
-def _find_box_tensor(graph, value_info, start_names, max_depth=4):
-    node_by_output = {out: n for n in graph.node for out in n.output}
-
-    def has_dim(name, target):
-        vi = value_info.get(name)
-        if vi is None:
-            return False
-        dims = vi.type.tensor_type.shape.dim
-        return any(int(d.dim_value) == target for d in dims if d.dim_value > 0)
-
-    frontier = list(start_names)
-    depth = 0
-    while frontier and depth < max_depth:
-        next_frontier = []
-        for name in frontier:
-            if has_dim(name, 4):
-                return name
-            producer = node_by_output.get(name)
-            if producer is not None and producer.op_type in ("Concat", "Reshape", "Slice"):
-                next_frontier.extend(producer.input)
-        frontier = next_frontier
-        depth += 1
-    return None
-
-# def decode_multibranch(branches: dict[str, list[np.ndarray]], reg_max, strides, num_classes, kpt_shape=None):
-#     """branches = {'box': [P3,P4,P5], 'cls': [P3,P4,P5], 'kpt': [P3,P4,P5] or None}
-#     Each Pn is the raw per-scale conv output, already dequantized to float."""
-#     all_boxes, all_scores, all_kpts = [], [], []
-#     for i, stride in enumerate(strides):
-#         box_raw = branches["box"][i]          # (1, 4*reg_max, H, W)
-#         cls_raw = branches["cls"][i]           # (1, nc, H, W)
-#         H, W = box_raw.shape[-2:]
-
-#         # DFL integral decode (done on CPU, exactly what RKOPT models expect)
-#         box = box_raw.reshape(4, reg_max, H * W).transpose(2, 0, 1)   # (HW, 4, reg_max)
-#         box = _softmax(box, axis=-1) @ np.arange(reg_max, dtype=np.float32)  # (HW, 4)
-
-#         gy, gx = np.mgrid[0:H, 0:W]
-#         anchor = np.stack([gx.ravel(), gy.ravel()], axis=1) + 0.5      # (HW, 2)
-#         x1y1 = anchor - box[:, :2]
-#         x2y2 = anchor + box[:, 2:]
-#         all_boxes.append(np.concatenate([x1y1, x2y2], axis=1) * stride)
-
-#         scores = 1.0 / (1.0 + np.exp(-cls_raw.reshape(num_classes, -1).T))
-#         all_scores.append(scores)
-
-#         if kpt_shape and branches.get("kpt"):
-#             k = branches["kpt"][i].reshape(*kpt_shape, H * W).transpose(2, 0, 1)
-#             kx = (k[..., 0] * 2.0 + (anchor[:, None, 0] - 0.5)) * stride
-#             ky = (k[..., 1] * 2.0 + (anchor[:, None, 1] - 0.5)) * stride
-#             kconf = 1.0 / (1.0 + np.exp(-k[..., 2]))
-#             all_kpts.append(np.stack([kx, ky, kconf], axis=-1))
-
-#     boxes = np.concatenate(all_boxes, axis=0)
-#     scores = np.concatenate(all_scores, axis=0)
-#     kpts = np.concatenate(all_kpts, axis=0) if all_kpts else None
-#     return boxes, scores, kpts
-
-def _dataset_dir_for(pt_path: Path) -> Path:
-    return _PROJECT_ROOT / "QuantizeDataset" / pt_path.stem
-
-def _export_rknn_metadata(
-    pt_file: str,
-    rknn_output,
-    input_size=None,
-    *,
-    output_format=None,
-    output_layout=None,
-    box_format=None,
-    quantize=None,
-    box_coord_scale=None,
-    kpt_coord_scale=None,
-) -> None:
-    try:
-        pt_path = Path(pt_file)
-        rknn_path = Path(rknn_output)
-        pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
-        meta = derive_format_metadata(pt_meta, "rknn")
-
-        if output_format is not None:
-            meta["output_format"] = output_format
-        if output_layout is not None:
-            meta["output_layout"] = output_layout
-        if box_format is not None:
-            meta["box_format"] = box_format
-        if quantize is not None:
-            meta["quantization"] = "int8" if quantize else "none"
-            meta["quant_scale"] = 255.0 if quantize else 1.0
-            meta["input_dtype"] = "uint8" if quantize else "float32"
-            meta["quantize"] = quantize
-        if box_coord_scale is not None:
-            meta["box_coord_scale"] = float(box_coord_scale)
-        if kpt_coord_scale is not None:
-            meta["kpt_coord_scale"] = float(kpt_coord_scale)
-        if input_size is not None:
-            if hasattr(input_size, "__iter__"):
-                meta["input_size"] = [int(x) for x in input_size]
-            else:
-                meta["input_size"] = [int(input_size), int(input_size)]
-
-        meta_path = metadata_path_for(rknn_path)
-        write_metadata(meta_path, meta)
-        logger.info("Exported RKNN metadata: %s", meta_path)
-    except Exception as e:
-        logger.warning("Failed to export RKNN metadata: %s", e)
- 
-def _yolo_models_dir() -> Path:
-    return _PROJECT_ROOT / "YoloModels"
- 
- 
-def _format_output_dir(target_format: str) -> Path:
-    if target_format == "pytorch":
-        return _yolo_models_dir() / "pytorch"
-    return _yolo_models_dir() / target_format
- 
- 
-def _desired_output_path(pt_path: Path, target_format: str) -> Path:
-    stem = pt_path.stem
-    out_dir = _format_output_dir(target_format)
-    out_dir.mkdir(parents=True, exist_ok=True)
- 
-    if target_format == "rknn":
-        return out_dir / f"{stem}.rknn"
-    if target_format == "onnx":
-        return out_dir / f"{stem}.onnx"
-    if target_format == "openvino":
-        return out_dir / f"{stem}_openvino_model"
-    if target_format == "coreml":
-        return out_dir / f"{stem}.mlpackage"
-    if target_format == "engine":
-        return out_dir / f"{stem}.engine"
-    if target_format == "tflite":
-        return out_dir / f"{stem}.tflite"
-    return out_dir / f"{stem}.{target_format}"
- 
- 
-def _remove_path_for_cleanup(path: Path) -> None:
-    if not path.exists():
-        return
-    _close_logging_handlers()
-    if path.is_dir():
-        shutil.rmtree(path)
-    else:
-        path.unlink()
-    _configure_quiet_logging()
-
-
-def _organize_exported_output(result_path: Path, desired_path: Path) -> Path:
-    if not result_path.exists():
-        return result_path
-    if result_path == desired_path:
-        return result_path
- 
-    desired_path.parent.mkdir(parents=True, exist_ok=True)
-    if desired_path.exists():
-        _remove_path_for_cleanup(desired_path)
- 
-    if result_path.is_dir():
-        shutil.move(str(result_path), str(desired_path))
-        return desired_path
-    shutil.move(str(result_path), str(desired_path))
-    return desired_path
- 
- 
-def _find_tflite_artifact(saved_path: Path) -> Path | None:
-    if saved_path.is_file() and saved_path.suffix == ".tflite":
-        return saved_path
-    if saved_path.is_dir():
-        candidates = list(saved_path.rglob("*.tflite"))
-        return candidates[0] if candidates else None
-    return None
- 
-def _find_keypoint_tensor(graph, value_info, concat_inputs, box_input_name, max_depth=4):
-    node_by_output = {out: n for n in graph.node for out in n.output}
-
-    def channel_dims(name):
-        vi = value_info.get(name)
-        if vi is None:
-            return []
-        return [d.dim_value for d in vi.type.tensor_type.shape.dim if d.dim_value > 0]
-
-    frontier = list(concat_inputs)
-    depth = 0
-    while frontier and depth < max_depth:
-        next_frontier = []
-        for name in frontier:
-            if name == box_input_name:
-                continue
-            for d in channel_dims(name):
-                if d > 4 and d % 3 == 0:
-                    return name, d
-            producer = node_by_output.get(name)
-            if producer is not None and producer.op_type in ("Concat", "Reshape", "Slice"):
-                next_frontier.extend(producer.input)
-        frontier = next_frontier
-        depth += 1
-    return None, None
-
-def _merge_rknn_build_outputs(outputs: list) -> "np.ndarray":
-    """Merge split RKNN inference outputs for format detection during build."""
-    import numpy as np
-
-    if not outputs:
-        return np.empty((0,), dtype=np.float32)
-    if len(outputs) == 1:
-        return outputs[0]
-
-    parts: list[np.ndarray] = []
-    for raw in outputs:
-        t = raw[0] if raw.ndim == 3 else raw
-        if t.ndim != 2:
-            return outputs[0]
-        if t.shape[0] > t.shape[1]:
-            t = t.T
-        parts.append(t)
-
-    box_parts = [p for p in parts if p.shape[0] == 4]
-    other_parts = [p for p in parts if p.shape[0] != 4]
-    ordered = (box_parts + other_parts) if len(box_parts) == 1 else parts
-    merged = np.concatenate(ordered, axis=0)
-    return merged[np.newaxis, ...]
-
-def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
-    """Divide the constant (initializer) input of `node` by `divisor`, in place.
-
-    If that initializer is shared by other nodes (RKNN toolkit's weight-sharing
-    means the same const tensor can feed multiple ops - confirmed in the layer
-    dump, e.g. onnx::Split_244 reused 3x), it is cloned under a new name first
-    so only `node` sees the scaled value and every other consumer is untouched.
-    """
-    import numpy as np
-    import onnx
-    import onnx.numpy_helper
-
-    initializer_map = {init.name: init for init in graph.initializer}
-    const_name = None
-    for inp in node.input:
-        if inp in initializer_map:
-            const_name = inp
-            break
-    if const_name is None:
-        raise RuntimeError(
-            f"Node '{node.name}' ({node.op_type}) has no constant/initializer "
-            f"input among {list(node.input)} - cannot fold a scale factor into it. "
-            "Ultralytics export structure may have changed - inspect manually."
-        )
-
-    other_consumers = [
-        n for n in graph.node if n is not node and const_name in n.input
-    ]
-    init = initializer_map[const_name]
-    arr = onnx.numpy_helper.to_array(init).astype(np.float32) / float(divisor)
-
-    if other_consumers:
-        new_name = f"{const_name}_iSpy_scaled"
-        new_init = onnx.numpy_helper.from_array(arr, name=new_name)
-        graph.initializer.append(new_init)
-        for idx, inp in enumerate(node.input):
-            if inp == const_name:
-                node.input[idx] = new_name
-        logger.info(
-            "Cloned shared constant '%s' -> '%s' (scaled by 1/%.1f) so only node "
-            "'%s' is affected (%d other consumer(s) left untouched).",
-            const_name, new_name, divisor, node.name, len(other_consumers),
-        )
-        return new_name
-
-    new_init = onnx.numpy_helper.from_array(arr, name=const_name)
-    for idx, ini in enumerate(graph.initializer):
-        if ini.name == const_name:
-            graph.initializer[idx].CopyFrom(new_init)
-            break
-    logger.info(
-        "Scaled constant '%s' by 1/%.1f in place (sole consumer: node '%s').",
-        const_name, divisor, node.name,
-    )
-    return const_name
-
-
-def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> tuple[float, float | None]:
-    import numpy as np
-    import onnx
-    import onnx.numpy_helper
-
-    model = onnx.load(onnx_path)
-    graph = model.graph
-
-    output_names = {output.name for output in graph.output}
-    concat_node = None
-    for node in graph.node:
-        if node.op_type == "Concat" and any(out_name in output_names for out_name in node.output):
-            concat_node = node
-            break
-    if concat_node is None:
-        raise RuntimeError(f"No Concat node feeding a graph output found in {onnx_path}.")
-
-    inputs = list(concat_node.input)
-    if len(inputs) < 2:
-        raise RuntimeError(
-            f"Output Concat '{concat_node.name}' has {len(inputs)} input(s), "
-            "expected at least 2 (boxes, scores[, keypoints]) - "
-            "Ultralytics export structure may have changed."
-        )
-
-    node_by_output = {out: n for n in graph.node for out in n.output}
-
-    box_input_name = inputs[0]
-    box_producer = node_by_output.get(box_input_name)
-    if box_producer is None or box_producer.op_type != "Mul":
-        raise RuntimeError(
-            f"Expected box tensor '{box_input_name}' (Concat input 0) to be "
-            f"produced by a Mul node (stride scaling), got "
-            f"{box_producer.op_type if box_producer else 'unknown producer'}. "
-            "Ultralytics export structure may have changed - inspect the ONNX "
-            "graph manually before trusting this conversion."
-        )
-
-    if hasattr(input_size, "__iter__"):
-        divisor = float(input_size[0] if len(input_size) > 0 else 640)
-    else:
-        divisor = float(input_size)
-
-    # Fold the scale into the box branch's EXISTING stride-multiply constant
-    # instead of inserting a new Div/Mul node. Inserting new nodes immediately
-    # upstream of the output Concat changed the NC1HWC2 layout/tiling RKNN
-    # chose for that region and corrupted the task submitted for the concat at
-    # runtime (confirmed: pose model's Concat_5 failed with new nodes present,
-    # built and ran clean with the exact same op count as an unmodified export
-    # once nodes were removed). Folding into an existing constant keeps graph
-    # topology identical to an unmodified export - only the constant's VALUES
-    # change - so RKNN's layout decisions for this region are unaffected.
-    _fold_scale_into_constant_input(graph, box_producer, divisor, node_by_output)
-    logger.info(
-        "Box-coordinate normalization applied: folded /%.1f into the existing "
-        "stride constant feeding '%s' (Mul producing the box tensor) - no new "
-        "nodes inserted, graph topology unchanged from an unmodified export.",
-        divisor, box_producer.name,
-    )
-
-    kpt_input_name = inputs[2] if len(inputs) > 2 else None
-    kpt_coord_scale = None
-    if kpt_input_name is not None:
-        # Walk back from the keypoint tensor to the Mul that scales x/y by
-        # stride, mirroring the box branch. Expected chain (Ultralytics
-        # kpts_decode): Reshape(kpt_input_name) <- Concat(xy_mul, conf_sigmoid)
-        # <- Mul(xy). Confidence is a separate branch and is never touched.
-        kpt_reshape = node_by_output.get(kpt_input_name)
-        if kpt_reshape is None or kpt_reshape.op_type != "Reshape":
-            raise RuntimeError(
-                f"Expected keypoint tensor '{kpt_input_name}' (Concat input 2) to "
-                f"be produced by a Reshape node, got "
-                f"{kpt_reshape.op_type if kpt_reshape else 'unknown'}. "
-                "Ultralytics export structure may have changed - inspect manually."
-            )
-
-        kpt_concat_input = kpt_reshape.input[0]
-        kpt_concat = node_by_output.get(kpt_concat_input)
-        if kpt_concat is None or kpt_concat.op_type != "Concat" or len(kpt_concat.input) < 2:
-            raise RuntimeError(
-                f"Expected '{kpt_concat_input}' (feeding the keypoint Reshape) to "
-                f"be produced by a Concat node with >=2 inputs (xy, confidence), "
-                f"got {kpt_concat.op_type if kpt_concat else 'unknown'}."
-            )
-
-        xy_tensor_name = kpt_concat.input[0]  # [xy, confidence] order
-        xy_producer = node_by_output.get(xy_tensor_name)
-        if xy_producer is None or xy_producer.op_type != "Mul":
-            raise RuntimeError(
-                f"Expected keypoint xy tensor '{xy_tensor_name}' (inner Concat "
-                f"input 0) to be produced by a Mul node (stride scaling), got "
-                f"{xy_producer.op_type if xy_producer else 'unknown'}. "
-                "Ultralytics export structure may have changed - inspect manually."
-            )
-
-        _fold_scale_into_constant_input(graph, xy_producer, divisor, node_by_output)
-        kpt_coord_scale = divisor
-        conf_input = kpt_concat.input[1] if len(kpt_concat.input) > 1 else "?"
-        logger.info(
-            "Keypoint-coordinate normalization applied: folded /%.1f into the "
-            "existing stride constant feeding '%s' (Mul producing keypoint x/y) "
-            "- confidence branch ('%s') left untouched, no new nodes inserted.",
-            divisor, xy_producer.name, conf_input,
-        )
-    else:
-        logger.debug(
-            "Output Concat '%s' has no third input - assuming detect-only model.",
-            concat_node.name,
-        )
-
-    onnx.checker.check_model(model)
-    onnx.save(model, output_path)
-    return divisor, kpt_coord_scale
-
-def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
-    """(Re)build dataset.txt inside a user-picked calibration folder from
-    whatever images it contains. Absolute paths are used so
-    _downscale_calib_images can resolve files living outside the dataset dir.
-    An existing dataset.txt is kept only while every listed file still exists;
-    otherwise it is rebuilt from current contents (stale entries would silently
-    feed a partial calibration set to the backend)."""
-    from iSpy.dataset.dataset import _find_images as _find_ds_images
-
-    dataset_txt = user_ds / "dataset.txt"
-    stale = True
-    if dataset_txt.exists():
-        lines = [l for l in dataset_txt.read_text().splitlines() if l.strip()]
-        stale = not all(
-            (Path(l) if Path(l).is_absolute() else user_ds / l).exists()
-            for l in lines
-        )
-    if not stale:
-        return dataset_txt
-    imgs = _find_ds_images(user_ds)
-    if not imgs:
-        raise FileNotFoundError(
-            f"User quantization dataset contains no images: {user_ds}"
-        )
-    dataset_txt.write_text("\n".join(str(p.resolve()) for p in imgs) + "\n")
-    logger.info(
-        "Calibration dataset from user path %s (%d images)",
-        user_ds, len(imgs),
-    )
-    return dataset_txt
-
-
-def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
-    """data.yaml for ultralytics' int8 calibration that matches the model's
-    actual class count/names (falling back to the old single-class defaults
-    when no sidecar exists) and points straight at the user's images - nothing
-    is downloaded. An nc mismatch against a multi-class model would make the
-    export path reject the calibration data."""
-    pt_meta = read_metadata(Path(pt_file)) or {}
-    try:
-        nc = max(1, int(pt_meta.get("nc") or pt_meta.get("num_classes") or 1))
-    except (TypeError, ValueError):
-        nc = 1
-    names_meta = pt_meta.get("names") or {}
-    if not names_meta:
-        names = ["object"] if nc == 1 else [f"class_{i}" for i in range(nc)]
-    else:
-        names = [
-            names_meta.get(i, names_meta.get(str(i), f"class_{i}"))
-            for i in range(nc)
-        ]
-    if not names:
-        names = ["object"]
-    data_yaml = user_ds / "data.yaml"
-    data_yaml.write_text(
-        f"train: {user_ds}\nval: {user_ds}\nnc: {nc}\n"
-        f"names: {json.dumps(names)}\n"
-    )
-    logger.info("Calibration data.yaml written (nc=%d) at %s", nc, data_yaml)
-    return str(data_yaml)
-
-
-def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None):
-    if quantize is None:
-        quantize = _RKNN_QUANTIZE
-    pt_path = Path(pt_file)
-    user_dataset = dataset_path is not None
-    if dataset_path is None:
-        dataset_path = str(_dataset_dir_for(pt_path))
-
-    raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
-    if not raw_onnx.exists():
-        raise RuntimeError(f"Intermediate ONNX export failed: {raw_onnx}")
-
-    # Route intermediate ONNX to the onnx folder with its own sidecar
-    try:
-        onnx_path = _desired_output_path(pt_path, "onnx")
-        if raw_onnx != onnx_path:
-            onnx_path.parent.mkdir(parents=True, exist_ok=True)
-            if onnx_path.exists():
-                _remove_path_for_cleanup(onnx_path)
-            shutil.move(str(raw_onnx), str(onnx_path))
-        pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
-        format_meta = derive_format_metadata(pt_meta, "onnx")
-        format_meta["input_size"] = (
-            list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)]
-        )
-        write_metadata(metadata_path_for(onnx_path), format_meta)
-        logger.info("Intermediate ONNX routed to %s with sidecar", onnx_path)
-    except Exception as e:
-        logger.warning("Could not route intermediate ONNX: %s", e)
-        onnx_path = raw_onnx
-
-    try:
-        from rknn.api import RKNN
-        warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
-    except ImportError:
-        raise ImportError("RKNN Toolkit not found. Install it to convert to RKNN format.")
-
-    effective_kw = kw if kw is not None else get_calibration_keywords(pt_path, default=keywords)
-    count = calib_count_for_format("rknn")
-    ds_path = Path(dataset_path)
-    if user_dataset:
-        # User-picked calibration dataset: use their images directly, never
-        # download. dataset.txt is kept in sync with whatever images are
-        # inside (absolute paths, so _downscale_calib_images resolves them).
-        dataset_txt = _prepare_user_calibration_dataset(ds_path)
-    else:
-        prepare_quantization_dataset(dataset_path, boot=True, keywords=effective_kw, count=count)
-        dataset_txt = ds_path / "dataset.txt"
-    if not dataset_txt.exists() or not dataset_txt.read_text().strip():
-        raise FileNotFoundError(f"RKNN calibration dataset could not be prepared at: {dataset_txt}")
-    
-    calib_dir = _downscale_calib_images(Path(dataset_path))
-    calib_txt = calib_dir / "dataset.txt" if calib_dir != Path(dataset_path) else dataset_txt
-
-    rknn_output = _desired_output_path(pt_path, "rknn")
-    logger.info("Converting ONNX -> RKNN with dataset=%s", calib_txt)
-
-    box_coord_scale = None
-    kpt_coord_scale = None
-    onnx_path_for_build = onnx_path
-    surgery_path = onnx_path.parent / f"{onnx_path.stem}_rknn_ready.onnx"
-    try:
-        box_coord_scale, kpt_coord_scale = _normalize_box_coords_for_quantization(
-            str(onnx_path), str(surgery_path), input_size
-        )
-        onnx_path_for_build = surgery_path
-    except Exception as exc:
-        logger.warning(
-            "Box/keypoint-coordinate normalization for RKNN quantization failed: %s. "
-            "Proceeding without it; confidence may collapse to zero.",
-            exc,
-            exc_info=True,   # <-- add this: prints the full traceback, not just str(exc)
-        )
-
-    try:
-        with _progress_spinner("RKNN build"):
-            with _silence_third_party():
-                rknn = RKNN(verbose=False, )
-            detected_format = None
-            detected_layout = None
-            detected_box_format = None
-            try:
-                config_kwargs = dict(
-                    mean_values=[[0, 0, 0]],
-                    std_values=[[255, 255, 255]],
-                    target_platform=_detect_rknn_target_platform(),
-                    disable_rules=[
-                        "fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"
-                    ],
-                )
-
-                if quantize:
-                    config_kwargs["quantized_dtype"] = "asymmetric_quantized-8"
-                    config_kwargs["quantized_algorithm"] = "kl_divergence"
-                    # config_kwargs["quantized_hybrid_level"] = 1
-                    
-                rknn.config(**config_kwargs)
-                ret = rknn.load_onnx(model=str(onnx_path_for_build))
-                if ret != 0:
-                    raise RuntimeError(f"RKNN load_onnx failed with code {ret}")
-                ret = rknn.build(do_quantization=quantize, dataset=str(calib_txt))
-                if ret != 0:
-                    raise RuntimeError(f"RKNN build failed with code {ret}")
-                ret = rknn.export_rknn(str(rknn_output))
-                if ret != 0:
-                    raise RuntimeError(f"RKNN export failed with code {ret}")
-
-                # Detect actual output format by running a quick inference
-                try:
-                    import numpy as np
-                    rknn.init_runtime()
-                    if isinstance(input_size, int):
-                        h = w = input_size
-                    elif isinstance(input_size, (list, tuple)):
-                        h, w = int(input_size[0]), int(input_size[1]) if len(input_size) > 1 else int(input_size[0])
-                    else:
-                        h = w = 640
-                    dummy = np.zeros((1, h, w, 3), dtype=np.uint8)
-                    outputs = rknn.inference(inputs=[dummy])
-                    if outputs and len(outputs) > 0:
-                        tensor = _merge_rknn_build_outputs(outputs)
-                        if len(outputs) > 1:
-                            logger.info(
-                                "RKNN build returned %d split output(s) %s -> merged shape %s",
-                                len(outputs),
-                                [o.shape for o in outputs],
-                                tensor.shape,
-                            )
-                        t = tensor[0] if tensor.ndim == 3 else tensor
-                        smaller = min(t.shape[0], t.shape[-1])
-                        larger = max(t.shape[0], t.shape[-1])
-                        is_nms = (smaller == 6 and larger < 1000)
-                        detected_format = "hardware_nms" if is_nms else "raw"
-                        detected_layout = "anchors_first" if is_nms else "features_first"
-                        detected_box_format = "xyxy" if is_nms else "cxcywh"
-                        logger.info(
-                            "RKNN output shape %s -> detected format: %s",
-                            tensor.shape, detected_format,
-                        )
-                except Exception as e:
-                    logger.debug("RKNN inference for format detection failed: %s", e)
-            finally:
-                rknn.release()
-    finally:
-        if calib_dir != Path(dataset_path):
-            shutil.rmtree(str(calib_dir), ignore_errors=True)
-
-    logger.info("RKNN conversion successful: %s", rknn_output)
-    _export_rknn_metadata(
-        pt_file, rknn_output, input_size=input_size,
-        output_format=detected_format,
-        output_layout=detected_layout,
-        box_format=detected_box_format,
-        quantize=quantize,
-        box_coord_scale=box_coord_scale,
-        kpt_coord_scale=kpt_coord_scale,
-    )
-    return str(rknn_output)
-
-def _find_pose_output_tensors(graph, concat_node):
-    """Identify box/conf/kpt tensors feeding the final output Concat by
-    structural role (Ultralytics export pattern), not by dimension guessing.
-    concat_node.input is [boxes, scores, keypoints] for pose,
-    or [boxes, scores] for detect - in that fixed order."""
-    node_by_output = {out: n for n in graph.node for out in n.output}
-    inputs = list(concat_node.input)
-
-    box_name = inputs[0]   # always first: decoded+stride-scaled boxes
-    conf_name = inputs[1]  # always second: sigmoid'd confidence/class scores
-    kpt_name = inputs[2] if len(inputs) > 2 else None  # pose only
-
-    box_producer = node_by_output.get(box_name)
-    if box_producer is None or box_producer.op_type != "Mul":
-        raise RuntimeError(
-            f"Expected box tensor '{box_name}' to be produced by a Mul node "
-            f"(stride scaling), got {box_producer.op_type if box_producer else 'unknown'}. "
-            "Ultralytics export structure may have changed - verify manually."
-        )
-    return box_name, conf_name, kpt_name
-
-def convert_model(model_file, target_format, input_size, quantize=None, force=False, kw=None, dataset_path=None):
-    if not os.path.exists(model_file):
-        logger.warning("Model file %s is missing. Skipping conversion.", model_file)
-        return model_file
-    if Path(model_file).suffix.lower() != ".pt":
-        logger.warning(
-            "Model file %s is not a .pt file. Skipping conversion.", model_file
-        )
-        return model_file
-
-    if target_format == "tpu":
-        logger.info(
-            "TPU backend uses the .pt directly via torch_xla at runtime - "
-            "no export/conversion step needed for %s.",
-            Path(model_file).name,
-        )
-        return model_file
-
-    pt_path = Path(model_file)
-    stem = pt_path.stem
-    
-    if target_format == "rknn":
-        if quantize is None:
-            quantize = _RKNN_QUANTIZE
-        rknn_path = _desired_output_path(pt_path, "rknn")
-        if rknn_path.exists() and not force:
-            meta_path = metadata_path_for(rknn_path)
-            if not meta_path.exists():
-                _export_rknn_metadata(model_file, rknn_path, quantize=quantize)
-            else:
-                old_meta = read_metadata(rknn_path) or {}
-                stored_quantize = old_meta.get("quantize")
-                if stored_quantize is None:
-                    q = old_meta.get("quantization")
-                    stored_quantize = q != "none" if q is not None else None
-                if stored_quantize is not None and stored_quantize != quantize:
-                    logger.info(
-                        "Cached rknn model %s has quantize=%s but config says %s. Re-converting.",
-                        rknn_path.name, stored_quantize, quantize,
-                    )
-                    _remove_path_for_cleanup(rknn_path)
-                    _remove_path_for_cleanup(meta_path)
-                    rknn_result = _convert_rknn(
-                        pt_file=model_file,
-                        input_size=input_size,
-                        quantize=quantize,
-                        kw=kw,
-                        dataset_path=dataset_path,
-                    )
-                    _run_optimized_model_comparison(model_file, rknn_result)
-                    return rknn_result
-            logger.info("Cached rknn model found: %s", rknn_path)
-            return str(rknn_path)
-        if force and rknn_path.exists():
-            logger.info("Fresh conversion forced for %s", rknn_path.name)
-            _remove_path_for_cleanup(rknn_path)
-            meta = metadata_path_for(rknn_path)
-            if meta.exists():
-                _remove_path_for_cleanup(meta)
-        return _convert_rknn(
-            pt_file=model_file,
-            input_size=input_size,
-            quantize=quantize,
-            kw=kw,
-            dataset_path=dataset_path,
-        )
-
-    desired = _desired_output_path(pt_path, target_format)
-    if not force:
-        if target_format == "tflite":
-            if desired.exists():
-                logger.info("Cached tflite model found: %s", desired)
-                return str(desired)
-        else:
-            if desired.exists():
-                logger.info("Cached %s model found: %s", target_format, desired)
-                return str(desired)
-
-    dataset_root = str(_PROJECT_ROOT / "QuantizeDataset")
-    data_yaml = None
-    if quantize:
-        kw = get_calibration_keywords(pt_path, default=keywords)
-        if dataset_path:
-            # User-picked calibration dataset: point ultralytics' int8
-            # calibration straight at their images; never download.
-            user_ds = Path(dataset_path).resolve()
-            _prepare_user_calibration_dataset(user_ds)
-            data_yaml = _user_calibration_data_yaml(model_file, user_ds)
-            logger.info(
-                "Calibration dataset from user path %s (data.yaml=%s)",
-                user_ds, data_yaml,
-            )
-        else:
-            ds_dir = _dataset_dir_for(pt_path)
-            count = calib_count_for_format(target_format)
-            prepare_quantization_dataset(str(ds_dir), boot=True, keywords=kw, count=count)
-            # data.yaml lives inside the per-model dataset folder that was just
-            # prepared - the root QuantizeDataset/data.yaml is never written,
-            # so pointing ultralytics int8 calibration at it would load nothing.
-            data_yaml = str(Path(ds_dir) / "data.yaml")
-    else:
-        Path(dataset_root).mkdir(parents=True, exist_ok=True)
-
-    try:
-        result = _export_ultralytics(model_file, target_format, input_size, data_yaml)
-    except AttributeError as e:
-        if "EXPLICIT_BATCH" in str(e):
-            logger.error(
-                "TensorRT 10+ is incompatible with the ultralytics export path. "
-                "Skipping engine conversion. Falling back to .pt."
-            )
-        else:
-            logger.error("Conversion to %s failed: %s", target_format, e, exc_info=True)
-        return model_file
-    except Exception as e:
-        logger.error("Conversion to %s failed: %s", target_format, e, exc_info=True)
-        return model_file
-
-    if result is not None:
-        result_path = Path(result)
-        desired_path = _desired_output_path(pt_path, target_format)
-        if result_path.exists():
-            if target_format == "tflite":
-                if result_path.is_dir():
-                    tflite_artifact = _find_tflite_artifact(result_path)
-                    if tflite_artifact:
-                        result_path = tflite_artifact
-                if not result_path.exists() or result_path.suffix != ".tflite":
-                    logger.warning(
-                        "TFLite export did not produce a .tflite artifact at %s",
-                        result,
-                    )
-                else:
-                    if result_path.parent != desired_path.parent:
-                        desired_path = desired_path
-                        desired_path.parent.mkdir(parents=True, exist_ok=True)
-                        if desired_path.exists():
-                            _remove_path_for_cleanup(desired_path)
-                        shutil.move(str(result_path), str(desired_path))
-                        result_path = desired_path
-            else:
-                if result_path != desired_path:
-                    if desired_path.exists():
-                        _remove_path_for_cleanup(desired_path)
-                    shutil.move(str(result_path), str(desired_path))
-                    result_path = desired_path
- 
-            logger.info("%s export successful: %s", target_format, result_path)
-            # Write derived metadata for converted file based on source .pt
-            try:
-                pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
-                format_meta = derive_format_metadata(pt_meta, target_format)
-                format_meta["input_size"] = list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)]
-                write_metadata(metadata_path_for(result_path), format_meta)
-                logger.info("Wrote metadata for converted %s", result_path.name)
-            except Exception as e:
-                logger.warning("Could not write metadata for converted %s: %s", result_path.name, e)
-
-            _run_optimized_model_comparison(model_file, str(result_path))
-            return str(result_path)
-
-    logger.warning("Conversion to %s failed, falling back to .pt", target_format)
-    return model_file
-
-def _convert_model_subprocess(model_file, target_format, input_size, quantize=None, force=False, kw=None, dataset_path=None) -> Path:
-    import tempfile
-
-    outputs_dir = _PROJECT_ROOT / "Outputs"
-    outputs_dir.mkdir(parents=True, exist_ok=True)
-
-    args = {
-        "model_file": str(model_file),
-        "target_format": target_format,
-        "input_size": list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)],
-        "quantize": quantize,
-        "force": force,
-        "kw": kw,
-    }
-    if dataset_path:
-        args["dataset_path"] = str(dataset_path)
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir=str(outputs_dir)) as f:
-        args_path = f.name
-        json.dump(args, f)
-
-    result_path = args_path + ".result.json"
-
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "iSpy.boot._convert_worker", args_path],
-            cwd=str(_PROJECT_ROOT),
-            capture_output=True,
-            text=True,
-        )
-
-        # Surface the worker's own logging - it just runs in a subprocess,
-        # it shouldn't run silently.
-        if proc.stdout:
-            print(proc.stdout, file=_REAL_STDOUT, end="")
-        if proc.stderr:
-            print(proc.stderr, file=_REAL_STDERR, end="")
-
-        if proc.returncode != 0 or not os.path.exists(result_path):
-            logger.error(
-                "Conversion subprocess for %s -> %s failed (exit code %s). Falling back to .pt.",
-                Path(model_file).name, target_format, proc.returncode,
-            )
-            return Path(model_file)
-
-        with open(result_path) as f:
-            result_data = json.load(f)
-        return Path(result_data["result"])
-    finally:
-        for p in (args_path, result_path):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
-
-def setup_files(first_boot: bool = False):
+def setup_files(fresh: bool = False):
+    """Fresh boot (`boot -f`): wipe generated application state (Config,
+    Outputs, YoloModels, QuantizeDataset) and stage the bundled models.
+    Normal boot: ensure runtime directories exist, stage any missing bundled
+    assets, and keep model metadata sidecars up to date."""
     yolo_dir = _PROJECT_ROOT / "YoloModels"
     config_dir = _PROJECT_ROOT / "Config"
     outputs_dir = _PROJECT_ROOT / "Outputs"
     dataset_dir = get_active_dataset_dir()
-    saved_config = None
-    if first_boot:
-        config_path = config_dir / "config.json"
-        if config_path.exists():
-            try:
-                with open(str(config_path)) as f:
-                    existing_config = json.load(f)
 
-                default_cfg = _default_config_dict()
-                comparable_existing = _strip_boot_managed_fields(existing_config)
-                comparable_default = _strip_boot_managed_fields(default_cfg)
-
-                if comparable_existing != comparable_default:
-                    # Real user customization (camera geometry, NT settings,
-                    # thresholds, plugins, min_conf, etc.) - keep it, but
-                    # reset each camera's boot-derived vision_model fields to
-                    # fresh defaults since YoloModels (and the artifacts
-                    # file_path describes) is about to be deleted.
-                    saved_config = comparable_existing
-                    default_vm = (
-                        default_cfg.get("camera_configs", {})
-                        .get("default_cam", {})
-                        .get("vision_model", {})
-                    )
-                    for cam in saved_config.get("camera_configs", {}).values():
-                        if isinstance(cam.get("vision_model"), dict):
-                            cam["vision_model"] = {**default_vm, **cam["vision_model"]}
-                    logger.info("Preserving user config (differs from default)")
-                else:
-                    logger.info("Existing config matches defaults - nothing to preserve")
-            except Exception as e:
-                logger.warning("Could not read existing config: %s", e)
-
+    if fresh:
         for d in [yolo_dir, config_dir, outputs_dir, dataset_dir]:
             if d.exists():
                 _remove_path_for_cleanup(d)
-                logger.info("Deleted %s", d)
-                
+                logger.info("boot -f: deleted generated %s", d)
+
     keywords_path = _ASSETS_DIR / "keywords.json"
 
     try:
@@ -1689,150 +168,47 @@ def setup_files(first_boot: bool = False):
     dataset_dir.mkdir(parents=True, exist_ok=True)
     for fmt in ["pytorch", "onnx", "tflite", "rknn", "openvino", "coreml", "engine"]:
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
-    # Calibration images are only needed for RKNN quantization, which is no
-    # longer run at boot. Never download data during boot - the quantization
-    # dataset is prepared on demand by the conversion flow (convert_model).
-    logger.info(
-        "Quantization dataset dir ready (%s) - image download deferred to "
-        "conversion time", dataset_dir,
-    )
-    if saved_config is not None:
-        config_path = config_dir / "config.json"
-        with open(str(config_path), "w") as f:
-            json.dump(saved_config, f, indent=4)
-        logger.info("Restored user config (per-camera vision_model paths reset for fresh staging)")
 
     pytorch_dir = yolo_dir / "pytorch"
-    _SKIP_DIRS = {
-        ".venv",
-        "__pycache__",
-        ".git",
-        ".pytest_cache",
-        "env",
-        "runs",
-        "dist",
-    }
-    seen = set()
     for pt_file in _ASSETS_DIR.rglob("*.pt"):
         target = pytorch_dir / pt_file.name
-        if first_boot or not target.exists():
+        if fresh or not target.exists():
             shutil.copy2(pt_file, target)
-            seen.add(pt_file.name)
-            logger.info("Copied model %s -> %s", pt_file.name, target)
-    if first_boot:
-        for pt_file in _PROJECT_ROOT.rglob("*.pt"):
-            if pt_file.name in seen:
-                continue
-            if any(
-                part in _SKIP_DIRS for part in pt_file.relative_to(_PROJECT_ROOT).parts
-            ):
-                continue
-            target = pytorch_dir / pt_file.name
-            try:
-                if target.exists() and os.path.samefile(pt_file, target):
-                    continue
-            except (OSError, ValueError):
-                pass
-            shutil.copy2(pt_file, target)
-            seen.add(pt_file.name)
-            logger.info("Copied model %s -> %s", pt_file.name, target)
+            logger.info("Staged bundled model %s -> %s", pt_file.name, target)
 
     # Ensure every .pt in the pytorch directory has a metadata sidecar
-    try:
-        for pt_file in pytorch_dir.glob("*.pt"):
-            meta_path = metadata_path_for(pt_file)
-            try:
-                if meta_path.exists():
-                    meta = read_metadata(meta_path)
-                else:
-                    logger.info("Generating metadata for %s", pt_file.name)
-                    meta = metadata_from_pt(pt_file)
+    for pt_file in pytorch_dir.glob("*.pt"):
+        meta_path = metadata_path_for(pt_file)
+        try:
+            if meta_path.exists():
+                meta = read_metadata(meta_path)
+            else:
+                logger.info("Generating metadata for %s", pt_file.name)
+                meta = metadata_from_pt(pt_file)
 
-                # Apply bundled keyword overrides
-                if pt_file.stem in default_keywords:
-                    meta["calibration_keywords"] = default_keywords[pt_file.stem]
-                write_metadata(meta_path, meta)
-                logger.info("Wrote metadata %s", meta_path.name)
+            # Apply bundled keyword overrides
+            if pt_file.stem in default_keywords:
+                meta["calibration_keywords"] = default_keywords[pt_file.stem]
+            write_metadata(meta_path, meta)
+            logger.info("Wrote metadata %s", meta_path.name)
 
-            except Exception as e:
-                logger.warning("Could not generate metadata for %s: %s", pt_file.name, e)
-    except Exception:
-        pass
-
-
-def _ensure_model_artifacts(config: iSpyConfig) -> None:
-    """Make sure every model-file-backed camera (typically object_detection,
-    identified by having a per-camera vision_model block) references an
-    existing model artifact. If a configured path is missing, fall back to the
-    newest staged .pt in YoloModels/pytorch (never triggers a conversion at
-    boot). Pipelines that provision their own models (depth_anything,
-    yolo_world download weights) carry no vision_model block and are skipped -
-    their readiness is reported by their cameras' is_ready()."""
-    pytorch_dir = _PROJECT_ROOT / "YoloModels" / "pytorch"
-    candidates = sorted(
-        pytorch_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True
-    )
-    user_models = [p for p in candidates if p.name not in _BUNDLED_DEFAULT_MODELS]
-    fallback = user_models[0] if user_models else (candidates[0] if candidates else None)
-
-    dirty = False
-    for name, cam_cfg in config.config.get("camera_configs", {}).items():
-        if not isinstance(cam_cfg, dict):
-            continue
-        pipeline = cam_cfg.get("pipeline", "object_detection")
-        vm = cam_cfg.get("vision_model")
-        if not isinstance(vm, dict) or not vm:
-            # No model-file config (e.g. depth/yolo_world download their own
-            # weights), no artifact to ensure.
-            continue
-        if fallback is None:
-            logger.warning(
-                "Camera '%s' uses model-backed pipeline '%s' but no model "
-                "exists in %s to fall back to.",
-                name, pipeline, pytorch_dir,
-            )
-            continue
-        rel = str(fallback.relative_to(_PROJECT_ROOT))
-        changed = False
-        for key in ("file_path", "source_pt"):
-            current = vm.get(key)
-            if current:
-                p = Path(current)
-                if not p.is_absolute():
-                    p = _PROJECT_ROOT / p
-                if p.exists():
-                    continue
-            vm[key] = rel
-            changed = True
-        if changed:
-            logger.info(
-                "Camera '%s': model path(s) pointed at missing artifacts - "
-                "using unoptimized .pt fallback %s",
-                name, rel,
-            )
-            dirty = True
-    if dirty:
-        config.save(quiet=True)
-
-
-_READINESS_POLL_S = 2.0
-_READINESS_WAIT_TIMEOUT_S = int(os.environ.get("ISPY_READINESS_TIMEOUT_S", "1200"))  # default 20 min
+        except Exception as e:
+            logger.warning("Could not generate metadata for %s: %s", pt_file.name, e)
 
 
 def _wait_for_pipeline_ready(
     config: iSpyConfig, pipeline_classes: dict[str, type]
 ) -> None:
-    """Construct every configured camera pipeline (which triggers each
-    __init__'s own background readiness work) and wait until every camera's
-    is_ready() reports ready. Boot proceeds after _READINESS_WAIT_TIMEOUT_S
-    with a loud warning - nothing here blocks forever, but the expectation is
-    that quantization/optimization jobs finish before that deadline."""
+    """Construct every configured camera pipeline (each pipeline starts its
+    own background preparation in __init__) and wait until every pipeline
+    reports ready. Fails fast with a clear error if a pipeline enters an
+    unrecoverable error state, and raises if readiness is not reached within
+    the timeout - boot never silently proceeds on an unready system."""
     from iSpy.config.iSpyConfig import iSpyCameraConfig
 
     cams = {k: v for k, v in config.config.get("camera_configs", {}).items() if isinstance(v, dict)}
     if not cams:
-        logger.info("No cameras configured - skipping readiness wait.")
-        return
+        raise RuntimeError("No cameras configured - nothing to boot.")
 
     default_pipeline = (
         config.default_config.get("camera_configs", {})
@@ -1844,34 +220,28 @@ def _wait_for_pipeline_ready(
         pipeline = cam_cfg.get("pipeline", default_pipeline)
         cls = pipeline_classes.get(pipeline)
         if cls is None:
-            logger.warning(
-                "  camera %-16s -> pipeline %-16s -> NOT LOADED (unknown pipeline)",
-                name, pipeline,
+            raise RuntimeError(
+                f"Camera '{name}' uses unknown pipeline '{pipeline}' - cannot boot."
             )
-            continue
         try:
             inst = cls(iSpyCameraConfig(cam_cfg), config, None)
         except Exception as e:
-            logger.error(
-                "  camera %-16s -> pipeline %-16s -> failed to construct: %s",
-                name, pipeline, e,
+            raise RuntimeError(
+                f"Camera '{name}' pipeline '{pipeline}' failed to construct: {e}"
             )
-            continue
         instances[name] = inst
 
     if not instances:
-        logger.info("No loadable pipelines to wait on - proceeding.")
-        return
+        raise RuntimeError("No loadable pipelines to boot - aborting.")
 
-    last_status: dict[str, str] = {n: "" for n in instances}
     deadline = _time.monotonic() + _READINESS_WAIT_TIMEOUT_S
     logger.info(
-        "Waiting up to %d s for camera pipelines to become ready "
-        "(background builds may be running)...", _READINESS_WAIT_TIMEOUT_S,
+        "Waiting for %d camera pipeline(s) to become ready (background "
+        "preparation may still be running)...", len(instances),
     )
     pending = set(instances)
+    last_status: dict[str, str] = {n: "" for n in instances}
     while pending and _time.monotonic() < deadline:
-        still: set[str] = set()
         for name in tuple(pending):
             inst = instances[name]
             try:
@@ -1881,58 +251,52 @@ def _wait_for_pipeline_ready(
             if status != last_status[name]:
                 logger.info("  camera %-16s -> %s", name, status)
                 last_status[name] = status
-            if not ready:
-                still.add(name)
-        if not still:
-            break
-        pending = still
-        _time.sleep(_READINESS_POLL_S)
-    not_ready = []
-    for name in sorted(pending):
-        try:
-            ready, status = instances[name].is_ready()
-        except Exception as e:
-            ready, status = False, str(e)
-        if not ready:
-            not_ready.append((name, status))
-        else:
-            logger.info("  camera %-16s -> ready", name)
+            if "error:" in status and not ready:
+                raise RuntimeError(
+                    f"Camera '{name}' pipeline entered an unrecoverable error "
+                    f"state: {status}"
+                )
+            if ready:
+                pending.discard(name)
+        if pending:
+            _time.sleep(_READINESS_POLL_S)
 
-    if not_ready:
-        logger.warning(
-            "Timed out waiting for camera readiness after %d s - proceeding:",
-            _READINESS_WAIT_TIMEOUT_S,
+    if pending:
+        detail = "; ".join(
+            f"camera '{name}' -> {instances[name].is_ready()[1]}"
+            for name in sorted(pending)
         )
-        for name, status in not_ready:
-            logger.warning("  camera %-16s -> still not ready: %s", name, status)
-    else:
-        logger.info("All camera pipelines ready.")
+        raise RuntimeError(
+            f"Timed out waiting for pipeline readiness after "
+            f"{_READINESS_WAIT_TIMEOUT_S}s: {detail}"
+        )
+    logger.info("All camera pipelines ready.")
 
 
-def on_boot(install_service: bool = False, first_boot: bool = False):
+def on_boot(install_service: bool = False, fresh: bool = False):
     _configure_quiet_logging()
-    if first_boot:
-        logger.info("First boot mode - staging fresh models and configuration")
-    setup_files(first_boot=first_boot)
-    config_path = search_for_config()
-    config = None
-    if not config_path:
-        logger.info("No config found. Creating default config...")
-        config_path = _PROJECT_ROOT / "Config" / "config.json"
-        config = iSpyConfig(str(config_path), create=True, strict_migration=False)
+
+    if fresh:
+        logger.info("boot -f: forcefully fresh installation state")
+        setup_files(fresh=True)
+        config_path = str(_PROJECT_ROOT / "Config" / "config.json")
+        config = iSpyConfig(config_path, create=True)
+        _bootstrap_default_camera(config)
     else:
+        setup_files(fresh=False)
+        config_path = search_for_config()
+        if not config_path:
+            raise RuntimeError(
+                "No configuration found. First-run initialization is only "
+                "performed by 'boot -f' (forcefully fresh) - run that first."
+            )
         logger.info("Using existing config: %s", config_path)
+        config = iSpyConfig(config_path, create=False)
 
     if not validate_system():
         raise RuntimeError("System validation failed. Aborting boot.")
 
-    if config is None:
-        config = iSpyConfig(str(config_path), strict_migration=False)
-
-    _bootstrap_default_camera(config)
-
     pipeline_classes = get_pipeline_classes()
-    _ensure_model_artifacts(config)
     _wait_for_pipeline_ready(config, pipeline_classes)
     config.save(quiet=True)
     logger.info("Boot sequence complete.")
@@ -1972,10 +336,13 @@ def main():
     parser = argparse.ArgumentParser(description="iSpy boot sequence")
     parser.add_argument("-s", "--service", action="store_true",
                          help="Install and start the watchdog service")
-    parser.add_argument("-f", "--first-boot", action="store_true",
-                         help="Delete Config, Outputs, and YoloModels before booting")
+    parser.add_argument("-f", "--fresh", action="store_true",
+                         help="Forcefully wipe generated state (Config, Outputs, "
+                              "YoloModels, QuantizeDataset) and create a fresh "
+                              "default setup")
     args = parser.parse_args()
-    on_boot(install_service=args.service, first_boot=args.first_boot)
+    on_boot(install_service=args.service, fresh=args.fresh)
+
 
 if __name__ == "__main__":
     main()

@@ -349,16 +349,21 @@ class CamerasModule(WebModule):
                         ready, status = False, "error: is_ready() raised"
                     payload["ready"] = bool(ready)
                     payload["status"] = str(status)
+                    state = getattr(inst, "get_state", None)
+                    payload["state"] = state() if callable(state) else None
+                    options = getattr(inst, "get_optimization_options", None)
+                    payload["can_optimize"] = bool(options() if callable(options) else {})
                 else:
                     payload["ready"] = None
                     payload["status"] = None
+                    payload["state"] = None
                 cameras.append(payload)
         return jsonify(cameras=cameras)
 
-    def _optimize_camera(self, camera_name):
-        inst = self.live_cameras.get(camera_name)
+    def _optimize_camera(self, name):
+        inst = self.live_cameras.get(name)
         if inst is None:
-            return jsonify(error=f"Camera '{camera_name}' is not running"), 404
+            return jsonify(error=f"Camera '{name}' is not running"), 404
         if not hasattr(inst, "request_optimize"):
             pipeline = getattr(inst, "plugin_name", "?")
             return jsonify(

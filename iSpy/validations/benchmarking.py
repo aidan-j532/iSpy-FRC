@@ -52,7 +52,7 @@ os.environ["YOLO_VERBOSE"] = "False"
 
 from iSpy.config.AutoOpt import has_rockchip_npu, has_nvidia, has_tensorrt, has_tpu
 from iSpy.vision.ModelInspector import fill_missing_config
-from iSpy.boot.boot import convert_model
+from iSpy.vision.optimizer import convert_model
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s", force=True)
 logging.getLogger("iSpy.vision.ModelInspector").setLevel(logging.INFO)

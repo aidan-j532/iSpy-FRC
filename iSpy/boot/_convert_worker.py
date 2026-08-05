@@ -12,7 +12,7 @@ def main():
 
     # Imported here, not at module level, so a bad args file fails fast
     # without paying boot.py's heavy import cost first.
-    from iSpy.boot.boot import convert_model
+    from iSpy.vision.optimizer import convert_model
 
     result = convert_model(
         args["model_file"],

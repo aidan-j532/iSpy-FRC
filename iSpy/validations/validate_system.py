@@ -318,11 +318,10 @@ def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset")
 
     return all_valid
 
-def validate_system(first_boot: bool = False) -> bool:
+def validate_system() -> bool:
     try:
-        if not first_boot:
-            validate_model_files()
-            validate_config_files()
+        validate_model_files()
+        validate_config_files()
 
         validate_quantization_dataset_wrapper()
 

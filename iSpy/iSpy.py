@@ -6,7 +6,7 @@ import logging
 import os
 from iSpy.config.iSpyConfig import iSpyConfig
 import signal
-from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
+from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.validations.model_validator import (
     enforce_model_organization,
     validate_model_organization,
@@ -26,7 +26,7 @@ while not (PROJECT_ROOT / "plugins").exists():
 _PLUGIN_ROOT = PROJECT_ROOT / "plugins"
 
 class iSpy:
-    def __init__(self, cameras: list[ObjectDetectionCamera], config: iSpyConfig):
+    def __init__(self, cameras: list[VisionPipeline], config: iSpyConfig):
         self.cameras = cameras
         self.config = config
 

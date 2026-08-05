@@ -4,6 +4,10 @@
 <h1>Dataset Manager</h1>
 
 <div id="datasets-view">
+  <div class="controls-bar" style="margin-bottom:16px;">
+    <input type="text" id="new-dataset-name" placeholder="New dataset name..." style="flex:1; min-width:180px;">
+    <button onclick="createDataset()">Create Dataset</button>
+  </div>
   <div id="datasets-grid" class="dataset-grid"></div>
 </div>
 
@@ -46,7 +50,7 @@ async function loadDatasets() {
   activeDataset = data.active || '';
 
   if (datasets.length === 0) {
-    grid.innerHTML = '<div class="card empty-state">No datasets found. Create a dataset folder in QuantizeDataset/ to get started.</div>';
+    grid.innerHTML = '<div class="card empty-state">No datasets yet. Create one with the form above.</div>';
     return;
   }
 
@@ -56,6 +60,29 @@ async function loadDatasets() {
       <div class="dataset-count">${d.image_count} image${d.image_count !== 1 ? 's' : ''}</div>
     </div>
   `).join('');
+}
+
+async function createDataset() {
+  const input = document.getElementById('new-dataset-name');
+  const name = input.value.trim();
+  if (!name) return;
+  try {
+    const resp = await fetch('/api/datasets', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name}),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      input.value = '';
+      showToast(`Dataset "${data.name}" created`, 'success');
+    } else {
+      showToast(data.error || 'Failed to create dataset', 'error');
+    }
+  } catch(e) {
+    showToast('Failed to create dataset', 'error');
+  }
+  loadDatasets();
 }
 
 async function openDataset(name) {

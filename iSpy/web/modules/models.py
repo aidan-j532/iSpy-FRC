@@ -25,26 +25,42 @@ class ModelsModule(WebModule):
         self.pytorch_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_protected_model_names(self) -> set[str]:
+        """Names of model files referenced by any camera's pipeline config
+        (per-camera vision_model blocks)."""
         config = self.context.get("config")
         if not config:
             return set()
-        model_cfg = config.get("vision_model", {})
         names = set()
-        for key in ("file_path", "source_pt"):
-            fp = model_cfg.get(key)
-            if fp:
-                names.add(Path(fp).name)
+        cams = config.get_nested("camera_configs", default={})
+        for cam in cams.values():
+            if not isinstance(cam, dict):
+                continue
+            model_cfg = cam.get("vision_model")
+            if not isinstance(model_cfg, dict):
+                continue
+            for key in ("file_path", "source_pt"):
+                fp = model_cfg.get(key)
+                if fp:
+                    names.add(Path(fp).name)
         return names
 
     def _get_current_model(self) -> str | None:
         # kept for the "active" badge in the list/detail views - still just
-        # the primary file_path's basename.
+        # the primary file_path's basename of the first model-backed camera.
         config = self.context.get("config")
         if not config:
             return None
-        model_cfg = config.get("vision_model", {})
-        file_path = model_cfg.get("file_path") or model_cfg.get("source_pt")
-        return Path(file_path).name if file_path else None
+        cams = config.get_nested("camera_configs", default={})
+        for cam in cams.values():
+            if not isinstance(cam, dict):
+                continue
+            model_cfg = cam.get("vision_model")
+            if not isinstance(model_cfg, dict):
+                continue
+            file_path = model_cfg.get("file_path") or model_cfg.get("source_pt")
+            if file_path:
+                return Path(file_path).name
+        return None
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/models", "models_page", lambda: render_template("models.html"))
@@ -116,11 +132,25 @@ class ModelsModule(WebModule):
         if not _is_safe_path(self.pytorch_dir, p) and not _is_safe_path(Path.cwd() / "YoloModels", p):
             return jsonify(error="Invalid model path"), 403
         config = self.context.get("config")
-        if config:
-            config.set("vision_model", "source_pt", str(p))
-            config.set("vision_model", "file_path", str(p))
-            config.save()
-        return jsonify(success=True, note="Restart iSpy to load this model.")
+        if not config:
+            return jsonify(error="No config available"), 500
+        # Model selection lives in the object_detection pipeline config of
+        # every model-backed camera (per-camera vision_model blocks).
+        updated = []
+        cams = config.get_nested("camera_configs", default={})
+        for cam_name, cam in cams.items():
+            if not isinstance(cam, dict):
+                continue
+            model_cfg = cam.get("vision_model")
+            if not isinstance(model_cfg, dict):
+                continue
+            model_cfg["source_pt"] = str(p)
+            model_cfg["file_path"] = str(p)
+            updated.append(cam_name)
+        if not updated:
+            return jsonify(error="No camera uses a user-selectable model"), 400
+        config.save()
+        return jsonify(success=True, note="Restart iSpy to load this model.", cameras=updated)
     
     def _resolve_model_path(self, name: str) -> Path | None:
         target = (self.pytorch_dir / name).resolve()

@@ -30,7 +30,15 @@ class DatasetsModule(WebModule):
     def __init__(self, context: dict):
         super().__init__(context)
         self.dataset_root = Path.cwd() / "QuantizeDataset"
+        self.dataset_root.mkdir(parents=True, exist_ok=True)
+        # A quantization dataset is a reusable resource, not tied to any one
+        # vision model. `default` is the built-in dataset every pipeline falls
+        # back to when none is selected.
+        (self.dataset_root / "default" / "images").mkdir(parents=True, exist_ok=True)
         self._active: str = self._load_active()
+        if not self._active and (self.dataset_root / "default").exists():
+            self._active = "default"
+            self._save_active("default")
 
     def _load_active(self) -> str:
         try:
@@ -48,6 +56,7 @@ class DatasetsModule(WebModule):
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/datasets", "datasets_page", lambda: render_template("datasets.html"))
         flask_app.add_url_rule("/api/datasets", "api_datasets_list", self._list, methods=["GET"])
+        flask_app.add_url_rule("/api/datasets", "api_datasets_create", self._create, methods=["POST"])
         flask_app.add_url_rule("/api/datasets/active", "api_datasets_active_get", self._get_active, methods=["GET"])
         flask_app.add_url_rule("/api/datasets/active", "api_datasets_active_set", self._set_active, methods=["POST"])
         flask_app.add_url_rule("/api/datasets/<name>/images", "api_ds_images", self._list_images, methods=["GET"])
@@ -71,6 +80,19 @@ class DatasetsModule(WebModule):
 
     def _get_active(self):
         return jsonify(active=self._active)
+
+    def _create(self):
+        data = request.get_json(force=True) or {}
+        name = _validate_filename(str(data.get("name", "")))
+        if not name or name in (".", ".."):
+            return jsonify(error="Invalid dataset name"), 400
+        target = self.dataset_root / name
+        if not _is_safe_path(self.dataset_root, target):
+            return jsonify(error="Invalid path"), 400
+        if target.exists():
+            return jsonify(error=f"Dataset '{name}' already exists"), 409
+        (target / "images").mkdir(parents=True, exist_ok=True)
+        return jsonify(success=True, name=name)
 
     def _set_active(self):
         data = request.get_json(force=True) or {}

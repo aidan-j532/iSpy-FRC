@@ -8,10 +8,9 @@ _REPO_ROOT = Path.cwd()
 
 class iSpyConfig:
     def __init__(
-        self, file_path: str = None, create: bool = True, strict_migration: bool = True
+        self, file_path: str = None, create: bool = True
     ):
         self.logger = logging.getLogger(__name__)
-        self._strict_migration = strict_migration
 
         self.default_config = {
             "num_gpus": "auto",
@@ -41,10 +40,10 @@ class iSpyConfig:
                         # output.* and input.* vision model fields are auto-detected
                         # from the model's _metadata.yaml sidecar file. You do not need to set them.
                         # Override here only if you know the metadata is wrong.
-                        "file_path": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
-                        "source_pt": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
+                        "file_path": "YoloModels/pytorch/_default_pose.pt",
+                        "source_pt": "YoloModels/pytorch/_default_pose.pt",
                         "min_conf": 0.5,
-                        # Build the optimized RKNN artifact on first boot; the
+                        # Build the optimized backend artifact on first boot; the
                         # camera reports ready once the background build lands.
                         "quantized": True,
                     },
@@ -111,7 +110,7 @@ class iSpyConfig:
             self.save()
 
         if file_path:
-            self.load_from_file(file_path, strict_migration=strict_migration)
+            self.load_from_file(file_path)
 
         self.camera_configs: dict[str, iSpyCameraConfig] = {
             name: iSpyCameraConfig(cam_cfg)
@@ -135,61 +134,7 @@ class iSpyConfig:
         self.logger.info("Found config files: %s  ->  using %s", config_files, chosen)
         return chosen
 
-    def _migrate_legacy_vision_model(self, strict: bool = True):
-        legacy = self.config.get("vision_model")
-        if not isinstance(legacy, dict):
-            return
-
-        cams = self.config.get("camera_configs")
-        if not isinstance(cams, dict):
-            raise RuntimeError(
-                "Legacy top-level vision_model found but camera_configs is not a "
-                "dict - cannot migrate vision_model to per-camera form."
-            )
-
-        targets = []
-        for name, cam in cams.items():
-            if not isinstance(cam, dict):
-                raise RuntimeError(
-                    f"Camera config '{name}' is not a dict - cannot migrate "
-                    "vision_model into it."
-                )
-            pipeline = cam.get("pipeline")
-            if pipeline in (None, "", "object_detection") and "vision_model" not in cam:
-                targets.append(name)
-
-        if not targets:
-            if strict:
-                raise RuntimeError(
-                    "Legacy top-level vision_model found but no camera_configs entry "
-                    "with pipeline 'object_detection' (or unset) exists without its "
-                    "own vision_model - refusing to drop the model config silently."
-                )
-            self.logger.warning(
-                "Dropping legacy top-level vision_model with no per-camera "
-                "consumer (no object_detection camera without its own "
-                "vision_model). No model config was lost for any camera."
-            )
-            self.config.pop("vision_model", None)
-            self.save()
-            return
-
-        for name in targets:
-            cams[name]["vision_model"] = json.loads(json.dumps(legacy))
-
-        self.config.pop("vision_model", None)
-        self.logger.info(
-            "Migrated legacy top-level vision_model to per-camera vision_model on: %s",
-            ", ".join(targets),
-        )
-        self.save()
-
     def _check_config(self):
-        if self.config.get("vision_model") and self.config.get("april_tag"):
-            self.logger.warning(
-                "Both vision_model and april_tag configs present - ensure this is intentional."
-            )
-
         self.config.setdefault("plugins", {})
         self.config["plugins"].setdefault("trackers", [])
         self.config["plugins"].setdefault("utilities", [])
@@ -221,32 +166,23 @@ class iSpyConfig:
             )
         return cfg
 
-    def load_from_file(self, file_path: str, strict_migration: bool = True):
+    def load_from_file(self, file_path: str):
         try:
             with open(file_path, "r") as f:
                 data = json.load(f)
             self._update_config(data)
-            self._migrate_legacy_vision_model(strict=strict_migration)
         except json.JSONDecodeError as e:
-            # Back up the corrupt file instead of silently discarding it or
-            # re-searching the same broken path.
-            bad_path = Path(file_path)
-            if bad_path.exists():
-                backup = bad_path.with_suffix(f".corrupt-{int(__import__('time').time())}.json")
-                try:
-                    bad_path.rename(backup)
-                    self.logger.error(
-                        "Config at %s was invalid JSON (%s). Backed up to %s and "
-                        "regenerating defaults.", file_path, e, backup,
-                    )
-                except OSError:
-                    self.logger.error(
-                        "Config at %s was invalid JSON (%s) and could not be backed up. "
-                        "Using defaults without touching the file.", file_path, e,
-                    )
-            self.save()
+            # Invalid config is an error - boot never silently regenerates it.
+            # First-run initialization is explicitly the job of `boot -f`.
+            raise RuntimeError(
+                f"Config at {file_path} is invalid JSON ({e}). Fix it or run "
+                "'boot -f' to start from a fresh default configuration."
+            ) from e
         except FileNotFoundError:
-            self.logger.warning("Config file not found at %s. Using defaults.", file_path)
+            raise RuntimeError(
+                f"Config file not found at {file_path}. Run 'boot -f' to "
+                "create a fresh default configuration."
+            ) from None
         finally:
             try:
                 self._configure_logging()

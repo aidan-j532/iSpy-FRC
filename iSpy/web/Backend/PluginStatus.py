@@ -42,8 +42,13 @@ def _build_vision_pipeline_payloads():
             "name": name,
             "class_name": cls.__name__,
             "config_schema": schema,
-            "show_common_fields": name == "object_detection",
+            "show_common_fields": bool(getattr(cls, "uses_user_model", lambda: False)()),
+            "can_optimize": False,
         }
+        try:
+            payload["can_optimize"] = bool(cls.get_optimization_options(cls))
+        except Exception:
+            pass
         if hasattr(cls, "recommended_format"):
             try:
                 payload["recommended_format"] = cls.recommended_format()
