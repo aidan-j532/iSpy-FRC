@@ -12,6 +12,7 @@ def ensure_quantized_model(
     input_size=(640, 640),
     quantize=True,
     force=False,
+    dataset_path=None,
 ):
     """
     This comment was written by OpenCode BigPickle :)
@@ -80,6 +81,7 @@ def ensure_quantized_model(
             input_size,
             quantize=True,
             force=force,
+            dataset_path=dataset_path,
         )
     except Exception as exc:
         logger.warning(

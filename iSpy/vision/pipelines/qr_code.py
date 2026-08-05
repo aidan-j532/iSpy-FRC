@@ -84,22 +84,17 @@ class QRCodeCamera(Camera, VisionBase):
         return (img_w / 2.0) / math.tan(math.radians(60.0 / 2.0))
 
     def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
-        fx, fy, fz = pt
-        yaw_rad = math.radians(self.camera_bot_relative_yaw)
-        cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
-        
-        x_rot = fz * cos_y + (-fx) * sin_y
-        y_rot = fz * sin_y - (-fx) * cos_y
         scale = self.conversions.get(self.unit, self.conversions["meter"])
-        
-        return np.array([
-            (x_rot + self.camera_x) * scale,
-            (y_rot + self.camera_y) * scale,
-            (-fy + self.camera_z) * scale,
-        ], dtype=np.float32)
+        return triangulation.camera_point_to_robot(
+            pt,
+            self.camera_x,
+            self.camera_y,
+            self.camera_z,
+            self.camera_bot_relative_yaw,
+            self.camera_pitch_angle,
+        ) * scale
 
-    def _rvec_to_euler(self, rvec: np.ndarray) -> tuple[float, float, float]:
-        R, _ = cv2.Rodrigues(rvec)
+    def _matrix_to_euler(self, R: np.ndarray) -> tuple[float, float, float]:
         sy = math.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
         if sy > 1e-6:
             roll = math.atan2(R[2, 1], R[2, 2])
@@ -212,7 +207,11 @@ class QRCodeCamera(Camera, VisionBase):
                 robot_pt = self._camera_point_to_robot(
                     (tvec[0] * to_inches, tvec[1] * to_inches, tvec[2] * to_inches)
                 )
-                roll, pitch, yaw = self._rvec_to_euler(rvec.reshape(3))
+                R_tag, _ = cv2.Rodrigues(rvec.reshape(3))
+                R_robot = triangulation.camera_rotation_to_robot(
+                    R_tag, self.camera_bot_relative_yaw, self.camera_pitch_angle
+                )
+                roll, pitch, yaw = self._matrix_to_euler(R_robot)
 
                 obj = Object(
                     x=float(robot_pt[0]),

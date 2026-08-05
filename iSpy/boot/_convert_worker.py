@@ -21,6 +21,7 @@ def main():
         quantize=args.get("quantize"),
         force=args.get("force", False),
         kw=args.get("kw"),
+        dataset_path=args.get("dataset_path"),
     )
 
     out_path = Path(sys.argv[1] + ".result.json")

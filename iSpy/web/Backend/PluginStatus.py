@@ -38,12 +38,18 @@ def _build_vision_pipeline_payloads():
             continue
         if schema is None:
             schema = {}
-        pipelines.append({
+        payload = {
             "name": name,
             "class_name": cls.__name__,
             "config_schema": schema,
             "show_common_fields": name == "object_detection",
-        })
+        }
+        if hasattr(cls, "recommended_format"):
+            try:
+                payload["recommended_format"] = cls.recommended_format()
+            except Exception:
+                pass
+        pipelines.append(payload)
     return pipelines
 
 

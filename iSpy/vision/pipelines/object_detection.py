@@ -67,7 +67,10 @@ class ObjectDetectionCamera(Camera, VisionBase):
         # Schema fields set via the config UI live at the camera level; merge
         # them into the model config so they drive loading, readiness gating
         # and optimization identically to the nested vision_model keys.
-        for _k in ("quantized", "min_conf", "target_format", "input_size"):
+        for _k in (
+            "quantized", "min_conf", "target_format", "input_size",
+            "quantization_dataset", "auto_opt",
+        ):
             if _k in camera_config.data and _k not in vm_cfg:
                 vm_cfg[_k] = camera_config.data[_k]
         camera_config.data["vision_model"] = vm_cfg
@@ -78,6 +81,13 @@ class ObjectDetectionCamera(Camera, VisionBase):
         self.yolo_model_file = vm_filled["file_path"]
         self.input_size = tuple(vm_filled["input_size"])
         self.quantized = vm_filled.get("quantized", vm_cfg.get("quantized", False))
+        cam_auto_opt = vm_cfg.get("auto_opt")
+        if cam_auto_opt is None:
+            cam_auto_opt = config.get("auto_opt", False) if config is not None else False
+        self._auto_opt = bool(cam_auto_opt)
+        self._requested_format = str(vm_cfg.get("target_format") or "auto")
+        self.quantization_dataset = vm_cfg.get("quantization_dataset") or None
+        self._target_format: str | None = None
         self.frame_sync = config.get("frame_sync", False)
         if self.frame_sync:
             self.logger.warning("Frame sync is enabled. This may introduce latency in detection (you probaly don't want this).")
@@ -163,12 +173,38 @@ class ObjectDetectionCamera(Camera, VisionBase):
     @classmethod
     def config_schema(cls) -> dict:
         return {
+            "auto_opt": {
+                "type": "boolean",
+                "label": "Auto-optimize (recommend backend)",
+                "default": False,
+                "help": "Use iSpy's hardware detection (recommend_format) to build "
+                        "the best optimized backend artifact for this device "
+                        "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
+                        "etc.) in the background. Falls back to the top-level "
+                        "config 'auto_opt' when unset.",
+            },
+            "target_format": {
+                "type": "select",
+                "label": "Target format",
+                "options": ["auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"],
+                "default": "auto",
+                "help": "'auto' picks the best backend for this device via "
+                        "recommend_format(). Set an explicit format to override.",
+            },
             "quantized": {
                 "type": "boolean",
-                "label": "Quantize / optimize model",
+                "label": "Quantize model",
                 "default": False,
-                "help": "Build an optimized RKNN artifact from source_pt in the "
-                        "background; camera reports ready once the build finishes.",
+                "help": "Quantize the optimized artifact (int8). Only meaningful "
+                        "with auto_opt or target_format set.",
+            },
+            "quantization_dataset": {
+                "type": "text",
+                "label": "Quantization dataset",
+                "default": "",
+                "help": "Optional path to a folder of calibration images used "
+                        "for quantization. Leave empty to auto-download images "
+                        "from the model's calibration keywords.",
             },
             "min_conf": {
                 "type": "number",
@@ -177,6 +213,16 @@ class ObjectDetectionCamera(Camera, VisionBase):
                 "step": 0.05,
             },
         }
+
+    @classmethod
+    def recommended_format(cls) -> str:
+        """Best backend for this device (what 'auto' resolves to)."""
+        try:
+            from iSpy.config.AutoOpt import recommend_format
+
+            return recommend_format(ignore_dependencies=True)
+        except Exception:
+            return "onnx"
 
     @classmethod
     def needs_model_backend(cls) -> bool:
@@ -189,6 +235,30 @@ class ObjectDetectionCamera(Camera, VisionBase):
         if not p.is_absolute():
             p = Path(__file__).resolve().parents[3] / p
         return p
+
+    def _resolve_target_format(self) -> str:
+        """Effective conversion backend: explicit target_format if set (and not
+        'auto'), otherwise the old boot recommend_format() detection."""
+        explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
+        if explicit and explicit != "auto":
+            target = explicit
+        else:
+            target = self.recommended_format()
+        supported = {"onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu"}
+        if target not in supported:
+            self.logger.warning(
+                "Recommended target format %r unsupported - using onnx", target,
+            )
+            return "onnx"
+        return target
+
+    def _target_format_cached(self) -> str:
+        if self._target_format is None:
+            self._target_format = self._resolve_target_format()
+        return self._target_format
+
+    def _optimizing_status(self) -> str:
+        return f"optimizing ({self._target_format_cached()} build)"
 
     def _has_fallback(self) -> bool:
         """True if ANY loadable model artifact exists for this camera's
@@ -209,15 +279,24 @@ class ObjectDetectionCamera(Camera, VisionBase):
             return _OPTIMIZE_JOBS.get(self._cam_name)
 
     def _optimization_requested(self) -> bool:
+        # Quantize flag OR the old boot auto_opt behavior (camera-level
+        # auto_opt, falling back to the top-level config auto_opt).
+        if bool(getattr(self, "quantized", False)):
+            return True
+        if getattr(self, "_auto_opt", False):
+            return True
         vm = self.config.get("vision_model") or {}
-        return bool(vm.get("quantized"))
+        return bool(vm.get("auto_opt")) or bool(vm.get("quantized"))
 
     def _optimized_active(self) -> bool:
-        model = getattr(self, "model", None)
-        return (
-            model is not None
-            and getattr(model, "model_type", "") in ("rknn", "onnx", "tflite")
-        )
+        """True once the loaded model is a backend artifact (not a bare .pt),
+        or the TPU backend which consumes .pt via XLA."""
+        if getattr(self, "model", None) is None:
+            return False
+        if getattr(self.model, "model_type", "") == "tpu":
+            return True
+        path = str(getattr(self, "yolo_model_file", "") or "")
+        return bool(path) and not path.lower().endswith(".pt")
 
     def is_ready(self) -> tuple[bool, str]:
         job = self._current_job()
@@ -231,7 +310,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
             if self._optimized_active():
                 return True, "ready"
             if in_flight:
-                return False, "optimizing (rknn build)"
+                return False, self._optimizing_status()
             if job is not None and job["status"].startswith("error: optimize failed"):
                 return True, job["status"]
             if self.model is None and not self._has_fallback():
@@ -243,8 +322,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
         if in_flight:
             if self.model is not None or self._has_fallback():
-                return True, "optimizing (rknn build)"
-            return False, "optimizing (rknn build)"
+                return True, self._optimizing_status()
+            return False, self._optimizing_status()
 
         if self.model is not None:
             if job is not None and job["status"].startswith("error: optimize failed"):
@@ -265,9 +344,11 @@ class ObjectDetectionCamera(Camera, VisionBase):
         return False, "error: no model configured/found"
 
     def request_optimize(self) -> str:
-        """Start an RKNN build of this camera's source .pt as a background
-        job (via the existing boot conversion subprocess). No-op if a job is
-        already in flight for this camera. Never blocks."""
+        """Start a backend build (rknn/onnx/engine/...) of this camera's
+        source .pt as a background job (via the existing boot conversion
+        subprocess). Target format comes from target_format or
+        recommend_format(). No-op if a job is already in flight for this
+        camera. Never blocks."""
         with _OPTIMIZE_LOCK:
             existing = _OPTIMIZE_JOBS.get(self._cam_name)
             if existing is not None and existing["thread"].is_alive():
@@ -281,7 +362,7 @@ class ObjectDetectionCamera(Camera, VisionBase):
             if self.model is None and not self._has_fallback():
                 return "error: no model configured/found"
 
-            job = {"status": "optimizing (rknn build)", "thread": None}
+            job = {"status": self._optimizing_status(), "thread": None}
             thread = threading.Thread(
                 target=self._optimize_worker,
                 args=(str(pt_path),),
@@ -295,20 +376,45 @@ class ObjectDetectionCamera(Camera, VisionBase):
 
     def _optimize_worker(self, pt_path: str):
         try:
-            from iSpy.boot.boot import _convert_model_subprocess, _RKNN_QUANTIZE
+            from iSpy.boot.boot import _convert_model_subprocess
 
             input_size = list(getattr(self, "input_size", (640, 640)))
+            vm_cfg = self.config.get("vision_model") or {}
+            dataset = vm_cfg.get("quantization_dataset") or None
+            target = self._target_format_cached()
+
+            if target == "tpu":
+                # TPU consumes the .pt directly via torch_xla at runtime, but
+                # only when GenericYolo loads it with device="tpu" (model_type
+                # "tpu"). Without that it loads as a plain CPU/GPU YOLO and
+                # _optimized_active() stays False, so is_ready() would keep
+                # restarting the "optimize" thread on every poll. vm_extra
+                # pushes device="tpu" into the runtime load AND the persisted
+                # config for subsequent boots.
+                self.logger.info(
+                    "Camera '%s': TPU backend - keeping .pt, no conversion.",
+                    self._cam_name,
+                )
+                self._activate_optimized_model(pt_path, vm_extra={"device": "tpu"})
+                self._set_optimize_status("ready (tpu)")
+                return
+
             converted = _convert_model_subprocess(
                 pt_path,
-                "rknn",
+                target,
                 input_size,
-                quantize=_RKNN_QUANTIZE,
+                quantize=bool(self.quantized),
                 force=True,
+                dataset_path=dataset,
             )
             converted_path = self._resolve_model_path(str(converted or ""))
-            if converted_path is None or not converted_path.exists() or converted_path.suffix.lower() != ".rknn":
+            if (
+                converted_path is None
+                or not converted_path.exists()
+                or converted_path.suffix.lower() == ".pt"
+            ):
                 raise RuntimeError(
-                    f"RKNN build produced no .rknn artifact (got '{converted}')"
+                    f"{target} build produced no artifact (got '{converted}')"
                 )
             self._activate_optimized_model(str(converted_path))
             self._set_optimize_status("ready")
@@ -335,14 +441,18 @@ class ObjectDetectionCamera(Camera, VisionBase):
             "input_size": list(getattr(self, "input_size", (640, 640))),
         }
 
-    def _activate_optimized_model(self, artifact_path: str):
-        """Swap this camera onto the freshly built RKNN artifact: reload the
+    def _activate_optimized_model(self, artifact_path: str, vm_extra: dict | None = None):
+        """Swap this camera onto the freshly built backend artifact: reload the
         model, start the pipeline worker if needed, and persist the per-camera
         file_path. Raises RuntimeError if the optimized model fails to load -
-        the camera then stays on its fallback."""
+        the camera then stays on its fallback. vm_extra is merged into the
+        persisted vision_model (e.g. {"device": "tpu"}) so the artifact is
+        loaded the same way on subsequent boots."""
         vm = self._current_vm_config()
         vm["file_path"] = artifact_path
         vm["quantized"] = True
+        if vm_extra:
+            vm.update(vm_extra)
 
         from iSpy.vision.ModelInspector import fill_missing_config
         new_model = GenericYolo(
@@ -375,6 +485,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
         vm_out = self.config.get("vision_model")
         if isinstance(vm_out, dict):
             vm_out["file_path"] = artifact_path
+            if vm_extra:
+                vm_out.update(vm_extra)
         if self._ispy_config is not None:
             cams = self._ispy_config.config.get("camera_configs", {})
             for key, entry in cams.items():
@@ -384,6 +496,8 @@ class ObjectDetectionCamera(Camera, VisionBase):
                     entry_vm = entry.get("vision_model")
                     if isinstance(entry_vm, dict):
                         entry_vm["file_path"] = artifact_path
+                        if vm_extra:
+                            entry_vm.update(vm_extra)
             try:
                 self._ispy_config.save(quiet=True)
             except Exception:
@@ -489,6 +603,22 @@ class ObjectDetectionCamera(Camera, VisionBase):
     def _box_to_robot_point(
         self, box: Box, img_w: int, img_h: int
     ) -> np.ndarray | None:
+        # Unified depth model: cast the bottom-center ray and intersect it
+        # with the ground plane (objects are assumed to sit on the ground).
+        # This is geometrically exact and consistent for every pitch; the
+        # old size-based two-zone heuristic is kept only as a fallback for
+        # the degenerate case where the ray runs parallel to the ground.
+        x1, y1, x2, y2 = box.xyxy
+        ray = self._pixel_ray((x1 + x2) / 2.0, y2, img_w, img_h)
+        gp = triangulation.ground_plane_intersection(ray, ground_z=0.0)
+        if gp is not None:
+            scale = self.conversions.get(self.unit, self.conversions["meter"])
+            return gp * scale
+        return self._size_based_point(box, img_w, img_h)
+
+    def _size_based_point(
+        self, box: Box, img_w: int, img_h: int
+    ) -> np.ndarray | None:
         x1, y1, x2, y2 = box.xyxy
         avg_px = ((x2 - x1) + (y2 - y1)) / 2.0
         if avg_px <= 0:
@@ -518,10 +648,11 @@ class ObjectDetectionCamera(Camera, VisionBase):
         left_right = true_horiz * math.sin(horizontal_angle_rad)
         forward = true_horiz * math.cos(horizontal_angle_rad)
 
+        # +X right, +Y forward, +Z up; yaw 0 = facing +Y, positive yaw turns right.
         yaw_rad = math.radians(self.camera_bot_relative_yaw)
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
-        x_rot = forward * cos_y + left_right * sin_y
-        y_rot = forward * sin_y - left_right * cos_y
+        x_rot = left_right * cos_y + forward * sin_y
+        y_rot = forward * cos_y - left_right * sin_y
 
         scale = self.conversions.get(self.unit, self.conversions["meter"])
         return np.array(
@@ -581,20 +712,15 @@ class ObjectDetectionCamera(Camera, VisionBase):
         return results, annotated_frame
 
     def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
-        fx, fy, fz = pt
-        yaw_rad = math.radians(self.camera_bot_relative_yaw)
-        cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
-        x_rot = fz * cos_y + (-fx) * sin_y
-        y_rot = fz * sin_y - (-fx) * cos_y
         scale = self.conversions.get(self.unit, self.conversions["meter"])
-        return np.array(
-            [
-                (x_rot + self.camera_x) * scale,
-                (y_rot + self.camera_y) * scale,
-                (-fy + self.camera_z) * scale,
-            ],
-            dtype=np.float32,
-        )
+        return triangulation.camera_point_to_robot(
+            pt,
+            self.camera_x,
+            self.camera_y,
+            self.camera_z,
+            self.camera_bot_relative_yaw,
+            self.camera_pitch_angle,
+        ) * scale
 
     def _pnp_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
         # solvePnP output is in the units of `pnp.object_points`, which the
@@ -625,20 +751,16 @@ class ObjectDetectionCamera(Camera, VisionBase):
         depth_source = "monocular"
         if box.translation is not None:
             pt = self._pnp_to_robot_coordinates(box.translation)
-        elif self.z_mode == "ground_plane":
-            gp = triangulation.ground_plane_intersection(ray)
-            if gp is not None:
-                pt = gp
-                depth_source = "ground_plane"
-            else:
-                pt = self._box_to_robot_point(box, img_w, img_h)
-                if pt is None:
-                    return None
-                pt = np.array([pt[0], pt[1], 0.0])
         else:
             pt = self._box_to_robot_point(box, img_w, img_h)
             if pt is None:
                 return None
+            # Both depth models assume the object sits on the ground, so the
+            # reported z is the ground-plane intersection (0). z_mode is kept
+            # as an accepted config key for backwards compatibility; both
+            # "size_based" and "ground_plane" now use the same ray+plane math.
+            if self.z_mode == "ground_plane":
+                depth_source = "ground_plane"
             pt = np.array([pt[0], pt[1], 0.0])
 
         roll, pitch, yaw = 0.0, 0.0, 0.0

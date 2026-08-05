@@ -33,18 +33,17 @@ def _bootstrap_default_camera(config: iSpyConfig):
         return
     dev = devices[0]
     name = "camera_1"
-    default_vm = config.default_config["camera_configs"]["default_cam"]["vision_model"]
-    config.set("camera_configs", {
-        name: {
-            "name": name, "source": dev["path"], "device_id": dev.get("device_id"),
-            "pipeline": "object_detection", "yaw": 0, "pitch": 0, "height": 1.0,
-            "x": 0, "y": 0, "z": 0, "grayscale": False, "subsystem": "field",
-            "calibration": {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
-            "vision_model": json.loads(json.dumps(default_vm)),
-        }
-    })
+    default_cam = config.default_config["camera_configs"]["default_cam"]
+    cam_cfg = json.loads(json.dumps(default_cam))
+    cam_cfg["name"] = name
+    cam_cfg["source"] = dev["path"]
+    cam_cfg["device_id"] = dev.get("device_id")
+    config.set("camera_configs", {name: cam_cfg})
     config.save()
-    logger.info("First boot: auto-configured camera '%s' -> %s", name, dev["path"])
+    logger.info(
+        "First boot: auto-configured camera '%s' -> %s (pipeline=%s)",
+        name, dev["path"], cam_cfg.get("pipeline", "?"),
+    )
 
 def _close_logging_handlers() -> None:
     root = logging.getLogger()
@@ -754,13 +753,13 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
             except Exception:
                 kpt_shape = [17, 3]
             pose_yaml = Path(data_yaml).parent / "data_pose.yaml"
-            pose_yaml.write_text(
-                "train: images\n"
-                "val: valid/images\n"
-                "nc: 1\n"
-                "names: ['object']\n"
-                f"kpt_shape: {list(kpt_shape)}\n"
-            )
+            try:
+                base = Path(data_yaml).read_text()
+            except OSError:
+                base = "train: images\nval: valid/images\nnc: 1\nnames: ['object']\n"
+            if not base.strip():
+                base = "train: images\nval: valid/images\nnc: 1\nnames: ['object']\n"
+            pose_yaml.write_text(base.rstrip() + f"\nkpt_shape: {list(kpt_shape)}\n")
             effective_data_yaml = str(pose_yaml)
             logger.info("Pose task detected - using kpt_shape-aware data.yaml: %s", pose_yaml)
 
@@ -1172,10 +1171,73 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     onnx.save(model, output_path)
     return divisor, kpt_coord_scale
 
+def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
+    """(Re)build dataset.txt inside a user-picked calibration folder from
+    whatever images it contains. Absolute paths are used so
+    _downscale_calib_images can resolve files living outside the dataset dir.
+    An existing dataset.txt is kept only while every listed file still exists;
+    otherwise it is rebuilt from current contents (stale entries would silently
+    feed a partial calibration set to the backend)."""
+    from iSpy.dataset.dataset import _find_images as _find_ds_images
+
+    dataset_txt = user_ds / "dataset.txt"
+    stale = True
+    if dataset_txt.exists():
+        lines = [l for l in dataset_txt.read_text().splitlines() if l.strip()]
+        stale = not all(
+            (Path(l) if Path(l).is_absolute() else user_ds / l).exists()
+            for l in lines
+        )
+    if not stale:
+        return dataset_txt
+    imgs = _find_ds_images(user_ds)
+    if not imgs:
+        raise FileNotFoundError(
+            f"User quantization dataset contains no images: {user_ds}"
+        )
+    dataset_txt.write_text("\n".join(str(p.resolve()) for p in imgs) + "\n")
+    logger.info(
+        "Calibration dataset from user path %s (%d images)",
+        user_ds, len(imgs),
+    )
+    return dataset_txt
+
+
+def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
+    """data.yaml for ultralytics' int8 calibration that matches the model's
+    actual class count/names (falling back to the old single-class defaults
+    when no sidecar exists) and points straight at the user's images - nothing
+    is downloaded. An nc mismatch against a multi-class model would make the
+    export path reject the calibration data."""
+    pt_meta = read_metadata(Path(pt_file)) or {}
+    try:
+        nc = max(1, int(pt_meta.get("nc") or pt_meta.get("num_classes") or 1))
+    except (TypeError, ValueError):
+        nc = 1
+    names_meta = pt_meta.get("names") or {}
+    if not names_meta:
+        names = ["object"] if nc == 1 else [f"class_{i}" for i in range(nc)]
+    else:
+        names = [
+            names_meta.get(i, names_meta.get(str(i), f"class_{i}"))
+            for i in range(nc)
+        ]
+    if not names:
+        names = ["object"]
+    data_yaml = user_ds / "data.yaml"
+    data_yaml.write_text(
+        f"train: {user_ds}\nval: {user_ds}\nnc: {nc}\n"
+        f"names: {json.dumps(names)}\n"
+    )
+    logger.info("Calibration data.yaml written (nc=%d) at %s", nc, data_yaml)
+    return str(data_yaml)
+
+
 def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None):
     if quantize is None:
         quantize = _RKNN_QUANTIZE
     pt_path = Path(pt_file)
+    user_dataset = dataset_path is not None
     if dataset_path is None:
         dataset_path = str(_dataset_dir_for(pt_path))
 
@@ -1210,8 +1272,15 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
 
     effective_kw = kw if kw is not None else get_calibration_keywords(pt_path, default=keywords)
     count = calib_count_for_format("rknn")
-    prepare_quantization_dataset(dataset_path, boot=True, keywords=effective_kw, count=count)
-    dataset_txt = Path(dataset_path) / "dataset.txt"
+    ds_path = Path(dataset_path)
+    if user_dataset:
+        # User-picked calibration dataset: use their images directly, never
+        # download. dataset.txt is kept in sync with whatever images are
+        # inside (absolute paths, so _downscale_calib_images resolves them).
+        dataset_txt = _prepare_user_calibration_dataset(ds_path)
+    else:
+        prepare_quantization_dataset(dataset_path, boot=True, keywords=effective_kw, count=count)
+        dataset_txt = ds_path / "dataset.txt"
     if not dataset_txt.exists() or not dataset_txt.read_text().strip():
         raise FileNotFoundError(f"RKNN calibration dataset could not be prepared at: {dataset_txt}")
     
@@ -1344,7 +1413,7 @@ def _find_pose_output_tensors(graph, concat_node):
         )
     return box_name, conf_name, kpt_name
 
-def convert_model(model_file, target_format, input_size, quantize=None, force=False, kw=None):
+def convert_model(model_file, target_format, input_size, quantize=None, force=False, kw=None, dataset_path=None):
     if not os.path.exists(model_file):
         logger.warning("Model file %s is missing. Skipping conversion.", model_file)
         return model_file
@@ -1391,6 +1460,7 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
                         input_size=input_size,
                         quantize=quantize,
                         kw=kw,
+                        dataset_path=dataset_path,
                     )
                     _run_optimized_model_comparison(model_file, rknn_result)
                     return rknn_result
@@ -1407,6 +1477,7 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
             input_size=input_size,
             quantize=quantize,
             kw=kw,
+            dataset_path=dataset_path,
         )
 
     desired = _desired_output_path(pt_path, target_format)
@@ -1424,10 +1495,24 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
     data_yaml = None
     if quantize:
         kw = get_calibration_keywords(pt_path, default=keywords)
-        ds_dir = _dataset_dir_for(pt_path)
-        count = calib_count_for_format(target_format)
-        prepare_quantization_dataset(str(ds_dir), boot=True, keywords=kw, count=count)
-        data_yaml = str(Path(dataset_root) / "data.yaml")
+        if dataset_path:
+            # User-picked calibration dataset: point ultralytics' int8
+            # calibration straight at their images; never download.
+            user_ds = Path(dataset_path).resolve()
+            _prepare_user_calibration_dataset(user_ds)
+            data_yaml = _user_calibration_data_yaml(model_file, user_ds)
+            logger.info(
+                "Calibration dataset from user path %s (data.yaml=%s)",
+                user_ds, data_yaml,
+            )
+        else:
+            ds_dir = _dataset_dir_for(pt_path)
+            count = calib_count_for_format(target_format)
+            prepare_quantization_dataset(str(ds_dir), boot=True, keywords=kw, count=count)
+            # data.yaml lives inside the per-model dataset folder that was just
+            # prepared - the root QuantizeDataset/data.yaml is never written,
+            # so pointing ultralytics int8 calibration at it would load nothing.
+            data_yaml = str(Path(ds_dir) / "data.yaml")
     else:
         Path(dataset_root).mkdir(parents=True, exist_ok=True)
 
@@ -1492,7 +1577,7 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
     logger.warning("Conversion to %s failed, falling back to .pt", target_format)
     return model_file
 
-def _convert_model_subprocess(model_file, target_format, input_size, quantize=None, force=False, kw=None) -> Path:
+def _convert_model_subprocess(model_file, target_format, input_size, quantize=None, force=False, kw=None, dataset_path=None) -> Path:
     import tempfile
 
     outputs_dir = _PROJECT_ROOT / "Outputs"
@@ -1506,6 +1591,8 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
         "force": force,
         "kw": kw,
     }
+    if dataset_path:
+        args["dataset_path"] = str(dataset_path)
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir=str(outputs_dir)) as f:
         args_path = f.name
@@ -1673,10 +1760,14 @@ def setup_files(first_boot: bool = False):
         pass
 
 
-def _ensure_object_detection_models(config: iSpyConfig) -> None:
-    """Make sure every object_detection camera references an existing model
-    artifact. If a configured path is missing, fall back to the newest staged
-    .pt in YoloModels/pytorch (never triggers a conversion at boot)."""
+def _ensure_model_artifacts(config: iSpyConfig) -> None:
+    """Make sure every model-file-backed camera (typically object_detection,
+    identified by having a per-camera vision_model block) references an
+    existing model artifact. If a configured path is missing, fall back to the
+    newest staged .pt in YoloModels/pytorch (never triggers a conversion at
+    boot). Pipelines that provision their own models (depth_anything,
+    yolo_world download weights) carry no vision_model block and are skipped -
+    their readiness is reported by their cameras' is_ready()."""
     pytorch_dir = _PROJECT_ROOT / "YoloModels" / "pytorch"
     candidates = sorted(
         pytorch_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True
@@ -1686,19 +1777,21 @@ def _ensure_object_detection_models(config: iSpyConfig) -> None:
 
     dirty = False
     for name, cam_cfg in config.config.get("camera_configs", {}).items():
-        if cam_cfg.get("pipeline") != "object_detection":
+        if not isinstance(cam_cfg, dict):
             continue
+        pipeline = cam_cfg.get("pipeline", "object_detection")
         vm = cam_cfg.get("vision_model")
-        if not isinstance(vm, dict):
-            raise RuntimeError(
-                f"Camera '{name}' uses pipeline 'object_detection' but has no "
-                "vision_model block - cannot determine a model file."
-            )
+        if not isinstance(vm, dict) or not vm:
+            # No model-file config (e.g. depth/yolo_world download their own
+            # weights), no artifact to ensure.
+            continue
         if fallback is None:
-            raise RuntimeError(
-                f"Camera '{name}' uses pipeline 'object_detection' but no model "
-                f"exists in {pytorch_dir} to fall back to."
+            logger.warning(
+                "Camera '%s' uses model-backed pipeline '%s' but no model "
+                "exists in %s to fall back to.",
+                name, pipeline, pytorch_dir,
             )
+            continue
         rel = str(fallback.relative_to(_PROJECT_ROOT))
         changed = False
         for key in ("file_path", "source_pt"):
@@ -1723,7 +1816,7 @@ def _ensure_object_detection_models(config: iSpyConfig) -> None:
 
 
 _READINESS_POLL_S = 2.0
-_READINESS_WAIT_TIMEOUT_S = 1200  # 20 minutes
+_READINESS_WAIT_TIMEOUT_S = int(os.environ.get("ISPY_READINESS_TIMEOUT_S", "1200"))  # default 20 min
 
 
 def _wait_for_pipeline_ready(
@@ -1741,9 +1834,14 @@ def _wait_for_pipeline_ready(
         logger.info("No cameras configured - skipping readiness wait.")
         return
 
+    default_pipeline = (
+        config.default_config.get("camera_configs", {})
+        .get("default_cam", {})
+        .get("pipeline", "object_detection")
+    )
     instances: dict[str, object] = {}
     for name, cam_cfg in cams.items():
-        pipeline = cam_cfg.get("pipeline", "object_detection")
+        pipeline = cam_cfg.get("pipeline", default_pipeline)
         cls = pipeline_classes.get(pipeline)
         if cls is None:
             logger.warning(
@@ -1812,6 +1910,7 @@ def _wait_for_pipeline_ready(
 
 
 def on_boot(install_service: bool = False, first_boot: bool = False):
+    _configure_quiet_logging()
     if first_boot:
         logger.info("First boot mode - staging fresh models and configuration")
     setup_files(first_boot=first_boot)
@@ -1833,7 +1932,7 @@ def on_boot(install_service: bool = False, first_boot: bool = False):
     _bootstrap_default_camera(config)
 
     pipeline_classes = get_pipeline_classes()
-    _ensure_object_detection_models(config)
+    _ensure_model_artifacts(config)
     _wait_for_pipeline_ready(config, pipeline_classes)
     config.save(quiet=True)
     logger.info("Boot sequence complete.")

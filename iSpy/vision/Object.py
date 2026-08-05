@@ -10,7 +10,7 @@ class Object:
         x: float,
         y: float,
         z: float = 0.0,
-        id: int = 0.0,
+        id: int | None = None,
         alive_time: float = 0.4,
         roll: float = 0.0,
         pitch: float = 0.0,
@@ -62,10 +62,12 @@ class Object:
         robot_pitch: float = 0.0,
         robot_yaw: float = 0.0,
     ):
+        # Frame: +X right, +Y forward, +Z up. robot_yaw is positive when the
+        # robot has turned RIGHT (boresight rotated from +Y toward +X).
         cos_y = math.cos(robot_yaw)
         sin_y = math.sin(robot_yaw)
-        field_x = cos_y * self.x - sin_y * self.y
-        field_y = sin_y * self.x + cos_y * self.y
+        field_x = self.x * cos_y + self.y * sin_y
+        field_y = self.y * cos_y - self.x * sin_y
         self.x = field_x + robot_x
         self.y = field_y + robot_y
         self.z = self.z + robot_z

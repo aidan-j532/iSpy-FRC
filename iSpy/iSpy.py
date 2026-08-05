@@ -218,8 +218,10 @@ class iSpy:
 
         t_track = time.perf_counter()
         for tracker in self.trackers.values():
+            # WPILib pose yaw is CCW-positive; Object.relative_to uses the
+            # codebase's convention (positive yaw = turned RIGHT), so negate.
             fuel_list = tracker.update(
-                fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), 0.0
+                fuel_list, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
         code_times["trackers"] = time.perf_counter() - t_track
 
@@ -263,8 +265,10 @@ class iSpy:
 
         t_track = time.perf_counter()
         for tracker in self.trackers.values():
+            # WPILib pose yaw is CCW-positive; Object.relative_to uses the
+            # codebase's convention (positive yaw = turned RIGHT), so negate.
             fuel_list = tracker.update(
-                fuel_list, pose.X(), pose.Y(), pose.rotation().radians(), 0.0
+                fuel_list, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
         code_times["trackers"] = time.perf_counter() - t_track
 

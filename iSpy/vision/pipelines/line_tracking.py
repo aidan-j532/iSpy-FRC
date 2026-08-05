@@ -47,6 +47,18 @@ class LineTrackingCamera(Camera, VisionBase):
         self.line_color = camera_config.get("line_color", "white").lower()
         self.min_area = int(camera_config.get("min_contour_area", 500))
 
+        self.unit = config.get("unit", "meter")
+        self.conversions = {
+            "meter": 0.0254,
+            "meters": 0.0254,
+            "inch": 1.0,
+            "inches": 1.0,
+            "foot": 1 / 12,
+            "feet": 1 / 12,
+            "centimeter": 2.54,
+            "centimeters": 2.54,
+        }
+
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
         self._last_objects: list[Object] = []
 
@@ -125,10 +137,11 @@ class LineTrackingCamera(Camera, VisionBase):
                 if robot_pt is not None:
                     # Convert minAreaRect angle to radians
                     yaw_rad = math.radians(angle)
+                    scale = self.conversions.get(self.unit, self.conversions["meter"])
 
                     obj = Object(
-                        x=float(robot_pt[0]),
-                        y=float(robot_pt[1]),
+                        x=float(robot_pt[0] * scale),
+                        y=float(robot_pt[1] * scale),
                         z=0.0,
                         name=f"line_{self.line_color}",
                         confidence=min(area / (w * h * 0.5), 1.0), # Pseudo confidence based on screen real-estate

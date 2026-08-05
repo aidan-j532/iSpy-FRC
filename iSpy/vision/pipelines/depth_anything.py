@@ -102,6 +102,15 @@ class DepthAnythingCamera(Camera, VisionBase):
         self.max_depth = float(camera_config.get("max_depth", 10.0))
         self.estimate_depth = bool(camera_config.get("estimate_depth", True))
 
+        # max_depth is configured in meters; scale z output into the
+        # configured unit so every pipeline emits the same unit.
+        self._z_scale = {
+            "meter": 1.0, "meters": 1.0,
+            "inch": 39.37007874, "inches": 39.37007874,
+            "foot": 3.280839895, "feet": 3.280839895,
+            "centimeter": 100.0, "centimeters": 100.0,
+        }.get(self.unit, 1.0)
+
         raw_optimize = camera_config.get("optimize", True)
         if isinstance(raw_optimize, str):
             raw_optimize = raw_optimize.strip().lower() in ("1", "true", "yes", "on")
@@ -283,7 +292,7 @@ class DepthAnythingCamera(Camera, VisionBase):
             np.clip(1.0 - closeness, 0.0, 1.0)
         )
 
-        return distance_m
+        return distance_m * self._z_scale
 
     def _objects_from_depth(
         self,

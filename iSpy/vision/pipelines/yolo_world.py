@@ -62,6 +62,14 @@ class YoloWorldCamera(Camera, VisionBase):
                 "default": False,
                 "help": "Convert the YOLO World model to a quantized backend artifact using iSpy's export framework.",
             },
+            "quantization_dataset": {
+                "type": "text",
+                "label": "Quantization dataset",
+                "default": "",
+                "help": "Optional path to a folder of calibration images used "
+                        "for quantization. Leave empty to auto-download images "
+                        "from the model's calibration keywords.",
+            },
             "target_format": {
                 "type": "select",
                 "label": "Target Format",
@@ -111,6 +119,7 @@ class YoloWorldCamera(Camera, VisionBase):
         self.quantize = bool(raw_quantize)
 
         self.target_format = str(camera_config.get("target_format") or "auto").lower()
+        self._quantization_dataset = camera_config.get("quantization_dataset") or None
         self._model_input_size = int(camera_config.get("input_size") or 640)
         self.model = None
         self._model_path = None
@@ -256,6 +265,7 @@ class YoloWorldCamera(Camera, VisionBase):
                 self.target_format,
                 (self._model_input_size, self._model_input_size),
                 quantize=True,
+                dataset_path=self._quantization_dataset,
             )
             if not converted:
                 self._set_load_error(
