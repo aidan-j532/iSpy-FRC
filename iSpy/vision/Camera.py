@@ -135,9 +135,58 @@ class Camera:
         cv2.putText(frame, text, (cx, cy), font, scale, (180, 180, 180), thickness, cv2.LINE_AA)
         return frame
 
+    def _open_capture(self, extra_backends: bool = False):
+        """Open the capture with the platform's preferred backend(s).
+
+        ``extra_backends`` (used on recovery re-opens) additionally allows
+        DirectShow on Windows, which can open cameras that MSMF reports as
+        invalidated (e.g. while another app holds the device)."""
+        backend_candidates = self._get_capture_backend_candidates(platform.system())
+        if extra_backends and cv2.CAP_DSHOW not in backend_candidates:
+            backend_candidates = backend_candidates + [cv2.CAP_DSHOW]
+        last_error = None
+        for backend in backend_candidates:
+            try:
+                cap = cv2.VideoCapture(self.source) if backend is None else cv2.VideoCapture(self.source, backend)
+            except Exception as exc:
+                last_error = exc
+                continue
+            if cap is not None and cap.isOpened():
+                return cap
+            last_error = ValueError(f"Camera failed to open with backend {backend}: {self.source}")
+        raise ValueError(f"Camera failed to open: {self.source} ({last_error})")
+
+    def _configure_capture(self, cap):
+        is_windows = platform.system() == "Windows"
+        is_linux = platform.system() == "Linux"
+
+        # CROSS-PLATFORM FIX: Safely assign parameters based on platform capabilities
+        if is_windows:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+        elif is_linux:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+        else:
+            # Fallback configuration for macOS/other systems
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+
+        for _ in range(20):
+            try:
+                cap.grab()
+            except Exception:
+                break
+
     def _open_camera(self):
         sys_platform = platform.system()
-        is_windows = sys_platform == "Windows"
         is_linux = sys_platform == "Linux"
 
         # CROSS-PLATFORM FIX: Only run v4l2-ctl configurations if specifically on Linux
@@ -191,56 +240,12 @@ class Camera:
 
         # CROSS-PLATFORM FIX: Try a safe backend order first and only fall back
         # to another backend if the first cannot open the device.
-        backend_candidates = self._get_capture_backend_candidates(sys_platform)
-        self.cap = None
-        last_error = None
-        for backend in backend_candidates:
-            try:
-                if backend is None:
-                    self.cap = cv2.VideoCapture(self.source)
-                else:
-                    self.cap = cv2.VideoCapture(self.source, backend)
-            except Exception as exc:
-                last_error = exc
-                self.cap = None
-                continue
-
-            if self.cap is not None and self.cap.isOpened():
-                break
-
-            last_error = ValueError(f"Camera failed to open with backend {backend}: {self.source}")
-            self.cap = None
-
-        if self.cap is None or not self.cap.isOpened():
-            raise ValueError(f"Camera failed to open: {self.source} ({last_error})")
+        self.cap = self._open_capture()
 
         for _ in range(10):
             self.cap.grab()
 
-        # CROSS-PLATFORM FIX: Safely assign parameters based on platform capabilities
-        if is_windows:
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
-        elif is_linux:
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
-        else:
-            # Fallback configuration for macOS/other systems
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
-
-        for _ in range(20):
-            try:
-                self.cap.grab()
-            except Exception:
-                break
+        self._configure_capture(self.cap)
 
         if not self.cap.isOpened():
             raise ValueError(f"Camera lost after configuration: {self.source}")
@@ -266,20 +271,66 @@ class Camera:
             
         self._frame_processors = []
 
+    def _reopen_capture(self):
+        """Release and re-open the capture after a persistent grab failure
+        (e.g. MSMF error -1072873821 / MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED
+        when another app grabs the webcam). Returns True on success."""
+        try:
+            cap = getattr(self, "cap", None)
+            if cap is not None:
+                cap.release()
+        except Exception:
+            pass
+        try:
+            self.cap = self._open_capture(extra_backends=True)
+            self._configure_capture(self.cap)
+            self.logger.info("Camera %s: capture re-opened.", self.source)
+            return True
+        except Exception as exc:
+            self.cap = None
+            self.logger.warning(
+                "Camera %s: capture re-open failed (%s); will retry.", self.source, exc
+            )
+            time.sleep(2.0)
+            return False
+
     def _reader(self):
         frame_interval = 1.0 / self._fps_cap if self._fps_cap > 0 else 0.0
         next_frame_time = 0.0
+        consecutive_failures = 0
+        warned = False
         while not self.stopped:
             if frame_interval > 0:
                 now = time.perf_counter()
                 if now < next_frame_time:
                     time.sleep(min(next_frame_time - now, 0.05))
                     continue
+
+            if self.cap is None:
+                self._reopen_capture()
+                time.sleep(0.5)
+                continue
+
             ret, frame = self.cap.read()
             if not ret:
-                self.logger.warning(f"Frame read failed on {self.source}, retrying...")
-                time.sleep(0.05) # Don't starve CPU
+                consecutive_failures += 1
+                if not warned:
+                    self.logger.warning(
+                        "Frame read failed on %s - camera busy or unavailable; "
+                        "will retry and re-open the capture if this persists.",
+                        self.source,
+                    )
+                    warned = True
+                if consecutive_failures >= 30:
+                    consecutive_failures = 0
+                    self._reopen_capture()
+                time.sleep(0.05)  # Don't starve CPU
                 continue
+
+            if warned:
+                self.logger.info("Camera %s: frame reads recovered.", self.source)
+                warned = False
+            consecutive_failures = 0
 
             if frame.max() < 1:
                 self.logger.debug("Solid-black frame skipped.")
