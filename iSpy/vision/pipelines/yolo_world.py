@@ -128,7 +128,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self.classes = self._parse_classes(self.prompt)
         self.model_size = str(camera_config.get("model_size") or "s").lower()
 
-        raw_quantize = camera_config.get("quantize", False)
+        raw_quantize = camera_config.get("quantized", False)
         if isinstance(raw_quantize, str):
             raw_quantize = raw_quantize.strip().lower() in ("1", "true", "yes", "on")
         self.quantize = bool(raw_quantize)
@@ -155,7 +155,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         schema = self.config_schema()
         return {
             key: schema[key]
-            for key in ("quantize", "target_format", "quantization_dataset", "input_size")
+            for key in ("quantized", "target_format", "quantization_dataset", "input_size")
             if key in schema
         }
 

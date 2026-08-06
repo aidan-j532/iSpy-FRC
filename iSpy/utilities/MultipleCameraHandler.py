@@ -52,44 +52,6 @@ class MultipleCameraHandler:
             except Exception:
                 pass
 
-    def reload_camera(self, index: int, new_camera: VisionPipeline):
-        """Replace the camera at ``index`` and restart its processing thread.
-
-        Used by the web layer when a camera's settings change: the new
-        pipeline instance has already been constructed (its __init__ kicked
-        off any background work), so this only has to swap it in and restart
-        that camera's loop without touching the other cameras. The replaced
-        instance is destroyed so its capture device is released."""
-        if index < 0 or index >= len(self.cameras):
-            raise IndexError(f"Cannot reload camera at index {index}")
-
-        self._stop_events[index].set()
-        thread = self._threads[index]
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=3.0)
-
-        old_camera = self.cameras[index]
-        self.cameras[index] = new_camera
-        with self._locks[index]:
-            self._objects[index] = []
-            self._frames[index] = None
-        self._fresh[index].clear()
-
-        self._stop_events[index] = threading.Event()
-        self._threads[index] = threading.Thread(
-            target=self._camera_loop,
-            args=(index, new_camera),
-            daemon=True,
-            name=f"CameraLoop-{getattr(new_camera, 'source', index)}",
-        )
-        self._threads[index].start()
-
-        if old_camera is not new_camera:
-            try:
-                old_camera.destroy()
-            except Exception:
-                self.logger.exception("Error destroying replaced camera at index %d", index)
-
     def predict(self) -> list[Object]:
         for event in self._fresh:
             if not event.wait(timeout=0.2):

@@ -13,12 +13,6 @@ from iSpy.vision.genericYolo import Box, Results, GenericYolo, ModelFileError
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision import triangulation
 
-# In-process registry of per-camera optimization jobs, keyed by camera name.
-# Mirrors the state-in-dict pattern used by service_daemon.VisionSupervisor:
-# only the status string and the worker thread live here.
-_OPTIMIZE_JOBS: dict[str, dict] = {}
-_OPTIMIZE_LOCK = threading.Lock()
-
 class ObjectDetectionCamera(VisionPipeline):
     plugin_name = "object_detection"
 
@@ -158,17 +152,22 @@ class ObjectDetectionCamera(VisionPipeline):
             )
             self._preproc_thread.start()
 
-        # The pipeline kicks off its own readiness work: if the config
-        # requests quantization/optimization and the optimized artifact
-        # isn't loaded yet, start the background RKNN build right here so
-        # is_ready() reports "optimizing (rknn build)" and boot only has to
-        # wait for it to finish.
+        # If the config requests optimization and no matching artifact is
+        # active yet, kick off the build on a simple background thread so the
+        # app can keep running (is_ready() reports "optimizing" and run()
+        # passes frames through untouched until the build finishes).
+        self._optimizing = False
+        self._optimize_error: str | None = None
         if self._optimization_requested() and not self._optimized_active():
             self.logger.info(
-                "Camera '%s': quantization requested - starting background "
-                "RKNN build", self._cam_name,
+                "Camera '%s': optimization requested - building %s artifact",
+                self._cam_name, self._target_format_cached(),
             )
-            self.request_optimize()
+            threading.Thread(
+                target=self._optimize_runner,
+                daemon=True,
+                name=f"Optimize-{self._cam_name}",
+            ).start()
 
     @classmethod
     def config_schema(cls) -> dict:
@@ -194,7 +193,7 @@ class ObjectDetectionCamera(VisionPipeline):
             "target_format": {
                 "type": "select",
                 "label": "Target format",
-                "options": ["auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"],
+                "options": ["auto", "onnx"],
                 "default": "auto",
                 "quantization": True,
                 "help": "'auto' picks the best backend for this device via "
@@ -228,12 +227,14 @@ class ObjectDetectionCamera(VisionPipeline):
 
     @classmethod
     def recommended_format(cls) -> str:
-        """Best backend for this device (what 'auto' resolves to)."""
         try:
             from iSpy.config.AutoOpt import recommend_format
 
             return recommend_format(ignore_dependencies=True)
         except Exception:
+            logging.getLogger(__name__).warning(
+                "AutoOpt.recommend_format did NOT work for your device, falling back to ONNX!"
+            )
             return "onnx"
 
     @classmethod
@@ -253,13 +254,13 @@ class ObjectDetectionCamera(VisionPipeline):
         return p
 
     def _resolve_target_format(self) -> str:
-        """Effective conversion backend: explicit target_format if set (and not
-        'auto'), otherwise the old boot recommend_format() detection."""
         explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
         if explicit and explicit != "auto":
             target = explicit
         else:
             target = self.recommended_format()
+            
+        # Note right now the user only has access to ONNX for a reason!
         supported = {"onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu"}
         if target not in supported:
             self.logger.warning(
@@ -273,26 +274,39 @@ class ObjectDetectionCamera(VisionPipeline):
             self._target_format = self._resolve_target_format()
         return self._target_format
 
-    def _optimizing_status(self) -> str:
-        return f"optimizing ({self._target_format_cached()} build)"
+    def _is_processable(self) -> bool:
+        """True when run() may actually run inference. When False, run()
+        passes the raw camera feed through untouched."""
+        if getattr(self, "_optimizing", False):
+            return False
+        if self.model is None:
+            return False
+        if self._optimization_requested():
+            return self._optimized_active()
+        return True
 
-    def _has_fallback(self) -> bool:
-        """True if ANY loadable model artifact exists for this camera's
-        configured vision_model (file_path or source_pt) - including a raw
-        .pt that runs on CPU/ONNX. Purely filesystem-level; never converts."""
+    def _source_model_path(self) -> Path | None:
+        """The .pt this camera's optimization builds from, or None."""
         vm = self.config.get("vision_model") or {}
-        for key in ("file_path", "source_pt"):
-            p = self._resolve_model_path(str(vm.get(key, "")))
-            if p is not None and p.exists():
-                return True
-        return False
+        source = vm.get("source_pt") or vm.get("file_path")
+        p = self._resolve_model_path(str(source or ""))
+        if p is not None and p.exists() and p.suffix.lower() == ".pt":
+            return p
+        return None
 
-    def _model_file_is_pt(self) -> bool:
-        return str(getattr(self, "yolo_model_file", "")).lower().endswith(".pt")
-
-    def _current_job(self) -> dict | None:
-        with _OPTIMIZE_LOCK:
-            return _OPTIMIZE_JOBS.get(self._cam_name)
+    def _optimized_artifact_path(self) -> Path | None:
+        """Existing build artifact at YoloModels/{format}/{stem}.{ext}."""
+        src = self._source_model_path()
+        if src is None:
+            return None
+        from iSpy.vision.optimizer import _desired_output_path
+        try:
+            p = _desired_output_path(src, self._target_format_cached())
+        except Exception:
+            return None
+        if p.exists():
+            return p
+        return None
 
     def _optimization_requested(self) -> bool:
         # Quantize flag OR the old boot auto_opt behavior (camera-level
@@ -304,65 +318,56 @@ class ObjectDetectionCamera(VisionPipeline):
         vm = self.config.get("vision_model") or {}
         return bool(vm.get("auto_opt")) or bool(vm.get("quantized"))
 
+    @staticmethod
+    def _path_format(path: str) -> str:
+        """Format of a model path: 'pytorch', 'onnx', 'openvino', ... or ''."""
+        p = str(path).lower()
+        if "openvino_model" in p or p.endswith(".xml"):
+            return "openvino"
+        for ext, fmt in (
+            (".pt", "pytorch"),
+            (".onnx", "onnx"),
+            (".rknn", "rknn"),
+            (".tflite", "tflite"),
+            (".engine", "engine"),
+            (".mlpackage", "coreml"),
+        ):
+            if p.endswith(ext):
+                return fmt
+        return ""
+
     def _optimized_active(self) -> bool:
-        """True once the loaded model is a backend artifact (not a bare .pt),
+        """True once the loaded model is a backend artifact in the requested
+        target format (a stale artifact in another format does not count),
         or the TPU backend which consumes .pt via XLA."""
         if getattr(self, "model", None) is None:
             return False
         if getattr(self.model, "model_type", "") == "tpu":
             return True
         path = str(getattr(self, "yolo_model_file", "") or "")
-        return bool(path) and not path.lower().endswith(".pt")
+        if not path:
+            return False
+        return self._path_format(path) == self._target_format_cached()
 
     def is_ready(self) -> tuple[bool, str]:
-        ready, status = self._readiness()
-        self._set_status(status)
-        return ready, status
+        # Pure status report - never triggers or blocks on optimization.
+        # The optimize build is started at construction when needed.
+        if not self._optimization_requested():
+            status = "ready" if self.model is not None else "error: no model configured/found"
+            self._set_status(status)
+            return self.model is not None, status
 
-    def _readiness(self) -> tuple[bool, str]:
-        job = self._current_job()
-        in_flight = job is not None and job["thread"].is_alive()
+        if self._optimizing:
+            self._set_status("optimizing")
+            return False, "optimizing"
 
-        # Optimization configured: only "ready" once the optimized build
-        # finishes. Kicks the build off as a background job if none is
-        # running. A finished-but-failed build still leaves the camera
-        # usable on its fallback, reported with the error status.
-        if self._optimization_requested():
-            if self._optimized_active():
-                return True, "ready"
-            if in_flight:
-                return False, self._optimizing_status()
-            if job is not None and job["status"].startswith("error: optimize failed"):
-                return True, job["status"]
-            if self.model is None and not self._has_fallback():
-                return False, "error: no model configured/found"
-            status = self.request_optimize()
-            if status.startswith("optimizing"):
-                return False, status
-            return True, status
-
-        if in_flight:
-            if self.model is not None or self._has_fallback():
-                return True, self._optimizing_status()
-            return False, self._optimizing_status()
-
-        if self.model is not None:
-            if job is not None and job["status"].startswith("error: optimize failed"):
-                return True, job["status"]
-            if job is not None and job["status"] == "ready":
-                return True, "ready"
-            if self._model_file_is_pt():
-                return True, "using unoptimized .pt fallback"
+        if self._optimized_active():
+            self._set_status("ready")
             return True, "ready"
 
-        if job is not None and job["status"].startswith("error: optimize failed"):
-            if self._has_fallback():
-                return True, job["status"]
-            return False, job["status"]
-
-        if self._has_fallback():
-            return True, "using unoptimized .pt fallback"
-        return False, "error: no model configured/found"
+        status = self._optimize_error or "optimizing"
+        self._set_status(status)
+        return False, status
 
     def get_optimization_options(self) -> dict:
         schema = self.config_schema()
@@ -373,73 +378,46 @@ class ObjectDetectionCamera(VisionPipeline):
         }
 
     def optimize(self, **kwargs) -> str:
-        """Start a backend build of this camera's source .pt as a background
-        job (generic entry point over request_optimize())."""
-        return self.request_optimize()
+        """Build the optimized model artifact synchronously. Blocks until the
+        build finishes; is_ready() reports (False, "optimizing") while it
+        runs and (True, "ready") once it has produced an artifact."""
+        if self._optimizing:
+            return "optimizing"
 
-    def request_optimize(self) -> str:
-        """Start a backend build (rknn/onnx/engine/...) of this camera's
-        source .pt as a background job (via the existing boot conversion
-        subprocess). Target format comes from target_format or
-        recommend_format(). No-op if a job is already in flight for this
-        camera. Never blocks."""
-        with _OPTIMIZE_LOCK:
-            existing = _OPTIMIZE_JOBS.get(self._cam_name)
-            if existing is not None and existing["thread"].is_alive():
-                return existing["status"]
+        artifact = self._optimized_artifact_path()
+        if artifact is not None:
+            try:
+                self._activate_optimized_model(str(artifact))
+                return "ready"
+            except Exception:
+                pass  # stale/broken artifact - rebuild below
 
-            vm_cfg = self.config.get("vision_model") or {}
-            source_pt = vm_cfg.get("source_pt") or vm_cfg.get("file_path")
-            pt_path = self._resolve_model_path(str(source_pt or ""))
-            if pt_path is None or not pt_path.exists() or pt_path.suffix.lower() != ".pt":
-                return "error: optimize failed - source .pt not found, using fallback"
-            if self.model is None and not self._has_fallback():
-                return "error: no model configured/found"
+        source_pt = self._source_model_path()
+        if source_pt is None:
+            return "error: optimize failed - source .pt not found"
 
-            job = {"status": self._optimizing_status(), "thread": None}
-            thread = threading.Thread(
-                target=self._optimize_worker,
-                args=(str(pt_path),),
-                daemon=True,
-                name=f"Optimize-{self._cam_name}",
-            )
-            job["thread"] = thread
-            _OPTIMIZE_JOBS[self._cam_name] = job
-            thread.start()
-            return job["status"]
-
-    def _optimize_worker(self, pt_path: str):
+        self._optimizing = True
         try:
-            from iSpy.vision.optimizer import _convert_model_subprocess
-
-            input_size = list(getattr(self, "input_size", (640, 640)))
-            vm_cfg = self.config.get("vision_model") or {}
-            dataset = vm_cfg.get("quantization_dataset") or None
             target = self._target_format_cached()
-
             if target == "tpu":
-                # TPU consumes the .pt directly via torch_xla at runtime, but
-                # only when GenericYolo loads it with device="tpu" (model_type
-                # "tpu"). Without that it loads as a plain CPU/GPU YOLO and
-                # _optimized_active() stays False, so is_ready() would keep
-                # restarting the "optimize" thread on every poll. vm_extra
-                # pushes device="tpu" into the runtime load AND the persisted
-                # config for subsequent boots.
+                # TPU consumes the .pt directly via torch_xla at runtime
+                # (device="tpu" makes GenericYolo load it as model_type "tpu").
                 self.logger.info(
                     "Camera '%s': TPU backend - keeping .pt, no conversion.",
                     self._cam_name,
                 )
-                self._activate_optimized_model(pt_path, vm_extra={"device": "tpu"})
-                self._set_optimize_status("ready (tpu)")
-                return
+                self._activate_optimized_model(str(source_pt), vm_extra={"device": "tpu"})
+                return "ready"
+
+            from iSpy.vision.optimizer import _convert_model_subprocess
 
             converted = _convert_model_subprocess(
-                pt_path,
+                str(source_pt),
                 target,
-                input_size,
+                list(self.input_size),
                 quantize=bool(self.quantized),
                 force=True,
-                dataset_path=dataset,
+                dataset_path=self.quantization_dataset,
             )
             converted_path = self._resolve_model_path(str(converted or ""))
             if (
@@ -451,20 +429,23 @@ class ObjectDetectionCamera(VisionPipeline):
                     f"{target} build produced no artifact (got '{converted}')"
                 )
             self._activate_optimized_model(str(converted_path))
-            self._set_optimize_status("ready")
+            return "ready"
         except Exception as exc:
             self.logger.exception(
                 "Optimization failed for camera '%s': %s", self._cam_name, exc
             )
-            self._set_optimize_status(
-                f"error: optimize failed - {exc}, using fallback"
-            )
+            return f"error: optimize failed - {exc}"
+        finally:
+            self._optimizing = False
 
-    def _set_optimize_status(self, status: str):
-        with _OPTIMIZE_LOCK:
-            job = _OPTIMIZE_JOBS.get(self._cam_name)
-            if job is not None:
-                job["status"] = status
+    def _optimize_runner(self):
+        """Run the synchronous optimize() off the main thread (started at
+        construction when the config requests a build). is_ready() reports
+        "optimizing" until this finishes."""
+        status = self.optimize()
+        if not self._optimized_active():
+            self._optimize_error = status
+        self._set_status(status)
 
     def _current_vm_config(self) -> dict:
         vm = self.config.get("vision_model")
@@ -833,8 +814,14 @@ class ObjectDetectionCamera(VisionPipeline):
         )
 
     def run(self):
-        data, frame = self.get_yolo_data()
-        if data is None or frame is None:
+        frame = self.get_frame()
+        if frame is None:
+            return [], None
+        if not self._is_processable():
+            return [], frame
+
+        data, annotated = self.get_yolo_data()
+        if data is None or annotated is None:
             return [], frame
 
         img_h, img_w = frame.shape[:2]
@@ -853,6 +840,8 @@ class ObjectDetectionCamera(VisionPipeline):
         return objects, frame
  
     def run_with_supplied_data(self, data: Results) -> list[Object]:
+        if not self._is_processable():
+            return []
         img_h, img_w = data.orig_shape[:2]
         objects: list[Object] = []
         kp_iter = iter(data.keypoints) if data.keypoints else None

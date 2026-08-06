@@ -134,7 +134,11 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             "centimeter": 100.0, "centimeters": 100.0,
         }.get(self.unit, 1.0)
 
-        raw_optimize = camera_config.get("optimize", True)
+        raw_optimize = camera_config.get("auto_opt")
+        if raw_optimize is None:
+            raw_optimize = camera_config.get("optimize")  # legacy key
+        if raw_optimize is None:
+            raw_optimize = config.get("auto_opt", False) if config is not None else False
         if isinstance(raw_optimize, str):
             raw_optimize = raw_optimize.strip().lower() in ("1", "true", "yes", "on")
         self.optimize = bool(raw_optimize)
@@ -161,7 +165,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         schema = self.config_schema()
         return {
             key: schema[key]
-            for key in ("optimize", "model_size")
+            for key in ("auto_opt", "model_size")
             if key in schema
         }
 

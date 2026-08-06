@@ -1,6 +1,5 @@
 import copy
 import glob
-import logging
 import os
 import platform
 import subprocess
@@ -13,10 +12,6 @@ from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.save_store import read, write
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 from iSpy.config.iSpyConfig import default_vision_model, is_model_backed_pipeline
-from iSpy.vision.pipelines import get_pipeline_classes
-from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
@@ -324,28 +319,8 @@ class CamerasModule(WebModule):
         config.set("camera_configs", cams)
         config.save()
 
-        # Rebuild the camera's pipeline in place with the new settings. The
-        # pipeline __init__ kicks off whatever background work it needs
-        # (optimization builds, model downloads, etc.) - no restart required.
-        vision = self.context.get("vision_instance")
-        reloaded = False
-        if vision is not None and hasattr(vision, "reload_camera"):
-            # Match the RUNNING pipeline instance by its current name/source
-            # (the config key and the camera name can diverge in legacy
-            # configs, and the instance still holds the pre-rename name).
-            old_name = entry.get("name") or entry_key
-            try:
-                vision.reload_camera(old_name, dict(new_entry))
-                reloaded = True
-            except Exception as exc:
-                logger.exception("Failed to reload camera '%s' after config save", new_name)
-
-        if reloaded:
-            return jsonify(
-                success=True,
-                note="Settings saved - pipeline reloaded.",
-                camera=new_entry,
-            )
+        # Settings changes are picked up on the next vision start - never
+        # rebuild/swap the running pipeline mid-run.
         return jsonify(
             success=True,
             note="Settings saved - restart vision to apply.",

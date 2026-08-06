@@ -6,7 +6,6 @@ from iSpy.plugins.bases import VisionBase
 from iSpy.vision.pipelines.april_tag import AprilTagCamera
 from iSpy.vision.pipelines.qr_code import QRCodeCamera
 from iSpy.vision.pipelines.depth_anything import DepthAnythingCamera
-from iSpy.vision.pipelines.line_tracking import LineTrackingCamera
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 from iSpy.vision.Camera import Camera
 
