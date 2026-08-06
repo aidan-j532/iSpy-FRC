@@ -745,7 +745,7 @@ async function submitEditCamera() {
   });
   const j = await r.json();
   if (r.ok) {
-    showToast('Settings saved - pipeline reloaded', 'success');
+    showToast(j.note || 'Settings saved', 'success');
     closeEditCameraModal();
     refreshCameras();
   } else {

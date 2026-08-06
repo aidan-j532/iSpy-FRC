@@ -38,16 +38,12 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         pipeline_names = {p["name"] for p in pipelines}
         self.assertIn("qr_code", pipeline_names)
         self.assertIn("depth_anything", pipeline_names)
-        self.assertIn("line_tracking", pipeline_names)
 
         qr_schema = QRCodeCamera.config_schema()
         self.assertIn("decode_mode", qr_schema)
 
         depth_schema = DepthAnythingCamera.config_schema()
         self.assertIn("estimate_depth", depth_schema)
-
-        line_schema = LineTrackingCamera.config_schema()
-        self.assertIn("line_color", line_schema)
 
     def test_vision_base_exposes_debug_contract(self):
         class DummyVision(VisionBase):
@@ -106,17 +102,16 @@ class VisionPipelineSchemaTests(unittest.TestCase):
     def test_builtin_plugins_emit_visible_objects_and_annotations(self):
         import numpy as np
 
-        for plugin_cls in (QRCodeCamera, LineTrackingCamera):
-            camera = plugin_cls.__new__(plugin_cls)
-            camera.get_frame = lambda: np.zeros((80, 80, 3), dtype=np.uint8)
-            camera.logger = None
-            camera._last_frame = None
-            objects, frame = camera.run()
-            self.assertTrue(objects, f"{plugin_cls.__name__} should emit at least one object")
-            self.assertIsNotNone(frame)
-            annotated = camera.plot(frame)
-            self.assertIsNotNone(annotated)
-            self.assertTrue(np.any(annotated != frame))
+        camera = QRCodeCamera.__new__(QRCodeCamera)
+        camera.get_frame = lambda: np.zeros((80, 80, 3), dtype=np.uint8)
+        camera.logger = None
+        camera._last_frame = None
+        objects, frame = camera.run()
+        self.assertTrue(objects, "QRCodeCamera should emit at least one object")
+        self.assertIsNotNone(frame)
+        annotated = camera.plot(frame)
+        self.assertIsNotNone(annotated)
+        self.assertTrue(np.any(annotated != frame))
 
     def test_depth_plugin_unloaded_returns_raw_frame(self):
         import numpy as np

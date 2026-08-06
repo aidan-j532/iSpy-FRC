@@ -163,6 +163,5 @@ class BackgroundPreparedPipeline(VisionPipeline):
         raise NotImplementedError
 
     def _preparing(self) -> bool:
-        return bool(
-            self._prep_thread is not None and self._prep_thread.is_alive()
-        )
+        thread = getattr(self, "_prep_thread", None)
+        return bool(thread is not None and thread.is_alive())

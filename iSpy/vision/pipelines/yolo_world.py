@@ -28,23 +28,32 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return True
 
     def is_ready(self) -> tuple[bool, str]:
-        ready, status = self._readiness()
-        self._set_status(status)
-        return ready, status
+        # Pure status report - never triggers or blocks on optimization.
+        # The optimize build is started at construction when needed.
+        if not self._optimization_requested():
+            if self._preparing():
+                self._set_status("downloading (model weights)")
+                return False, "downloading (model weights)"
+            if self.model is not None:
+                self._set_status("ready")
+                return True, "ready"
+            reason = getattr(self, "_load_error", None)
+            status = f"error: {reason}" if reason else "error: model weights not downloaded/loaded"
+            self._set_status(status)
+            return False, status
 
-    def _readiness(self) -> tuple[bool, str]:
-        if getattr(self, "_optimizing", False):
-            return False, "optimizing (backend build)"
-        if self._preparing():
-            return False, "downloading (model weights)"
-        if self.model is not None:
-            if self.quantize and not self._quantized:
-                return True, "error: quantized build failed - using full precision fallback"
+        if self._optimizing:
+            self._set_status("optimizing")
+            return False, "optimizing"
+
+        if self._optimized_active():
+            self._set_status("ready")
             return True, "ready"
-        reason = getattr(self, "_load_error", None)
-        if reason:
-            return False, f"error: {reason}"
-        return False, "error: model weights not downloaded/loaded"
+
+        reason = self._optimize_error or getattr(self, "_load_error", None)
+        status = reason or "optimizing"
+        self._set_status(status)
+        return False, status
 
     def _set_load_error(self, reason: str):
         self._load_error = reason
@@ -142,9 +151,26 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self._load_error = None
         self._class_names = {i: name for i, name in enumerate(self.classes)}
         self._optimizing = False
+        self._optimize_error: str | None = None
+        self._target_format: str | None = None
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
 
-        self.prepare()
+        # If the config requests optimization and no matching artifact is
+        # active yet, kick off the build on a simple background thread so the
+        # app can keep running (is_ready() reports "optimizing" until the
+        # artifact is active; run() passes frames through untouched).
+        if self._optimization_requested() and not self._optimized_active():
+            self.logger.info(
+                "Camera '%s': optimization requested - building %s artifact",
+                self.config.get("name", "?"), self._target_format_cached(),
+            )
+            threading.Thread(
+                target=self._optimize_runner,
+                daemon=True,
+                name=f"Optimize-{self.config.get('name', 'yolo_world')}",
+            ).start()
+        else:
+            self.prepare()
 
     def _prepare(self):
         """Background preparation: download/convert the YOLO World model
@@ -160,42 +186,110 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         }
 
     def optimize(self, **kwargs) -> str:
-        """Start a forced backend build of this camera's YOLO World model
-        as a background job (generic entry point over request_optimize())."""
-        return self.request_optimize()
-
-    def request_optimize(self) -> str:
-        """Force-rebuild the quantized backend artifact (re-downloading or
-        re-reparameterizing weights if needed) without blocking. No-op if a
-        rebuild is already running. Never blocks."""
-        if not self.quantize:
+        """Build the quantized backend artifact synchronously. Blocks until
+        the build finishes; is_ready() reports (False, "optimizing") while it
+        runs and (True, "ready") once it has produced a matching artifact."""
+        if not self._optimization_requested():
             return "optimization disabled for this camera (set 'Quantize' in camera settings)"
-        if getattr(self, "_optimizing", False):
-            return "optimizing (backend build)"
-        if self._preparing():
-            return "initializing (model preparation in progress)"
+        if self._optimizing:
+            return "optimizing"
+
         self._optimizing = True
         self._set_status("optimizing (backend build)")
-        thread = threading.Thread(
-            target=self._optimize_worker,
-            daemon=True,
-            name="Optimize-YoloWorld",
-        )
-        thread.start()
-        return "optimizing (backend build)"
-
-    def _optimize_worker(self):
         try:
             self._load_quantized_model(force=True)
         except Exception as exc:
-            self._set_load_error(f"quantized rebuild failed: {exc}")
-        finally:
+            self._optimize_error = f"quantized build failed: {exc}"
+            self._set_load_error(self._optimize_error)
             self._optimizing = False
-        if self.model is not None and self._quantized:
+            return f"error: quantized build failed - {exc}"
+        self._optimizing = False
+
+        if self._optimized_active():
             self._load_error = None
+            self._optimize_error = None
             self._set_status("ready")
+            return "ready"
+        status = self._optimize_error or "error: quantized build failed - no artifact produced"
+        self._optimize_error = status
+        self._set_status(status)
+        return status
+
+    def _optimize_runner(self):
+        """Run the synchronous optimize() off the main thread (started at
+        construction when the config requests a build). is_ready() reports
+        "optimizing" until this finishes."""
+        status = self.optimize()
+        if not self._optimized_active():
+            self._optimize_error = status
+        self._set_status(status)
+
+    def _optimization_requested(self) -> bool:
+        return bool(getattr(self, "quantize", False))
+
+    def _resolve_target_format(self) -> str:
+        explicit = str(getattr(self, "target_format", "") or "").strip().lower()
+        if explicit and explicit != "auto":
+            target = explicit
         else:
-            self._set_status("error: quantized build failed - using fallback")
+            # Same resolution ensure_quantized_model uses so the readiness
+            # format check agrees with the artifact that actually gets built.
+            from iSpy.config.AutoOpt import recommend_format
+            target = recommend_format()
+        supported = {"onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu"}
+        if target not in supported:
+            self.logger.warning(
+                "Recommended target format %r unsupported - using onnx", target,
+            )
+            return "onnx"
+        return target
+
+    def _target_format_cached(self) -> str:
+        if self._target_format is None:
+            self._target_format = self._resolve_target_format()
+        return self._target_format
+
+    @staticmethod
+    def _path_format(path: str) -> str:
+        """Format of a model path: 'onnx', 'openvino', ... or ''."""
+        p = str(path).lower()
+        if "openvino_model" in p or p.endswith(".xml"):
+            return "openvino"
+        for ext, fmt in (
+            (".pt", "pytorch"),
+            (".onnx", "onnx"),
+            (".rknn", "rknn"),
+            (".tflite", "tflite"),
+            (".engine", "engine"),
+            (".mlpackage", "coreml"),
+        ):
+            if p.endswith(ext):
+                return fmt
+        return ""
+
+    def _optimized_active(self) -> bool:
+        """True once the loaded model is the quantized backend artifact in
+        the requested target format (a full-precision fallback or an artifact
+        in another format does not count)."""
+        if getattr(self, "model", None) is None or not getattr(self, "_quantized", False):
+            return False
+        if getattr(self.model, "model_type", "") == "tpu":
+            return True
+        path = str(getattr(self, "_model_path", "") or "")
+        if not path:
+            return False
+        return self._path_format(path) == self._target_format_cached()
+
+    def _is_processable(self) -> bool:
+        """True when run() may actually run inference. When False, run()
+        passes the raw camera feed through untouched."""
+        if getattr(self, "_optimizing", False):
+            return False
+        if self.model is None:
+            return False
+        if self._optimization_requested():
+            return self._optimized_active()
+        return True
 
     def _ensure_world_model(self, size: str) -> str | None:
         """Download YOLO World weights into the iSpy cache on first use."""
@@ -387,7 +481,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         if frame is None:
             return [], None
 
-        if self.model is None:
+        if not self._is_processable():
             return [], frame
 
         try:

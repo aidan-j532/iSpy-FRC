@@ -338,16 +338,22 @@ class ObjectDetectionCamera(VisionPipeline):
 
     def _optimized_active(self) -> bool:
         """True once the loaded model is a backend artifact in the requested
-        target format (a stale artifact in another format does not count),
-        or the TPU backend which consumes .pt via XLA."""
+        target format AND derived from this camera's source model. A stale
+        artifact for a different model (or same model in another format) does
+        not count, so boot re-optimizes instead of silently running the wrong
+        weights. Falls back to a format-only match if the source .pt is gone -
+        a still-valid artifact can then boot.""" 
         if getattr(self, "model", None) is None:
             return False
         if getattr(self.model, "model_type", "") == "tpu":
             return True
         path = str(getattr(self, "yolo_model_file", "") or "")
-        if not path:
+        if not path or self._path_format(path) != self._target_format_cached():
             return False
-        return self._path_format(path) == self._target_format_cached()
+        expected = self._optimized_artifact_path()
+        if expected is None:
+            return True
+        return self._resolve_model_path(path) == expected
 
     def is_ready(self) -> tuple[bool, str]:
         # Pure status report - never triggers or blocks on optimization.

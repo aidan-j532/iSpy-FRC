@@ -19,7 +19,6 @@ from iSpy.vision.pipelines.base import (
 )
 from iSpy.vision.pipelines.april_tag import AprilTagCamera
 from iSpy.vision.pipelines.qr_code import QRCodeCamera
-from iSpy.vision.pipelines.line_tracking import LineTrackingCamera
 from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
 from iSpy.vision.pipelines.depth_anything import DepthAnythingCamera
 from iSpy.vision.pipelines.yolo_world import YoloWorldCamera
@@ -215,7 +214,7 @@ class PipelineLifecycleTests(unittest.TestCase):
 
     def test_user_model_selection_is_pipeline_driven(self):
         self.assertTrue(ObjectDetectionCamera.uses_user_model())
-        for cls in (AprilTagCamera, QRCodeCamera, LineTrackingCamera,
+        for cls in (AprilTagCamera, QRCodeCamera,
                     DepthAnythingCamera, YoloWorldCamera):
             self.assertFalse(cls.uses_user_model(), cls.__name__)
 
@@ -233,48 +232,67 @@ class PipelineLifecycleTests(unittest.TestCase):
         # YOLO World and Depth Anything are optimizable pipelines too - the
         # generic optimize endpoint must not be object-detection-only.
         for cls, keys in (
-            (YoloWorldCamera, ("quantize", "target_format", "quantization_dataset", "input_size")),
-            (DepthAnythingCamera, ("optimize", "model_size")),
+            (YoloWorldCamera, ("quantized", "target_format", "quantization_dataset", "input_size")),
+            (DepthAnythingCamera, ("auto_opt", "model_size")),
         ):
             options = cls.__new__(cls).get_optimization_options()
             for key in keys:
                 self.assertIn(key, options, f"{cls.__name__} missing {key}")
 
     def test_optimize_disabled_returns_explanation(self):
-        # Quantize/Optimize disabled in config -> request_optimize explains
-        # instead of pretending to start a build.
+        # Quantize/Optimize disabled in config -> optimize() explains instead
+        # of pretending to start a build.
         yw = YoloWorldCamera.__new__(YoloWorldCamera)
         yw.quantize = False
         yw._optimizing = False
-        self.assertIn("disabled", yw.request_optimize())
+        self.assertIn("disabled", yw.optimize())
 
         da = DepthAnythingCamera.__new__(DepthAnythingCamera)
-        da.optimize = False
+        da._auto_opt = False
+        da.estimate_depth = True
         da._optimizing = False
-        self.assertIn("disabled", da.request_optimize())
+        self.assertIn("disabled", da.optimize())
 
-    def test_optimize_starts_background_build(self):
-        import time as _time
-
+    def test_optimize_runs_synchronously_and_gates_readiness(self):
+        # A failed optimized build leaves the pipeline not-ready and run()
+        # gated to the raw camera feed; a successful build flips it to ready.
         da = DepthAnythingCamera.__new__(DepthAnythingCamera)
-        da.optimize = True
+        da._auto_opt = True
+        da.estimate_depth = True
         da._optimizing = False
-        da._prep_thread = None
-        da._prep_started = False
+        da._optimize_error = None
         da._load_error = None
         da._session = None
+        da.model = None
         da.logger = logging.getLogger("test")
-        da._load_optimized = lambda force=False: None
-        status = da.request_optimize()
-        self.assertTrue(status.startswith("optimizing"), status)
-        deadline = _time.monotonic() + 5
-        while getattr(da, "_optimizing", False) and _time.monotonic() < deadline:
-            _time.sleep(0.01)
+        da._load_optimized = lambda force=False: None  # stub out the real build
+
+        taken = da.optimize()
+        self.assertIn("error", taken)
         self.assertFalse(da._optimizing)
-        self.assertTrue(da.get_status().startswith("error"))
+        ready, status = da.is_ready()
+        self.assertFalse(ready)
+        self.assertIn("error", status)
+        self.assertFalse(da._is_processable())
+
+        ok = DepthAnythingCamera.__new__(DepthAnythingCamera)
+        ok._auto_opt = True
+        ok.estimate_depth = True
+        ok._optimizing = False
+        ok._optimize_error = None
+        ok._load_error = None
+        ok._session = object()
+        ok._model = None
+        ok.logger = logging.getLogger("test")
+        ok._load_optimized = lambda force=False: None
+        ok._optimized_active = lambda: True
+
+        self.assertEqual(ok.optimize(), "ready")
+        self.assertEqual(ok.is_ready(), (True, "ready"))
+        self.assertTrue(ok._is_processable())
 
     def test_no_prep_pipelines_report_ready_immediately(self):
-        for cls in (AprilTagCamera, QRCodeCamera, LineTrackingCamera):
+        for cls in (AprilTagCamera, QRCodeCamera):
             pipeline = cls.__new__(cls)
             ready, status = pipeline.is_ready()
             self.assertTrue(ready, f"{cls.__name__}: {status}")
