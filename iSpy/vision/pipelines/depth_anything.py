@@ -114,7 +114,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
 
         self._model = None
         self._session = None
-        self._onnx = False
+        self._infer = None
         self._load_error = None
         self._optimizing = False
         self._optimize_error: str | None = None
@@ -293,7 +293,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
 
         providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in ort.get_available_providers()]
         self._session = ort.InferenceSession(artifact, providers=providers)
-        self._onnx = True
+        self._infer = self._infer_depth_onnx
         self._load_error = None
         self.logger.info("Loaded optimized Depth Anything ONNX from %s", artifact)
 
@@ -313,6 +313,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 model=_DEPTH_MODEL_ID,
             )
 
+            self._infer = self._infer_depth_pipeline
             self._load_error = None
             self.logger.info("Loaded Depth Anything V2 Small.")
 
@@ -324,9 +325,14 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             self._model = None
 
     def _infer_depth(self, frame: np.ndarray):
-        if self._onnx and self._session is not None:
-            return self._infer_depth_onnx(frame)
+        # Runtime is chosen once at load time (GenericYolo-style): the frame
+        # loop never re-decides between the ONNX session and the transformers
+        # pipeline - _load_optimized/_load_pipeline set one impl only.
+        if self._infer is not None:
+            return self._infer(frame)
+        return self._infer_depth_pipeline(frame)
 
+    def _infer_depth_pipeline(self, frame: np.ndarray):
         image = Image.fromarray(
             cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         )
@@ -650,7 +656,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
     def destroy(self):
         self._model = None
         self._session = None
-        self._onnx = False
+        self._infer = None
         self._last_depth = None
         self._last_objects = []
         self._last_annotated = None

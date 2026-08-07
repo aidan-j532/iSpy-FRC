@@ -843,7 +843,7 @@ class ObjectDetectionCamera(VisionPipeline):
             if obj is not None:
                 objects.append(obj)
         self._last_objects = objects
-        return objects, frame
+        return objects, annotated
  
     def run_with_supplied_data(self, data: Results) -> list[Object]:
         if not self._is_processable():
@@ -862,6 +862,17 @@ class ObjectDetectionCamera(VisionPipeline):
                 objects.append(obj)
         return objects
  
+
+    def plot(self, frame):
+        if frame is None:
+            return None
+        result = getattr(self, "_last_result", None)
+        if result is None:
+            return frame
+        try:
+            return result.plot(frame.copy())
+        except Exception:
+            return frame
 
     def get_data_for_subsystem(self, target: str):
         if self.subsystem != target:
