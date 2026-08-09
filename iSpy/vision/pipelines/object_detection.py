@@ -85,6 +85,7 @@ class ObjectDetectionCamera(VisionPipeline):
         self.frame_sync = config.get("frame_sync", False)
         if self.frame_sync:
             self.logger.warning("Frame sync is enabled. This may introduce latency in detection (you probaly don't want this).")
+            
         self.core_mask = core_mask
         self.unit = config["unit"]
         self.debug_mode = config["debug_mode"]

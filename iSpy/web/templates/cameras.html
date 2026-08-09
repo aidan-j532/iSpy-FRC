@@ -13,7 +13,7 @@
     </select>
   </label>
   <button onclick="refreshCameras()" class="btn-refresh">Refresh</button>
-  <button onclick="openAddCameraModal()" class="btn-ok" style="margin-left:auto;">+ Add Camera</button>
+  <button onclick="openCameraModal('add')" class="btn-ok" style="margin-left:auto;">+ Add Camera</button>
 </div>
 <div id="camera-grid" class="grid"></div>
 
@@ -27,196 +27,55 @@
   </div>
 </div>
 
-<div id="add-camera-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeAddCameraModal()">
-  <div class="modal" style="max-width:520px;">
-    <h3>Add Camera</h3>
-    <div class="settings-section">
-      <div class="form-row">
-        <span class="form-label">Device</span>
-        <select id="new-cam-device" class="form-input" onchange="onDeviceSelected()"></select>
-      </div>
-      <div class="form-row">
-        <span class="form-label">Name</span>
-        <input id="new-cam-name" class="form-input" type="text" placeholder="e.g. front_cam">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Pipeline</span>
-        <select id="new-cam-pipeline" class="form-input" onchange="renderDynamicPipelineFields()">
-          <option value="object_detection">Object Detection</option>
-        </select>
-      </div>
-      <div id="dynamic-pipeline-fields"></div>
-      <div class="form-row">
-        <span class="form-label">X offset</span>
-        <input id="new-cam-x" class="form-input" type="number" step="0.01" value="0">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Y offset</span>
-        <input id="new-cam-y" class="form-input" type="number" step="0.01" value="0">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Height (m)</span>
-        <input id="new-cam-height" class="form-input" type="number" step="0.01" value="0">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Yaw (deg)</span>
-        <input id="new-cam-yaw" class="form-input" type="number" step="0.1" value="0">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Pitch (deg)</span>
-        <input id="new-cam-pitch" class="form-input" type="number" step="0.1" value="0">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Subsystem</span>
-        <select id="new-cam-subsystem" class="form-input">
-          <option value="field">Field</option>
-          <option value="robot">Robot</option>
-          <option value="other">Other</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <span class="form-label">Grayscale</span>
-        <select id="new-cam-grayscale" class="form-input">
-          <option value="false">No</option>
-          <option value="true">Yes</option>
-        </select>
-      </div>
+<!-- Shared Add / Edit Camera modal. Every field is rendered by JS from the
+     pipeline's config_schema + the common field definitions below, so the two
+     modes can never drift out of sync. -->
+<div id="camera-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeCameraModal()">
+  <div class="modal camera-modal">
+    <div id="camera-modal-header">
+      <h3 id="camera-modal-title">Camera</h3>
+      <span id="camera-modal-note" class="restart-badge">Restart vision to apply</span>
     </div>
-    <div class="settings-section">
-      <h3>Calibration</h3>
-      <div class="form-row">
-        <span class="form-label">Distance (m)</span>
-        <input id="new-cam-cal-distance" class="form-input" type="number" step="0.01" value="0">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Game Piece Size (m)</span>
-        <input id="new-cam-cal-gpsize" class="form-input" type="number" step="0.01" value="0">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Size (px)</span>
-        <input id="new-cam-cal-size" class="form-input" type="number" step="1" value="0">
-      </div>
-      <div class="form-row">
-        <span class="form-label">FOV (deg)</span>
-        <input id="new-cam-cal-fov" class="form-input" type="number" step="0.1" value="0">
-      </div>
-    </div>
+    <div id="camera-modal-body"></div>
     <div class="modal-actions">
-      <button onclick="closeAddCameraModal()" style="background:var(--border);">Cancel</button>
-      <button onclick="submitAddCamera()" class="btn-ok">Add Camera</button>
-    </div>
-  </div>
-</div>
-
-<div id="edit-camera-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeEditCameraModal()">
-  <div class="modal" style="max-width:520px;">
-    <h3>Edit Camera</h3>
-    <div class="settings-section">
-      <div class="form-row">
-        <span class="form-label">Source</span>
-        <input id="edit-cam-source" class="form-input" type="text">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Name</span>
-        <input id="edit-cam-name" class="form-input" type="text">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Pipeline</span>
-        <select id="edit-cam-pipeline" class="form-input" onchange="renderEditPipelineFields()"></select>
-      </div>
-      <div id="edit-dynamic-pipeline-fields"></div>
-      <div class="form-row">
-        <span class="form-label">X offset</span>
-        <input id="edit-cam-x" class="form-input" type="number" step="0.01">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Y offset</span>
-        <input id="edit-cam-y" class="form-input" type="number" step="0.01">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Height (m)</span>
-        <input id="edit-cam-height" class="form-input" type="number" step="0.01">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Yaw (deg)</span>
-        <input id="edit-cam-yaw" class="form-input" type="number" step="0.1">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Pitch (deg)</span>
-        <input id="edit-cam-pitch" class="form-input" type="number" step="0.1">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Subsystem</span>
-        <select id="edit-cam-subsystem" class="form-input">
-          <option value="field">Field</option>
-          <option value="robot">Robot</option>
-          <option value="other">Other</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <span class="form-label">Grayscale</span>
-        <select id="edit-cam-grayscale" class="form-input">
-          <option value="false">No</option>
-          <option value="true">Yes</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <span class="form-label">Auto Brightness</span>
-        <select id="edit-cam-auto-brightness" class="form-input">
-          <option value="true">Yes</option>
-          <option value="false">No</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <span class="form-label">Exposure Time (us)</span>
-        <input id="edit-cam-exposure" class="form-input" type="number" step="1">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Gain</span>
-        <input id="edit-cam-gain" class="form-input" type="number" step="1">
-      </div>
-      <div class="form-row">
-        <span class="form-label">FPS Cap</span>
-        <input id="edit-cam-fps-cap" class="form-input" type="number" step="1">
-      </div>
-    </div>
-    <div class="settings-section">
-      <h3>Calibration</h3>
-      <div class="form-row">
-        <span class="form-label">Distance (m)</span>
-        <input id="edit-cam-cal-distance" class="form-input" type="number" step="0.01">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Game Piece Size (m)</span>
-        <input id="edit-cam-cal-gpsize" class="form-input" type="number" step="0.01">
-      </div>
-      <div class="form-row">
-        <span class="form-label">Size (px)</span>
-        <input id="edit-cam-cal-size" class="form-input" type="number" step="1">
-      </div>
-      <div class="form-row">
-        <span class="form-label">FOV (deg)</span>
-        <input id="edit-cam-cal-fov" class="form-input" type="number" step="0.1">
-      </div>
-    </div>
-    <div class="modal-actions">
-      <button onclick="closeEditCameraModal()" style="background:var(--border);">Cancel</button>
-      <button onclick="submitEditCamera()" class="btn-ok">Save Settings</button>
+      <button onclick="closeCameraModal()" style="background:var(--border);">Cancel</button>
+      <button id="camera-modal-submit" onclick="submitCameraModal()" class="btn-ok">Save</button>
     </div>
   </div>
 </div>
 
 <div id="folder-picker-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeFolderPicker()">
   <div class="modal" style="max-width:560px;">
-    <h3>Select Folder</h3>
-    <div class="form-row">
-      <span class="form-label">Path</span>
-      <span id="folder-picker-path" class="text-dim" style="word-break:break-all;padding-top:8px;"></span>
+    <h3 id="folder-picker-title">Select Folder</h3>
+    <div id="folder-picker-tabs" class="settings-tabs" style="display:none;">
+      <button type="button" class="settings-tab active" id="folder-tab-device" onclick="setFolderPickerTab('device')">On Device</button>
+      <button type="button" class="settings-tab" id="folder-tab-upload" onclick="setFolderPickerTab('upload')">Upload</button>
     </div>
-    <div id="folder-picker-list" class="folder-picker-list"></div>
-    <div class="modal-actions">
-      <button onclick="closeFolderPicker()" style="background:var(--border);">Cancel</button>
-      <button onclick="confirmFolderPick()" class="btn-ok">Select This Folder</button>
+    <div id="folder-picker-panel-device">
+      <div class="form-row">
+        <span class="form-label">Path</span>
+        <span id="folder-picker-path" class="text-dim" style="word-break:break-all;padding-top:8px;"></span>
+      </div>
+      <div id="folder-picker-list" class="folder-picker-list"></div>
+      <div class="modal-actions">
+        <button onclick="closeFolderPicker()" style="background:var(--border);">Cancel</button>
+        <button onclick="confirmFolderPick()" class="btn-ok">Select This Folder</button>
+      </div>
+    </div>
+    <div id="folder-picker-panel-upload" style="display:none;">
+      <p class="picker-hint">Create a new dataset on this device by uploading images from your computer.</p>
+      <div class="form-row">
+        <span class="form-label">Name</span>
+        <input type="text" id="dataset-upload-name" class="form-input" placeholder="e.g. game_pieces">
+      </div>
+      <div class="upload-row" style="margin-top:8px;">
+        <input type="file" id="dataset-upload-input" accept=".jpg,.jpeg,.png,.bmp" multiple style="flex:1;">
+        <button onclick="uploadDatasetFromPicker()" id="dataset-upload-btn">Upload</button>
+      </div>
+      <div id="dataset-upload-status" class="upload-status" style="margin-top:8px;"></div>
+      <div class="modal-actions" style="margin-top:12px;">
+        <button onclick="closeFolderPicker()" style="background:var(--border);">Cancel</button>
+      </div>
     </div>
   </div>
 </div>
@@ -224,10 +83,23 @@
 <div id="model-picker-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeModelPicker()">
   <div class="modal" style="max-width:560px;">
     <h3>Select YOLO Model (.pt)</h3>
-    <p>Choose a model from the Yolo Models library. To use a new model, upload it first on the Models page.</p>
-    <div id="model-picker-list" class="folder-picker-list"></div>
+    <div class="settings-tabs">
+      <button type="button" class="settings-tab active" id="model-tab-device" onclick="setModelPickerTab('device')">On Device</button>
+      <button type="button" class="settings-tab" id="model-tab-upload" onclick="setModelPickerTab('upload')">Upload</button>
+    </div>
+    <div id="model-picker-panel-device">
+      <p class="picker-hint">Choose a model already in the Yolo Models library on this device.</p>
+      <div id="model-picker-list" class="folder-picker-list"></div>
+    </div>
+    <div id="model-picker-panel-upload" style="display:none;">
+      <p class="picker-hint">Upload a .pt file from your computer. It will be copied into the Yolo Models library on this device.</p>
+      <div class="upload-row">
+        <input type="file" id="model-upload-input" accept=".pt" style="flex:1;">
+        <button onclick="uploadModelFromPicker()" id="model-upload-btn">Upload</button>
+      </div>
+      <div id="model-upload-status" class="upload-status" style="margin-top:8px;"></div>
+    </div>
     <div class="modal-actions">
-      <a href="/models" class="btn-sm" style="text-decoration:none;">Upload a model&hellip;</a>
       <span style="flex:1"></span>
       <button onclick="closeModelPicker()" style="background:var(--border);">Cancel</button>
     </div>
@@ -254,38 +126,105 @@
     border-radius: 4px;
     cursor: pointer;
   }
-  .folder-picker-item:hover {
-    border-color: var(--accent);
+  .folder-picker-item:hover { border-color: var(--accent); }
+  .picker-hint {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin: 4px 0 10px 0;
+    line-height: 1.4;
   }
+
+  .camera-modal { max-width: 640px; width: 92%; }
+  #camera-modal-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  #camera-modal-header h3 { margin: 0; }
+  #camera-modal-note { margin-left: auto; }
+
+  .settings-section details summary {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.95rem;
+    font-weight: 600;
+    padding: 4px 0 8px 0;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-section details summary::-webkit-details-marker { display: none; }
+  .settings-section details summary::before {
+    content: "\25B8";
+    display: inline-block;
+    margin-right: 8px;
+    color: var(--text-dim);
+    transition: transform 0.15s;
+  }
+  .settings-section details[open] summary::before { transform: rotate(90deg); }
+  .settings-section details summary:hover { color: var(--accent); }
+
+  .form-field { margin-bottom: 10px; }
+  .form-help {
+    margin: 2px 0 0 192px;
+    color: var(--text-dim);
+    font-size: 0.76rem;
+    line-height: 1.3;
+  }
+  .form-unit { color: var(--text-dim); opacity: 0.75; font-weight: 400; }
+  .camera-hidden { display: none !important; }
+  @media (max-width: 768px) { .form-help { margin-left: 0; } }
 </style>
 
 <script>
+/* ==========================================================================
+   Cameras page.
+   A single schema-driven form powers both "Add Camera" and "Edit Camera".
+   Common fields (mount, capture, calibration) live in collapsible sections
+   defined below; pipeline-specific fields are rendered from the pipeline's
+   config_schema and grouped into Model / Pipeline / Optimization sections.
+   Add and edit share the same field map, value filling and submit path.
+   ========================================================================== */
+
 let refreshTimer = null;
 let currentRate = 1000;
 let knownCameras = new Map();
 let pipelineSchemas = {};
 
-function setRefreshRate() {
-  currentRate = Number(document.getElementById('refresh-rate').value);
-  clearInterval(refreshTimer);
-  refreshTimer = setInterval(refreshCameras, currentRate);
-}
+const camModal = {
+  mode: 'add',       // 'add' | 'edit'
+  data: null,        // camera config entry (edit) or null (add)
+  pipeline: 'object_detection',
+  fields: new Map(), // fieldKey -> { el, def, source: 'common' | 'schema' }
+};
 
-function closeAddCameraModal() {
-  document.getElementById('add-camera-modal').style.display = 'none';
-  document.getElementById('dynamic-pipeline-fields').innerHTML = '';
-}
+/* ---- Common (non-schema) field definitions ------------------------------ */
 
-function openCameraLightbox(name) {
-  document.getElementById('lightbox-title').textContent = name;
-  document.getElementById('lightbox-feed').src = `/video/${encodeURIComponent(name)}`;
-  document.getElementById('camera-lightbox').style.display = 'flex';
-}
+const COMMON_SECTIONS = [
+  { title: 'Mount & Location', fields: ['x', 'y', 'height', 'yaw', 'pitch'] },
+  { title: 'Capture', fields: ['subsystem', 'grayscale', 'auto_brightness', 'exposure_time', 'gain', 'fps_cap'] },
+  { title: 'Calibration', fields: ['calibration.distance', 'calibration.game_piece_size', 'calibration.size', 'calibration.fov'] },
+];
 
-function closeCameraLightbox() {
-  document.getElementById('camera-lightbox').style.display = 'none';
-  document.getElementById('lightbox-feed').src = '';
-}
+const COMMON_FIELDS = {
+  device: { label: 'Device', type: 'device', required: true, help: 'A physical camera detected on this machine.' },
+  source: { label: 'Source', type: 'text', required: true, help: 'Camera index (e.g. 0), a /dev/video path, or an RTSP / MJPEG URL.' },
+  name: { label: 'Name', type: 'text', required: true, default: '', help: 'Short unique name used on the dashboard and in code (e.g. front_cam).' },
+  pipeline: { label: 'Pipeline', type: 'pipeline', required: true },
+  x: { label: 'X offset', type: 'number', step: 0.01, unit: 'm', default: 0 },
+  y: { label: 'Y offset', type: 'number', step: 0.01, unit: 'm', default: 0 },
+  height: { label: 'Mount height', type: 'number', step: 0.01, unit: 'm', default: 0, help: 'Height of the camera above the ground plane.' },
+  yaw: { label: 'Yaw', type: 'number', step: 0.1, unit: 'deg', default: 0, help: 'Horizontal rotation. Positive angles turn the camera right.' },
+  pitch: { label: 'Pitch', type: 'number', step: 0.1, unit: 'deg', default: 0, help: 'Vertical tilt. Positive tilts the camera down toward the field.' },
+  subsystem: { label: 'Subsystem', type: 'select', options: ['field', 'robot', 'other'], default: 'field' },
+  grayscale: { label: 'Grayscale', type: 'boolean', default: false, help: 'Convert frames to grayscale before processing (slightly faster).' },
+  auto_brightness: { label: 'Auto brightness', type: 'boolean', default: true, help: 'Let the camera auto-adjust exposure. Disable to use fixed exposure and gain.' },
+  exposure_time: { label: 'Exposure', type: 'number', step: 1, unit: '\u00b5s', nullable: true, help: 'Fixed exposure in microseconds. Leave empty for the camera default.' },
+  gain: { label: 'Gain', type: 'number', step: 1, nullable: true, help: 'Fixed sensor gain. Leave empty for the camera default.' },
+  fps_cap: { label: 'FPS cap', type: 'number', step: 1, nullable: true, help: 'Hard cap on capture framerate. Leave empty for uncapped.' },
+  'calibration.distance': { label: 'Known distance', type: 'number', step: 0.01, unit: 'm', default: 0 },
+  'calibration.game_piece_size': { label: 'Game piece size', type: 'number', step: 0.01, unit: 'm', default: 0, help: 'Real-world height of the tracked game piece.' },
+  'calibration.size': { label: 'Object height in frame', type: 'number', step: 1, unit: 'px', default: 0, help: 'Vertical pixel size the object appears at the known distance.' },
+  'calibration.fov': { label: 'Horizontal FOV', type: 'number', step: 0.1, unit: 'deg', default: 0, help: 'Horizontal field of view used for ray/depth estimation.' },
+};
+
+/* ---- Small helpers ------------------------------------------------------ */
 
 function humanizePipelineName(name) {
   return String(name || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -295,525 +234,617 @@ function humanizeFieldName(name) {
   return String(name || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function setCommonFieldVisibility(show) {
-  const commonFields = [
-    'new-cam-x',
-    'new-cam-y',
-    'new-cam-height',
-    'new-cam-yaw',
-    'new-cam-pitch',
-  ];
-  commonFields.forEach(fieldId => {
-    const row = document.getElementById(fieldId).closest('.form-row');
-    if (row) {
-      row.style.display = show ? '' : 'none';
-    }
-  });
-}
-
-function createPipelineFieldRow(fieldName, fieldDef, idPrefix, currentValue) {
-  const row = document.createElement('div');
-  row.className = 'form-row';
-  if (fieldDef.quantization) row.classList.add('quantization-field');
-  if (fieldDef.optimize_toggle) row.setAttribute('data-optimize-toggle', '');
-
-  const label = document.createElement('span');
-  label.className = 'form-label';
-  label.textContent = fieldDef.label || humanizeFieldName(fieldName);
-
-  let control;
-  const fieldType = fieldDef.type || 'text';
-  if (fieldType === 'select') {
-    control = document.createElement('select');
-    control.className = 'form-input';
-    (fieldDef.options || []).forEach(optionValue => {
-      const option = document.createElement('option');
-      option.value = optionValue;
-      option.textContent = optionValue;
-      control.appendChild(option);
-    });
-  } else if (fieldType === 'boolean') {
-    control = document.createElement('select');
-    control.className = 'form-input';
-    const yesOption = document.createElement('option');
-    yesOption.value = 'true';
-    yesOption.textContent = 'Yes';
-    const noOption = document.createElement('option');
-    noOption.value = 'false';
-    noOption.textContent = 'No';
-    control.appendChild(yesOption);
-    control.appendChild(noOption);
-  } else if (fieldType === 'toggle') {
-    // On/off switch backed by a checkbox.
-    control = document.createElement('input');
-    control.type = 'checkbox';
-    control.className = 'toggle-input';
-    if (currentValue === true || currentValue === 'true' || currentValue === 1) {
-      control.checked = true;
-    }
-  } else if (fieldType === 'model') {
-    // Model picker: read-only display + Browse button. The value is the
-    // model file name (basename) from the Yolo Models library.
-    control = document.createElement('input');
-    control.className = 'form-input model-field';
-    control.type = 'text';
-    control.readOnly = true;
-    control.placeholder = 'Browse to select a model...';
-    if (currentValue && typeof currentValue === 'object') {
-      currentValue = currentValue.source_pt || currentValue.file_path || '';
-    }
-    if (currentValue) {
-      currentValue = String(currentValue).split('/').pop();
-    }
-  } else if (fieldType === 'browse') {
-    // Folder picker: read-only text + Browse button. The user picks a
-    // directory (e.g. a named QuantizeDataset) instead of typing a path.
-    control = document.createElement('input');
-    control.className = 'form-input';
-    control.type = 'text';
-    control.readOnly = true;
-    control.placeholder = 'Browse to select a folder...';
-  } else {
-    control = document.createElement('input');
-    control.className = 'form-input';
-    control.type = fieldType === 'number' ? 'number' : 'text';
-    if (fieldType === 'number' && fieldDef.step != null) {
-      control.step = fieldDef.step;
-    }
-  }
-
-  control.id = `${idPrefix}-${fieldName}`;
-  if (currentValue != null) {
-    control.value = String(currentValue);
-    control.dataset.original = String(currentValue);
-  }
-  if (fieldDef.optimize_toggle) {
-    control.onchange = () => syncQuantizationVisibility(idPrefix);
-  }
-
-  row.appendChild(label);
-  row.appendChild(control);
-
-  if (fieldDef.type === 'model') {
-    const browseBtn = document.createElement('button');
-    browseBtn.type = 'button';
-    browseBtn.className = 'btn-sm';
-    browseBtn.textContent = 'Browse...';
-    browseBtn.onclick = () => openModelPicker(control.id);
-    row.appendChild(browseBtn);
-  } else if (fieldDef.type === 'browse') {
-    const browseBtn = document.createElement('button');
-    browseBtn.type = 'button';
-    browseBtn.className = 'btn-sm';
-    browseBtn.textContent = 'Browse...';
-    browseBtn.onclick = () => openFolderPicker(control.id, fieldDef.browse_root);
-    row.appendChild(browseBtn);
-  }
-
-  return row;
-}
-
-function syncQuantizationVisibility(idPrefix) {
-  const container = document.getElementById(
-    idPrefix === 'edit-dyn' ? 'edit-dynamic-pipeline-fields' : 'dynamic-pipeline-fields'
-  );
-  const toggleRow = container.querySelector('[data-optimize-toggle]');
-  let on = false;
-  if (toggleRow) {
-    const toggleControl = toggleRow.querySelector('select, input[type="checkbox"]');
-    if (toggleControl) {
-      on = toggleControl.type === 'checkbox' ? toggleControl.checked : toggleControl.value === 'true';
-    }
-  }
-  container.querySelectorAll('.quantization-field').forEach(row => {
-    row.style.display = on ? '' : 'none';
-  });
-}
-
-function renderDynamicPipelineFields() {
-  const container = document.getElementById('dynamic-pipeline-fields');
-  container.innerHTML = '';
-  const pipelineSelect = document.getElementById('new-cam-pipeline');
-  const pipeline = pipelineSchemas[pipelineSelect.value] || {};
-  const schema = pipeline.config_schema || {};
-  setCommonFieldVisibility(Boolean(pipeline.show_common_fields));
-  Object.entries(schema).forEach(([fieldName, fieldDef]) => {
-    container.appendChild(createPipelineFieldRow(fieldName, fieldDef, 'dyn', fieldDef.default));
-  });
-  syncQuantizationVisibility('dyn');
-}
-
-async function openAddCameraModal(preselectPath) {
-  const data = await fetch('/api/cameras/discover').then(r => r.json());
-  const available = (data.devices || []).filter(d => !d.active);
-  const sel = document.getElementById('new-cam-device');
-  sel.innerHTML = available.map(d =>
-    `<option value="${d.path}" data-device-id="${d.device_id || ''}">${d.name}${d.resolution ? ' (' + d.resolution + ')' : ''}</option>`
-  ).join('') || '<option disabled>No unused cameras detected</option>';
-  if (preselectPath) {
-    sel.value = preselectPath;
-  }
-
-  try {
-    const pipelineData = await fetch('/api/vision_pipelines').then(r => r.json());
-    pipelineSchemas = {};
-    const pipelineSel = document.getElementById('new-cam-pipeline');
-    pipelineSel.innerHTML = '';
-    (pipelineData.pipelines || []).forEach(pipeline => {
-      pipelineSchemas[pipeline.name] = pipeline;
-      const option = document.createElement('option');
-      option.value = pipeline.name;
-      option.textContent = humanizePipelineName(pipeline.name);
-      pipelineSel.appendChild(option);
-    });
-    if (!pipelineSel.options.length) {
-      const fallback = document.createElement('option');
-      fallback.value = 'object_detection';
-      fallback.textContent = 'Object Detection';
-      pipelineSel.appendChild(fallback);
-      pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {}, show_common_fields: true };
-    }
-    if (!pipelineSchemas[pipelineSel.value]) {
-      pipelineSel.value = pipelineSel.options[0].value;
-    }
-  } catch (e) {
-    console.warn('Failed to load pipeline schemas', e);
-    pipelineSchemas = { object_detection: { name: 'object_detection', config_schema: {}, show_common_fields: true } };
-    const pipelineSel = document.getElementById('new-cam-pipeline');
-    pipelineSel.innerHTML = '<option value="object_detection">Object Detection</option>';
-    pipelineSel.value = 'object_detection';
-  }
-
-  renderDynamicPipelineFields();
-  prefillFirstModel();
-  document.getElementById('add-camera-modal').style.display = 'flex';
-  onDeviceSelected();
-}
-
-async function onDeviceSelected() {
-  const sel = document.getElementById('new-cam-device');
-  const opt = sel.selectedOptions[0];
-  if (!opt) return;
-  const deviceId = opt.dataset.deviceId;
-  if (!deviceId) return;
-  try {
-    const r = await fetch(`/api/cameras/profile/${encodeURIComponent(deviceId)}`);
-    const { profile } = await r.json();
-    if (profile) {
-      document.getElementById('new-cam-name').value = profile.name || '';
-      document.getElementById('new-cam-x').value = profile.x ?? 0;
-      document.getElementById('new-cam-y').value = profile.y ?? 0;
-      document.getElementById('new-cam-height').value = profile.height ?? 0;
-      document.getElementById('new-cam-yaw').value = profile.yaw ?? 0;
-      document.getElementById('new-cam-pitch').value = profile.pitch ?? 0;
-      document.getElementById('new-cam-subsystem').value = profile.subsystem || 'field';
-      document.getElementById('new-cam-grayscale').value = String(profile.grayscale || false);
-      if (profile.calibration) {
-        document.getElementById('new-cam-cal-distance').value = profile.calibration.distance ?? 0;
-        document.getElementById('new-cam-cal-gpsize').value = profile.calibration.game_piece_size ?? 0;
-        document.getElementById('new-cam-cal-size').value = profile.calibration.size ?? 0;
-        document.getElementById('new-cam-cal-fov').value = profile.calibration.fov ?? 0;
-      }
-    }
-  } catch (e) { /* no profile yet */ }
-}
-
-async function submitAddCamera() {
-  const sel = document.getElementById('new-cam-device');
-  const opt = sel.selectedOptions[0];
-  if (!opt) { showToast('Select a device first', 'error'); return; }
-  const name = document.getElementById('new-cam-name').value.trim();
-  if (!name) { showToast('Camera name is required', 'error'); return; }
-  const payload = {
-    name: name,
-    source: isNaN(Number(opt.value)) ? opt.value : Number(opt.value),
-    device_id: opt.dataset.deviceId || null,
-    pipeline: document.getElementById('new-cam-pipeline').value,
-    x: Number(document.getElementById('new-cam-x').value),
-    y: Number(document.getElementById('new-cam-y').value),
-    height: Number(document.getElementById('new-cam-height').value),
-    yaw: Number(document.getElementById('new-cam-yaw').value),
-    pitch: Number(document.getElementById('new-cam-pitch').value),
-    subsystem: document.getElementById('new-cam-subsystem').value,
-    grayscale: document.getElementById('new-cam-grayscale').value === 'true',
-    calibration: {
-      distance: Number(document.getElementById('new-cam-cal-distance').value),
-      game_piece_size: Number(document.getElementById('new-cam-cal-gpsize').value),
-      size: Number(document.getElementById('new-cam-cal-size').value),
-      fov: Number(document.getElementById('new-cam-cal-fov').value),
-    },
-  };
-  const schema = (pipelineSchemas[document.getElementById('new-cam-pipeline').value] || {}).config_schema || {};
-  document.querySelectorAll('#dynamic-pipeline-fields [id^="dyn-"]').forEach(el => {
-    const key = el.id.slice(4);
-    const fieldDef = schema[key] || {};
-    const modelPayload = modelFieldPayload(el, fieldDef, /* changedOnly */ false);
-    if (modelPayload) {
-      payload[key] = modelPayload;
-      return;
-    }
-    if (fieldDef.type === 'model') return;
-    let value = el.value;
-    if (fieldDef.type === 'number') {
-      value = el.value === '' ? null : Number(el.value);
-    } else if (fieldDef.type === 'boolean') {
-      value = el.value === 'true';
-    } else if (fieldDef.type === 'toggle') {
-      value = el.checked;
-    }
-    payload[key] = value;
-  });
-  const r = await fetch('/api/cameras/config', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload),
-  });
-  const j = await r.json();
-  if (r.ok) {
-    showToast('Camera added - restart vision to apply', 'success');
-    closeAddCameraModal();
-    refreshCameras();
-  } else {
-    showToast(j.error, 'error');
-  }
-}
-
-let editCamData = null;
-
-function closeEditCameraModal() {
-  document.getElementById('edit-camera-modal').style.display = 'none';
-  document.getElementById('edit-dynamic-pipeline-fields').innerHTML = '';
-  editCamData = null;
-}
-
-function setEditCommonFieldVisibility(show) {
-  const commonFields = [
-    'edit-cam-x',
-    'edit-cam-y',
-    'edit-cam-height',
-    'edit-cam-yaw',
-    'edit-cam-pitch',
-  ];
-  commonFields.forEach(fieldId => {
-    const row = document.getElementById(fieldId).closest('.form-row');
-    if (row) row.style.display = show ? '' : 'none';
-  });
-}
-
-function renderEditPipelineFields() {
-  const container = document.getElementById('edit-dynamic-pipeline-fields');
-  container.innerHTML = '';
-  const pipeline = pipelineSchemas[document.getElementById('edit-cam-pipeline').value] || {};
-  const schema = pipeline.config_schema || {};
-  setEditCommonFieldVisibility(Boolean(pipeline.show_common_fields));
-  Object.entries(schema).forEach(([fieldName, fieldDef]) => {
-    // Pipeline settings may live at the camera level OR nested inside the
-    // camera's vision_model block (legacy/optimization fields). Read the
-    // effective value so toggles/selects reflect what actually runs.
-    let current = fieldDef.default;
-    if (editCamData) {
-      if (editCamData[fieldName] != null) {
-        current = editCamData[fieldName];
-      } else if (editCamData.vision_model && editCamData.vision_model[fieldName] != null) {
-        current = editCamData.vision_model[fieldName];
-      }
-    }
-    container.appendChild(createPipelineFieldRow(fieldName, fieldDef, 'edit-dyn', current));
-  });
-  syncQuantizationVisibility('edit-dyn');
-}
-
-async function openEditCameraModal(name) {
-  try {
-    const [camRes, pipelineRes] = await Promise.all([
-      fetch(`/api/cameras/config/${encodeURIComponent(name)}`).then(r => r.json()),
-      fetch('/api/vision_pipelines').then(r => r.json()),
-    ]);
-    const cam = camRes.camera;
-    if (!cam) {
-      showToast(camRes.error || 'Camera not found', 'error');
-      return;
-    }
-    editCamData = cam;
-
-    pipelineSchemas = {};
-    const pipelineSel = document.getElementById('edit-cam-pipeline');
-    pipelineSel.innerHTML = '';
-    (pipelineRes.pipelines || []).forEach(pipeline => {
-      pipelineSchemas[pipeline.name] = pipeline;
-      const option = document.createElement('option');
-      option.value = pipeline.name;
-      option.textContent = humanizePipelineName(pipeline.name);
-      pipelineSel.appendChild(option);
-    });
-    if (!pipelineSel.options.length) {
-      const fallback = document.createElement('option');
-      fallback.value = 'object_detection';
-      fallback.textContent = 'Object Detection';
-      pipelineSel.appendChild(fallback);
-      pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {}, show_common_fields: true };
-    }
-    pipelineSel.value = cam.pipeline || pipelineSel.options[0].value;
-
-    document.getElementById('edit-cam-source').value = cam.source != null ? cam.source : '';
-    document.getElementById('edit-cam-name').value = cam.name || '';
-    document.getElementById('edit-cam-x').value = cam.x ?? 0;
-    document.getElementById('edit-cam-y').value = cam.y ?? 0;
-    document.getElementById('edit-cam-height').value = cam.height ?? 0;
-    document.getElementById('edit-cam-yaw').value = cam.yaw ?? 0;
-    document.getElementById('edit-cam-pitch').value = cam.pitch ?? 0;
-    document.getElementById('edit-cam-subsystem').value = cam.subsystem || 'field';
-    document.getElementById('edit-cam-grayscale').value = String(!!cam.grayscale);
-    document.getElementById('edit-cam-auto-brightness').value = String(cam.auto_brightness !== false);
-    document.getElementById('edit-cam-exposure').value = cam.exposure_time != null ? cam.exposure_time : '';
-    document.getElementById('edit-cam-gain').value = cam.gain != null ? cam.gain : '';
-    document.getElementById('edit-cam-fps-cap').value = cam.fps_cap != null ? cam.fps_cap : '';
-    if (cam.calibration) {
-      document.getElementById('edit-cam-cal-distance').value = cam.calibration.distance ?? 0;
-      document.getElementById('edit-cam-cal-gpsize').value = cam.calibration.game_piece_size ?? 0;
-      document.getElementById('edit-cam-cal-size').value = cam.calibration.size ?? 0;
-      document.getElementById('edit-cam-cal-fov').value = cam.calibration.fov ?? 0;
-    } else {
-      document.getElementById('edit-cam-cal-distance').value = 0;
-      document.getElementById('edit-cam-cal-gpsize').value = 0;
-      document.getElementById('edit-cam-cal-size').value = 0;
-      document.getElementById('edit-cam-cal-fov').value = 0;
-    }
-
-    renderEditPipelineFields();
-    document.getElementById('edit-camera-modal').style.display = 'flex';
-  } catch (e) {
-    showToast('Failed to load camera settings', 'error');
-    console.error(e);
-  }
-}
-
-async function submitEditCamera() {
-  if (!editCamData) return;
-  const srcVal = document.getElementById('edit-cam-source').value.trim();
-  const payload = {
-    source: (srcVal !== '' && !isNaN(Number(srcVal))) ? Number(srcVal) : srcVal,
-    name: document.getElementById('edit-cam-name').value.trim(),
-    pipeline: document.getElementById('edit-cam-pipeline').value,
-    x: Number(document.getElementById('edit-cam-x').value),
-    y: Number(document.getElementById('edit-cam-y').value),
-    height: Number(document.getElementById('edit-cam-height').value),
-    yaw: Number(document.getElementById('edit-cam-yaw').value),
-    pitch: Number(document.getElementById('edit-cam-pitch').value),
-    subsystem: document.getElementById('edit-cam-subsystem').value,
-    grayscale: document.getElementById('edit-cam-grayscale').value === 'true',
-    auto_brightness: document.getElementById('edit-cam-auto-brightness').value === 'true',
-    exposure_time: document.getElementById('edit-cam-exposure').value === '' ? null : Number(document.getElementById('edit-cam-exposure').value),
-    gain: document.getElementById('edit-cam-gain').value === '' ? null : Number(document.getElementById('edit-cam-gain').value),
-    fps_cap: document.getElementById('edit-cam-fps-cap').value === '' ? null : Number(document.getElementById('edit-cam-fps-cap').value),
-    calibration: {
-      distance: Number(document.getElementById('edit-cam-cal-distance').value),
-      game_piece_size: Number(document.getElementById('edit-cam-cal-gpsize').value),
-      size: Number(document.getElementById('edit-cam-cal-size').value),
-      fov: Number(document.getElementById('edit-cam-cal-fov').value),
-    },
-  };
-  const schema = (pipelineSchemas[payload.pipeline] || {}).config_schema || {};
-  document.querySelectorAll('#edit-dynamic-pipeline-fields [id^="edit-dyn-"]').forEach(el => {
-    const key = el.id.slice('edit-dyn-'.length);
-    const fieldDef = schema[key] || {};
-    const modelPayload = modelFieldPayload(el, fieldDef, /* changedOnly */ true);
-    if (modelPayload) {
-      payload[key] = modelPayload;
-      return;
-    }
-    if (fieldDef.type === 'model') return;
-    let value = el.value;
-    if (fieldDef.type === 'number') {
-      value = el.value === '' ? null : Number(el.value);
-    } else if (fieldDef.type === 'boolean') {
-      value = el.value === 'true';
-    } else if (fieldDef.type === 'toggle') {
-      value = el.checked;
-    }
-    // Only send pipeline settings the user actually changed. Fields that
-    // live in the camera's vision_model block (quantized, min_conf, ...)
-    // would otherwise be clobbered by stale defaults on every save.
-    const original = el.dataset.original;
-    if (original !== undefined && String(value) === original) return;
-    payload[key] = value;
-  });
-
-  const originalName = editCamData.name || '';
-  const r = await fetch(`/api/cameras/config/${encodeURIComponent(originalName)}`, {
-    method: 'PUT', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload),
-  });
-  const j = await r.json();
-  if (r.ok) {
-    showToast(j.note || 'Settings saved', 'success');
-    closeEditCameraModal();
-    refreshCameras();
-  } else {
-    showToast(j.error, 'error');
-  }
-}
-
-function confirmRemoveCamera(name) {
-  if (!confirm(`Remove camera "${name}"? Its settings will be saved for next time you add it back.`)) return;
-  fetch(`/api/cameras/config/${encodeURIComponent(name)}`, { method: 'DELETE' })
-    .then(r => r.json())
-    .then(j => { showToast(j.success ? 'Camera removed' : j.error, j.success ? 'success' : 'error'); refreshCameras(); });
-}
-
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
 }
 
-function statusDotClass(cam) {
-  if (cam.ready) return 'status-ok';
-  const state = cam.state;
-  if (state === 'optimizing' || state === 'downloading' || state === 'initializing') return 'status-warn';
-  return 'status-bad';
+function fieldId(key) {
+  return 'f-' + key.replace(/[^a-zA-Z0-9_]/g, '');
 }
 
-function updateCameraFooter(card, cam) {
-  let footer = card.querySelector('.camera-footer');
-  if (cam.ready == null) {
-    if (footer) footer.remove();
-    return;
-  }
-  const status = cam.status ?? 'unknown';
-  if (!footer) {
-    footer = document.createElement('div');
-    footer.className = 'camera-footer';
-    card.appendChild(footer);
-  }
-  footer.innerHTML = `
-    <span class="status-dot ${statusDotClass(cam)}"></span>
-    <span class="cam-status">${escapeHtml(status)}</span>
-  `;
+function $id(id) { return document.getElementById(id); }
+
+function activeSchema() {
+  return (pipelineSchemas[camModal.pipeline] || {}).config_schema || {};
 }
+
+/* Pipelines can store settings flat on the camera entry or nested in a
+   per-camera "vision_model" block. Read the effective value either way. */
+function effectiveValue(key) {
+  const d = camModal.data || {};
+  if (d[key] != null) return d[key];
+  if (d.vision_model && d.vision_model[key] != null) return d.vision_model[key];
+  return undefined;
+}
+
+function modelValue(source) {
+  if (!source) return '';
+  if (typeof source === 'object') source = source.source_pt || source.file_path || '';
+  return String(source || '').split('/').pop();
+}
+
+/* ---- Schema classification ------------------------------------------------
+   Pipeline schema fields are split into three sections:
+     model        -> pick-a-model fields (type "model")
+     pipeline     -> runtime settings + optimize/quantize master toggles
+     optimization -> quantization-only fields, shown while a master toggle
+                     (auto_opt / quantized) is switched on.
+--------------------------------------------------------------------------- */
+function splitSchema(schema) {
+  const out = { model: [], pipeline: [], optimization: [] };
+  Object.entries(schema || {}).forEach(([key, raw]) => {
+    const def = Object.assign({}, raw || {});
+    if (def.type === 'model') { out.model.push([key, def]); return; }
+    const isMasterToggle = def.type === 'toggle' && (def.optimize_toggle || def.quantization);
+    if (isMasterToggle) { out.pipeline.push([key, def]); return; }
+    if (def.quantization) { out.optimization.push([key, def]); return; }
+    out.pipeline.push([key, def]);
+  });
+  return out;
+}
+
+function mastersOn() {
+  const body = $id('camera-modal-body');
+  const masters = Array.from(body.querySelectorAll('input[type="checkbox"].master-toggle'));
+  return masters.length === 0 || masters.some(t => t.checked);
+}
+
+function syncOptimization() {
+  const on = mastersOn();
+  $id('camera-modal-body').querySelectorAll('[data-gated="optimization"]').forEach(node => {
+    node.classList.toggle('camera-hidden', !on);
+  });
+}
+
+/* ---- Field building ------------------------------------------------------ */
+
+function buildField(key, def, source) {
+  const row = document.createElement('div');
+  row.className = 'form-field';
+
+  const line = document.createElement('div');
+  line.className = 'form-row';
+
+  const label = document.createElement('span');
+  label.className = 'form-label';
+  label.innerHTML = escapeHtml(def.label || humanizeFieldName(key)) +
+    (def.unit ? ` <span class="form-unit">${escapeHtml(def.unit)}</span>` : '');
+  line.appendChild(label);
+
+  let control;
+  const type = def.type || 'text';
+  if (type === 'select') {
+    control = document.createElement('select');
+    control.className = 'form-input';
+    (def.options || []).forEach(optionValue => {
+      const option = document.createElement('option');
+      option.value = optionValue;
+      option.textContent = humanizePipelineName(optionValue);
+      control.appendChild(option);
+    });
+  } else if (type === 'boolean') {
+    control = document.createElement('select');
+    control.className = 'form-input';
+    const yes = document.createElement('option'); yes.value = 'true'; yes.textContent = 'Yes';
+    const no = document.createElement('option'); no.value = 'false'; no.textContent = 'No';
+    control.appendChild(yes);
+    control.appendChild(no);
+  } else if (type === 'toggle') {
+    control = document.createElement('input');
+    control.type = 'checkbox';
+    control.className = 'toggle-input master-toggle';
+    control.onchange = syncOptimization;
+  } else if (type === 'device' || type === 'pipeline') {
+    control = document.createElement('select');
+    control.className = 'form-input';
+  } else if (type === 'model') {
+    control = document.createElement('input');
+    control.className = 'form-input model-field';
+    control.type = 'text';
+    control.readOnly = true;
+    control.placeholder = 'Browse to select a model...';
+  } else if (type === 'browse') {
+    control = document.createElement('input');
+    control.className = 'form-input';
+    control.type = 'text';
+    control.readOnly = true;
+    control.placeholder = 'Browse to select a folder...';
+  } else if (type === 'number') {
+    control = document.createElement('input');
+    control.className = 'form-input';
+    control.type = 'number';
+    if (def.step != null) control.step = def.step;
+  } else {
+    control = document.createElement('input');
+    control.className = 'form-input';
+    control.type = 'text';
+  }
+  control.id = fieldId(key);
+  line.appendChild(control);
+
+  if (type === 'model') {
+    const browse = document.createElement('button');
+    browse.type = 'button';
+    browse.className = 'btn-sm';
+    browse.textContent = 'Browse...';
+    browse.onclick = () => openModelPicker(control.id);
+    line.appendChild(browse);
+  } else if (type === 'browse') {
+    const browse = document.createElement('button');
+    browse.type = 'button';
+    browse.className = 'btn-sm';
+    browse.textContent = 'Browse...';
+    browse.onclick = () => openFolderPicker(control.id, def.browse_root);
+    line.appendChild(browse);
+  }
+  row.appendChild(line);
+
+  if (def.help) {
+    const help = document.createElement('div');
+    help.className = 'form-help';
+    help.textContent = def.help;
+    row.appendChild(help);
+  }
+
+  camModal.fields.set(key, { el: control, def, source });
+  return row;
+}
+
+function renderSectionBody(bodyNode, defs, source) {
+  defs.forEach(([key, def]) => bodyNode.appendChild(buildField(key, def, source)));
+}
+
+function renderSection(title, opts) {
+  const holder = document.createElement('div');
+  holder.className = 'settings-section';
+  if (opts && opts.gated) holder.dataset.gated = 'optimization';
+
+  let body;
+  if (!opts || !opts.collapsible) {
+    const h = document.createElement('h3');
+    h.textContent = title;
+    body = document.createElement('div');
+    holder.appendChild(h);
+    holder.appendChild(body);
+  } else {
+    const details = document.createElement('details');
+    if (opts && opts.open) details.open = true;
+    const summary = document.createElement('summary');
+    summary.textContent = title;
+    body = document.createElement('div');
+    details.appendChild(summary);
+    details.appendChild(body);
+    holder.appendChild(details);
+  }
+  return { holder, body };
+}
+
+function setFieldValue(key, value) {
+  const field = camModal.fields.get(key);
+  if (!field) return;
+  const { el, def } = field;
+  if (def.type === 'toggle') {
+    el.checked = value === true || value === 'true';
+  } else if (def.type === 'number') {
+    el.value = (value == null || value === '') ? '' : Number(value);
+  } else if (def.type === 'boolean') {
+    el.value = (value === true || value === 'true') ? 'true' : 'false';
+  } else {
+    el.value = value == null ? (def.default != null ? String(def.default) : '') : String(value);
+  }
+  el.dataset.original = String(value == null ? def.default ?? '' : value);
+}
+
+function readField(key) {
+  const field = camModal.fields.get(key);
+  if (!field) return undefined;
+  const { el, def } = field;
+  if (def.type === 'toggle') return el.checked;
+  if (def.type === 'number') {
+    if (el.value === '') return def.nullable ? null : (def.default ?? 0);
+    return Number(el.value);
+  }
+  if (def.type === 'boolean') return el.value === 'true';
+  if (el.value === '' && def.default != null) return def.default;
+  return el.value;
+}
+
+/* ---- Modal open / close -------------------------------------------------- */
+
+function closeCameraModal() {
+  $id('camera-modal').style.display = 'none';
+  $id('camera-modal-body').innerHTML = '';
+  camModal.fields.clear();
+  camModal.data = null;
+}
+
+async function loadPipelines() {
+  try {
+    const data = await fetch('/api/vision_pipelines').then(r => r.json());
+    pipelineSchemas = {};
+    (data.pipelines || []).forEach(p => { pipelineSchemas[p.name] = p; });
+  } catch (e) {
+    console.warn('Failed to load pipeline schemas', e);
+    pipelineSchemas = { object_detection: { name: 'object_detection', config_schema: {}, show_common_fields: true } };
+  }
+  if (!Object.keys(pipelineSchemas).length) {
+    pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {}, show_common_fields: true };
+  }
+}
+
+function populatePipelineSelect() {
+  const sel = $id(fieldId('pipeline'));
+  if (!sel) return;
+  sel.innerHTML = '';
+  const keys = Object.keys(pipelineSchemas);
+  keys.forEach(name => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = humanizePipelineName(name);
+    sel.appendChild(option);
+  });
+  const requested = camModal.data && camModal.data.pipeline;
+  sel.value = keys.includes(requested) ? requested : camModal.pipeline;
+  camModal.pipeline = sel.value;
+}
+
+async function populateDevices(preselect) {
+  const sel = $id(fieldId('device'));
+  if (!sel) return;
+  sel.innerHTML = '<option value="" disabled>Detecting cameras...</option>';
+  try {
+    const data = await fetch('/api/cameras/discover').then(r => r.json());
+    const available = (data.devices || []).filter(d => !d.active);
+    sel.innerHTML = available.map(d =>
+      `<option value="${escapeHtml(d.path)}" data-device-id="${escapeHtml(d.device_id || '')}">${escapeHtml(d.name)}${d.resolution ? ' (' + escapeHtml(d.resolution) + ')' : ''}</option>`
+    ).join('') || '<option value="" disabled>No unused cameras detected</option>';
+    if (preselect) sel.value = preselect;
+    sel.onchange = onDeviceChanged;
+    onDeviceChanged();
+  } catch (e) {
+    sel.innerHTML = '<option value="" disabled>Failed to detect cameras</option>';
+  }
+}
+
+async function onDeviceChanged() {
+  const sel = $id(fieldId('device'));
+  if (!sel) return;
+  const opt = sel.selectedOptions[0];
+  const deviceId = opt && opt.dataset.deviceId;
+  if (!deviceId) return;
+  try {
+    const r = await fetch(`/api/cameras/profile/${encodeURIComponent(deviceId)}`);
+    const { profile } = await r.json();
+    if (!profile) return;
+    setFieldValue('name', profile.name ?? '');
+    setFieldValue('x', profile.x ?? 0);
+    setFieldValue('y', profile.y ?? 0);
+    setFieldValue('height', profile.height ?? 0);
+    setFieldValue('yaw', profile.yaw ?? 0);
+    setFieldValue('pitch', profile.pitch ?? 0);
+    setFieldValue('subsystem', profile.subsystem || 'field');
+    setFieldValue('grayscale', !!profile.grayscale);
+    const cal = profile.calibration || {};
+    setFieldValue('calibration.distance', cal.distance ?? 0);
+    setFieldValue('calibration.game_piece_size', cal.game_piece_size ?? 0);
+    setFieldValue('calibration.size', cal.size ?? 0);
+    setFieldValue('calibration.fov', cal.fov ?? 0);
+  } catch (e) { /* no profile saved for this device yet */ }
+}
+
+async function openCameraModal(mode, arg) {
+  camModal.mode = mode;
+  camModal.data = null;
+  if (mode === 'edit') {
+    if (!arg) return;
+    const r = await fetch(`/api/cameras/config/${encodeURIComponent(arg)}`).then(r => r.json());
+    if (!r.camera) { showToast(r.error || 'Camera not found', 'error'); return; }
+    camModal.data = r.camera;
+  }
+  await loadPipelines();
+
+  $id('camera-modal-title').textContent = mode === 'add' ? 'Add Camera' : 'Edit Camera';
+  $id('camera-modal-note').style.display = mode === 'add' ? 'none' : '';
+  $id('camera-modal-submit').textContent = mode === 'add' ? 'Add Camera' : 'Save Settings';
+
+  const body = $id('camera-modal-body');
+  body.innerHTML = '';
+  camModal.fields.clear();
+
+  // Identity (always visible).
+  const identity = renderSection('Camera', {});
+  const idKeys = mode === 'add' ? ['device', 'name', 'pipeline'] : ['source', 'name', 'pipeline'];
+  renderSectionBody(identity.body, idKeys.map(k => [k, COMMON_FIELDS[k]]), 'common');
+  body.appendChild(identity.holder);
+
+  // Anchor where pipeline / optimization sections are (re)inserted.
+  const anchor = document.createElement('div');
+  anchor.id = 'schema-anchor';
+  body.appendChild(anchor);
+
+  // Common collapsible groups.
+  const pipeline = pipelineSchemas[camModal.pipeline] || {};
+  const showMount = pipeline.show_common_fields !== false;
+  COMMON_SECTIONS.forEach(group => {
+    if (group.title === 'Mount & Location' && !showMount) return;
+    const sec = renderSection(group.title, { collapsible: true });
+    renderSectionBody(sec.body, group.fields.map(k => [k, COMMON_FIELDS[k]]), 'common');
+    body.appendChild(sec.holder);
+  });
+
+  populatePipelineSelect();
+  const pipelineSel = $id(fieldId('pipeline'));
+  pipelineSel.onchange = () => {
+    camModal.pipeline = pipelineSel.value;
+    renderPipelineSections();
+    if (mode === 'add') prefillFirstModel();
+  };
+
+  // Defaults fill first; the device profile (add) override-on-top keeps the
+  // user's saved mount/calibration values instead of being clobbered.
+  renderPipelineSections();
+  fillCommonValues();
+  if (mode === 'add') { await populateDevices(arg); prefillFirstModel(); }
+  $id('camera-modal').style.display = 'flex';
+}
+
+/* ---- Pipeline (schema-driven) sections ----------------------------------- */
+
+function renderPipelineSections() {
+  const body = $id('camera-modal-body');
+  body.querySelectorAll('[data-schema-section]').forEach(n => n.remove());
+  camModal.fields.forEach((field, key) => {
+    if (field.source === 'schema') camModal.fields.delete(key);
+  });
+
+  const { model, pipeline, optimization } = splitSchema(activeSchema());
+  const fragment = document.createDocumentFragment();
+
+  if (model.length) {
+    const sec = renderSection('Model', { collapsible: true, open: true });
+    sec.holder.dataset.schemaSection = 'model';
+    renderSectionBody(sec.body, model, 'schema');
+    fragment.appendChild(sec.holder);
+  }
+  if (pipeline.length) {
+    const sec = renderSection('Pipeline', { collapsible: true, open: true });
+    sec.holder.dataset.schemaSection = 'pipeline';
+    renderSectionBody(sec.body, pipeline, 'schema');
+    fragment.appendChild(sec.holder);
+  }
+  if (optimization.length) {
+    const sec = renderSection('Optimization', { gated: true });
+    sec.holder.dataset.schemaSection = 'optimization';
+    renderSectionBody(sec.body, optimization, 'schema');
+    fragment.appendChild(sec.holder);
+  }
+
+  $id('schema-anchor').parentNode.insertBefore(fragment, $id('schema-anchor'));
+
+  Object.entries(activeSchema()).forEach(([key, schemaDef]) => {
+    const input = $id(fieldId(key));
+    if (!input) return;
+    if (schemaDef.type === 'model') { setFieldModelValue(key); return; }
+    const value = effectiveValue(key);
+    setFieldValue(key, value == null ? schemaDef.default : value);
+  });
+  syncOptimization();
+}
+
+function setFieldModelValue(key) {
+  const input = $id(fieldId(key));
+  if (!input) return;
+  const name = modelValue(effectiveValue(key));
+  input.value = name;
+  input.dataset.original = name;
+}
+
+/* ---- Value filling -------------------------------------------------------- */
+
+function fillCommonValues() {
+  const src = camModal.data || {};
+  setFieldValue('x', src.x ?? 0);
+  setFieldValue('y', src.y ?? 0);
+  setFieldValue('height', src.height ?? 0);
+  setFieldValue('yaw', src.yaw ?? 0);
+  setFieldValue('pitch', src.pitch ?? 0);
+  setFieldValue('subsystem', src.subsystem || 'field');
+  setFieldValue('grayscale', src.grayscale ?? false);
+  setFieldValue('auto_brightness', src.auto_brightness !== false);
+  setFieldValue('exposure_time', src.exposure_time);
+  setFieldValue('gain', src.gain);
+  setFieldValue('fps_cap', src.fps_cap);
+  const cal = src.calibration || {};
+  setFieldValue('calibration.distance', cal.distance ?? 0);
+  setFieldValue('calibration.game_piece_size', cal.game_piece_size ?? 0);
+  setFieldValue('calibration.size', cal.size ?? 0);
+  setFieldValue('calibration.fov', cal.fov ?? 0);
+  if (camModal.mode === 'edit') {
+    setFieldValue('source', src.source ?? '');
+    setFieldValue('name', src.name ?? '');
+  }
+}
+
+/* ---- Save ------------------------------------------------------------------ */
+
+async function submitCameraModal() {
+  const mode = camModal.mode;
+  const payload = {};
+
+  if (mode === 'add') {
+    const sel = $id(fieldId('device'));
+    const opt = sel.selectedOptions[0];
+    if (!opt || opt.value === '') { showToast('Select a device first', 'error'); return; }
+    payload.source = isNaN(Number(opt.value)) ? opt.value : Number(opt.value);
+    payload.device_id = opt.dataset.deviceId || null;
+  } else {
+    const src = readField('source');
+    payload.source = (src !== '' && !isNaN(Number(src))) ? Number(src) : src;
+  }
+
+  const name = String(readField('name') || '').trim();
+  if (!name) { showToast('Camera name is required', 'error'); return; }
+  payload.name = name;
+  payload.pipeline = camModal.pipeline;
+
+  ['x', 'y', 'height', 'yaw', 'pitch', 'subsystem'].forEach(k => {
+    const v = readField(k);
+    if (v != null) payload[k] = v;
+  });
+  payload.grayscale = !!readField('grayscale');
+  payload.auto_brightness = !!readField('auto_brightness');
+  ['exposure_time', 'gain', 'fps_cap'].forEach(k => {
+    const v = readField(k);
+    payload[k] = (v === '' || v == null) ? null : Number(v);
+  });
+  payload.calibration = {
+    distance: readField('calibration.distance') ?? 0,
+    game_piece_size: readField('calibration.game_piece_size') ?? 0,
+    size: readField('calibration.size') ?? 0,
+    fov: readField('calibration.fov') ?? 0,
+  };
+
+  collectSchemaFields(payload);
+
+  const url = mode === 'add'
+    ? '/api/cameras/config'
+    : `/api/cameras/config/${encodeURIComponent(camModal.data.name || '')}`;
+  const r = await fetch(url, {
+    method: mode === 'add' ? 'POST' : 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const j = await r.json();
+  if (r.ok) {
+    showToast(j.note || 'Settings saved', 'success');
+    closeCameraModal();
+    refreshCameras();
+  } else {
+    showToast(j.error, 'error');
+  }
+}
+
+function collectSchemaFields(payload) {
+  const schema = activeSchema();
+  const gatesOn = mastersOn();
+  camModal.fields.forEach((field, key) => {
+    if (field.source !== 'schema') return;
+    const schemaDef = schema[key] || {};
+    const modelPayload = modelPayloadField(field.el, schemaDef, camModal.mode === 'edit');
+    if (modelPayload) { payload[key] = modelPayload; return; }
+    if (schemaDef.type === 'model') return;
+    // Non-toggle quantization fields are hidden by the optimization gate;
+    // the master toggles themselves are always saved.
+    if (schemaDef.quantization && schemaDef.type !== 'toggle' && !gatesOn) return;
+    let value = readField(key);
+    if (camModal.mode === 'edit') {
+      const original = field.el.dataset.original;
+      if (original !== undefined && String(value) === original) return;
+    }
+    payload[key] = value;
+  });
+}
+
+function modelPayloadField(el, schemaDef, changedOnly) {
+  if (schemaDef.type !== 'model' || !el.value) return null;
+  if (changedOnly && el.value === el.dataset.original) return null;
+  const basename = el.value.split('/').pop();
+  const path = 'YoloModels/pytorch/' + basename;
+  return { file_path: path, source_pt: path };
+}
+
+function prefillFirstModel() {
+  const input = document.querySelector('#camera-modal-body .model-field');
+  if (!input || input.value) return;
+  fetch('/api/models').then(r => r.json()).then(data => {
+    const models = data.models || [];
+    if (models.length) {
+      input.value = models[0].name;
+      input.dataset.original = models[0].name;
+    }
+  }).catch(() => {});
+}
+
+/* ---- Folder / model pickers ------------------------------------------------ */
 
 let folderPickerTarget = null;
 let folderPickerPath = '';
+let folderPickerIsDataset = false;
+
+function setFolderPickerTab(tab) {
+  $id('folder-tab-device').classList.toggle('active', tab === 'device');
+  $id('folder-tab-upload').classList.toggle('active', tab === 'upload');
+  $id('folder-picker-panel-device').style.display = tab === 'device' ? '' : 'none';
+  $id('folder-picker-panel-upload').style.display = tab === 'upload' ? '' : 'none';
+}
 
 async function openFolderPicker(inputId, startPath) {
   folderPickerTarget = inputId;
-  const input = document.getElementById(inputId);
+  folderPickerIsDataset = String(startPath || '').replace(/\\/g, '/').endsWith('QuantizeDataset');
+  $id('folder-picker-title').textContent = folderPickerIsDataset ? 'Select Quantization Dataset' : 'Select Folder';
+  $id('folder-picker-tabs').style.display = folderPickerIsDataset ? '' : 'none';
+  setFolderPickerTab('device');
+  $id('dataset-upload-name').value = '';
+  $id('dataset-upload-input').value = '';
+  $id('dataset-upload-status').textContent = '';
+  const input = $id(inputId);
   const start = (input && input.value) ? input.value : (startPath || '');
   await loadFolderPicker(start);
-  document.getElementById('folder-picker-modal').style.display = 'flex';
+  $id('folder-picker-modal').style.display = 'flex';
+}
+
+async function uploadDatasetFromPicker() {
+  const name = String($id('dataset-upload-name').value || '').trim();
+  const files = $id('dataset-upload-input').files;
+  if (!name) { showToast('Enter a dataset name', 'error'); return; }
+  if (!files.length) { showToast('Choose at least one image', 'error'); return; }
+  const btn = $id('dataset-upload-btn');
+  const status = $id('dataset-upload-status');
+  btn.disabled = true;
+  status.textContent = 'Creating dataset...';
+  try {
+    const resp = await fetch('/api/datasets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (resp.status !== 409 && !resp.ok) {
+      const j = await resp.json().catch(() => ({}));
+      throw new Error(j.error || 'Failed to create dataset');
+    }
+    for (let i = 0; i < files.length; i++) {
+      const form = new FormData();
+      form.append('file', files[i]);
+      status.textContent = `Uploading image ${i + 1}/${files.length}...`;
+      const ur = await fetch(`/api/datasets/${encodeURIComponent(name)}/images`, { method: 'POST', body: form });
+      if (!ur.ok) throw new Error('Failed to upload an image');
+    }
+    status.textContent = `Imported ${files.length} image${files.length !== 1 ? 's' : ''}`;
+    const target = $id(folderPickerTarget);
+    if (target) {
+      target.value = 'QuantizeDataset/' + name;
+      target.dataset.original = target.value;
+    }
+    showToast(`Dataset "${name}" created`, 'success');
+    closeFolderPicker();
+  } catch (e) {
+    status.textContent = e.message || 'Upload failed';
+    showToast(e.message || 'Upload failed', 'error');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function loadFolderPicker(path) {
   try {
     const r = await fetch(`/api/fs/dirs?path=${encodeURIComponent(path || '')}`);
     const data = await r.json();
-    if (!r.ok) {
-      showToast(data.error || 'Failed to browse folder', 'error');
-      return;
-    }
+    if (!r.ok) { showToast(data.error || 'Failed to browse folder', 'error'); return; }
     folderPickerPath = data.path;
-    document.getElementById('folder-picker-path').textContent = data.path;
-
-    const list = document.getElementById('folder-picker-list');
+    $id('folder-picker-path').textContent = data.path;
+    const list = $id('folder-picker-list');
     list.innerHTML = '';
     if (data.parent) {
       const upBtn = document.createElement('button');
@@ -835,31 +866,70 @@ async function loadFolderPicker(path) {
       btn.onclick = () => loadFolderPicker(d.path);
       list.appendChild(btn);
     });
-  } catch (e) {
-    showToast('Failed to browse folder', 'error');
-  }
+  } catch (e) { showToast('Failed to browse folder', 'error'); }
 }
 
 function confirmFolderPick() {
   if (folderPickerTarget && folderPickerPath) {
-    document.getElementById(folderPickerTarget).value = folderPickerPath;
+    $id(folderPickerTarget).value = folderPickerPath;
   }
   closeFolderPicker();
 }
 
 function closeFolderPicker() {
-  document.getElementById('folder-picker-modal').style.display = 'none';
+  $id('folder-picker-modal').style.display = 'none';
   folderPickerTarget = null;
   folderPickerPath = '';
 }
 
 let modelPickerTarget = null;
 
+function setModelPickerTab(tab) {
+  $id('model-tab-device').classList.toggle('active', tab === 'device');
+  $id('model-tab-upload').classList.toggle('active', tab === 'upload');
+  $id('model-picker-panel-device').style.display = tab === 'device' ? '' : 'none';
+  $id('model-picker-panel-upload').style.display = tab === 'upload' ? '' : 'none';
+}
+
+async function uploadModelFromPicker() {
+  const input = $id('model-upload-input');
+  const f = input.files[0];
+  if (!f) { showToast('Choose a .pt file first', 'error'); return; }
+  const btn = $id('model-upload-btn');
+  const status = $id('model-upload-status');
+  btn.disabled = true;
+  status.textContent = 'Uploading...';
+  const form = new FormData();
+  form.append('file', f);
+  try {
+    const r = await fetch('/api/models/upload', { method: 'POST', body: form });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok && r.status !== 207) throw new Error(j.error || 'Upload failed');
+    const name = j.name || f.name;
+    status.textContent = `Uploaded ${name}`;
+    const target = $id(modelPickerTarget);
+    if (target) {
+      target.value = name;
+      target.dataset.original = name;
+    }
+    showToast('Model uploaded', 'success');
+    closeModelPicker();
+  } catch (e) {
+    status.textContent = e.message || 'Upload failed';
+    showToast(e.message || 'Upload failed', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function openModelPicker(inputId) {
   modelPickerTarget = inputId;
-  const list = document.getElementById('model-picker-list');
+  setModelPickerTab('device');
+  $id('model-upload-input').value = '';
+  $id('model-upload-status').textContent = '';
+  const list = $id('model-picker-list');
   list.innerHTML = '<div class="empty-state">Loading models...</div>';
-  document.getElementById('model-picker-modal').style.display = 'flex';
+  $id('model-picker-modal').style.display = 'flex';
   try {
     const data = await fetch('/api/models').then(r => r.json());
     const models = data.models || [];
@@ -873,10 +943,10 @@ async function openModelPicker(inputId) {
       btn.type = 'button';
       btn.className = 'folder-picker-item';
       const details = [m.task || 'detect', m.nc != null ? m.nc + ' classes' : null, m.size_mb + ' MB']
-        .filter(Boolean).join(' · ');
+        .filter(Boolean).join(' \u00b7 ');
       btn.innerHTML = `<strong>${escapeHtml(m.name)}</strong><span class="text-dim" style="display:block;font-size:12px;">${escapeHtml(details)}</span>`;
       btn.onclick = () => {
-        const input = document.getElementById(modelPickerTarget);
+        const input = $id(modelPickerTarget);
         if (input) {
           input.value = m.name;
           input.dataset.original = m.name;
@@ -885,38 +955,38 @@ async function openModelPicker(inputId) {
       };
       list.appendChild(btn);
     });
-  } catch (e) {
-    list.innerHTML = '<div class="empty-state">Failed to load models.</div>';
-  }
+  } catch (e) { list.innerHTML = '<div class="empty-state">Failed to load models.</div>'; }
 }
 
 function closeModelPicker() {
-  document.getElementById('model-picker-modal').style.display = 'none';
+  $id('model-picker-modal').style.display = 'none';
   modelPickerTarget = null;
 }
 
-function modelFieldPayload(el, schemaKey, changedOnly) {
-  const fieldDef = schemaKey || {};
-  if (fieldDef.type !== 'model' || !el.value) return null;
-  // For the edit flow, only send the vision_model block when the user
-  // actually changed the selection, so unrelated settings saves don't
-  // clobber an optimized artifact's file_path back to the raw .pt. For
-  // the add flow always send it - the prefilled picker IS the choice.
-  if (changedOnly && el.value === el.dataset.original) return null;
-  const modelPath = 'YoloModels/pytorch/' + el.value.split('/').pop();
-  return { file_path: modelPath, source_pt: modelPath };
+/* ---- Camera cards / refresh ----------------------------------------------- */
+
+function statusDotClass(cam) {
+  if (cam.ready) return 'status-ok';
+  if (['optimizing', 'downloading', 'initializing'].includes(cam.state)) return 'status-warn';
+  return 'status-bad';
 }
 
-function prefillFirstModel() {
-  const modelField = document.querySelector('#dynamic-pipeline-fields .model-field');
-  if (!modelField) return;
-  fetch('/api/models').then(r => r.json()).then(data => {
-    const models = data.models || [];
-    if (models.length) {
-      modelField.value = models[0].name;
-      modelField.dataset.original = models[0].name;
-    }
-  }).catch(() => {});
+function updateCameraFooter(card, cam) {
+  let footer = card.querySelector('.camera-footer');
+  if (cam.ready == null) {
+    if (footer) footer.remove();
+    return;
+  }
+  const status = cam.status ?? 'unknown';
+  if (!footer) {
+    footer = document.createElement('div');
+    footer.className = 'camera-footer';
+    card.appendChild(footer);
+  }
+  footer.innerHTML = `
+    <span class="status-dot ${statusDotClass(cam)}"></span>
+    <span class="cam-status">${escapeHtml(status)}</span>
+  `;
 }
 
 function buildCameraCard(name, isStreaming, ageText, cam) {
@@ -928,7 +998,7 @@ function buildCameraCard(name, isStreaming, ageText, cam) {
       <span class="status-dot ${isStreaming ? 'status-ok' : 'status-warn'}"></span>
       <strong>${escapeHtml(name)}</strong>
       <span class="cam-meta">${escapeHtml(ageText)}</span>
-      <button class="btn-sm btn-ok" onclick="openEditCameraModal(this.closest('.camera-card').dataset.camera)" style="margin-left:auto;">Edit</button>
+      <button class="btn-sm btn-ok" onclick="openCameraModal('edit', this.closest('.camera-card').dataset.camera)" style="margin-left:auto;">Edit</button>
       <button class="btn-sm btn-bad" onclick="confirmRemoveCamera(this.closest('.camera-card').dataset.camera)">Remove</button>
     </div>
     ${isStreaming
@@ -955,7 +1025,7 @@ function buildDiscoverCard(device) {
       <span class="status-dot status-ok"></span>
       <strong>${escapeHtml(device.name)}</strong>
       <span class="cam-meta">${escapeHtml(device.resolution || device.path)}</span>
-      <button class="btn-sm btn-ok" onclick="openAddCameraModal(this.closest('.camera-card').dataset.discover)" style="margin-left:auto;">Add</button>
+      <button class="btn-sm btn-ok" onclick="openCameraModal('add', this.closest('.camera-card').dataset.discover)" style="margin-left:auto;">Add</button>
     </div>
     <div class="camera-not-streaming">Discovered but not configured.</div>
   `;
@@ -968,10 +1038,9 @@ async function refreshCameras() {
       fetch('/api/cameras').then(r => r.json()),
       fetch('/api/cameras/discover').then(r => r.json()),
     ]);
-    const grid = document.getElementById('camera-grid');
+    const grid = $id('camera-grid');
     const cameras = camData.cameras || [];
     const discovered = discData.devices || [];
-
     const streamingNames = new Set(cameras.map(c => c.name));
 
     if (cameras.length === 0 && discovered.length === 0) {
@@ -980,27 +1049,21 @@ async function refreshCameras() {
       return;
     }
 
-    const cameraMap = new Map(cameras.map(c => [c.name, c]));
-
     cameras.forEach(cam => {
       const name = cam.name;
       const age = cam.age_ms != null ? cam.age_ms + 'ms' : '';
       if (!knownCameras.has(name)) {
-        const card = buildCameraCard(name, true, age, cam);
-        grid.appendChild(card);
+        grid.appendChild(buildCameraCard(name, true, age, cam));
+        knownCameras.set(name, { streaming: true });
+      } else if (!knownCameras.get(name).streaming) {
+        const oldCard = grid.querySelector(`[data-camera="${name}"]`);
+        if (oldCard) oldCard.replaceWith(buildCameraCard(name, true, age, cam));
         knownCameras.set(name, { streaming: true });
       } else {
-        const known = knownCameras.get(name);
-        if (!known.streaming) {
-          const oldCard = grid.querySelector(`[data-camera="${name}"]`);
-          if (oldCard) oldCard.replaceWith(buildCameraCard(name, true, age, cam));
-          knownCameras.set(name, { streaming: true });
-        } else {
-          const meta = grid.querySelector(`[data-camera="${name}"] .cam-meta`);
-          if (meta) meta.textContent = age;
-          const card = grid.querySelector(`[data-camera="${name}"]`);
-          if (card) updateCameraFooter(card, cam);
-        }
+        const card = grid.querySelector(`[data-camera="${name}"]`);
+        const meta = card.querySelector('.cam-meta');
+        if (meta) meta.textContent = age;
+        updateCameraFooter(card, cam);
       }
     });
 
@@ -1012,14 +1075,35 @@ async function refreshCameras() {
       }
     });
 
-    const existingDiscoverCards = grid.querySelectorAll('[data-discover]');
-    existingDiscoverCards.forEach(c => c.remove());
-    discovered.filter(d => !d.active).forEach(d => {
-      grid.appendChild(buildDiscoverCard(d));
-    });
+    grid.querySelectorAll('[data-discover]').forEach(c => c.remove());
+    discovered.filter(d => !d.active).forEach(d => grid.appendChild(buildDiscoverCard(d)));
   } catch (e) {
     console.error('Camera refresh failed', e);
   }
+}
+
+function confirmRemoveCamera(name) {
+  if (!confirm(`Remove camera "${name}"? Its settings will be saved for next time you add it back.`)) return;
+  fetch(`/api/cameras/config/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    .then(r => r.json())
+    .then(j => { showToast(j.success ? 'Camera removed.' : j.error, j.success ? 'success' : 'error'); refreshCameras(); });
+}
+
+function openCameraLightbox(name) {
+  $id('lightbox-title').textContent = name;
+  $id('lightbox-feed').src = `/video/${encodeURIComponent(name)}`;
+  $id('camera-lightbox').style.display = 'flex';
+}
+
+function closeCameraLightbox() {
+  $id('camera-lightbox').style.display = 'none';
+  $id('lightbox-feed').src = '';
+}
+
+function setRefreshRate() {
+  currentRate = Number($id('refresh-rate').value);
+  clearInterval(refreshTimer);
+  refreshTimer = setInterval(refreshCameras, currentRate);
 }
 
 refreshCameras();

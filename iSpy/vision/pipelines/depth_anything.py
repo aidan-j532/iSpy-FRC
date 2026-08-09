@@ -1,5 +1,6 @@
 import logging
 import threading
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -12,6 +13,7 @@ from iSpy.vision.Object import Object
 _DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 _DEPTH_INPUT_SIZE = 518
 _DEPTH_ARTIFACT_STEM = "depth_anything_v2_small"
+_DEPTH_HF_CACHE_DIR = Path(__file__).resolve().parents[3] / "YoloModels" / "huggingface"
 
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
@@ -196,6 +198,37 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         if self._optimizing:
             return "optimizing"
 
+        if kwargs.pop("force", False):
+            return self._optimize_forced()
+
+        self._optimizing = True
+        self._set_status("optimizing (onnx build)")
+        try:
+            # Reuse the cached ONNX artifact when present; only a full
+            # rebuild re-exports and re-quantizes from the HF weights.
+            self._load_optimized(force=False)
+            if not self._optimized_active():
+                self._load_optimized(force=True)
+        except Exception as exc:
+            self._optimize_error = f"optimized ONNX build failed: {exc}"
+            self._load_error = self._optimize_error
+            self._optimizing = False
+            return f"error: optimized ONNX build failed - {exc}"
+        self._optimizing = False
+
+        if self._optimized_active():
+            self._load_error = None
+            self._optimize_error = None
+            self._set_status("ready")
+            return "ready"
+        status = self._optimize_error or "error: optimized ONNX build failed - no artifact produced"
+        self._optimize_error = status
+        self._set_status(status)
+        return status
+
+    def _optimize_forced(self) -> str:
+        """Force a full rebuild: re-export and re-quantize even when a
+        matching artifact is already cached (manual rebuild path)."""
         self._optimizing = True
         self._set_status("optimizing (onnx build)")
         try:
@@ -273,7 +306,9 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             self.logger.info(
                 "Loading Depth Anything V2 Small weights from Hugging Face..."
             )
-            model = AutoModelForDepthEstimation.from_pretrained(_DEPTH_MODEL_ID)
+            model = AutoModelForDepthEstimation.from_pretrained(
+                _DEPTH_MODEL_ID, cache_dir=str(_DEPTH_HF_CACHE_DIR)
+            )
             model.eval()
             return _DepthModule(model)
 
@@ -311,6 +346,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             self._model = pipeline(
                 "depth-estimation",
                 model=_DEPTH_MODEL_ID,
+                cache_dir=str(_DEPTH_HF_CACHE_DIR),
             )
 
             self._infer = self._infer_depth_pipeline

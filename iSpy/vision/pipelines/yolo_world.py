@@ -11,7 +11,7 @@ from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 
-_WORLD_MODEL_CACHE = Path.home() / ".cache" / "ispy"
+_WORLD_MODEL_DIR = Path(__file__).resolve().parents[3] / "YoloModels" / "pytorch"
 
 _WORLD_MODEL_URLS = {
     "s": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8s-worldv2.pt",
@@ -145,6 +145,15 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self.target_format = str(camera_config.get("target_format") or "auto").lower()
         self._quantization_dataset = camera_config.get("quantization_dataset") or None
         self._model_input_size = int(camera_config.get("input_size") or 640)
+
+        raw_optimize = camera_config.get("auto_opt")
+        if raw_optimize is None:
+            raw_optimize = camera_config.get("optimize")  # legacy key
+        if raw_optimize is None:
+            raw_optimize = config.get("auto_opt", False) if config is not None else False
+        if isinstance(raw_optimize, str):
+            raw_optimize = raw_optimize.strip().lower() in ("1", "true", "yes", "on")
+        self._auto_opt = bool(raw_optimize)
         self.model = None
         self._model_path = None
         self._quantized = False
@@ -194,6 +203,37 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         if self._optimizing:
             return "optimizing"
 
+        if kwargs.pop("force", False):
+            return self._optimize_forced()
+
+        self._optimizing = True
+        self._set_status("optimizing (backend build)")
+        try:
+            # Reuse a cached artifact when one matches the requested
+            # target format; only a full rebuild re-exports and re-quantizes.
+            self._load_quantized_model(force=False)
+            if not self._optimized_active():
+                self._load_quantized_model(force=True)
+        except Exception as exc:
+            self._optimize_error = f"quantized build failed: {exc}"
+            self._set_load_error(self._optimize_error)
+            self._optimizing = False
+            return f"error: quantized build failed - {exc}"
+        self._optimizing = False
+
+        if self._optimized_active():
+            self._load_error = None
+            self._optimize_error = None
+            self._set_status("ready")
+            return "ready"
+        status = self._optimize_error or "error: quantized build failed - no artifact produced"
+        self._optimize_error = status
+        self._set_status(status)
+        return status
+
+    def _optimize_forced(self) -> str:
+        """Force a full rebuild: re-export and re-quantize even when a
+        matching artifact is already cached (manual rebuild path)."""
         self._optimizing = True
         self._set_status("optimizing (backend build)")
         try:
@@ -225,7 +265,9 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self._set_status(status)
 
     def _optimization_requested(self) -> bool:
-        return bool(getattr(self, "quantize", False))
+        return bool(getattr(self, "quantize", False)) or bool(
+            getattr(self, "_auto_opt", False)
+        )
 
     def _resolve_target_format(self) -> str:
         explicit = str(getattr(self, "target_format", "") or "").strip().lower()
@@ -292,10 +334,10 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return True
 
     def _ensure_world_model(self, size: str) -> str | None:
-        """Download YOLO World weights into the iSpy cache on first use."""
+        """Download YOLO World weights into <project>/YoloModels/pytorch on first use."""
         url = _WORLD_MODEL_URLS.get(size, _WORLD_MODEL_URLS["s"])
         filename = url.rsplit("/", 1)[-1]
-        target = _WORLD_MODEL_CACHE / filename
+        target = _WORLD_MODEL_DIR / filename
 
         if target.exists() and target.stat().st_size >= 1024:
             return str(target)
@@ -345,7 +387,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
             return None
 
         classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[:8]
-        fixed = _WORLD_MODEL_CACHE / "world" / f"{Path(weights).stem}-{classes_key}.pt"
+        fixed = _WORLD_MODEL_DIR / "world" / f"{Path(weights).stem}-{classes_key}.pt"
         if fixed.exists() and fixed.stat().st_size >= 1024:
             return str(fixed)
 
@@ -362,7 +404,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
             return None
 
     def _load_model(self):
-        if self.quantize:
+        if self._optimization_requested():
             self._load_quantized_model()
             if self.model is not None:
                 return
