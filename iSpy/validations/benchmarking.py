@@ -88,15 +88,34 @@ def find_pt_files():
         try:
             with open(config_path) as f:
                 cfg = json.load(f)
-            vm = cfg.get("vision_model", {})
-            for key in ("file_path", "source_pt"):
-                p = vm.get(key)
-                if p:
-                    p = Path(p)
-                    if not p.is_absolute():
-                        p = _PROJECT_ROOT / p
-                    if p.suffix == ".pt" and p.exists():
-                        raw.append(p.resolve())
+            from iSpy.config.iSpyConfig import get_pipeline_settings
+            models: list[Path] = []
+            for cam in (cfg.get("camera_configs") or {}).values():
+                if not isinstance(cam, dict):
+                    continue
+                settings = get_pipeline_settings(cam) or {}
+                settings_vm = settings.get("vision_model")
+                if isinstance(settings_vm, dict):
+                    for key in ("file_path", "source_pt"):
+                        p = settings_vm.get(key)
+                        if p:
+                            p = Path(p)
+                            if not p.is_absolute():
+                                p = _PROJECT_ROOT / p
+                            if p.suffix == ".pt" and p.exists():
+                                models.append(p.resolve())
+            # Legacy top-level layout, tolerated for old configs.
+            if not models:
+                vm = cfg.get("vision_model", {})
+                for key in ("file_path", "source_pt"):
+                    p = vm.get(key)
+                    if p:
+                        p = Path(p)
+                        if not p.is_absolute():
+                            p = _PROJECT_ROOT / p
+                        if p.suffix == ".pt" and p.exists():
+                            models.append(p.resolve())
+            raw.extend(models)
         except Exception:
             pass
 
@@ -288,9 +307,9 @@ def benchmark(model_config, core_mask, duration=5.0):
     from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 
     config = iSpyConfig()
-    config.set("vision_model", model_config)
-
-    cam_cfg = iSpyCameraConfig({
+    # Model selection lives in the camera's pipeline settings, never at the
+    # config root - the object detection camera only reads it from there.
+    cam_entry = {
         "name": "bench",
         "source": 99,  # won't open -> placeholder
         "fps_cap": 1000,
@@ -299,7 +318,11 @@ def benchmark(model_config, core_mask, duration=5.0):
         "grayscale": False,
         "subsystem": "bench",
         "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
-    })
+        "pipeline": {"name": "object_detection", "settings": {"vision_model": model_config}},
+    }
+    config.set("camera_configs", {"bench": cam_entry})
+
+    cam_cfg = iSpyCameraConfig(cam_entry)
 
     with _quiet():
         camera = ObjectDetectionCamera(cam_cfg, config, core_mask=core_mask)

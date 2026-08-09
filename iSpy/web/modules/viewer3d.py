@@ -17,8 +17,20 @@ class Viewer3DModule(WebModule):
     def update(self, frame_data: dict):
         fuel_list = frame_data.get("fuel_list", [])
         if self._cached_num_keypoints is None:
-            config = self.context.get("config", {})
-            vm = config.get("vision_model", {}) if config else {}
+            config = self.context.get("config", None)
+            # The model is configured per camera under pipeline settings;
+            # fall back to the first model-backed camera found.
+            vm = {}
+            if config:
+                from iSpy.config.iSpyConfig import get_pipeline_settings
+                for cam in config.get("camera_configs", {}).values():
+                    if not isinstance(cam, dict):
+                        continue
+                    settings = get_pipeline_settings(cam) or {}
+                    candidate = settings.get("vision_model")
+                    if isinstance(candidate, dict) and candidate.get("source_pt"):
+                        vm = candidate
+                        break
             self._cached_num_keypoints = self._get_num_keypoints(vm)
         num_kpts = self._cached_num_keypoints
         self._latest_objects = []

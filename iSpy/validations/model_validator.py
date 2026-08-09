@@ -226,7 +226,21 @@ def _check_for_standalone_models(
 def validate_config_model_paths(
     config: Dict, repo_root: Path, validation_result: ModelValidationResult
 ) -> str:
-    config_model_path = config.get("vision_model", {}).get("file_path", "")
+    # The model lives in the first model-backed camera's pipeline settings.
+    from iSpy.config.iSpyConfig import get_pipeline_settings
+
+    config_model_path = ""
+    for cam in (config.get("camera_configs") or {}).values():
+        if not isinstance(cam, dict):
+            continue
+        settings = get_pipeline_settings(cam) or {}
+        settings_vm = settings.get("vision_model")
+        if isinstance(settings_vm, dict) and settings_vm.get("file_path"):
+            config_model_path = settings_vm["file_path"]
+            break
+
+    if not config_model_path:
+        config_model_path = config.get("vision_model", {}).get("file_path", "")
 
     if not config_model_path:
         logger.warning("No model path in config.json, cannot validate vision model")

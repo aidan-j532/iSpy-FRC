@@ -88,6 +88,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
                 "default": "",
                 "browse_root": "QuantizeDataset",
                 "quantization": True,
+                "gated_by": "quantized",
                 "help": "Optional folder of calibration images used for "
                         "quantization. Leave empty to auto-download images "
                         "from the model's calibration keywords.",
@@ -133,22 +134,22 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self.config = camera_config
         self._ispy_config = config
         self.core_mask = core_mask
-        self.prompt = str(camera_config.get("prompt") or "A dog.")
+        self.prompt = str(camera_config.get_pipeline_setting("prompt") or "A dog.")
         self.classes = self._parse_classes(self.prompt)
-        self.model_size = str(camera_config.get("model_size") or "s").lower()
+        self.model_size = str(camera_config.get_pipeline_setting("model_size") or "s").lower()
 
-        raw_quantize = camera_config.get("quantized", False)
+        raw_quantize = camera_config.get_pipeline_setting("quantized", False)
         if isinstance(raw_quantize, str):
             raw_quantize = raw_quantize.strip().lower() in ("1", "true", "yes", "on")
         self.quantize = bool(raw_quantize)
 
-        self.target_format = str(camera_config.get("target_format") or "auto").lower()
-        self._quantization_dataset = camera_config.get("quantization_dataset") or None
-        self._model_input_size = int(camera_config.get("input_size") or 640)
+        self.target_format = str(camera_config.get_pipeline_setting("target_format") or "auto").lower()
+        self._quantization_dataset = camera_config.get_pipeline_setting("quantization_dataset") or None
+        self._model_input_size = int(camera_config.get_pipeline_setting("input_size") or 640)
 
-        raw_optimize = camera_config.get("auto_opt")
+        raw_optimize = camera_config.get_pipeline_setting("auto_opt")
         if raw_optimize is None:
-            raw_optimize = camera_config.get("optimize")  # legacy key
+            raw_optimize = camera_config.get_pipeline_setting("optimize")  # legacy key
         if raw_optimize is None:
             raw_optimize = config.get("auto_opt", False) if config is not None else False
         if isinstance(raw_optimize, str):

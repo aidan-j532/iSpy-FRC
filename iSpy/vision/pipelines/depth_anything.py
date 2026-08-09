@@ -127,8 +127,8 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self._last_annotated = None
 
         self.unit = config.get("unit", "meter")
-        self.max_depth = float(camera_config.get("max_depth", 10.0))
-        self.estimate_depth = bool(camera_config.get("estimate_depth", True))
+        self.max_depth = float(camera_config.get_pipeline_setting("max_depth", 10.0))
+        self.estimate_depth = bool(camera_config.get_pipeline_setting("estimate_depth", True))
 
         # max_depth is configured in meters; scale z output into the
         # configured unit so every pipeline emits the same unit.
@@ -139,9 +139,9 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             "centimeter": 100.0, "centimeters": 100.0,
         }.get(self.unit, 1.0)
 
-        raw_optimize = camera_config.get("auto_opt")
+        raw_optimize = camera_config.get_pipeline_setting("auto_opt")
         if raw_optimize is None:
-            raw_optimize = camera_config.get("optimize")  # legacy key
+            raw_optimize = camera_config.get_pipeline_setting("optimize")  # legacy key
         if raw_optimize is None:
             raw_optimize = config.get("auto_opt", False) if config is not None else False
         if isinstance(raw_optimize, str):
@@ -149,7 +149,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self._auto_opt = bool(raw_optimize)
 
         try:
-            self._every = max(1, int(camera_config.get("process_every", 5)))
+            self._every = max(1, int(camera_config.get_pipeline_setting("process_every", 5)))
         except (TypeError, ValueError):
             self._every = 5
 

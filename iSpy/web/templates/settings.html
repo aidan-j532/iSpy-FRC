@@ -11,13 +11,14 @@
   <button class="settings-tab" onclick="switchTab('raw', this)">Raw JSON</button>
 </div>
 
+<div class="settings-actions">
+  <button class="btn btn-ok" onclick="saveSettings()">Save Settings</button>
+  <span id="msg" class="settings-msg"></span>
+</div>
+
 <div id="tab-vision" class="settings-tab-content">
   <div class="settings-section">
     <h3>Model</h3>
-    <div class="form-row">
-      <span class="form-label">Min Confidence</span>
-      <input class="form-input" type="number" step="0.05" min="0" max="1" data-key="vision_model.min_conf">
-    </div>
     <div class="form-row">
       <span class="form-label">Auto Optimize</span>
       <select class="form-input" data-key="auto_opt" data-restart="true">
@@ -279,23 +280,6 @@ function loadFormValues() {
       if (badge) badge.style.display = '';
     }
   });
-}
-
-function collectFormValues() {
-  const data = {};
-  const restartKeys = [];
-  document.querySelectorAll('[data-key]').forEach(el => {
-    const key = el.dataset.key;
-    let val = parseValue(el.value);
-    if (BOOL_KEYS.has(key.split('.').pop())) {
-      val = val === true || val === "true";
-    }
-    setNestedValue(data, key, val);
-    if (el.dataset.restart) {
-      restartKeys.push(key);
-    }
-  });
-  return { data, restartKeys };
 }
 
 function switchTab(name, btn) {

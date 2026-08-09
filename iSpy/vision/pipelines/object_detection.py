@@ -10,7 +10,7 @@ import queue
 import json
 from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.genericYolo import Box, Results, GenericYolo, ModelFileError
-from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, get_pipeline_settings
 from iSpy.vision import triangulation
 
 class ObjectDetectionCamera(VisionPipeline):
@@ -48,25 +48,26 @@ class ObjectDetectionCamera(VisionPipeline):
 
         # Model architecture fields come exclusively from metadata sidecars,
         # not from config.  Config holds only user-preference fields.  The
-        # vision_model block is per-camera (migrated from the legacy top-level
-        # key in a prior pass).
+        # vision_model block is per-camera pipeline settings (pipeline.settings),
+        # migrated from the legacy top-level key in a prior pass.
         from iSpy.vision.ModelInspector import fill_missing_config
-        vm_cfg = camera_config.get("vision_model")
+        vm_cfg = camera_config.get_pipeline_setting("vision_model")
         if not isinstance(vm_cfg, dict) or not vm_cfg:
             raise RuntimeError(
                 f"Camera '{self._cam_name}' uses pipeline 'object_detection' "
-                "but has no per-camera vision_model block."
+                "but has no vision_model block in its pipeline settings."
             )
-        # Schema fields set via the config UI live at the camera level; merge
-        # them into the model config so they drive loading, readiness gating
-        # and optimization identically to the nested vision_model keys.
+        # Schema fields set via the config UI live in the pipeline settings;
+        # merge them into the model config so they drive loading, readiness
+        # gating and optimization identically to the nested vision_model keys.
         for _k in (
             "quantized", "min_conf", "target_format", "input_size",
             "quantization_dataset", "auto_opt",
         ):
-            if _k in camera_config.data:
-                vm_cfg[_k] = camera_config.data[_k]
-        camera_config.data["vision_model"] = vm_cfg
+            _v = camera_config.get_pipeline_setting(_k)
+            if _v is not None:
+                vm_cfg[_k] = _v
+        camera_config.set_pipeline_setting("vision_model", vm_cfg)
         vm_filled = fill_missing_config(dict(vm_cfg))
         self.margin = vm_filled.get("margin", vm_cfg.get("margin", 0))
         raw_min_conf = vm_filled.get("min_conf", vm_cfg.get("min_conf", 0.5))
@@ -214,6 +215,7 @@ class ObjectDetectionCamera(VisionPipeline):
                 "default": "",
                 "browse_root": "QuantizeDataset",
                 "quantization": True,
+                "gated_by": "quantized",
                 "help": "Optional folder of calibration images used for "
                         "quantization. Leave empty to auto-download images "
                         "from the model's calibration keywords.",
@@ -288,7 +290,7 @@ class ObjectDetectionCamera(VisionPipeline):
 
     def _source_model_path(self) -> Path | None:
         """The .pt this camera's optimization builds from, or None."""
-        vm = self.config.get("vision_model") or {}
+        vm = self._current_vm_config()
         source = vm.get("source_pt") or vm.get("file_path")
         p = self._resolve_model_path(str(source or ""))
         if p is not None and p.exists() and p.suffix.lower() == ".pt":
@@ -316,7 +318,7 @@ class ObjectDetectionCamera(VisionPipeline):
             return True
         if getattr(self, "_auto_opt", False):
             return True
-        vm = self.config.get("vision_model") or {}
+        vm = self._current_vm_config()
         return bool(vm.get("auto_opt")) or bool(vm.get("quantized"))
 
     @staticmethod
@@ -455,7 +457,7 @@ class ObjectDetectionCamera(VisionPipeline):
         self._set_status(status)
 
     def _current_vm_config(self) -> dict:
-        vm = self.config.get("vision_model")
+        vm = self.config.get_pipeline_setting("vision_model")
         if isinstance(vm, dict):
             return json.loads(json.dumps(vm))
         return {
@@ -504,7 +506,7 @@ class ObjectDetectionCamera(VisionPipeline):
         except Exception:
             pass
 
-        vm_out = self.config.get("vision_model")
+        vm_out = self.config.get_pipeline_setting("vision_model")
         if isinstance(vm_out, dict):
             vm_out["file_path"] = artifact_path
             if vm_extra:
@@ -515,7 +517,7 @@ class ObjectDetectionCamera(VisionPipeline):
                 if not isinstance(entry, dict):
                     continue
                 if entry.get("name") == self._cam_name or key == self._cam_name:
-                    entry_vm = entry.get("vision_model")
+                    entry_vm = get_pipeline_settings(entry).get("vision_model")
                     if isinstance(entry_vm, dict):
                         entry_vm["file_path"] = artifact_path
                         if vm_extra:

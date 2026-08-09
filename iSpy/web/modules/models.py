@@ -3,9 +3,22 @@ from pathlib import Path
 from flask import jsonify, render_template, request
 from werkzeug.utils import secure_filename
 from iSpy.web.Backend.WebModule import WebModule
+from iSpy.config.iSpyConfig import get_pipeline_settings
 from iSpy.vision.metadata import read_metadata, metadata_from_pt, write_metadata, metadata_path_for
 
 logger = logging.getLogger(__name__)
+
+
+def _camera_vision_model(cam) -> dict | None:
+    """The vision_model block of a camera entry: pipeline.settings for the
+    new nested layout, flat entry for legacy configs."""
+    if not isinstance(cam, dict):
+        return None
+    settings = get_pipeline_settings(cam) or {}
+    model_cfg = settings.get("vision_model")
+    if isinstance(model_cfg, dict):
+        return model_cfg
+    return None
 
 
 def _is_safe_path(base: Path, target: Path) -> bool:
@@ -33,10 +46,8 @@ class ModelsModule(WebModule):
         names = set()
         cams = config.get_nested("camera_configs", default={})
         for cam in cams.values():
-            if not isinstance(cam, dict):
-                continue
-            model_cfg = cam.get("vision_model")
-            if not isinstance(model_cfg, dict):
+            model_cfg = _camera_vision_model(cam)
+            if not model_cfg:
                 continue
             for key in ("file_path", "source_pt"):
                 fp = model_cfg.get(key)
@@ -52,10 +63,8 @@ class ModelsModule(WebModule):
             return None
         cams = config.get_nested("camera_configs", default={})
         for cam in cams.values():
-            if not isinstance(cam, dict):
-                continue
-            model_cfg = cam.get("vision_model")
-            if not isinstance(model_cfg, dict):
+            model_cfg = _camera_vision_model(cam)
+            if not model_cfg:
                 continue
             file_path = model_cfg.get("file_path") or model_cfg.get("source_pt")
             if file_path:
@@ -139,13 +148,11 @@ class ModelsModule(WebModule):
         updated = []
         cams = config.get_nested("camera_configs", default={})
         for cam_name, cam in cams.items():
-            if not isinstance(cam, dict):
-                continue
-            model_cfg = cam.get("vision_model")
+            settings = get_pipeline_settings(cam) or {}
+            model_cfg = settings.get("vision_model")
             if not isinstance(model_cfg, dict):
                 continue
-            model_cfg["source_pt"] = str(p)
-            model_cfg["file_path"] = str(p)
+            settings["vision_model"] = {**model_cfg, "source_pt": str(p), "file_path": str(p)}
             updated.append(cam_name)
         if not updated:
             return jsonify(error="No camera uses a user-selectable model"), 400

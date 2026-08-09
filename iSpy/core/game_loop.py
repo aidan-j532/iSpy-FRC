@@ -81,15 +81,19 @@ def main():
 
     is_valid, corrected_model_path = enforce_model_organization(repo_root, config.config)
     if corrected_model_path:
+        from iSpy.config.iSpyConfig import get_pipeline_settings
         for cam_cfg in config.config["camera_configs"].values():
-            if isinstance(cam_cfg.get("vision_model"), dict):
-                cam_cfg["vision_model"]["file_path"] = corrected_model_path
+            if not isinstance(cam_cfg, dict):
+                continue
+            vm = get_pipeline_settings(cam_cfg).get("vision_model")
+            if isinstance(vm, dict):
+                vm["file_path"] = corrected_model_path
 
     pipeline_classes = get_pipeline_classes()
     cameras = []
     for cam_name in config.camera_configs:
         cam_config = config.camera_config(cam_name)
-        pipeline = cam_config.get("pipeline", "object_detection")
+        pipeline = cam_config.pipeline_name()
         cls = pipeline_classes.get(pipeline)
         if cls is None:
             logger.warning("Unknown pipeline '%s' for camera '%s'", pipeline, cam_name)

@@ -45,8 +45,8 @@ class QRCodeCamera(VisionPipeline):
             calib = camera_config.get("calibration", {})
             self.fov = calib.get("fov", 0.0)
             self.grayscale = camera_config.get("grayscale", False)
-            self.qr_size = float(camera_config.get("qr_size", 0.1))
-            self.decode_mode = str(camera_config.get("decode_mode", "standard")).lower()
+            self.qr_size = float(camera_config.get_pipeline_setting("qr_size", 0.1))
+            self.decode_mode = str(camera_config.get_pipeline_setting("decode_mode", "standard")).lower()
         except KeyError as e:
             raise ValueError(f"Missing camera config key for QRCode: {e}")
 

@@ -71,7 +71,21 @@ class DashboardModule(WebModule):
             config = self.context.get("config")
             if not config:
                 return
-            model_cfg = config.get("vision_model", {})
+            # Models are selected per camera under the pipeline settings,
+            # so report the first model-backed camera's model.
+            from iSpy.config.iSpyConfig import get_pipeline_settings
+            cams = config.get("camera_configs", {})
+            model_cfg = None
+            for cam in cams.values():
+                if not isinstance(cam, dict):
+                    continue
+                settings = get_pipeline_settings(cam) or {}
+                candidate = settings.get("vision_model")
+                if isinstance(candidate, dict) and candidate.get("file_path"):
+                    model_cfg = candidate
+                    break
+            if not model_cfg:
+                return
             file_path = model_cfg.get("file_path", "")
             if file_path:
                 p = Path(file_path)

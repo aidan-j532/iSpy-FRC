@@ -87,7 +87,7 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
 
     config = data.get("config", data)
 
-    required_fields = ["unit", "vision_model", "camera_configs"]
+    required_fields = ["unit", "camera_configs"]
     for field in required_fields:
         if field not in config:
             raise ValueError(f"Missing required config field: {field}")
@@ -96,20 +96,13 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
     if config.get("unit", "").lower() not in valid_units:
         raise ValueError(f"Invalid unit: {config.get('unit')}. Must be one of: {valid_units}")
 
-    vision_model = config.get("vision_model", {})
-    if not vision_model:
-        raise ValueError("vision_model config is empty")
-    if "file_path" not in vision_model:
-        raise ValueError("vision_model must have 'file_path'")
-    if "input_size" not in vision_model:
-        raise ValueError("vision_model must have 'input_size'")
-
     camera_configs = config.get("camera_configs", {})
     if not camera_configs:
         raise ValueError("camera_configs cannot be empty")
 
+    model_cameras = 0
     for cam_name, cam_config in camera_configs.items():
-        cam_required = ["name", "source", "subsystem"]
+        cam_required = ["name", "source", "subsystem", "pipeline"]
         for field in cam_required:
             if field not in cam_config:
                 raise ValueError(f"Camera '{cam_name}' missing required field: {field}")
@@ -120,6 +113,30 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
             for field in calib_required:
                 if field not in calib:
                     raise ValueError(f"Camera '{cam_name}' calibration missing: {field}")
+
+        # Models live in the camera's pipeline settings (nested layout) -
+        # legacy flat entries are folded into settings lazily.
+        pipeline = cam_config.get("pipeline")
+        if isinstance(pipeline, dict):
+            pipeline_name = pipeline.get("name")
+            settings = pipeline.get("settings") or {}
+        else:
+            pipeline_name = pipeline
+            settings = {k: v for k, v in cam_config.items()
+                        if k not in ("name", "source", "subsystem", "pipeline", "calibration")}
+        if not pipeline_name:
+            raise ValueError(f"Camera '{cam_name}' pipeline must have a name")
+
+        vision_model = settings.get("vision_model")
+        if isinstance(vision_model, dict):
+            model_cameras += 1
+            if "file_path" not in vision_model:
+                raise ValueError(f"Camera '{cam_name}' vision_model must have 'file_path'")
+            if "input_size" not in vision_model:
+                raise ValueError(f"Camera '{cam_name}' vision_model must have 'input_size'")
+
+    if model_cameras == 0:
+        raise ValueError("No camera has a vision_model configured")
 
     ip = config.get("network_tables_ip")
     if ip:
@@ -221,20 +238,34 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
                 "Consider setting fps_cap (e.g., 30) to reduce CPU load."
             )
 
-    vision_model = config.get("vision_model", {})
-    model_path = vision_model.get("file_path", "model.pt")
-    if not Path(model_path).exists():
-        recommendations.append(
-            f"Model file not found: {model_path}. "
-            "Verify the path exists or update vision_model.file_path."
-        )
+    # Models are configured per camera under their pipeline settings.
+    seen_paths = set()
+    for cam_name, cam_cfg in camera_configs.items():
+        pipeline = cam_cfg.get("pipeline")
+        if isinstance(pipeline, dict):
+            settings = pipeline.get("settings") or {}
+        else:
+            settings = {k: v for k, v in cam_cfg.items()
+                        if k not in ("name", "source", "subsystem", "pipeline", "calibration")}
+        vision_model = settings.get("vision_model")
+        if not isinstance(vision_model, dict):
+            continue
+        model_path = vision_model.get("file_path", "model.pt")
+        if model_path in seen_paths:
+            continue
+        seen_paths.add(model_path)
+        if not Path(model_path).exists():
+            recommendations.append(
+                f"Model file not found: {model_path} (camera '{cam_name}'). "
+                "Verify the path exists or update the camera's pipeline vision_model."
+            )
 
-    input_size = vision_model.get("input_size", [640, 640])
-    if input_size[0] != input_size[1]:
-        recommendations.append(
-            f"Vision model input_size is non-square {input_size}. "
-            "Most models expect square input. This may cause issues."
-        )
+        input_size = vision_model.get("input_size", [640, 640])
+        if input_size[0] != input_size[1]:
+            recommendations.append(
+                f"Vision model input_size is non-square {input_size} (camera '{cam_name}'). "
+                "Most models expect square input. This may cause issues."
+            )
 
     ip = config.get("network_tables_ip", "")
     if ip == "10.22.7.2":

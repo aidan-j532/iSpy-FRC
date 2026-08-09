@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 from iSpy.plugins.bases import UtilityBase
+from iSpy.config.iSpyConfig import get_pipeline_settings
 from iSpy.vision.metadata import metadata_from_pt, write_metadata, metadata_path_for
 
 try:
@@ -38,10 +39,24 @@ class YOLOHandler(UtilityBase):
         if not p.exists():
             return jsonify(error=f"Model not found: {p}"), 404
 
-        self.config.set("vision_model", "source_pt", str(p))
-        self.config.set("vision_model", "file_path", str(p))
+        # Model selection lives in each model-backed camera's pipeline
+        # settings (per-camera vision_model blocks) - never at the config
+        # root, where it is ignored and would trip the next boot.
+        updated = []
+        cams = self.config.get("camera_configs", {})
+        for cam in cams.values():
+            if not isinstance(cam, dict):
+                continue
+            settings = get_pipeline_settings(cam) or {}
+            model_cfg = settings.get("vision_model")
+            if not isinstance(model_cfg, dict):
+                continue
+            settings["vision_model"] = {**model_cfg, "source_pt": str(p), "file_path": str(p)}
+            updated.append(cam.get("name", "?"))
+        if not updated:
+            return jsonify(error="No camera uses a user-selectable model"), 400
         self.config.save()
-        return jsonify(success=True, note="Restart iSpy (or re-run boot.py) to convert and load this model.")
+        return jsonify(success=True, note="Restart iSpy (or re-run boot.py) to convert and load this model.", cameras=updated)
 
     def stop(self):
         pass

@@ -22,7 +22,8 @@ async function go(){
     unit: unit.value, use_network_tables: use_nt.value==="true", network_tables_ip: nt_ip.value,
     camera_configs: {[cam_name.value]: {
       name: cam_name.value, source: isNaN(cam_source.value)?cam_source.value:Number(cam_source.value),
-      subsystem: cam_subsystem.value, pipeline: "object_detection",
+      subsystem: cam_subsystem.value,
+      pipeline: {name: "object_detection", settings: {}},
       yaw:0, pitch:0, height:1.0, x:0, y:0,
       calibration:{distance:0, game_piece_size:0, size:0, fov:0}
     }}
@@ -55,6 +56,10 @@ class SetupWizardModule(WebModule):
             if "network_tables_ip" in data:
                 config.set("network_tables_ip", data["network_tables_ip"])
             config.set("camera_configs", data["camera_configs"])
+            # Normalize entries (nested pipeline layout, default vision_model
+            # for model-backed pipelines) so the first run is valid.
+            from iSpy.config.iSpyConfig import ensure_camera_entries_ready
+            ensure_camera_entries_ready(config.get("camera_configs", {}))
             config.save()
             return jsonify(success=True)
         except Exception as e:

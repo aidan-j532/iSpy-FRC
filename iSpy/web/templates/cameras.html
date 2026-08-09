@@ -250,10 +250,16 @@ function activeSchema() {
   return (pipelineSchemas[camModal.pipeline] || {}).config_schema || {};
 }
 
-/* Pipelines can store settings flat on the camera entry or nested in a
-   per-camera "vision_model" block. Read the effective value either way. */
+/* Pipelines store their settings nested in a per-camera "pipeline" dict
+   ({name, settings}). Read the effective value from there, falling back to
+   legacy flat camera entries (settings on the entry itself or in a flat
+   "vision_model" block) so old configs still fill the form correctly. */
 function effectiveValue(key) {
   const d = camModal.data || {};
+  const settings = (d.pipeline && typeof d.pipeline === 'object')
+    ? (d.pipeline.settings || {}) : null;
+  if (settings && settings[key] != null) return settings[key];
+  if (settings && settings.vision_model && settings.vision_model[key] != null) return settings.vision_model[key];
   if (d[key] != null) return d[key];
   if (d.vision_model && d.vision_model[key] != null) return d.vision_model[key];
   return undefined;
@@ -292,9 +298,16 @@ function mastersOn() {
 }
 
 function syncOptimization() {
+  const body = $id('camera-modal-body');
   const on = mastersOn();
-  $id('camera-modal-body').querySelectorAll('[data-gated="optimization"]').forEach(node => {
+  body.querySelectorAll('[data-gated="optimization"]').forEach(node => {
     node.classList.toggle('camera-hidden', !on);
+  });
+  // Field-level gates: a field with data-gated-by (e.g. quantization_dataset
+  // gated on the "quantized" toggle) only shows while that master is checked.
+  body.querySelectorAll('[data-gated-by]').forEach(node => {
+    const toggle = $id(fieldId(node.dataset.gatedBy));
+    node.classList.toggle('camera-hidden', !toggle || !toggle.checked);
   });
 }
 
@@ -387,6 +400,8 @@ function buildField(key, def, source) {
     help.textContent = def.help;
     row.appendChild(help);
   }
+
+  if (def.gated_by) row.dataset.gatedBy = def.gated_by;
 
   camModal.fields.set(key, { el: control, def, source });
   return row;
@@ -485,7 +500,10 @@ function populatePipelineSelect() {
     option.textContent = humanizePipelineName(name);
     sel.appendChild(option);
   });
-  const requested = camModal.data && camModal.data.pipeline;
+  // Edit mode: pipeline may arrive as a nested dict ({name, settings}) or a
+  // legacy flat string. Resolve to the pipeline name either way.
+  let requested = camModal.data && camModal.data.pipeline;
+  if (requested && typeof requested === 'object') requested = requested.name;
   sel.value = keys.includes(requested) ? requested : camModal.pipeline;
   camModal.pipeline = sel.value;
 }
@@ -687,7 +705,7 @@ async function submitCameraModal() {
   const name = String(readField('name') || '').trim();
   if (!name) { showToast('Camera name is required', 'error'); return; }
   payload.name = name;
-  payload.pipeline = camModal.pipeline;
+  payload.pipeline = { name: camModal.pipeline, settings: {} };
 
   ['x', 'y', 'height', 'yaw', 'pitch', 'subsystem'].forEach(k => {
     const v = readField(k);
@@ -729,11 +747,12 @@ async function submitCameraModal() {
 function collectSchemaFields(payload) {
   const schema = activeSchema();
   const gatesOn = mastersOn();
+  const settings = payload.pipeline.settings;
   camModal.fields.forEach((field, key) => {
     if (field.source !== 'schema') return;
     const schemaDef = schema[key] || {};
     const modelPayload = modelPayloadField(field.el, schemaDef, camModal.mode === 'edit');
-    if (modelPayload) { payload[key] = modelPayload; return; }
+    if (modelPayload) { settings[key] = modelPayload; return; }
     if (schemaDef.type === 'model') return;
     // Non-toggle quantization fields are hidden by the optimization gate;
     // the master toggles themselves are always saved.
@@ -743,7 +762,7 @@ function collectSchemaFields(payload) {
       const original = field.el.dataset.original;
       if (original !== undefined && String(value) === original) return;
     }
-    payload[key] = value;
+    settings[key] = value;
   });
 }
 

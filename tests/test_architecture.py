@@ -43,17 +43,20 @@ class PipelineConfigTests(unittest.TestCase):
     def test_default_config_is_object_detection_with_bundled_pose_model(self):
         cfg = iSpyConfig()
         cam = cfg.default_config["camera_configs"]["default_cam"]
-        self.assertEqual(cam["pipeline"], "object_detection")
+        self.assertEqual(cam["pipeline"]["name"], "object_detection")
         self.assertEqual(
-            cam["vision_model"]["file_path"],
+            cam["pipeline"]["settings"]["vision_model"]["file_path"],
             "YoloModels/pytorch/_default_pose.pt",
         )
         self.assertEqual(
-            cam["vision_model"]["source_pt"],
+            cam["pipeline"]["settings"]["vision_model"]["source_pt"],
             "YoloModels/pytorch/_default_pose.pt",
         )
 
-    def test_new_camera_pipeline_config_loads(self):
+    def test_legacy_flat_camera_config_migrates_to_nested_pipeline(self):
+        # Pre-restructure configs stored pipeline settings flat on the camera
+        # entry. Loading such a file must fold every non-camera key into
+        # pipeline.settings (so old config.json files keep working).
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             data = {
@@ -63,6 +66,8 @@ class PipelineConfigTests(unittest.TestCase):
                         "pipeline": "object_detection",
                         "vision_model": {"file_path": "YoloModels/pytorch/a.pt",
                                          "min_conf": 0.3},
+                        "target_format": "onnx",
+                        "stale_flat_junk": 1,
                     },
                     "cam_tags": {
                         "name": "cam_tags", "source": 1,
@@ -74,20 +79,57 @@ class PipelineConfigTests(unittest.TestCase):
             path.write_text(json.dumps(data))
             cfg = iSpyConfig(str(path), create=False)
             detect = cfg.camera_config("cam_detect")
-            self.assertEqual(detect["pipeline"], "object_detection")
-            self.assertEqual(detect["vision_model"]["min_conf"], 0.3)
+            self.assertEqual(detect.pipeline_name(), "object_detection")
+            settings = detect.pipeline_settings()
+            self.assertEqual(settings["vision_model"]["min_conf"], 0.3)
+            self.assertEqual(settings["target_format"], "onnx")
+            # Non-camera keys were folded out of the flat layout.
+            self.assertNotIn("target_format", detect.data)
             tags = cfg.camera_config("cam_tags")
-            self.assertEqual(tags["pipeline"], "april_tag")
-            self.assertEqual(tags["tag_size_inches"], 4.5)
+            self.assertEqual(tags.pipeline_name(), "april_tag")
+            self.assertEqual(tags.get_pipeline_setting("tag_size_inches"), 4.5)
+
+    def test_new_camera_pipeline_config_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            data = {
+                "camera_configs": {
+                    "cam_detect": {
+                        "name": "cam_detect", "source": 0,
+                        "pipeline": {"name": "object_detection", "settings": {
+                            "vision_model": {"file_path": "YoloModels/pytorch/a.pt",
+                                             "min_conf": 0.3},
+                        }},
+                    },
+                    "cam_tags": {
+                        "name": "cam_tags", "source": 1,
+                        "pipeline": {"name": "april_tag", "settings": {
+                            "tag_size_inches": 4.5,
+                        }},
+                    },
+                }
+            }
+            path.write_text(json.dumps(data))
+            cfg = iSpyConfig(str(path), create=False)
+            detect = cfg.camera_config("cam_detect")
+            self.assertEqual(detect.pipeline_name(), "object_detection")
+            self.assertEqual(
+                detect.get_pipeline_setting("vision_model")["min_conf"], 0.3
+            )
+            tags = cfg.camera_config("cam_tags")
+            self.assertEqual(tags.pipeline_name(), "april_tag")
+            self.assertEqual(tags.get_pipeline_setting("tag_size_inches"), 4.5)
 
     def test_object_detection_settings_not_globally_required(self):
         # An AprilTag camera needs no vision_model/optimization config at all.
         cam_cfg = iSpyCameraConfig({
             "name": "cam_tags", "source": 1,
-            "pipeline": "april_tag", "tag_size_inches": 6.5,
+            "pipeline": {"name": "april_tag", "settings": {"tag_size_inches": 6.5}},
         })
         self.assertNotIn("vision_model", cam_cfg)
-        self.assertEqual(cam_cfg.get("tag_size_inches"), 6.5)
+        self.assertEqual(
+            cam_cfg.get_pipeline_setting("tag_size_inches"), 6.5
+        )
 
     def test_no_legacy_migration_happens(self):
         # Legacy top-level vision_model must NOT be migrated into cameras -
@@ -128,7 +170,9 @@ class PipelineConfigTests(unittest.TestCase):
         cfg = iSpyConfig()
         self.assertIsNone(cfg.get("vision_model"))
         cam = cfg.camera_config("default_cam")
-        self.assertFalse(cam["vision_model"]["quantized"])
+        self.assertFalse(
+            cam.get_pipeline_setting("vision_model")["quantized"]
+        )
         self.assertFalse(cfg.get("auto_opt", True))
 
 

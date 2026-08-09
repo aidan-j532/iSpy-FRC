@@ -5,7 +5,7 @@ from iSpy.web.Backend.WebModule import WebModule
 from iSpy.validations.recommendations import get_structured_recommendations
 
 _RESTART_REQUIRED_KEYS = {
-    "vision_model", "unit", "debug_mode", "dbscan", "distance_threshold",
+    "unit", "debug_mode", "dbscan", "distance_threshold",
     "stale_threshold", "record_mode", "record_dir", "frame_sync",
     "auto_opt", "log_level", "use_network_tables", "network_tables_ip",
     "metrics", "plugins", "camera_configs", "device", "num_gpus",
@@ -72,6 +72,8 @@ class SettingsModule(WebModule):
                 })
 
             return jsonify(success=True, needs_restart=needs_restart, changed=list(changed_keys))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
         except Exception as e:
             return jsonify(error=str(e)), 500
 
@@ -89,6 +91,8 @@ class SettingsModule(WebModule):
             needs_restart = bool(changed_keys & _RESTART_REQUIRED_KEYS)
 
             return jsonify(needs_restart=needs_restart, changed=list(changed_keys))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
         except Exception as e:
             return jsonify(error=str(e)), 500
 

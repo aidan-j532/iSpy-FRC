@@ -39,7 +39,7 @@ class AprilTagCamera(VisionPipeline):
             calib = camera_config.get("calibration", {})
             self.known_calibration_distance = calib.get("distance", 1.0)
             self.known_calibration_pixel_height = calib.get("size", 100)
-            tag_size_inches = camera_config.get("tag_size_inches")
+            tag_size_inches = camera_config.get_pipeline_setting("tag_size_inches")
             if tag_size_inches is None:
                 tag_size_inches = calib.get("game_piece_size", 6.5)
             self.tag_size_inches = float(tag_size_inches)

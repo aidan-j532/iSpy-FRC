@@ -11,10 +11,71 @@ import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.save_store import read, write
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
-from iSpy.config.iSpyConfig import default_vision_model, is_model_backed_pipeline
+from iSpy.config.iSpyConfig import (
+    default_vision_model,
+    is_model_backed_pipeline,
+    get_pipeline_name,
+    get_pipeline_settings,
+    ensure_camera_entries_ready,
+)
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
+
+# Legacy settings-key aliases that predate the current schemas. They are
+# dropped when the pipeline's canonical key is present, so old configs don't
+# carry dead twins around forever.
+_SETTING_ALIASES = {"quantize": "quantized", "optimize": "auto_opt"}
+
+
+def _pipeline_schema_keys(pipeline_name: str) -> set:
+    """Set of settings keys the named pipeline accepts (config_schema keys).
+    Returns an empty set when the pipeline is unknown so pruning never
+    destroys data for pipelines we can't describe."""
+    try:
+        from iSpy.vision.pipelines import get_pipeline_classes
+        cls = get_pipeline_classes().get(pipeline_name)
+    except Exception:
+        cls = None
+    if cls is None:
+        return set()
+    try:
+        schema = cls.config_schema() or {}
+    except Exception:
+        return set()
+    return set(schema) | {"vision_model"}
+
+
+def _prune_stale_pipeline_settings(entry: dict) -> None:
+    """Drop settings that belong to a *different* pipeline (they accumulate
+    when a camera switches pipelines or was edited under an older layout)
+    plus legacy alias keys whose canonical key is present. Keys unknown to
+    every pipeline schema are left untouched - they may be hand-written
+    tuning knobs (e.g. pnp, margin)."""
+    if not isinstance(entry, dict):
+        return
+    pipeline_name = get_pipeline_name(entry)
+    settings = get_pipeline_settings(entry)
+    if not settings:
+        return
+    try:
+        from iSpy.vision.pipelines import get_pipeline_classes
+        foreign = set()
+        for name, cls in get_pipeline_classes().items():
+            if name == pipeline_name:
+                continue
+            try:
+                foreign |= set((cls.config_schema() or {}).keys())
+            except Exception:
+                continue
+    except Exception:
+        foreign = set()
+    allowed = _pipeline_schema_keys(pipeline_name)
+    for key in [k for k in settings if k in foreign and k not in allowed]:
+        del settings[key]
+    for alias, canonical in _SETTING_ALIASES.items():
+        if alias in settings and canonical in settings:
+            del settings[alias]
 
 
 def _windows_cameras_from_registry():
@@ -223,34 +284,42 @@ class CamerasModule(WebModule):
                 if existing.get("device_id") == device_id:
                     return jsonify(error=f"Device already in use by camera '{existing.get('name')}'"), 409
 
-        pipeline = data.get("pipeline", "object_detection")
+        raw_pipeline = data.get("pipeline", "object_detection")
+        if isinstance(raw_pipeline, dict):
+            pipeline_name = raw_pipeline.get("name") or "object_detection"
+            pipeline_settings = dict(raw_pipeline.get("settings") or {})
+        else:
+            pipeline_name = str(raw_pipeline or "object_detection")
+            pipeline_settings = {}
+
         cam_entry = {
             "name": name, "source": source, "device_id": device_id,
-            "pipeline": pipeline,
             "yaw": data.get("yaw", 0), "pitch": data.get("pitch", 0),
             "height": data.get("height", 0), "x": data.get("x", 0),
             "y": data.get("y", 0), "z": data.get("z", 0),
             "grayscale": data.get("grayscale", False),
             "subsystem": data.get("subsystem", "field"),
             "calibration": data.get("calibration", {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0}),
+            "pipeline": {"name": pipeline_name, "settings": pipeline_settings},
         }
 
-        # Model-backed pipelines need a per-camera vision_model block or the
-        # pipeline crashes at construction. Accept the model picker's dict
-        # ({file_path, source_pt}), a raw path string, or default to the
-        # first .pt in the YoloModels library.
+        # Model-backed pipelines need a vision_model block in their pipeline
+        # settings or the pipeline crashes at construction. Accept the model
+        # picker's dict ({file_path, source_pt}), a raw path string, or let
+        # ensure_camera_entries_ready drop in a default below.
         vm = data.get("vision_model")
         if isinstance(vm, dict) and vm.get("file_path"):
-            cam_entry["vision_model"] = vm
+            pipeline_settings["vision_model"] = vm
         elif isinstance(vm, str) and vm:
-            cam_entry["vision_model"] = {"file_path": vm, "source_pt": vm}
-        elif is_model_backed_pipeline(pipeline):
-            cam_entry["vision_model"] = default_vision_model()
+            pipeline_settings["vision_model"] = {"file_path": vm, "source_pt": vm}
 
         handled = {"name", "source", "device_id", "pipeline", "vision_model", "yaw", "pitch", "height", "x", "y", "z", "grayscale", "subsystem", "calibration"}
         for k, v in data.items():
             if k not in handled:
-                cam_entry[k] = v
+                pipeline_settings[k] = v
+
+        ensure_camera_entries_ready({name: cam_entry})
+        _prune_stale_pipeline_settings(cam_entry)
         cams[name] = cam_entry
         config.set("camera_configs", cams)
         config.save()
@@ -287,16 +356,45 @@ class CamerasModule(WebModule):
             return jsonify(error="Camera not found"), 404
 
         new_entry = copy.deepcopy(entry)
+        pipeline_entry = new_entry.get("pipeline")
+        if not isinstance(pipeline_entry, dict):
+            pipeline_entry = {
+                "name": get_pipeline_name(new_entry),
+                "settings": dict(get_pipeline_settings(new_entry) or {}),
+            }
+            new_entry["pipeline"] = pipeline_entry
+
         for key, value in data.items():
             if value is None:
+                settings = pipeline_entry.get("settings", {})
+                if key in settings:
+                    del settings[key]
                 new_entry.pop(key, None)
                 continue
-            if isinstance(value, dict) and isinstance(new_entry.get(key), dict):
-                merged = dict(new_entry[key])
-                merged.update(value)
-                new_entry[key] = merged
-            else:
+            if key == "pipeline":
+                if isinstance(value, str):
+                    pipeline_entry["name"] = value
+                elif isinstance(value, dict):
+                    if value.get("name"):
+                        pipeline_entry["name"] = value["name"]
+                    if isinstance(value.get("settings"), dict):
+                        pipeline_entry.setdefault("settings", {}).update(value["settings"])
+                continue
+            if key == "name":
                 new_entry[key] = value
+                continue
+            if key in _CAMERA_CORE_KEYS:
+                if isinstance(value, dict) and isinstance(new_entry.get(key), dict):
+                    merged = dict(new_entry[key])
+                    merged.update(value)
+                    new_entry[key] = merged
+                else:
+                    new_entry[key] = value
+                continue
+            # Anything else is a pipeline settings-field (min_conf, prompt,
+            # tag_size_inches, vision_model...). Route it into
+            # pipeline.settings so stale top-level keys can't reappear.
+            pipeline_entry.setdefault("settings", {})[key] = value
 
         new_name = str(new_entry.get("name") or "").strip()
         if not new_name:
@@ -306,13 +404,25 @@ class CamerasModule(WebModule):
         if new_name != entry_key and new_name in cams:
             return jsonify(error=f"Camera '{new_name}' already exists"), 409
 
+        pipeline_name = str(pipeline_entry.get("name") or "object_detection")
+        try:
+            from iSpy.vision.pipelines import get_pipeline_classes
+            if pipeline_name not in get_pipeline_classes():
+                return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 400
+        except Exception:
+            pass
+
         # Switching a camera onto a model-backed pipeline (e.g. from
-        # april_tag to object_detection) needs a vision_model block or the
-        # new pipeline instance crashes at construction.
-        if is_model_backed_pipeline(new_entry.get("pipeline")) and not isinstance(
-            new_entry.get("vision_model"), dict
+        # april_tag to object_detection) needs a vision_model block in its
+        # pipeline settings or the new pipeline instance crashes at
+        # construction.
+        if is_model_backed_pipeline(pipeline_name) and not isinstance(
+            pipeline_entry.get("settings", {}).get("vision_model"), dict
         ):
-            new_entry["vision_model"] = default_vision_model()
+            pipeline_entry.setdefault("settings", {})["vision_model"] = default_vision_model()
+
+        ensure_camera_entries_ready({new_name: new_entry})
+        _prune_stale_pipeline_settings(new_entry)
 
         cams.pop(entry_key)
         cams[new_name] = new_entry

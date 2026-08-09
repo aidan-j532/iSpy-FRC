@@ -11,7 +11,7 @@ from pathlib import Path
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 os.environ["YOLO_VERBOSE"] = "False"
 
-from iSpy.config.iSpyConfig import iSpyConfig
+from iSpy.config.iSpyConfig import iSpyConfig, get_pipeline_name
 from iSpy.config.AutoOpt import has_jetson
 from iSpy.validations.validate_system import validate_system
 from iSpy.dataset.dataset import get_active_dataset_dir
@@ -73,7 +73,7 @@ def _bootstrap_default_camera(config: iSpyConfig):
     config.save()
     logger.info(
         "First boot: auto-configured camera '%s' -> %s (pipeline=%s)",
-        name, dev["path"], cam_cfg.get("pipeline", "?"),
+        name, dev["path"], get_pipeline_name(cam_cfg),
     )
 
 
@@ -210,14 +210,12 @@ def _wait_for_pipeline_ready(
     if not cams:
         raise RuntimeError("No cameras configured - nothing to boot.")
 
-    default_pipeline = (
-        config.default_config.get("camera_configs", {})
-        .get("default_cam", {})
-        .get("pipeline", "object_detection")
+    default_pipeline = get_pipeline_name(
+        config.default_config.get("camera_configs", {}).get("default_cam", {})
     )
     instances: dict[str, object] = {}
     for name, cam_cfg in cams.items():
-        pipeline = cam_cfg.get("pipeline", default_pipeline)
+        pipeline = get_pipeline_name(cam_cfg) if isinstance(cam_cfg, dict) else default_pipeline
         cls = pipeline_classes.get(pipeline)
         if cls is None:
             raise RuntimeError(
