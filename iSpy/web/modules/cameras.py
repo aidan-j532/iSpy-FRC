@@ -2,6 +2,7 @@ import copy
 import glob
 import os
 import platform
+import re
 import subprocess
 import threading
 import cv2
@@ -12,6 +13,7 @@ from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.save_store import read, write
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 from iSpy.config.iSpyConfig import (
+    _CAMERA_CORE_KEYS,
     default_vision_model,
     is_model_backed_pipeline,
     get_pipeline_name,
@@ -111,6 +113,9 @@ def _windows_cameras_from_registry():
             devices.append({
                 "index": camera_index,
                 "name": _windows_camera_name(iface) or f"Camera {camera_index}",
+                # Unique per device interface (e.g. USB\VID_...&PID_...&MI_01\
+                # <instance>). Used to dedupe and as a stable device_id.
+                "hw_id": iface[:iface.find("#{")],
             })
             camera_index += 1
     finally:
@@ -119,7 +124,13 @@ def _windows_cameras_from_registry():
 
 
 def _windows_camera_name(iface):
-    """Resolve a friendly camera name from a DeviceClasses interface key name."""
+    """Resolve a friendly camera name from a DeviceClasses interface key name.
+
+    Queries the device instance (Enum key) for FriendlyName/DriverDesc/
+    DeviceDesc. Generic UVC interface names ("USB Video Device") are replaced
+    by walking up to the parent USB device node, which carries the real
+    marketing name (e.g. "Logitech HD Pro Webcam C920").
+    """
     try:
         import winreg
     except ImportError:
@@ -133,25 +144,186 @@ def _windows_camera_name(iface):
         if body.startswith(prefix):
             body = body[len(prefix):]
             break
-    instance = "SYSTEM\\CurrentControlSet\\Enum\\" + body.replace("#", "\\")
+    parts = body.split("#", 1)
+    if len(parts) != 2:
+        return None
+    hw_id, instance_id = parts
+
+    def _read_name(enum_parent, instance):
+        enum_path = f"SYSTEM\\CurrentControlSet\\Enum\\{enum_parent}\\{instance}"
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, enum_path)
+        except OSError:
+            return None
+        try:
+            for value in ("FriendlyName", "DriverDesc", "DeviceDesc"):
+                try:
+                    name, _ = winreg.QueryValueEx(key, value)
+                except OSError:
+                    continue
+                if not isinstance(name, str):
+                    continue
+                if name.startswith("@"):
+                    # "inf_path,%desc%;Friendly Name" -> drop the locator,
+                    # keep the trailing friendly text.
+                    name = name.rsplit(";", 1)[-1] if ";" in name else ""
+                name = name.strip()
+                if name:
+                    return name
+        finally:
+            winreg.CloseKey(key)
+        return None
+
+    name = _read_name(hw_id, instance_id)
+    if name and name.lower() not in _GENERIC_WINDOWS_NAMES:
+        return name
+
+    # Generic interface name - the marketing name usually lives on the parent
+    # USB node (Enum\USB\VID_xxxx&PID_yyyy\<instance>), not the UVC interface.
+    m = re.match(r"^USB\\(VID_\w+&PID_\w+)(?:&MI_\w+)?$", hw_id, re.IGNORECASE)
+    if m:
+        parent_hw = f"USB\\{m.group(1)}"
+        parent_root = f"SYSTEM\\CurrentControlSet\\Enum\\{parent_hw}"
+        try:
+            parent_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, parent_root)
+        except OSError:
+            parent_key = None
+        if parent_key is not None:
+            try:
+                try:
+                    sub, _ = winreg.EnumKey(parent_key, 0)
+                except OSError:
+                    sub = None
+                if sub:
+                    parent_name = _read_name(parent_hw, sub)
+                    if parent_name:
+                        return parent_name
+            finally:
+                winreg.CloseKey(parent_key)
+    return name or None
+
+
+# Names Windows hands out when it has nothing better - treat them as unknown
+# and keep digging (the parent USB node usually has the real name).
+_GENERIC_WINDOWS_NAMES = {
+    "", "usb video device", "usb camera", "camera", "uvc camera",
+    "video capture device", "usb2.0 camera",
+}
+
+# V4L2 capability bits (videodev2.h). QUERYCAP layout: driver[16], card[32],
+# bus_info[32], version u32 @80, capabilities u32 @84.
+_V4L2_CAP_VIDEO_CAPTURE = 0x00000001
+_V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
+_V4L2_CAP_VIDEO_M2M = 0x00004000
+_VIDIOC_QUERYCAP = 0x80685600
+
+
+def _v4l2_caps(video_path):
+    """V4L2 capability bits of a /dev/videoN node (0 when unreadable)."""
     try:
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, instance)
+        import fcntl
+        import struct
+    except ImportError:
+        return 0
+    for mode in (os.O_RDWR, os.O_RDONLY):
+        try:
+            fd = os.open(video_path, mode | getattr(os, "O_NONBLOCK", 0))
+        except OSError:
+            continue
+        try:
+            buf = fcntl.ioctl(fd, _VIDIOC_QUERYCAP, b"\0" * 104)
+            return struct.unpack_from("<I", buf, 84)[0]
+        except OSError:
+            continue
+        finally:
+            os.close(fd)
+    return 0
+
+
+def _linux_is_capture_node(video_path):
+    """True if the node is a real video-capture device. Returns None when the
+    capability bits can't be read (treated as unknown, i.e. keep the node)."""
+    caps = _v4l2_caps(video_path)
+    if caps == 0:
+        return None
+    if caps & _V4L2_CAP_VIDEO_M2M:
+        # Memory-to-memory codecs (e.g. bcm2835-codec-decode) advertise the
+        # capture bit but are not cameras.
+        return False
+    return bool(caps & (_V4L2_CAP_VIDEO_CAPTURE | _V4L2_CAP_VIDEO_CAPTURE_MPLANE))
+
+
+def _linux_device_key(video_path):
+    """Identity of the physical device behind a /dev/videoN node.
+
+    video0 + video1 of one UVC camera resolve to the same sysfs device
+    interface and therefore share a key, while unrelated nodes (encoders,
+    metadata-only) resolve elsewhere. This is the dedupe key that kills
+    Linux "same camera twice" detection.
+    """
+    m = re.search(r"/video(?P<num>\d+)$", video_path)
+    if not m:
+        return video_path
+    sysfs = f"/sys/class/video4linux/video{m.group('num')}/device"
+    try:
+        real = os.path.realpath(sysfs)
     except OSError:
         return None
+    suffix = f"video4linux/video{m.group('num')}"
+    if real.endswith(suffix):
+        real = real[: -len(suffix)]
+    return real
+
+
+def _linux_sysfs_name(video_path):
+    """Friendly name Linux stores for a node (e.g. "Logitech Webcam C920")."""
+    m = re.search(r"/video(\d+)$", video_path)
+    if not m:
+        return None
     try:
-        for value in ("FriendlyName", "DeviceDesc"):
-            try:
-                name, _ = winreg.QueryValueEx(key, value)
-            except OSError:
+        with open(
+            f"/sys/class/video4linux/video{m.group(1)}/name",
+            encoding="utf-8", errors="replace",
+        ) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _linux_device_groups():
+    """Group /dev/videoN nodes by physical device.
+
+    Prefers ``v4l2-ctl --list-devices`` (groups every node under one device
+    name per physical device); falls back to grouping the sysfs device
+    identity. Returns a list of (name_or_None, [nodes]).
+    """
+    try:
+        result = subprocess.run(
+            ["v4l2-ctl", "--list-devices"],
+            capture_output=True, text=True, timeout=3,
+        )
+    except Exception:
+        result = None
+    if result is not None and result.returncode == 0:
+        groups = {}
+        current_name = None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                current_name = None
                 continue
-            if isinstance(name, str) and name.startswith("@"):
-                name = name.rsplit(";", 1)[-1]
-            name = name.strip() if isinstance(name, str) else ""
-            if name:
-                return name
-    finally:
-        winreg.CloseKey(key)
-    return None
+            if line.endswith(":") and not line.lower().startswith("/dev/"):
+                current_name = line.rstrip(":")
+                continue
+            if line.startswith("/dev/video") and current_name:
+                groups.setdefault(current_name, []).append(line)
+        return [(name, nodes) for name, nodes in groups.items()]
+
+    groups = {}
+    for path in sorted(glob.glob("/dev/video*")):
+        key = _linux_device_key(path) or path
+        groups.setdefault(key, []).append(path)
+    return [(None, nodes) for nodes in groups.values()]
 
 class CamerasModule(WebModule):
     plugin_name = "cameras"
@@ -313,7 +485,7 @@ class CamerasModule(WebModule):
         elif isinstance(vm, str) and vm:
             pipeline_settings["vision_model"] = {"file_path": vm, "source_pt": vm}
 
-        handled = {"name", "source", "device_id", "pipeline", "vision_model", "yaw", "pitch", "height", "x", "y", "z", "grayscale", "subsystem", "calibration"}
+        handled = _CAMERA_CORE_KEYS | {"pipeline", "vision_model"}
         for k, v in data.items():
             if k not in handled:
                 pipeline_settings[k] = v
@@ -617,62 +789,71 @@ class CamerasModule(WebModule):
         system_name = platform.system()
 
         if system_name == "Linux":
-            # 1. Parse v4l2-ctl cleanly, keeping only primary video capture nodes (avoiding duplicates)
-            try:
-                v4l = subprocess.run(
-                    ["v4l2-ctl", "--list-devices"],
-                    capture_output=True, text=True, timeout=3,
-                )
-                if v4l.returncode == 0:
-                    current_name = None
-                    for line in v4l.stdout.splitlines():
-                        line = line.strip()
-                        if not line:
-                            current_name = None
-                            continue
-                        if line.endswith(":"):
-                            current_name = line.rstrip(":")
-                        elif line.startswith("/dev/video"):
-                            # Linux double-detection fix: 
-                            # Usually, odd-numbered video nodes (e.g. /dev/video1, /dev/video3) 
-                            # are metadata/output companion nodes. Only accept even or primary nodes 
-                            # unless no other choice exists, or filter out nodes containing "meta".
-                            if "meta" in line.lower():
-                                continue
-                                
-                            devices.append({
-                                "path": line,
-                                "name": current_name or line,
-                                "device_id": None,
-                            })
-            except Exception:
-                pass
-
-            # Fallback or additional glob check, filtered to avoid duplicates already found via v4l2-ctl
-            existing_paths = {d["path"] for d in devices}
-            for path in sorted(glob.glob("/dev/video*")):
-                if path in existing_paths or "meta" in path.lower():
+            # One entry per physical device, never one per /dev/videoN node:
+            # UVC cameras expose a capture node plus a metadata companion node
+            # (video0 + video1), and encoders/codecs/radio nodes (e.g.
+            # /dev/video10+, bcm2835-codec-*) pollute the /dev/video* glob.
+            # VIDIOC_QUERYCAP keeps only true capture nodes; identical sysfs
+            # device identity deduplicates the rest.
+            seen_keys = set()
+            for label, nodes in _linux_device_groups():
+                capture = [n for n in nodes if _linux_is_capture_node(n)]
+                if not capture:
+                    capture = [n for n in nodes if _linux_is_capture_node(n) is None]
+                if not capture:
+                    # Every node is confirmed non-capture (encoder, codec,
+                    # radio, metadata...) - not a camera, skip the whole group.
                     continue
+                node = sorted(capture)[0]
+                key = _linux_device_key(node) or node
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                devices.append({
+                    "path": node,
+                    "name": label or _linux_sysfs_name(node) or node,
+                    "device_id": key,
+                })
+
+            # Anything v4l2-ctl / sysfs grouping missed, still filter out
+            # confirmed non-capture nodes and already-seen devices.
+            for path in sorted(glob.glob("/dev/video*")):
+                is_capture = _linux_is_capture_node(path)
+                if is_capture is False:
+                    continue
+                key = _linux_device_key(path) or path
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
                 devices.append({
                     "path": path,
-                    "name": path,
-                    "device_id": None,
+                    "name": _linux_sysfs_name(path) or path,
+                    "device_id": key,
                 })
 
         elif system_name == "Windows":
-            # Registry enumeration of video capture sources - no index-range
-            # probing and no transient VideoCapture opens (which would flicker
-            # the stream and spam stderr). Index order matches CAP_MSMF.
+            # Registry enumeration of video capture sources. No index probing:
+            # OpenCV's MSMF backend cannot open by index - every attempt emits
+            # "VIDEOIO(MSMF): backend is generally available but can't be
+            # used to capture by index", and the cameras page re-runs discover
+            # on its refresh interval, so probing would spam stderr forever.
+            # Registry key order is the order CAP_MSMF assigns indices, so
+            # names + indices come straight from there.
             with self.lock:
                 claimed = {s for s in self.sources.values() if s}
+            seen_interfaces = set()
             for cam in _windows_cameras_from_registry():
+                hw_id = cam.get("hw_id")
+                if hw_id in seen_interfaces:
+                    continue
+                seen_interfaces.add(hw_id)
                 index = str(cam["index"])
                 if index in claimed:
                     continue
                 devices.append({
                     "path": index,
                     "name": cam["name"],
-                    "device_id": None,
+                    "device_id": hw_id,
                 })
 
         else:

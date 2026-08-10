@@ -60,6 +60,11 @@ class ObjectDetectionCamera(VisionPipeline):
         # Schema fields set via the config UI live in the pipeline settings;
         # merge them into the model config so they drive loading, readiness
         # gating and optimization identically to the nested vision_model keys.
+        # The merge happens on a copy: the persisted vision_model block must
+        # keep only model identity (file_path, source_pt, ...), otherwise
+        # every setting gets duplicated into it the next time the config is
+        # saved.
+        vm_cfg = dict(vm_cfg)
         for _k in (
             "quantized", "min_conf", "target_format", "input_size",
             "quantization_dataset", "auto_opt",
@@ -67,7 +72,6 @@ class ObjectDetectionCamera(VisionPipeline):
             _v = camera_config.get_pipeline_setting(_k)
             if _v is not None:
                 vm_cfg[_k] = _v
-        camera_config.set_pipeline_setting("vision_model", vm_cfg)
         vm_filled = fill_missing_config(dict(vm_cfg))
         self.margin = vm_filled.get("margin", vm_cfg.get("margin", 0))
         raw_min_conf = vm_filled.get("min_conf", vm_cfg.get("min_conf", 0.5))

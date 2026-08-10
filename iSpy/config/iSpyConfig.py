@@ -17,6 +17,34 @@ _CAMERA_CORE_KEYS = {
     "csi", "path",
 }
 
+# User-facing model settings. These belong at pipeline.settings level, never
+# duplicated inside pipeline.settings.vision_model - older builds merged them
+# into the persisted vision_model block, so every camera save (or optimization
+# activation) wrote each setting twice. The vision_model block holds model
+# identity only (file_path, source_pt, input_size, device, ...).
+_VISION_MODEL_SETTINGS_KEYS = (
+    "min_conf", "quantized", "quantization_dataset", "auto_opt",
+    "target_format",
+)
+
+
+def _normalize_vision_model_settings(settings: dict) -> None:
+    """Drop user-facing settings duplicated inside the vision_model block.
+
+    When a key exists at pipeline.settings level AND inside vision_model, the
+    settings copy wins and the vision_model copy is dropped, so the config
+    never stores the same setting twice. Keys that live ONLY inside
+    vision_model are left untouched - they are valid legacy fallbacks (the
+    web UI and pipeline read through both locations). Idempotent."""
+    if not isinstance(settings, dict):
+        return
+    vm = settings.get("vision_model")
+    if not isinstance(vm, dict):
+        return
+    for key in _VISION_MODEL_SETTINGS_KEYS:
+        if key in vm and key in settings:
+            del vm[key]
+
 
 def default_vision_model() -> dict:
     """Pipeline-settings vision_model block for model-backed pipelines.
@@ -124,6 +152,7 @@ def ensure_camera_entries_ready(camera_configs: dict) -> None:
             get_pipeline_settings(cam_cfg).get("vision_model"), dict
         ):
             get_pipeline_settings(cam_cfg)["vision_model"] = default_vision_model()
+        _normalize_vision_model_settings(get_pipeline_settings(cam_cfg))
 
 
 class iSpyConfig:
@@ -273,6 +302,7 @@ class iSpyConfig:
             if not isinstance(cam_cfg, dict):
                 continue
             normalize_camera_entry(cam_cfg)
+            _normalize_vision_model_settings(get_pipeline_settings(cam_cfg))
             if is_model_backed_pipeline(get_pipeline_name(cam_cfg)) and not isinstance(
                 get_pipeline_settings(cam_cfg).get("vision_model"), dict
             ):
