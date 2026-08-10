@@ -1085,8 +1085,8 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
         raise RuntimeError(f"Intermediate ONNX export failed: {raw_onnx}")
 
     # Route intermediate ONNX to the onnx folder with its own sidecar
+    onnx_path = _desired_output_path(pt_path, "onnx")
     try:
-        onnx_path = _desired_output_path(pt_path, "onnx")
         if raw_onnx != onnx_path:
             onnx_path.parent.mkdir(parents=True, exist_ok=True)
             if onnx_path.exists():
@@ -1101,7 +1101,14 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
         logger.info("Intermediate ONNX routed to %s with sidecar", onnx_path)
     except Exception as e:
         logger.warning("Could not route intermediate ONNX: %s", e)
-        onnx_path = raw_onnx
+        # Fall back to whichever copy actually exists. The raw file may have
+        # already been moved to onnx_path before the metadata step failed -
+        # pointing at raw_onnx then would strand the build on a dead path.
+        if not onnx_path.exists():
+            if raw_onnx != onnx_path and raw_onnx.exists():
+                shutil.move(str(raw_onnx), str(onnx_path))
+            else:
+                onnx_path = raw_onnx
 
     try:
         from rknn.api import RKNN

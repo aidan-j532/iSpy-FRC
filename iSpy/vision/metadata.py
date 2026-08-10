@@ -69,7 +69,12 @@ def set_calibration_keywords(pt_path: Path, keywords: list[str]) -> None:
 
 def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
     from ultralytics import YOLO
-    model = YOLO(str(pt_path), verbose=False, weights_only=True)
+    try:
+        model = YOLO(str(pt_path), verbose=False, weights_only=True)
+    except TypeError:
+        # Older ultralytics builds don't accept weights_only (torch>=2.6's
+        # safe-load flag wasn't wired through to YOLO.__init__ yet).
+        model = YOLO(str(pt_path), verbose=False)
     task = getattr(model, "task", "detect") or "detect"
 
     try:
