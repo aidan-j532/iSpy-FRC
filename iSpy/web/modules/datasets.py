@@ -22,6 +22,19 @@ def _validate_filename(name: str) -> str:
     return cleaned.strip(". ") or "unnamed"
 
 
+def _count_images_in_dir(folder: Path) -> int:
+    """Count usable image files directly inside a folder (no recursion)."""
+    if not folder.is_dir():
+        return 0
+    try:
+        return sum(
+            1 for p in folder.iterdir()
+            if p.is_file() and p.suffix.lower() in _IMG_EXTS
+        )
+    except PermissionError:
+        return 0
+
+
 class DatasetsModule(WebModule):
     plugin_name = "datasets"
 
@@ -43,6 +56,7 @@ class DatasetsModule(WebModule):
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_get", self._get_image, methods=["GET"])
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_delete", self._delete_image, methods=["DELETE"])
         flask_app.add_url_rule("/api/fs/dirs", "api_fs_dirs", self._browse_dirs, methods=["GET"])
+        flask_app.add_url_rule("/api/datasets/frc-download", "api_ds_frc_download", self._frc_download, methods=["POST"])
 
     def _images_dir(self, name: str) -> Path:
         return self.dataset_root / name / "images"
@@ -54,7 +68,7 @@ class DatasetsModule(WebModule):
                 if not d.is_dir():
                     continue
                 images_dir = d / "images"
-                count = len(list(images_dir.glob("*"))) if images_dir.exists() else 0
+                count = _count_images_in_dir(images_dir)
                 out.append({"name": d.name, "image_count": count})
         return jsonify(datasets=out)
 
@@ -100,7 +114,35 @@ class DatasetsModule(WebModule):
             name=base.name or str(base),
             parent=parent,
             dirs=dirs,
+            image_count=_count_images_in_dir(base),
+            inside_dataset_root=_is_safe_path(self.dataset_root, base),
         )
+
+    def _frc_download(self):
+        """Download the bundled FRC calibration images (from the project's
+        GitHub release) flat into the selected folder, so the picker's
+        top-level image count reflects them."""
+        from iSpy.dataset.dataset import _download_release_images
+
+        data = request.get_json(force=True) or {}
+        raw = str(data.get("path", "")).strip()
+        if not raw:
+            return jsonify(error="No folder selected"), 400
+        try:
+            folder = Path(raw).resolve()
+        except Exception:
+            return jsonify(error="Invalid path"), 400
+        if not _is_safe_path(self.dataset_root, folder):
+            return jsonify(error="Only available inside QuantizeDataset"), 400
+        if not folder.is_dir():
+            return jsonify(error="Folder not found"), 404
+
+        try:
+            images = _download_release_images(folder, count=200, target_dir="")
+        except Exception as e:
+            logger.exception("FRC dataset download failed: %s", e)
+            return jsonify(error=f"Download failed: {e}"), 500
+        return jsonify(success=True, downloaded=len(images))
 
     def _list_images(self, name):
         d = self._images_dir(name)

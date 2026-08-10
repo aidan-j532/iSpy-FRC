@@ -1042,6 +1042,29 @@ def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
     return str(data_yaml)
 
 
+def _resolve_calibration_dataset(dataset_path, keywords_list, count) -> tuple:
+    """Pick a usable calibration dataset, returning (dataset_dir, used_user_path).
+
+    A user-picked folder is used as-is when it contains images; an empty user
+    folder falls back to the auto-downloaded default dataset instead of
+    erroring out."""
+    from iSpy.dataset.dataset import prepare_quantization_dataset
+
+    if dataset_path:
+        user_ds = Path(dataset_path).resolve()
+        try:
+            _prepare_user_calibration_dataset(user_ds)
+            return user_ds, True
+        except FileNotFoundError:
+            logger.warning(
+                "User calibration dataset %s has no images - falling back to "
+                "auto-downloading calibration images", user_ds,
+            )
+    ds_dir = default_quantization_dataset_dir()
+    prepare_quantization_dataset(str(ds_dir), boot=True, keywords=keywords_list, count=count)
+    return ds_dir, False
+
+
 def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None):
     from iSpy.vision.metadata import (
         read_metadata,
@@ -1056,9 +1079,6 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
     if quantize is None:
         quantize = _RKNN_QUANTIZE
     pt_path = Path(pt_file)
-    user_dataset = dataset_path is not None
-    if dataset_path is None:
-        dataset_path = str(default_quantization_dataset_dir())
 
     raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
     if not raw_onnx.exists():
@@ -1091,20 +1111,13 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
 
     effective_kw = kw if kw is not None else get_calibration_keywords(pt_path, default=keywords)
     count = calib_count_for_format("rknn")
-    ds_path = Path(dataset_path)
-    if user_dataset:
-        # User-picked calibration dataset: use their images directly, never
-        # download. dataset.txt is kept in sync with whatever images are
-        # inside (absolute paths, so _downscale_calib_images resolves them).
-        dataset_txt = _prepare_user_calibration_dataset(ds_path)
-    else:
-        prepare_quantization_dataset(dataset_path, boot=True, keywords=effective_kw, count=count)
-        dataset_txt = ds_path / "dataset.txt"
+    ds_path, _ = _resolve_calibration_dataset(dataset_path, effective_kw, count)
+    dataset_txt = ds_path / "dataset.txt"
     if not dataset_txt.exists() or not dataset_txt.read_text().strip():
         raise FileNotFoundError(f"RKNN calibration dataset could not be prepared at: {dataset_txt}")
 
-    calib_dir = _downscale_calib_images(Path(dataset_path))
-    calib_txt = calib_dir / "dataset.txt" if calib_dir != Path(dataset_path) else dataset_txt
+    calib_dir = _downscale_calib_images(ds_path)
+    calib_txt = calib_dir / "dataset.txt" if calib_dir != ds_path else dataset_txt
 
     rknn_output = _desired_output_path(pt_path, "rknn")
     logger.info("Converting ONNX -> RKNN with dataset=%s", calib_txt)
@@ -1303,24 +1316,20 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
     data_yaml = None
     if quantize:
         kw = get_calibration_keywords(pt_path, default=keywords)
-        if dataset_path:
-            # User-picked calibration dataset: point ultralytics' int8
-            # calibration straight at their images; never download.
-            user_ds = Path(dataset_path).resolve()
-            _prepare_user_calibration_dataset(user_ds)
-            data_yaml = _user_calibration_data_yaml(model_file, user_ds)
+        ds_dir, used_user_ds = _resolve_calibration_dataset(
+            dataset_path, kw, calib_count_for_format(target_format)
+        )
+        if used_user_ds:
+            data_yaml = _user_calibration_data_yaml(model_file, ds_dir)
             logger.info(
                 "Calibration dataset from user path %s (data.yaml=%s)",
-                user_ds, data_yaml,
+                ds_dir, data_yaml,
             )
         else:
-            ds_dir = default_quantization_dataset_dir()
-            count = calib_count_for_format(target_format)
-            prepare_quantization_dataset(str(ds_dir), boot=True, keywords=kw, count=count)
             # data.yaml lives inside the dataset folder that was just
             # prepared - the root QuantizeDataset/data.yaml is never written,
             # so pointing ultralytics int8 calibration at it would load nothing.
-            data_yaml = str(Path(ds_dir) / "data.yaml")
+            data_yaml = str(ds_dir / "data.yaml")
     else:
         Path(dataset_root).mkdir(parents=True, exist_ok=True)
 
