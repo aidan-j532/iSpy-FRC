@@ -66,10 +66,14 @@ class ObjectDetectionCamera(VisionPipeline):
         # saved.
         vm_cfg = dict(vm_cfg)
         for _k in (
-            "quantized", "min_conf", "target_format", "input_size",
-            "quantization_dataset", "auto_opt",
+            "quantize", "min_conf", "target_format", "input_size",
+            "quantization_dataset", "optimize",
         ):
             _v = camera_config.get_pipeline_setting(_k)
+            if _v is None:
+                _legacy = {"quantize": "quantized", "optimize": "auto_opt"}.get(_k)
+                if _legacy is not None:
+                    _v = camera_config.get_pipeline_setting(_legacy)
             if _v is not None:
                 vm_cfg[_k] = _v
         vm_filled = fill_missing_config(dict(vm_cfg))
@@ -79,10 +83,21 @@ class ObjectDetectionCamera(VisionPipeline):
         self.z_mode = vm_cfg.get("z_mode", "size_based")  # "size_based" | "ground_plane"
         self.yolo_model_file = vm_filled.get("file_path", vm_cfg.get("file_path", ""))
         self.input_size = tuple(vm_filled.get("input_size", (640, 640)))
-        self.quantized = vm_filled.get("quantized", vm_cfg.get("quantized", False))
-        cam_auto_opt = vm_cfg.get("auto_opt")
+        raw_quantize = vm_filled.get("quantize", vm_cfg.get("quantize"))
+        if raw_quantize is None:
+            raw_quantize = vm_filled.get("quantized", vm_cfg.get("quantized"))
+        if raw_quantize is None:
+            raw_quantize = False
+        self.quantize = bool(raw_quantize)
+        cam_auto_opt = vm_cfg.get("optimize")
         if cam_auto_opt is None:
-            cam_auto_opt = config.get("auto_opt", False) if config is not None else False
+            cam_auto_opt = vm_cfg.get("auto_opt")  # legacy key
+        if cam_auto_opt is None:
+            cam_auto_opt = (
+                config.get("optimize", config.get("auto_opt", False))
+                if config is not None
+                else False
+            )
         self._auto_opt = bool(cam_auto_opt)
         self._requested_format = str(vm_cfg.get("target_format") or "auto")
         self.quantization_dataset = vm_cfg.get("quantization_dataset") or None
@@ -186,7 +201,7 @@ class ObjectDetectionCamera(VisionPipeline):
                         "chosen file is used for detection and as the source "
                         "for optimization builds.",
             },
-            "auto_opt": {
+            "optimize": {
                 "type": "toggle",
                 "label": "Optimize/Convert",
                 "default": False,
@@ -194,7 +209,7 @@ class ObjectDetectionCamera(VisionPipeline):
                 "help": "Build the best optimized backend artifact for this device "
                         "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
                         "etc.) in the background. Falls back to the top-level "
-                        "config 'auto_opt' when unset.",
+                        "config 'optimize' when unset.",
             },
             "target_format": {
                 "type": "select",
@@ -205,13 +220,13 @@ class ObjectDetectionCamera(VisionPipeline):
                 "help": "'auto' picks the best backend for this device via "
                         "recommend_format(). Set an explicit format to override.",
             },
-            "quantized": {
+            "quantize": {
                 "type": "toggle",
                 "label": "Quantize model",
                 "default": False,
                 "quantization": True,
                 "help": "Quantize the optimized artifact (int8). Only meaningful "
-                        "with auto_opt or target_format set.",
+                        "with optimize or target_format set.",
             },
             "quantization_dataset": {
                 "type": "browse",
@@ -219,7 +234,7 @@ class ObjectDetectionCamera(VisionPipeline):
                 "default": "",
                 "browse_root": "QuantizeDataset",
                 "quantization": True,
-                "gated_by": "quantized",
+                "gated_by": "quantize",
                 "help": "Optional folder of calibration images used for "
                         "quantization. Leave empty to auto-download images "
                         "from the model's calibration keywords.",
@@ -317,13 +332,16 @@ class ObjectDetectionCamera(VisionPipeline):
 
     def _optimization_requested(self) -> bool:
         # Quantize flag OR the old boot auto_opt behavior (camera-level
-        # auto_opt, falling back to the top-level config auto_opt).
-        if bool(getattr(self, "quantized", False)):
+        # auto_opt, falling back to the top-level config auto_opt). Legacy
+        # 'quantized'/'auto_opt' keys are still honored.
+        if bool(getattr(self, "quantize", False)):
             return True
         if getattr(self, "_auto_opt", False):
             return True
         vm = self._current_vm_config()
-        return bool(vm.get("auto_opt")) or bool(vm.get("quantized"))
+        return bool(vm.get("optimize") or vm.get("auto_opt")) or bool(
+            vm.get("quantize") or vm.get("quantized")
+        )
 
     @staticmethod
     def _path_format(path: str) -> str:
@@ -386,7 +404,7 @@ class ObjectDetectionCamera(VisionPipeline):
         schema = self.config_schema()
         return {
             key: schema[key]
-            for key in ("auto_opt", "target_format", "quantized", "quantization_dataset")
+            for key in ("optimize", "target_format", "quantize", "quantization_dataset")
             if key in schema
         }
 
@@ -428,7 +446,7 @@ class ObjectDetectionCamera(VisionPipeline):
                 str(source_pt),
                 target,
                 list(self.input_size),
-                quantize=bool(self.quantized),
+                quantize=bool(self.quantize),
                 force=True,
                 dataset_path=self.quantization_dataset,
             )
@@ -478,7 +496,7 @@ class ObjectDetectionCamera(VisionPipeline):
         loaded the same way on subsequent boots."""
         vm = self._current_vm_config()
         vm["file_path"] = artifact_path
-        vm["quantized"] = True
+        vm["quantize"] = True
         if vm_extra:
             vm.update(vm_extra)
 
@@ -490,7 +508,7 @@ class ObjectDetectionCamera(VisionPipeline):
         )
         self.model = new_model
         self.yolo_model_file = artifact_path
-        self.quantized = True
+        self.quantize = True
         self._use_pipeline = new_model.model_type in ("rknn", "onnx", "tflite")
         if self._use_pipeline and (
             self._preproc_thread is None or not self._preproc_thread.is_alive()

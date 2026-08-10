@@ -7,7 +7,7 @@ from iSpy.validations.recommendations import get_structured_recommendations
 _RESTART_REQUIRED_KEYS = {
     "unit", "debug_mode", "dbscan", "distance_threshold",
     "stale_threshold", "record_mode", "record_dir", "frame_sync",
-    "auto_opt", "log_level", "use_network_tables", "network_tables_ip",
+    "optimize", "log_level", "use_network_tables", "network_tables_ip",
     "metrics", "plugins", "camera_configs", "device", "num_gpus",
 }
 

@@ -21,7 +21,7 @@
     <h3>Model</h3>
     <div class="form-row">
       <span class="form-label">Auto Optimize</span>
-      <select class="form-input" data-key="auto_opt" data-restart="true">
+      <select class="form-input" data-key="optimize" data-restart="true">
         <option value="true">Enabled</option>
         <option value="false">Disabled</option>
       </select>
@@ -157,7 +157,7 @@
 <script>
 let configData = {};
 let defaultsData = {};
-const BOOL_KEYS = new Set(["auto_opt", "record_mode", "frame_sync", "use_network_tables", "metrics", "debug_mode", "grayscale"]);
+const BOOL_KEYS = new Set(["optimize", "record_mode", "frame_sync", "use_network_tables", "metrics", "debug_mode", "grayscale"]);
 
 function parseValue(el) {
   const val = el.value;

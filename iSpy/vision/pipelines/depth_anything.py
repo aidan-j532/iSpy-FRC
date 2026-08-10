@@ -68,7 +68,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 "default": "small",
                 "help": "Depth Anything V2 Small is downloaded automatically from Hugging Face.",
             },
-            "auto_opt": {
+            "optimize": {
                 "type": "toggle",
                 "label": "Optimize/Convert",
                 "default": False,
@@ -76,15 +76,15 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 "help": "Build the best optimized backend artifact for this device "
                         "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
                         "etc.) in the background. Falls back to the top-level "
-                        "config 'auto_opt' when unset.",
+                        "config 'optimize' when unset.",
             },
-            "quantized": {
+            "quantize": {
                 "type": "toggle",
                 "label": "Quantize model",
                 "default": False,
                 "quantization": True,
                 "help": "Quantize the optimized artifact (int8). Only meaningful "
-                        "with auto_opt or target_format set.",
+                        "with optimize or target_format set.",
             },
             "estimate_depth": {
                 "type": "toggle",
@@ -139,11 +139,11 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             "centimeter": 100.0, "centimeters": 100.0,
         }.get(self.unit, 1.0)
 
-        raw_optimize = camera_config.get_pipeline_setting("auto_opt")
+        raw_optimize = camera_config.get_pipeline_setting("optimize")
         if raw_optimize is None:
-            raw_optimize = camera_config.get_pipeline_setting("optimize")  # legacy key
+            raw_optimize = camera_config.get_pipeline_setting("auto_opt")  # legacy key
         if raw_optimize is None:
-            raw_optimize = config.get("auto_opt", False) if config is not None else False
+            raw_optimize = config.get("optimize", config.get("auto_opt", False)) if config is not None else False
         if isinstance(raw_optimize, str):
             raw_optimize = raw_optimize.strip().lower() in ("1", "true", "yes", "on")
         self._auto_opt = bool(raw_optimize)
@@ -185,7 +185,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         schema = self.config_schema()
         return {
             key: schema[key]
-            for key in ("auto_opt", "model_size")
+            for key in ("optimize", "model_size")
             if key in schema
         }
 

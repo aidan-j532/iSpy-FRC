@@ -69,7 +69,7 @@ def set_calibration_keywords(pt_path: Path, keywords: list[str]) -> None:
 
 def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
     from ultralytics import YOLO
-    model = YOLO(str(pt_path), verbose=False)
+    model = YOLO(str(pt_path), verbose=False, weights_only=True)
     task = getattr(model, "task", "detect") or "detect"
 
     try:

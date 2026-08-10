@@ -27,7 +27,7 @@ _FEED_TIMEOUT_S = 15.0
 # Legacy settings-key aliases that predate the current schemas. They are
 # dropped when the pipeline's canonical key is present, so old configs don't
 # carry dead twins around forever.
-_SETTING_ALIASES = {"quantize": "quantized", "optimize": "auto_opt"}
+_SETTING_ALIASES = {"quantized": "quantize", "auto_opt": "optimize"}
 
 
 def _pipeline_schema_keys(pipeline_name: str) -> set:

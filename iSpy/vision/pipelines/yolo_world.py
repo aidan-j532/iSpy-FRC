@@ -74,13 +74,13 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
                 "default": "s",
                 "help": "YOLO World v2 weights are downloaded automatically from Ultralytics on first use.",
             },
-            "quantized": {
+            "quantize": {
                 "type": "toggle",
                 "label": "Quantize model",
                 "default": False,
                 "quantization": True,
                 "help": "Quantize the optimized artifact (int8). Only meaningful "
-                        "with auto_opt or target_format set.",
+                        "with optimize or target_format set.",
             },
             "quantization_dataset": {
                 "type": "browse",
@@ -88,7 +88,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
                 "default": "",
                 "browse_root": "QuantizeDataset",
                 "quantization": True,
-                "gated_by": "quantized",
+                "gated_by": "quantize",
                 "help": "Optional folder of calibration images used for "
                         "quantization. Leave empty to auto-download images "
                         "from the model's calibration keywords.",
@@ -138,7 +138,11 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self.classes = self._parse_classes(self.prompt)
         self.model_size = str(camera_config.get_pipeline_setting("model_size") or "s").lower()
 
-        raw_quantize = camera_config.get_pipeline_setting("quantized", False)
+        raw_quantize = camera_config.get_pipeline_setting("quantize")
+        if raw_quantize is None:
+            raw_quantize = camera_config.get_pipeline_setting("quantized")  # legacy key
+        if raw_quantize is None:
+            raw_quantize = False
         if isinstance(raw_quantize, str):
             raw_quantize = raw_quantize.strip().lower() in ("1", "true", "yes", "on")
         self.quantize = bool(raw_quantize)
@@ -147,11 +151,11 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self._quantization_dataset = camera_config.get_pipeline_setting("quantization_dataset") or None
         self._model_input_size = int(camera_config.get_pipeline_setting("input_size") or 640)
 
-        raw_optimize = camera_config.get_pipeline_setting("auto_opt")
+        raw_optimize = camera_config.get_pipeline_setting("optimize")
         if raw_optimize is None:
-            raw_optimize = camera_config.get_pipeline_setting("optimize")  # legacy key
+            raw_optimize = camera_config.get_pipeline_setting("auto_opt")  # legacy key
         if raw_optimize is None:
-            raw_optimize = config.get("auto_opt", False) if config is not None else False
+            raw_optimize = config.get("optimize", config.get("auto_opt", False)) if config is not None else False
         if isinstance(raw_optimize, str):
             raw_optimize = raw_optimize.strip().lower() in ("1", "true", "yes", "on")
         self._auto_opt = bool(raw_optimize)
@@ -191,7 +195,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         schema = self.config_schema()
         return {
             key: schema[key]
-            for key in ("quantized", "target_format", "quantization_dataset", "input_size")
+            for key in ("quantize", "target_format", "quantization_dataset", "input_size")
             if key in schema
         }
 

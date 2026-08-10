@@ -171,9 +171,9 @@ class PipelineConfigTests(unittest.TestCase):
         self.assertIsNone(cfg.get("vision_model"))
         cam = cfg.camera_config("default_cam")
         self.assertFalse(
-            cam.get_pipeline_setting("vision_model")["quantized"]
+            cam.get_pipeline_setting("vision_model")["quantize"]
         )
-        self.assertFalse(cfg.get("auto_opt", True))
+        self.assertFalse(cfg.get("optimize", True))
 
 
 # ---------------------------------------------------------------------------
@@ -265,9 +265,9 @@ class PipelineLifecycleTests(unittest.TestCase):
     def test_only_object_detection_offers_optimization_options(self):
         pipeline = ObjectDetectionCamera.__new__(ObjectDetectionCamera)
         options = pipeline.get_optimization_options()
-        self.assertIn("auto_opt", options)
+        self.assertIn("optimize", options)
         self.assertIn("target_format", options)
-        self.assertIn("quantized", options)
+        self.assertIn("quantize", options)
         self.assertFalse(ConcretePipeline.__new__(ConcretePipeline).get_optimization_options())
         self.assertEqual(ConcretePipeline.__new__(ConcretePipeline).optimize(),
                          "not supported")
@@ -276,8 +276,8 @@ class PipelineLifecycleTests(unittest.TestCase):
         # YOLO World and Depth Anything are optimizable pipelines too - the
         # generic optimize endpoint must not be object-detection-only.
         for cls, keys in (
-            (YoloWorldCamera, ("quantized", "target_format", "quantization_dataset", "input_size")),
-            (DepthAnythingCamera, ("auto_opt", "model_size")),
+            (YoloWorldCamera, ("quantize", "target_format", "quantization_dataset", "input_size")),
+            (DepthAnythingCamera, ("optimize", "model_size")),
         ):
             options = cls.__new__(cls).get_optimization_options()
             for key in keys:

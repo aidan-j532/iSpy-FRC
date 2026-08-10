@@ -23,9 +23,17 @@ _CAMERA_CORE_KEYS = {
 # activation) wrote each setting twice. The vision_model block holds model
 # identity only (file_path, source_pt, input_size, device, ...).
 _VISION_MODEL_SETTINGS_KEYS = (
-    "min_conf", "quantized", "quantization_dataset", "auto_opt",
+    "min_conf", "quantize", "quantization_dataset", "optimize",
     "target_format",
 )
+
+# Legacy names for the same settings. 'optimize' was 'auto_opt' and 'quantize'
+# was 'quantized' in older configs; the legacy key is dropped whenever the
+# canonical one is present so old configs don't store both.
+_LEGACY_SETTING_ALIASES = {
+    "auto_opt": "optimize",
+    "quantized": "quantize",
+}
 
 
 def _normalize_vision_model_settings(settings: dict) -> None:
@@ -44,6 +52,11 @@ def _normalize_vision_model_settings(settings: dict) -> None:
     for key in _VISION_MODEL_SETTINGS_KEYS:
         if key in vm and key in settings:
             del vm[key]
+    for legacy, canonical in _LEGACY_SETTING_ALIASES.items():
+        if legacy in vm and (canonical in vm or canonical in settings):
+            del vm[legacy]
+        if legacy in settings and canonical in settings:
+            del settings[legacy]
 
 
 def default_vision_model() -> dict:
@@ -172,7 +185,7 @@ class iSpyConfig:
             "record_mode": True,
             "record_dir": "VideoRecordings",
             "frame_sync": False,
-            "auto_opt": False,
+            "optimize": False,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
             "use_network_tables": False,
@@ -217,7 +230,7 @@ class iSpyConfig:
                                 # the web UI - a fresh install should boot
                                 # instantly, not kick off a multi-minute
                                 # backend build.
-                                "quantized": False,
+                                "quantize": False,
                                 # Optional PnP for pose (translation stored on
                                 # Box; rotation stored as roll/pitch/yaw on
                                 # Box). Enable to get 3D position + orientation
