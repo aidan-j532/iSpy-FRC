@@ -8,9 +8,6 @@ import argparse
 import time as _time
 from pathlib import Path
 
-os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
-os.environ["YOLO_VERBOSE"] = "False"
-
 from iSpy.config.iSpyConfig import iSpyConfig, get_pipeline_name
 from iSpy.config.AutoOpt import has_jetson
 from iSpy.validations.validate_system import validate_system
@@ -33,7 +30,7 @@ _PROJECT_ROOT = Path.cwd().resolve()
 _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
 
 _READINESS_POLL_S = 2.0
-_READINESS_WAIT_TIMEOUT_S = int(os.environ.get("ISPY_READINESS_TIMEOUT_S", "1200"))  # default 20 min
+_READINESS_WAIT_TIMEOUT_S = 1200
 
 # Bound to the real stdout/stderr before anything can swap sys.stdout, so
 # silencing third-party libs later can't take iSpy's own logging down with it.

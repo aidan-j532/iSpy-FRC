@@ -45,11 +45,6 @@ if not (_PROJECT_ROOT / "iSpy").is_dir():
     _PROJECT_ROOT = Path.cwd()
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-os.environ["RKNN_LOG_LEVEL"] = "3"
-os.environ["ORT_LOG_LEVEL"] = "3"
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["YOLO_VERBOSE"] = "False"
-
 from iSpy.config.AutoOpt import has_rockchip_npu, has_nvidia, has_tensorrt, has_tpu
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.optimizer import convert_model

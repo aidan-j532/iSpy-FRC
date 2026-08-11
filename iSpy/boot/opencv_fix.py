@@ -1,4 +1,3 @@
-import os
 import re
 import shutil
 import site
@@ -28,7 +27,7 @@ def _system_python() -> str:
 
 
 def _apt_install_python3_opencv() -> bool:
-    env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
+    env = {"DEBIAN_FRONTEND": "noninteractive"}
     cmd = ["sudo", "apt-get", "install", "-y", "python3-opencv"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)

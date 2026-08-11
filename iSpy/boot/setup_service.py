@@ -2,6 +2,7 @@ import subprocess
 import sys
 import os
 import platform
+from pathlib import Path
 
 # Mainly vibe coded but supercool ngl
 
@@ -22,7 +23,7 @@ def get_platform():
     return "linux_other"
 
 def setup_systemd(script_path):
-    user = os.environ.get("USER", "pi")
+    user = "pi"
     python = sys.executable
     workdir = os.path.dirname(os.path.abspath(script_path))
 
@@ -74,7 +75,7 @@ def _relaunch_as_admin_windows(cmd):
     try:
         # Write the exact schtasks command to a .bat file so there are no
         # quoting/escaping issues passing arguments through Start-Process.
-        public = os.environ.get("PUBLIC", "C:\\Users\\Public")
+        public = "C:\\Users\\Public"
         bat_file = os.path.join(public, "vc_elevate.bat")
         out_file = os.path.join(public, "vc_schtasks_result.txt")
 
@@ -141,9 +142,7 @@ def setup_windows(script_path):
         # Either we ARE admin and schtasks still failed, or elevation was
         # declined - fall back to a per-user startup entry.
         try:
-            appdata = os.environ.get("APPDATA")
-            if not appdata:
-                raise RuntimeError("APPDATA environment variable not found")
+            appdata = str(Path.home() / "AppData" / "Roaming")
             startup_dir = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
             os.makedirs(startup_dir, exist_ok=True)
             bat_path = os.path.join(startup_dir, f"{SERVICE_NAME}_startup.bat")

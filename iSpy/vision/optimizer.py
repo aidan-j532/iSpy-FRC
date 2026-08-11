@@ -38,9 +38,6 @@ import warnings
 from functools import lru_cache
 from pathlib import Path
 
-os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
-os.environ.setdefault("YOLO_VERBOSE", "False")
-
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path.cwd().resolve()
@@ -162,9 +159,8 @@ def _find_lite_wheel_dir() -> Path:
 
 _RKNN_LITE_DIR = _find_lite_wheel_dir()
 
-_RKNN_FULL_BASE = os.environ.get(
-    "iSpy_RKNN_WHEELS_URL",
-    "https://github.com/aidan-j532/iSpy-FRC/releases/download/v1.0.2",
+_RKNN_FULL_BASE = (
+    "https://github.com/aidan-j532/iSpy-FRC/releases/download/v1.0.2"
 ).rstrip("/")
 
 _RKNN_FULL_WHEELS: dict[tuple[str, str], str] = {
@@ -363,8 +359,6 @@ def _in_virtualenv() -> bool:
     return (
         hasattr(sys, "real_prefix")
         or (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
-        or os.environ.get("VIRTUAL_ENV") is not None
-        or os.environ.get("CONDA_DEFAULT_ENV") is not None
     )
 
 

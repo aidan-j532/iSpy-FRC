@@ -50,9 +50,6 @@ if not (_PROJECT_ROOT / "iSpy").is_dir():
     _PROJECT_ROOT = Path.cwd()
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-os.environ.setdefault("RKNN_LOG_LEVEL", "3")
-os.environ.setdefault("YOLO_VERBOSE", "False")
-
 # Same pipeline iSpy.py / game_loop.py / ObjectDetectionCamera.py run in
 # production - not re-implemented here.
 from iSpy.vision.genericYolo import GenericYolo, Box  # noqa: E402
