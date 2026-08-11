@@ -1385,15 +1385,15 @@ class GenericYolo:
 
         return Results(boxes, ultralytics_result.orig_shape, keypoints_list or None)
 
-def release(self):
-    if self.model_type == "rknn":
-        self.model.release()
-    elif self.model_type == "onnx":
-        del self.model  # ORT session has no explicit close; drop the ref
-        if self._onnx_pool is not None:
-            self._onnx_pool.stop()
-    elif self.model_type == "tflite":
-        del self.model
-    pool = getattr(self, "_pool", None)
-    if pool is not None:
-        pool.stop()
+    def release(self):
+        if self.model_type == "rknn":
+            self.model.release()
+        elif self.model_type == "onnx":
+            del self.model  # ORT session has no explicit close; drop the ref
+            if self._onnx_pool is not None:
+                self._onnx_pool.stop()
+        elif self.model_type == "tflite":
+            del self.model
+        pool = getattr(self, "_pool", None)
+        if pool is not None:
+            pool.stop()

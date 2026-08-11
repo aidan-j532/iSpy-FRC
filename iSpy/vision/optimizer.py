@@ -785,12 +785,17 @@ def _merge_rknn_build_outputs(outputs: list) -> "np.ndarray":
 
 
 def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
-    """Divide the constant (initializer) input of `node` by `divisor`, in place.
+    """Divide the constant input of `node` by `divisor`.
 
-    If that initializer is shared by other nodes (RKNN toolkit's weight-sharing
-    means the same const tensor can feed multiple ops - confirmed in the layer
-    dump, e.g. onnx::Split_244 reused 3x), it is cloned under a new name first
-    so only `node` sees the scaled value and every other consumer is untouched.
+    The constant may be a graph initializer (older Ultralytics exports) or a
+    Constant NODE (newer exports, e.g. 8.4.x emits the stride multipliers as
+    onnx::Constant nodes rather than initializers). If that constant feeds
+    other nodes too (RKNN toolkit's weight-sharing means the same const tensor
+    can feed multiple ops - confirmed in the layer dump, e.g. onnx::Split_244
+    reused 3x), it is cloned under a new name first so only `node` sees the
+    scaled value and every other consumer is untouched. No nodes are inserted
+    or removed - only a fresh initializer is added - so RKNN's graph topology
+    (and its NC1HWC2 layout/tiling decisions) are unaffected.
     """
     import numpy as np
     import onnx
@@ -798,47 +803,59 @@ def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
 
     initializer_map = {init.name: init for init in graph.initializer}
     const_name = None
+    const_node = None
     for inp in node.input:
         if inp in initializer_map:
             const_name = inp
             break
     if const_name is None:
+        # Newer Ultralytics exports bake stride multipliers into Constant
+        # nodes ('/model.23/Constant_15' -> output '/model.23/Constant_15_output_0')
+        # instead of graph initializers - resolve those too or quantization
+        # proceeds with unnormalized box coords and confidence collapses.
+        for inp in node.input:
+            producer = node_by_output.get(inp)
+            if producer is not None and producer.op_type == "Constant":
+                const_node = producer
+                const_name = inp
+                break
+    if const_name is None:
         raise RuntimeError(
-            f"Node '{node.name}' ({node.op_type}) has no constant/initializer "
-            f"input among {list(node.input)} - cannot fold a scale factor into it. "
+            f"Node '{node.name}' ({node.op_type}) has no constant input among "
+            f"{list(node.input)} - cannot fold a scale factor into it. "
             "Ultralytics export structure may have changed - inspect manually."
         )
+
+    if const_node is None:
+        arr = onnx.numpy_helper.to_array(initializer_map[const_name])
+    else:
+        value_attr = next(
+            (a for a in const_node.attribute if a.name == "value"), None
+        )
+        if value_attr is None or value_attr.t is None:
+            raise RuntimeError(
+                f"Constant node '{const_node.name}' has no 'value' tensor "
+                "attribute - cannot fold a scale factor into it."
+            )
+        arr = onnx.numpy_helper.to_array(value_attr.t)
 
     other_consumers = [
         n for n in graph.node if n is not node and const_name in n.input
     ]
-    init = initializer_map[const_name]
-    arr = onnx.numpy_helper.to_array(init).astype(np.float32) / float(divisor)
-
-    if other_consumers:
-        new_name = f"{const_name}_iSpy_scaled"
-        new_init = onnx.numpy_helper.from_array(arr, name=new_name)
-        graph.initializer.append(new_init)
-        for idx, inp in enumerate(node.input):
-            if inp == const_name:
-                node.input[idx] = new_name
-        logger.info(
-            "Cloned shared constant '%s' -> '%s' (scaled by 1/%.1f) so only node "
-            "'%s' is affected (%d other consumer(s) left untouched).",
-            const_name, new_name, divisor, node.name, len(other_consumers),
-        )
-        return new_name
-
-    new_init = onnx.numpy_helper.from_array(arr, name=const_name)
-    for idx, ini in enumerate(graph.initializer):
-        if ini.name == const_name:
-            graph.initializer[idx].CopyFrom(new_init)
-            break
-    logger.info(
-        "Scaled constant '%s' by 1/%.1f in place (sole consumer: node '%s').",
-        const_name, divisor, node.name,
+    new_name = f"{const_name}_iSpy_scaled"
+    scaled = onnx.numpy_helper.from_array(
+        arr.astype(np.float32) / float(divisor), name=new_name
     )
-    return const_name
+    graph.initializer.append(scaled)
+    for idx, inp in enumerate(node.input):
+        if inp == const_name:
+            node.input[idx] = new_name
+    logger.info(
+        "Cloned constant '%s' -> '%s' (scaled by 1/%.1f) so only node '%s' is "
+        "affected (%d other consumer(s) left untouched).",
+        const_name, new_name, divisor, node.name, len(other_consumers),
+    )
+    return new_name
 
 
 def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> tuple[float, float | None]:
@@ -1217,6 +1234,8 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
     finally:
         if calib_dir != Path(dataset_path):
             shutil.rmtree(str(calib_dir), ignore_errors=True)
+        if surgery_path.exists():
+            surgery_path.unlink()
 
     logger.info("RKNN conversion successful: %s", rknn_output)
     _export_rknn_metadata(

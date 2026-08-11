@@ -855,7 +855,6 @@ async function uploadDatasetFromPicker() {
     const target = $id(folderPickerTarget);
     if (target) {
       target.value = 'QuantizeDataset/' + name;
-      target.dataset.original = target.value;
     }
     showToast(`Dataset "${name}" created`, 'success');
     closeFolderPicker();
@@ -978,7 +977,6 @@ async function uploadModelFromPicker() {
     const target = $id(modelPickerTarget);
     if (target) {
       target.value = name;
-      target.dataset.original = name;
     }
     showToast('Model uploaded', 'success');
     closeModelPicker();
@@ -1017,7 +1015,6 @@ async function openModelPicker(inputId) {
         const input = $id(modelPickerTarget);
         if (input) {
           input.value = m.name;
-          input.dataset.original = m.name;
         }
         closeModelPicker();
       };
