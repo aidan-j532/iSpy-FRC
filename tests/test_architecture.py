@@ -276,7 +276,7 @@ class PipelineLifecycleTests(unittest.TestCase):
         # YOLO World and Depth Anything are optimizable pipelines too - the
         # generic optimize endpoint must not be object-detection-only.
         for cls, keys in (
-            (YoloWorldCamera, ("quantize", "target_format", "quantization_dataset", "input_size")),
+            (YoloWorldCamera, ("optimize", "quantize", "target_format", "quantization_dataset", "input_size")),
             (DepthAnythingCamera, ("optimize", "model_size")),
         ):
             options = cls.__new__(cls).get_optimization_options()

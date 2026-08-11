@@ -74,6 +74,24 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
                 "default": "s",
                 "help": "YOLO World v2 weights are downloaded automatically from Ultralytics on first use.",
             },
+            "optimize": {
+                "type": "toggle",
+                "label": "Optimize/Convert",
+                "default": False,
+                "optimize_toggle": True,
+                "help": "Build the best optimized backend artifact for this device "
+                        "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
+                        "etc.) in the background. Falls back to the top-level "
+                        "config 'optimize' when unset.",
+            },
+            "target_format": {
+                "type": "select",
+                "label": "Target Format",
+                "options": ["auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"],
+                "default": "auto",
+                "quantization": True,
+                "help": "'auto' picks the best format for this device (rknn on Rockchip NPUs, tflite on Edge TPU, engine on NVIDIA, onnx elsewhere).",
+            },
             "quantize": {
                 "type": "toggle",
                 "label": "Quantize model",
@@ -92,14 +110,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
                 "help": "Optional folder of calibration images used for "
                         "quantization. Leave empty to auto-download images "
                         "from the model's calibration keywords.",
-            },
-            "target_format": {
-                "type": "select",
-                "label": "Target Format",
-                "options": ["auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"],
-                "default": "auto",
-                "quantization": True,
-                "help": "'auto' picks the best format for this device (rknn on Rockchip NPUs, tflite on Edge TPU, engine on NVIDIA, onnx elsewhere).",
             },
             "input_size": {
                 "type": "number",
@@ -195,7 +205,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         schema = self.config_schema()
         return {
             key: schema[key]
-            for key in ("quantize", "target_format", "quantization_dataset", "input_size")
+            for key in ("optimize", "quantize", "target_format", "quantization_dataset", "input_size")
             if key in schema
         }
 

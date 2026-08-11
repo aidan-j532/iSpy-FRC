@@ -57,10 +57,10 @@
         <span id="folder-picker-path" class="text-dim" style="word-break:break-all;padding-top:8px;"></span>
       </div>
       <div id="folder-picker-count" class="text-dim" style="padding-bottom:4px;"></div>
-      <div id="frc-download-panel" class="frc-download-panel" style="display:none;margin:6px 0 10px;padding:10px;border:1px solid var(--warn);border-radius:6px;background:var(--warn-dim);">
+      <div id="frc-download-panel" class="frc-download-panel" style="margin:6px 0 10px;padding:10px;border:1px solid var(--warn);border-radius:6px;background:var(--warn-dim);">
         <div style="margin-bottom:8px;">
-          <strong>No usable images in this folder.</strong>
-          <div class="form-help">The bundled FRC calibration set (200 general robotics images) can be downloaded here, but it is a generic set - it may not calibrate well for every model or target. For best quantization results, use your own images of your actual game pieces and field targets.</div>
+          <strong>Download the bundled FRC calibration set (200 images)</strong>
+          <div class="form-help">Downloads the 200 generic robotics images from the project's GitHub release into this folder. It is a generic set - it may not calibrate well for every model or target. For best quantization results, use your own images of your actual game pieces and field targets.</div>
         </div>
         <div class="upload-row">
           <button onclick="downloadFrcDataset()" id="frc-download-btn">Download FRC Dataset</button>
@@ -880,7 +880,7 @@ async function loadFolderPicker(path) {
       ? `${count} usable image${count !== 1 ? 's' : ''} found in this folder`
       : 'No usable images found in this folder';
     const frcPanel = $id('frc-download-panel');
-    frcPanel.style.display = (count === 0 && data.inside_dataset_root) ? '' : 'none';
+    frcPanel.style.display = '';
     $id('frc-download-btn').disabled = false;
     $id('frc-download-status').textContent = '';
     const list = $id('folder-picker-list');
@@ -909,6 +909,11 @@ async function loadFolderPicker(path) {
 }
 
 async function downloadFrcDataset() {
+  const risk = 'Downloading the bundled FRC calibration set (200 generic robotics images) into "' +
+    folderPickerPath +
+    '". It is a generic set - it may not calibrate well for every model or target. ' +
+    'For best quantization results, use your own images of your actual game pieces and field targets. Download anyway?';
+  if (!confirm(risk)) return;
   const btn = $id('frc-download-btn');
   const status = $id('frc-download-status');
   btn.disabled = true;

@@ -121,7 +121,8 @@ class DatasetsModule(WebModule):
     def _frc_download(self):
         """Download the bundled FRC calibration images (from the project's
         GitHub release) flat into the selected folder, so the picker's
-        top-level image count reflects them."""
+        top-level image count reflects them. The images are written to disk
+        and stay there; nothing deletes them afterwards."""
         from iSpy.dataset.dataset import _download_release_images
 
         data = request.get_json(force=True) or {}
@@ -132,8 +133,6 @@ class DatasetsModule(WebModule):
             folder = Path(raw).resolve()
         except Exception:
             return jsonify(error="Invalid path"), 400
-        if not _is_safe_path(self.dataset_root, folder):
-            return jsonify(error="Only available inside QuantizeDataset"), 400
         if not folder.is_dir():
             return jsonify(error="Folder not found"), 404
 

@@ -40,6 +40,11 @@ class SettingsModule(WebModule):
             return jsonify(error="No snapshot available (already used, or none was taken)"), 404
         config = self.context["config"]
         config.config = snap["config"]
+        # The whole config dict was swapped underneath the camera wrapper
+        # views - normalize and rebuild them like _update_config does.
+        from iSpy.config.iSpyConfig import ensure_camera_entries_ready
+        ensure_camera_entries_ready(config.config.get("camera_configs", {}))
+        config._rebuild_camera_configs()
         config.save()
         write("config_snapshot", {"config": None, "taken": False})  # one-shot: consume it
         return jsonify(success=True, config=config.config)

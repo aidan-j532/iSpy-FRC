@@ -73,18 +73,12 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 "label": "Optimize/Convert",
                 "default": False,
                 "optimize_toggle": True,
-                "help": "Build the best optimized backend artifact for this device "
-                        "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
-                        "etc.) in the background. Falls back to the top-level "
-                        "config 'optimize' when unset.",
-            },
-            "quantize": {
-                "type": "toggle",
-                "label": "Quantize model",
-                "default": False,
-                "quantization": True,
-                "help": "Quantize the optimized artifact (int8). Only meaningful "
-                        "with optimize or target_format set.",
+                "help": "Export Depth Anything to an int8-quantized ONNX artifact "
+                        "and run it via onnxruntime in the background. Depth "
+                        "Anything is always converted to ONNX - device 'auto' "
+                        "format selection does not apply, and there is no "
+                        "calibration dataset option. Falls back to the "
+                        "top-level config 'optimize' when unset.",
             },
             "estimate_depth": {
                 "type": "toggle",

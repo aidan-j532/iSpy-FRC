@@ -270,10 +270,7 @@ class iSpyConfig:
 
         self._check_config()
         self._migrate_camera_configs()
-        self.camera_configs: dict[str, iSpyCameraConfig] = {
-            name: iSpyCameraConfig(cam_cfg)
-            for name, cam_cfg in self.config["camera_configs"].items()
-        }
+        self._rebuild_camera_configs()
         try:
             self._configure_logging()
         except Exception:
@@ -336,6 +333,26 @@ class iSpyConfig:
                 f"Available: {list(self.camera_configs)}"
             )
         return cfg
+
+    def _rebuild_camera_configs(self):
+        """Recreate the iSpyCameraConfig wrapper views from the current
+        raw entries, keeping them in sync with self.config["camera_configs"].
+
+        Web saves replace the whole camera_configs dict with a fresh deep
+        copy (Settings._post -> _update_config, CamerasModule._update_camera
+        -> set), which silently orphans the wrappers built in __init__ - the
+        shared-reference link breaks on the first save and every later
+        settings read through them returns stale values. The wrappers share
+        their nested pipeline dicts with the raw entries, so in-place edits
+        made by ensure_camera_entries_ready / _activate_optimized_model stay
+        visible."""
+        cams = self.config.get("camera_configs", {})
+        if not isinstance(cams, dict):
+            self.config["camera_configs"] = cams = {}
+        self.camera_configs = {
+            name: iSpyCameraConfig(cam_cfg)
+            for name, cam_cfg in cams.items()
+        }
 
     def load_from_file(self, file_path: str):
         try:
@@ -402,6 +419,10 @@ class iSpyConfig:
                 target[key] = {}
             target = target[key]
         target[keys[-1]] = value
+        if keys[-1] == "camera_configs":
+            # A whole-dict replacement orphans the wrapper views - rebuild
+            # them so config.camera_configs stays a live view of the config.
+            self._rebuild_camera_configs()
 
     def _update_config(self, data: dict, current_dict: dict = None):
         if current_dict is None:
@@ -425,6 +446,10 @@ class iSpyConfig:
                 else:
                     self.config[key] = json.loads(json.dumps(value))
                     ensure_camera_entries_ready(self.config[key])
+                    # Every camera entry was replaced with a fresh deep copy -
+                    # rebuild the wrapper views so they don't keep pointing at
+                    # the orphaned pre-save dicts.
+                    self._rebuild_camera_configs()
             elif (
                 isinstance(value, dict)
                 and key in current_dict
