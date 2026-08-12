@@ -38,7 +38,7 @@ class PathPlanner(TrackerBase):
     def get_fuel_positions(self):
         return self.fuel_positions
 
-    def update(self, fuel_list, robot_x, robot_y, robot_yaw):
+    def update(self, fuel_list, robot_x, robot_y, robot_yaw, robot_z: float = 0.0):
         self.fuel_positions, self.noise_positions = self._dbscan(fuel_list)
         return self.fuel_positions
 

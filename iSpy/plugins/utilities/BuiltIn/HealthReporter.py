@@ -127,7 +127,23 @@ class HealthReporter(UtilityBase):
         self._network_handler = None  # set externally after all utilities load
 
         if flask_app and FLASK_AVAILABLE:
-            flask_app.add_url_rule("/health/detailed", "health_detailed", self._health_route)
+            # The /health/detailed route is registered by the HealthModule web
+            # module at app startup - registering it again here breaks once
+            # the app has served its first request (and is a duplicate rule
+            # anyway), so only add it if it isn't already present.
+            registered = any(
+                rule.endpoint == "health_detailed"
+                for rule in flask_app.url_map.iter_rules()
+            )
+            if not registered:
+                try:
+                    flask_app.add_url_rule(
+                        "/health/detailed", "health_detailed", self._health_route
+                    )
+                except AssertionError:
+                    self.logger.warning(
+                        "/health/detailed already registered - skipping."
+                    )
         elif not FLASK_AVAILABLE:
             self.logger.warning("Flask not available - /health/detailed endpoint disabled.")
 

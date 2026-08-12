@@ -24,6 +24,6 @@ class YourTracker(TrackerBase):
         # enabled - there is no "enabled" flag.
         self.count = int(self.config.get("count_start", 0))
 
-    def update(self, fuel_list, robot_x, robot_y, robot_yaw):
+    def update(self, fuel_list, robot_x, robot_y, robot_yaw, robot_z: float = 0.0):
         self.count += 1
         return fuel_list  # or modify and return
