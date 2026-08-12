@@ -7,6 +7,7 @@ env/
 *.pyc
 *.pyo
 __pycache__/
+*.py.__pycache__/
 .pytest_cache/
 log.txt
 kernel.errors.txt
@@ -43,6 +44,7 @@ rknn_log.txt
 *config.json
 Config/config.json
 prompt.txt
+results.txt
 *.zip
 repomix-output.txt
 repomix-output.xml
