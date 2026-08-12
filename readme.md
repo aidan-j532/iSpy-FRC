@@ -129,13 +129,26 @@ The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on dep
     "unit": "meter",
     "auto_opt": true,
     "debug_mode": false,
-    "use_network_tables": true,
-    "network_tables_ip": "10.TE.AM.2",
-    "stale_threshold": 1.0,
-    "distance_threshold": 0.5,
-    "dbscan": {
-        "epsilon": 0.3,
-        "min_samples": 3
+    "plugins": {
+        "trackers": {
+            "object_tracker": {
+                "distance_threshold": 0.5,
+                "stale_threshold": 1.0
+            },
+            "path_planner": {
+                "epsilon": 0.3,
+                "min_samples": 3
+            }
+        },
+        "utilities": {
+            "network_table_handler": {
+                "network_tables_ip": "10.TE.AM.2"
+            },
+            "video_recorder": {
+                "record_dir": "VideoRecordings"
+            }
+        },
+        "frame_processors": {}
     },
     "camera_configs": {
         "front_cam": {
@@ -166,11 +179,26 @@ The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on dep
 |-----|-------------|
 | `auto_opt` | Automatically converts your `.pt` model to the fastest format for the current hardware |
 | `unit` | Output coordinate unit: `meter`, `inch`, `foot`, `centimeter` |
-| `network_tables_ip` | Robot IP - typically `10.TE.AM.2` where TEAM is your 4-digit team number |
-| `stale_threshold` | Seconds before a detection is considered stale (default `1.0`) |
-| `distance_threshold` | Merge radius for the object tracker in your chosen unit (default `0.5`) |
 | `debug_mode` | Draws bounding boxes and FPS on the video feed |
 | `margin` | Pixels to ignore at image edges (filters partial detections) |
+
+### Add-ons (plugins)
+
+Add-ons are enabled by their presence: `plugins.<type>.<name>` being present in
+the config (even as `{}`) enables it - remove the entry to disable it. No
+separate `enabled` flag exists. Each add-on's settings live inside its own
+entry; missing settings fall back to defaults declared by the add-on's schema.
+
+| Add-on | Default settings | What it does |
+|--------|------------------|-------------|
+| `trackers.object_tracker` | `distance_threshold: 0.5`, `stale_threshold: 1.0` | Stitches detections into a single object per camera; drops stale detections |
+| `trackers.path_planner` | `epsilon: 0.3`, `min_samples: 3` | DBSCAN clustering of tracked objects into game-piece piles |
+| `utilities.network_table_handler` | `network_tables_ip: "10.0.0.2"` | Publishes vision output to the robot over NetworkTables |
+| `utilities.video_recorder` | `record_dir: "VideoRecordings"`, `fps: 30.0`, `max_queue: 300`, `downsample: 1` | Saves the annotated video feed to disk |
+| `utilities.health_reporter` | `stale_threshold: 1.0` | Serves camera/vision health over HTTP + NetworkTables |
+
+All add-ons (enabled state, settings) are managed from the **Add-ons page** in
+the web UI.
 
 ### Camera calibration
 
@@ -251,12 +279,32 @@ from iSpy.plugins.bases import TrackerBase
 class MyTracker(TrackerBase):
     plugin_name = "my_tracker"
 
+    @classmethod
+    def config_schema(cls):
+        return {
+            "merge_radius": {
+                "type": "number",
+                "label": "Merge Radius",
+                "default": 0.5,
+                "hint": "Radius to merge nearby detections",
+            },
+        }
+
+    def __init__(self, context: dict):
+        super().__init__(context)
+        # context["config"] is your OWN settings (iSpyAddonConfig view,
+        # schema defaults merged in); context["global_config"],
+        # context["cameras"], context["flask_app"], context["vision_instance"]
+        # give access to the rest of iSpy.
+        self.merge_radius = self.config.get("merge_radius", 0.5)
+
     def update(self, fuel_list, robot_x, robot_y, robot_yaw):
         # filter, smooth, or modify detections here
         return fuel_list
 ```
 
-Then add `"my_tracker"` to `plugins.trackers` in your config.
+Then add `"my_tracker": {}` (or with your settings) to `plugins.trackers` in
+your config - its presence enables it:
 
 ### Custom utility (Flask route, side effect, etc.)
 
@@ -280,7 +328,9 @@ class MyUtility(UtilityBase):
         return "hello from my plugin"
 ```
 
-Then add `"my_utility"` to `plugins.utilities` in your config.
+Then add `"my_utility": {}` to `plugins.utilities` in your config - its
+presence enables it. Settings declared in `config_schema()` are editable from
+the Add-ons page in the web UI and arrive in `context["config"]`.
 
 ---
 
