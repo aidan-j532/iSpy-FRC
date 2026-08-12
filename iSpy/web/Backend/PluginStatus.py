@@ -255,7 +255,7 @@ class PluginStatusModule(WebModule):
             # user settings are preserved if the entry already has them.
             defaults = {}
             try:
-                schema = cls.config_schema() or {}
+                schema = discovered[name].config_schema() or {}
             except Exception:
                 logger.warning("Failed to load config schema for add-on '%s'", name)
                 schema = {}

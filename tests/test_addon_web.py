@@ -106,7 +106,10 @@ class PluginStatusModuleTests(unittest.TestCase):
             resp = mod._toggle()
         self.assertTrue(resp.get_json()["success"])
         self.assertIn("object_tracker", cfg.config["plugins"]["trackers"])
-        self.assertEqual(cfg.config["plugins"]["trackers"]["object_tracker"], {})
+        self.assertEqual(
+            cfg.config["plugins"]["trackers"]["object_tracker"],
+            {"distance_threshold": 0.5, "stale_threshold": 1.0},
+        )
 
     def test_toggle_disable_removes_dict_entry(self):
         mod, cfg = self._module({
