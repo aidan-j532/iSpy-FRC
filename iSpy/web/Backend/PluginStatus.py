@@ -249,7 +249,20 @@ class PluginStatusModule(WebModule):
                        "frame_processor": "frame_processors"}[plugin_type]
 
         if enable:
-            config.enable_addon(config_type, name, save=False)
+            # Write the add-on's schema defaults into the config entry so the
+            # settings are visible in Config/config.json immediately (not an
+            # empty {} that only gets values after a manual save). Explicit
+            # user settings are preserved if the entry already has them.
+            defaults = {}
+            try:
+                schema = cls.config_schema() or {}
+            except Exception:
+                logger.warning("Failed to load config schema for add-on '%s'", name)
+                schema = {}
+            for _key, _defn in schema.items():
+                if isinstance(_defn, dict) and "default" in _defn:
+                    defaults[_key] = _defn["default"]
+            config.enable_addon(config_type, name, settings=defaults, save=False)
         else:
             config.disable_addon(config_type, name, save=False)
         config.save()
