@@ -31,7 +31,7 @@ class iSpyWebApp:
         )
         context = {
             "config": config,
-            "cameras": cameras,
+            "cameras": cameras or [],
             "flask_app": self.flask_app,
             "vision_instance": None,  # set later via set_vision_instance()
         }
@@ -73,6 +73,18 @@ class iSpyWebApp:
     def set_vision_instance(self, vision):
         """Called by iSpy.py once trackers/utilities/frame_processors exist."""
         self.context["vision_instance"] = vision
+
+    def set_cameras(self, cameras):
+        """Hand the constructed camera pipelines to a dashboard that was
+        booted before they existed (see game_loop.main). Modules that cached
+        the camera list eagerly in __init__ are updated via set_cameras()."""
+        self.context["cameras"] = cameras
+        for name, mod in self.modules.items():
+            if hasattr(mod, "set_cameras"):
+                try:
+                    mod.set_cameras(cameras)
+                except Exception:
+                    self.logger.exception("Web module '%s' set_cameras failed", name)
 
     def run(self, host="0.0.0.0", port=5000):
         self.flask_app.run(host=host, port=port, threaded=True)

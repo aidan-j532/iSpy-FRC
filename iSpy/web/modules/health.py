@@ -39,6 +39,9 @@ class HealthModule(WebModule):
     def set_network_handler(self, handler):
         self._network_handler = handler
 
+    def set_cameras(self, cameras):
+        self.cameras = cameras
+
     def register_routes(self, flask_app):
         # Minimal machine-readable contract for watchdogs/external monitors.
         # Keep this endpoint's shape stable - external tooling may depend on it.

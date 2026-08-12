@@ -27,7 +27,7 @@ while not (PROJECT_ROOT / "plugins").exists():
 _PLUGIN_ROOT = PROJECT_ROOT / "plugins"
 
 class iSpy:
-    def __init__(self, cameras: list[VisionPipeline], config: iSpyConfig):
+    def __init__(self, cameras: list[VisionPipeline], config: iSpyConfig, web_app=None):
         self.cameras = cameras
         self.config = config
 
@@ -48,7 +48,14 @@ class iSpy:
         else:
             self.logger.info("%d cameras - multi mode.", len(cameras))
             self.camera_handler = MultipleCameraHandler(cameras, config)
-        self.web_app = create_app(cameras=cameras, config=config) if config["app_mode"] else None
+        self.web_app = web_app
+        if self.web_app is None and config["app_mode"]:
+            self.web_app = create_app(cameras=cameras, config=config)
+        if self.web_app is not None:
+            # The dashboard may have booted before the camera pipelines
+            # existed (game_loop boots it first so it is reachable during
+            # the slow camera/model initialization); hand them over now.
+            self.web_app.set_cameras(cameras)
 
         # Shared context handed to every add-on; each add-on's constructor
         # receives its OWN view of its settings via iSpy._addon_context.
@@ -109,7 +116,10 @@ class iSpy:
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
         if self.web_app:
-            threading.Thread(target=self.web_app.run, daemon=True).start()
+            if web_app is None:
+                # Only start the server when we created it here; a pre-booted
+                # app was already serving before the cameras finished loading.
+                threading.Thread(target=self.web_app.run, daemon=True).start()
             dash = self.web_app.modules.get("dashboard")
             if dash and hasattr(dash, "set_plugins"):
                 dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
