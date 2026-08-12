@@ -96,8 +96,20 @@ _HTML = """<!DOCTYPE html>
 class HealthReporter(UtilityBase):
     plugin_name = "health_reporter"
 
+    @classmethod
+    def config_schema(cls) -> dict:
+        return {
+            "stale_threshold": {
+                "type": "number",
+                "label": "Stale Threshold (s)",
+                "hint": "Frames older than this (s) mark a camera or the main "
+                        "loop as stale/degraded.",
+                "default": 1.0,
+            },
+        }
+
     def __init__(self, context: dict):
-        config = context["config"]
+        super().__init__(context)
         flask_app = context.get("flask_app")
         self.cameras = context.get("cameras", [])
         self.logger = logging.getLogger(__name__)
@@ -109,7 +121,9 @@ class HealthReporter(UtilityBase):
         self._last_tick = time.perf_counter()
         self._uptime_start = time.perf_counter()
         self._loop_count = 0
-        self._stale_threshold = config.get("stale_threshold", 1.0)
+        # stale_threshold used to be a top-level config key - it now lives in
+        # this add-on's own settings.
+        self._stale_threshold = self.config.get("stale_threshold", 1.0)
         self._network_handler = None  # set externally after all utilities load
 
         if flask_app and FLASK_AVAILABLE:

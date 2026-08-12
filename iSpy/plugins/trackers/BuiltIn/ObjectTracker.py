@@ -3,7 +3,6 @@ import math
 import logging
 
 from iSpy.plugins.bases import TrackerBase
-from iSpy.config.iSpyConfig import iSpyConfig
 from iSpy.vision.Object import Object
 
 _EMA_ALPHA = 0.3
@@ -11,12 +10,33 @@ _EMA_ALPHA = 0.3
 class ObjectTracker(TrackerBase):
     plugin_name = "object_tracker"
 
-    def __init__(self, config: iSpyConfig):
+    @classmethod
+    def config_schema(cls) -> dict:
+        return {
+            "distance_threshold": {
+                "type": "number",
+                "label": "Merge Distance (m)",
+                "hint": "Detections closer than this to an existing tracked "
+                        "object (m) are merged into it instead of spawning a "
+                        "new one.",
+                "default": 0.5,
+            },
+            "stale_threshold": {
+                "type": "number",
+                "label": "Stale Threshold (s)",
+                "hint": "Tracked objects not seen for this many seconds are "
+                        "dropped.",
+                "default": 1.0,
+            },
+        }
+
+    def __init__(self, context: dict):
+        super().__init__(context)
         self.logger = logging.getLogger(__name__)
 
         self.fuel_list: list[Object] = []
 
-        raw_threshold = config.get("distance_threshold", 0.5)
+        raw_threshold = self.config.get("distance_threshold", 0.5)
         if raw_threshold is None or raw_threshold < 0:
             self.distance_threshold = 0.5
             self.logger.warning(
@@ -25,7 +45,7 @@ class ObjectTracker(TrackerBase):
         else:
             self.distance_threshold = float(raw_threshold)
 
-        self.stale_threshold = float(config.get("stale_threshold", 1.0))
+        self.stale_threshold = float(self.config.get("stale_threshold", 1.0))
 
     def update(
         self,

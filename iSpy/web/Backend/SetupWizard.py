@@ -51,10 +51,20 @@ class SetupWizardModule(WebModule):
             config = self.context["config"]
             if "unit" in data:
                 config.set("unit", data["unit"])
-            if "use_network_tables" in data:
-                config.set("use_network_tables", data["use_network_tables"])
-            if "network_tables_ip" in data:
-                config.set("network_tables_ip", data["network_tables_ip"])
+            # Legacy wizard payloads carried use_network_tables /
+            # network_tables_ip as top-level keys. NetworkTables is now an
+            # add-on: enabling it means the network_table_handler utility is
+            # present in the config; its IP lives in the add-on's settings.
+            if "use_network_tables" in data or "network_tables_ip" in data:
+                if data.get("use_network_tables"):
+                    config.update_addon_settings(
+                        "utilities", "network_table_handler",
+                        {"network_tables_ip": data.get("network_tables_ip", "10.0.0.2")},
+                        save=False,
+                    )
+                    config.enable_addon("utilities", "network_table_handler", save=False)
+                else:
+                    config.disable_addon("utilities", "network_table_handler", save=False)
             config.set("camera_configs", data["camera_configs"])
             # Normalize entries (nested pipeline layout, default vision_model
             # for model-backed pipelines) so the first run is valid.

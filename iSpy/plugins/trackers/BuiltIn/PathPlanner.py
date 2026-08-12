@@ -1,14 +1,33 @@
 import numpy as np
 from iSpy.plugins.bases import TrackerBase
-from iSpy.config.iSpyConfig import iSpyConfig
 from iSpy.algorithms.CustomDBScan import CustomDBScan
 
 class PathPlanner(TrackerBase):
     plugin_name = "path_planner"
 
-    def __init__(self, config: iSpyConfig):
-        self.epsilon = config["dbscan"]["epsilon"]
-        self.min_samples = config["dbscan"]["min_samples"]
+    @classmethod
+    def config_schema(cls) -> dict:
+        return {
+            "epsilon": {
+                "type": "number",
+                "label": "Cluster Radius (m)",
+                "hint": "DBSCAN epsilon - detections within this distance (m) "
+                        "of each other form a cluster.",
+                "default": 0.3,
+            },
+            "min_samples": {
+                "type": "number",
+                "label": "Min Cluster Size",
+                "hint": "DBSCAN min_samples - clusters smaller than this are "
+                        "treated as noise.",
+                "default": 3,
+            },
+        }
+
+    def __init__(self, context: dict):
+        super().__init__(context)
+        self.epsilon = float(self.config.get("epsilon", 0.3))
+        self.min_samples = int(self.config.get("min_samples", 3))
 
         self.fuel_positions = []
         self.noise_positions = []

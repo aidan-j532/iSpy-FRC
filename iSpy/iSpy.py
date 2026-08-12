@@ -13,6 +13,7 @@ from iSpy.validations.model_validator import (
 )
 from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import TrackerBase, UtilityBase, FrameProcessorBase
+from iSpy.config.iSpyConfig import iSpyAddonConfig
 from wpimath.geometry import Pose2d
 from iSpy.web.Backend.WebApp import create_app
 
@@ -47,18 +48,13 @@ class iSpy:
         else:
             self.logger.info("%d cameras - multi mode.", len(cameras))
             self.camera_handler = MultipleCameraHandler(cameras, config)
-        tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)
-        self.trackers = {}  # No default trackers
-        for name in config.get_nested("plugins", "trackers", default=[]):
-            if name in tracker_classes:
-                self.trackers[name] = tracker_classes[name](config)
-            else:
-                self.logger.warning("Unknown tracker: %s", name)
-
         self.web_app = create_app(cameras=cameras, config=config) if config["app_mode"] else None
 
-        context = {
+        # Shared context handed to every add-on; each add-on's constructor
+        # receives its OWN view of its settings via iSpy._addon_context.
+        self._base_context = {
             "config": config,
+            "global_config": config,
             "cameras": self.cameras,
             "flask_app": self.web_app.flask_app if self.web_app else None,
             # HealthModule/PluginStatusModule read this lazily per-request,
@@ -66,13 +62,25 @@ class iSpy:
             "vision_instance": self,
         }
 
+        tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)
+        self.trackers = {}  # No default trackers
+        for name, settings in self._enabled_addons("trackers"):
+            if name in tracker_classes:
+                self.trackers[name] = tracker_classes[name](
+                    self._addon_context(tracker_classes[name], settings)
+                )
+            else:
+                self.logger.warning("Unknown tracker: %s", name)
+
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
         self.utilities = {}
 
-        for name in config.get_nested("plugins", "utilities", default=[]):
+        for name, settings in self._enabled_addons("utilities"):
             if name in utility_classes:
                 try:
-                    self.utilities[name] = utility_classes[name](context)
+                    self.utilities[name] = utility_classes[name](
+                        self._addon_context(utility_classes[name], settings)
+                    )
                 except Exception:
                     self.logger.exception("Failed to initialize utility plugin: %s", name)
             else:
@@ -80,10 +88,12 @@ class iSpy:
 
         frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", FrameProcessorBase)
         self.frame_processors = {}
-        for name in config.get_nested("plugins", "frame_processors", default=[]):
+        for name, settings in self._enabled_addons("frame_processors"):
             if name in frame_processor_classes:
                 try:
-                    self.frame_processors[name] = frame_processor_classes[name](context)
+                    self.frame_processors[name] = frame_processor_classes[name](
+                        self._addon_context(frame_processor_classes[name], settings)
+                    )
                 except Exception:
                     self.logger.exception("Failed to initialize frame processor: %s", name)
             else:
@@ -116,6 +126,28 @@ class iSpy:
         # I think has to be at very bottom
         if self.web_app:
             self.web_app.set_vision_instance(self)
+
+    def _enabled_addons(self, addon_type: str) -> list[tuple[str, dict]]:
+        """(name, settings) pairs from plugins.<type>. Presence == enabled, so
+        only dict entries are returned; entries with non-dict values are
+        treated as enabled with no settings."""
+        raw = self.config.get_nested("plugins", addon_type, default={})
+        if not isinstance(raw, dict):
+            return []
+        out = []
+        for name, settings in raw.items():
+            if not isinstance(name, str):
+                continue
+            out.append((name, settings if isinstance(settings, dict) else {}))
+        return out
+
+    def _addon_context(self, addon_cls, settings: dict) -> dict:
+        """Context for one add-on instance: the shared context plus an
+        iSpyAddonConfig view of the add-on's own settings (schema defaults
+        merged in)."""
+        ctx = dict(self._base_context)
+        ctx["config"] = iSpyAddonConfig(settings, defaults=addon_cls.default_settings())
+        return ctx
 
     def _silence_external_loggers(self):
         for name in logging.root.manager.loggerDict:

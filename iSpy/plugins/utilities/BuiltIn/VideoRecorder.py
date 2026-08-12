@@ -26,16 +26,47 @@ def _best_codec():
 class VideoRecorder(UtilityBase):
     plugin_name = "video_recorder"
 
+    @classmethod
+    def config_schema(cls) -> dict:
+        return {
+            "record_dir": {
+                "type": "text",
+                "label": "Output Directory",
+                "hint": "Where recording files are written.",
+                "default": "VideoRecordings",
+            },
+            "fps": {
+                "type": "number",
+                "label": "Recording FPS",
+                "hint": "Frames per second stored in the recording file.",
+                "default": 30.0,
+            },
+            "max_queue": {
+                "type": "number",
+                "label": "Max Queue",
+                "hint": "Maximum buffered frames before dropping.",
+                "default": 300,
+            },
+            "downsample": {
+                "type": "number",
+                "label": "Downsample",
+                "hint": "Record every Nth frame (1 = every frame).",
+                "default": 1,
+            },
+        }
+
     def __init__(self, context: dict):
-        config = context["config"]
+        super().__init__(context)
         self.logger = logging.getLogger(__name__)
-        self._enabled = config.get("record_mode", False)
-        self._output_dir = config.get("record_dir", "VideoRecordings")
-        self._fps = 30.0
+        # No "enabled" flag: being present in the config IS the switch.
+        # record_mode/record_dir used to be top-level config keys - they now
+        # live in this add-on's own settings.
+        self._output_dir = self.config.get("record_dir", "VideoRecordings")
+        self._fps = float(self.config.get("fps", 30.0))
         self._forced_codec = None
         self._forced_ext = None
-        self._max_queue = 300
-        self._downsample = 1
+        self._max_queue = int(self.config.get("max_queue", 300))
+        self._downsample = max(1, int(self.config.get("downsample", 1)))
 
         self._queue = queue.Queue(maxsize=self._max_queue)
         self._writer = None
@@ -46,16 +77,12 @@ class VideoRecorder(UtilityBase):
         self._dropped = 0
         self._size = None
 
-        if self._enabled:
-            os.makedirs(self._output_dir, exist_ok=True)
+        os.makedirs(self._output_dir, exist_ok=True)
 
     def start(self):
         pass
 
     def update(self, frame_data: dict):
-        if not self._enabled:
-            return
-
         frame = frame_data.get("frame")
         if frame is None:
             return

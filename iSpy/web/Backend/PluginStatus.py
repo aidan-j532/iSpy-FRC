@@ -30,6 +30,37 @@ _TYPE_MAP = {
 
 _NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
+_ADDON_TYPES_FROM_PTYPE = {
+    "tracker": "trackers", "utility": "utilities",
+    "frame_processor": "frame_processors",
+}
+
+
+def _coerce_setting_value(value, defn: dict):
+    """Validate + coerce one add-on setting against its schema definition.
+    Raises ValueError with a human-readable message on bad input."""
+    if not isinstance(defn, dict):
+        return value
+    stype = defn.get("type")
+    if stype == "number":
+        if isinstance(value, bool):
+            raise ValueError(f"'{defn.get('label', 'value')}' must be a number")
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"'{defn.get('label', 'value')}' must be a number, got {value!r}"
+            ) from None
+        # numbers stay ints when the JSON payload was an int
+        return int(num) if isinstance(value, int) and not isinstance(value, bool) else num
+    if stype == "toggle":
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+    if stype == "text":
+        return str(value)
+    return value
+
 
 def _build_vision_pipeline_payloads():
     from iSpy.vision.pipelines import get_pipeline_classes
@@ -74,6 +105,7 @@ class PluginStatusModule(WebModule):
         flask_app.add_url_rule("/api/plugins/status", "api_plugins_status", self._status)
         flask_app.add_url_rule("/api/plugins/available", "api_plugins_available", self._available)
         flask_app.add_url_rule("/api/plugins/toggle", "api_plugins_toggle", self._toggle, methods=["POST"])
+        flask_app.add_url_rule("/api/plugins/settings", "api_plugins_settings", self._save_settings, methods=["POST"])
         flask_app.add_url_rule("/api/plugins/upload", "api_plugins_upload", self._upload, methods=["POST"])
         flask_app.add_url_rule("/api/plugins/create", "api_plugins_create", self._create, methods=["POST"])
         flask_app.add_url_rule("/api/plugins/<ptype>/<name>", "api_plugins_delete", self._delete, methods=["DELETE"])
@@ -104,11 +136,6 @@ class PluginStatusModule(WebModule):
 
     def _available(self):
         config = self.context.get("config")
-        enabled = {
-            "tracker": list(config.get_nested("plugins", "trackers", default=[])) if config else [],
-            "utility": list(config.get_nested("plugins", "utilities", default=[])) if config else [],
-            "frame_processor": list(config.get_nested("plugins", "frame_processors", default=[])) if config else [],
-        }
 
         available = []
         for ptype, (subdir, base_cls, _, _) in _TYPE_MAP.items():
@@ -128,13 +155,27 @@ class PluginStatusModule(WebModule):
                 continue
             discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
             for name, cls in discovered.items():
+                settings = {}
+                enabled = False
+                if config:
+                    addon_settings = config.get_addon_settings(_TYPE_MAP[ptype][0], name)
+                    if addon_settings is not None:
+                        enabled = True
+                        settings = addon_settings
+                try:
+                    schema = cls.config_schema()
+                except Exception:
+                    logger.warning("Failed to load config schema for add-on '%s'", name)
+                    schema = {}
                 available.append({
                     "name": name,
                     "type": ptype,
-                    "enabled": name in enabled[ptype],
+                    "enabled": enabled,
                     "builtin": False,
                     "doc": (cls.__doc__ or "").strip()[:200],
                     "filename": self._filename_for(subdir, name),
+                    "config_schema": schema if isinstance(schema, dict) else {},
+                    "settings": settings,
                 })
         return jsonify(available=available)
 
@@ -202,19 +243,78 @@ class PluginStatusModule(WebModule):
         if not config:
             return jsonify(error="No config available"), 500
 
-        config_key = {"tracker": "trackers", "utility": "utilities",
-                      "frame_processor": "frame_processors"}[plugin_type]
-        current = list(config.get_nested("plugins", config_key, default=[]))
+        # plugins.<type> is a dict of enabled add-on -> settings; presence IS
+        # the enabled state, so toggling adds/removes the entry.
+        config_type = {"tracker": "trackers", "utility": "utilities",
+                       "frame_processor": "frame_processors"}[plugin_type]
 
-        if enable and name not in current:
-            current.append(name)
-        elif not enable and name in current:
-            current.remove(name)
-
-        config.config.setdefault("plugins", {})[config_key] = current
+        if enable:
+            config.enable_addon(config_type, name, save=False)
+        else:
+            config.disable_addon(config_type, name, save=False)
         config.save()
 
-        return jsonify(success=True, enabled_list=current, needs_restart=True)
+        return jsonify(success=True, enabled=config.is_addon_enabled(config_type, name),
+                       needs_restart=True)
+
+    # ---------- settings (edit an enabled add-on's settings) ----------
+
+    def _save_settings(self):
+        data = request.get_json(force=True)
+        name = data.get("name")
+        plugin_type = data.get("type")
+        settings = data.get("settings") or {}
+
+        if not name or plugin_type not in _TYPE_MAP:
+            return jsonify(error="Missing/invalid name or type"), 400
+        if plugin_type == "vision_pipeline":
+            return jsonify(
+                error="Vision pipelines are configured per camera - their "
+                      "settings are not edited here."
+            ), 400
+        if not isinstance(settings, dict):
+            return jsonify(error="settings must be a JSON object"), 400
+
+        subdir, base_cls, _, _ = _TYPE_MAP[plugin_type]
+        discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
+        cls = discovered.get(name)
+        if cls is None:
+            return jsonify(error=f"Unknown {plugin_type} addon: '{name}'"), 404
+
+        config = self.context.get("config")
+        if not config:
+            return jsonify(error="No config available"), 500
+
+        config_type = {"tracker": "trackers", "utility": "utilities",
+                       "frame_processor": "frame_processors"}[plugin_type]
+        if not config.is_addon_enabled(config_type, name):
+            return jsonify(
+                error=f"'{name}' is not enabled - enable it first, then edit "
+                      f"its settings."
+            ), 409
+
+        # Validate + coerce against the add-on's schema so bad values never
+        # reach the config. Unknown keys are rejected - this config is
+        # forward-only and typo-proof.
+        try:
+            schema = cls.config_schema() or {}
+        except Exception:
+            schema = {}
+        clean = {}
+        for key, value in settings.items():
+            defn = schema.get(key)
+            if defn is None:
+                return jsonify(error=f"Unknown setting '{key}' for add-on '{name}'"), 400
+            try:
+                clean[key] = _coerce_setting_value(value, defn)
+            except ValueError as e:
+                return jsonify(error=str(e)), 400
+
+        config.update_addon_settings(config_type, name, clean, save=False)
+        config.save()
+
+        return jsonify(success=True, settings=config.get_addon_settings(config_type, name),
+                       needs_restart=True)
 
     # ---------- create / upload / delete ----------
 
@@ -343,13 +443,9 @@ class PluginStatusModule(WebModule):
                 continue
 
         if config and plugin_name:
-            config_key = {"tracker": "trackers", "utility": "utilities",
-                          "frame_processor": "frame_processors"}[ptype]
-            current = list(config.get_nested("plugins", config_key, default=[]))
-            if plugin_name in current:
-                current.remove(plugin_name)
-                config.config.setdefault("plugins", {})[config_key] = current
-                config.save()
+            config_key = _ADDON_TYPES_FROM_PTYPE[ptype]
+            config.disable_addon(config_key, plugin_name, save=False)
+            config.save()
 
         path.unlink()
         return jsonify(success=True, note="Add-on deleted. Restart vision to apply.")

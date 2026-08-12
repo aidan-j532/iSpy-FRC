@@ -1,3 +1,17 @@
+def _addon_setting(config: dict, addon_type: str, addon_name: str,
+                   key: str, default=None):
+    """One setting from an add-on's config entry. Add-ons live at
+    plugins.<type>.<name> as dicts; presence == enabled, so settings only
+    exist for enabled add-ons."""
+    try:
+        entry = config["plugins"][addon_type][addon_name]
+    except (KeyError, TypeError):
+        return default
+    if not isinstance(entry, dict):
+        return default
+    return entry.get(key, default)
+
+
 def get_structured_recommendations(config: dict) -> list[dict]:
     out = []
     def add(severity, key, message):
@@ -16,18 +30,25 @@ def get_structured_recommendations(config: dict) -> list[dict]:
             add("normal", f"deviceid.{cam_name}",
                 f"Camera '{cam_name}' has no saved device_id - it may not survive a USB replug/reindex.")
 
-    dbscan = config.get("dbscan", {})
-    if dbscan.get("epsilon", 0) == 0:
-        add("normal", "dbscan_eps", "DBSCAN epsilon is 0 - clustering is disabled.")
+    # DBSCAN / tracking settings belong to their add-ons now. Absent add-on
+    # (not enabled) = no recommendation, since the add-on is not running.
+    if _addon_setting(config, "trackers", "path_planner", "epsilon", 0) == 0:
+        add("normal", "dbscan_eps",
+            "PathPlanner DBSCAN epsilon is 0 - clustering is disabled.")
 
     if not config.get("camera_configs"):
         add("critical", "no_cameras", "No cameras configured - vision cannot run.")
 
-    dist_thresh = config.get("distance_threshold", -1)
+    dist_thresh = _addon_setting(config, "trackers", "object_tracker",
+                                 "distance_threshold", None)
     if dist_thresh is not None and dist_thresh > 1.5:
-        add("normal", "dist_thresh", f"distance_threshold is large ({dist_thresh}m) - different objects may merge.")
+        add("normal", "dist_thresh",
+            f"object_tracker distance_threshold is large ({dist_thresh}m) - "
+            "different objects may merge.")
 
-    if config.get("use_network_tables") and not config.get("network_tables_ip"):
-        add("critical", "nt_no_ip", "NetworkTables is enabled but no IP is set.")
+    if _addon_setting(config, "utilities", "network_table_handler",
+                      "network_tables_ip", "") == "":
+        add("critical", "nt_no_ip",
+            "network_table_handler is enabled but no network_tables_ip is set.")
 
     return out

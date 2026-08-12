@@ -68,6 +68,19 @@ def run_unit_tests() -> None:
 
     logger.info("All unit tests passed.")
 
+def get_addon_setting(config: dict, addon_type: str, addon_name: str,
+                      key: str, default=None):
+    """One setting from an add-on's config entry. Add-ons live at
+    plugins.<type>.<name> as dicts; presence == enabled."""
+    try:
+        entry = config["plugins"][addon_type][addon_name]
+    except (KeyError, TypeError):
+        return default
+    if not isinstance(entry, dict):
+        return default
+    return entry.get(key, default)
+
+
 def validate_config_required_fields(config_path: str = "Config/config.json") -> None:
     import json
     from pathlib import Path
@@ -138,7 +151,10 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
     if model_cameras == 0:
         raise ValueError("No camera has a vision_model configured")
 
-    ip = config.get("network_tables_ip")
+    # network_tables_ip is an add-on setting now (network_table_handler
+    # utility); only validated when the add-on is enabled.
+    ip = get_addon_setting(config, "utilities", "network_table_handler",
+                           "network_tables_ip")
     if ip:
         ip_parts = ip.split(".")
         if len(ip_parts) != 4:
@@ -160,11 +176,19 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
     config = data.get("config", data)
     recommendations = []
 
-    dbscan = config.get("dbscan", {})
-    epsilon = dbscan.get("epsilon", 0)
-    min_samples = dbscan.get("min_samples", 0)
+    # Add-on settings live in plugins.<type>.<name>; absent add-on = disabled.
+    dbscan_epsilon = get_addon_setting(config, "trackers", "path_planner",
+                                       "epsilon")
+    dbscan_min_samples = get_addon_setting(config, "trackers", "path_planner",
+                                           "min_samples")
+    epsilon = dbscan_epsilon if dbscan_epsilon is not None else 0
+    min_samples = dbscan_min_samples if dbscan_min_samples is not None else 0
 
-    if epsilon == 0:
+    if dbscan_epsilon is None:
+        recommendations.append(
+            "PathPlanner tracker is not enabled - no clustering configured."
+        )
+    elif epsilon == 0:
         recommendations.append(
             "DBSCAN epsilon is 0 - clustering is disabled. "
             "Set 'dbscan.epsilon' to a positive value (e.g., 0.3 for meters) to enable clustering."
@@ -191,8 +215,14 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
             "Only dense clusters will be kept. May miss sparse detections."
         )
 
-    dist_threshold = config.get("distance_threshold", -1)
-    if dist_threshold is None or dist_threshold < 0:
+    dist_threshold = get_addon_setting(config, "trackers", "object_tracker",
+                                       "distance_threshold")
+    if dist_threshold is None:
+        recommendations.append(
+            "object_tracker tracker is not enabled - no object merging configured. "
+            "Enable it and verify distance_threshold (default 0.5m) for your game pieces."
+        )
+    elif dist_threshold < 0:
         recommendations.append(
             "distance_threshold is negative/unset - using default 0.5m. "
             "Verify this merge distance works for your game pieces."
@@ -267,14 +297,23 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
                 "Most models expect square input. This may cause issues."
             )
 
-    ip = config.get("network_tables_ip", "")
-    if ip == "10.22.7.2":
+    nt_ip = get_addon_setting(config, "utilities", "network_table_handler",
+                              "network_tables_ip")
+    if nt_ip is None:
+        recommendations.append(
+            "NetworkTables utility not enabled - vision data is not published to the robot."
+        )
+    elif nt_ip == "10.22.7.2":
         recommendations.append(
             "NetworkTables IP is default (10.22.7.2). "
             "Verify this matches your robot's IP address."
         )
 
-    stale = config.get("stale_threshold", 1.0)
+    stale = get_addon_setting(config, "utilities", "health_reporter",
+                              "stale_threshold",
+                              get_addon_setting(config, "trackers",
+                                                "object_tracker",
+                                                "stale_threshold", 1.0))
     if stale > 3.0:
         recommendations.append(
             f"stale_threshold is high ({stale}s). "

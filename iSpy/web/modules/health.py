@@ -29,7 +29,11 @@ class HealthModule(WebModule):
         self._loop_count = 0
         self._last_tick = time.perf_counter()
         self._uptime_start = time.perf_counter()
-        self._stale_threshold = config.get("stale_threshold", 1.0)
+        # stale_threshold used to be a global config key; it now belongs to
+        # the health_reporter add-on (schema default 1.0 when not enabled).
+        self._stale_threshold = config.get_addon_setting(
+            "utilities", "health_reporter", "stale_threshold", 1.0
+        )
         self._network_handler = None  # wired externally, see iSpy.py
 
     def set_network_handler(self, handler):

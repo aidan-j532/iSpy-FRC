@@ -35,6 +35,53 @@ _LEGACY_SETTING_ALIASES = {
     "quantized": "quantize",
 }
 
+# ---------------------------------------------------------------------------
+# Add-on (plugin) configuration
+#
+# Add-ons are configured as dicts, one entry per enabled add-on, where the
+# value is that add-on's OWN settings:
+#
+#     "plugins": {
+#         "trackers": {
+#             "object_tracker": {"distance_threshold": 0.5, "stale_threshold": 1.0},
+#             "path_planner":   {"epsilon": 0.3, "min_samples": 3},
+#         },
+#         "utilities": {
+#             "network_table_handler": {"network_tables_ip": "10.0.0.2"},
+#         },
+#         "frame_processors": {},
+#     }
+#
+# An add-on that is present in its dict is ENABLED; removing it disables it -
+# there is no separate "enabled" flag. Settings that used to live at the top
+# level of the config (dbscan, distance_threshold, stale_threshold,
+# record_mode, record_dir, use_network_tables, network_tables_ip) now live
+# inside the add-on they belong to.
+# ---------------------------------------------------------------------------
+
+_ADDON_TYPES = ("trackers", "utilities", "frame_processors")
+
+# Top-level legacy keys that were folded into individual add-ons. (key, addon
+# type, addon name, target setting key) - used by _migrate_addons.
+_ADDON_LEGACY_FOLDS = (
+    ("dbscan",           "trackers",    "object_tracker", None),  # special: dict
+    ("distance_threshold", "trackers",  "object_tracker", "distance_threshold"),
+    ("stale_threshold",  "trackers",    "object_tracker", "stale_threshold"),
+    ("stale_threshold",  "utilities",   "health_reporter", "stale_threshold"),
+)
+
+# Legacy top-level flags that decided whether an add-on was enabled. The flag
+# value itself is discarded once it has been translated into add-on presence.
+_ADDON_LEGACY_FLAGS = {
+    "use_network_tables": ("utilities", "network_table_handler"),
+    "record_mode": ("utilities", "video_recorder"),
+}
+
+_ADDON_LEGACY_SETTINGS = {
+    "network_tables_ip": ("utilities", "network_table_handler", "network_tables_ip"),
+    "record_dir": ("utilities", "video_recorder", "record_dir"),
+}
+
 
 def _normalize_vision_model_settings(settings: dict) -> None:
     """Drop user-facing settings duplicated inside the vision_model block.
@@ -179,17 +226,10 @@ class iSpyConfig:
             "device": 0,
             "unit": "meter",
             "debug_mode": True,
-            "dbscan": {"epsilon": 0.3, "min_samples": 3},
-            "distance_threshold": 0.5,
-            "stale_threshold": 1.0,
-            "record_mode": True,
-            "record_dir": "VideoRecordings",
             "frame_sync": False,
             "optimize": False,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
-            "use_network_tables": False,
-            "network_tables_ip": "10.0.0.2",
             "metrics": True,
             "app_mode": True,
             "max_fps": 0,
@@ -252,11 +292,15 @@ class iSpyConfig:
                 }
             },
             "plugins": {
-                # "trackers": ["object_tracker", "path_planner"],
-                # "utilities": ["video_recorder", "health_reporter"],
-                "trackers": [],
-                "utilities": [],
-                "frame_processors": []
+                # Enabled add-ons only. Each entry maps an add-on name to a
+                # dict of that add-on's own settings (schema defaults apply at
+                # runtime, so omitted keys are fine). Removing an entry
+                # disables the add-on - there is no "enabled" flag.
+                # "trackers": {"object_tracker": {"distance_threshold": 0.5}},
+                # "utilities": {"network_table_handler": {"network_tables_ip": "10.0.0.2"}},
+                "trackers": {},
+                "utilities": {},
+                "frame_processors": {}
             },
         }
         self.config = json.loads(json.dumps(self.default_config))
@@ -269,6 +313,7 @@ class iSpyConfig:
             self.load_from_file(file_path)
 
         self._check_config()
+        self._migrate_addons()
         self._migrate_camera_configs()
         self._rebuild_camera_configs()
         try:
@@ -290,9 +335,78 @@ class iSpyConfig:
     def _check_config(self):
         self.config.setdefault("camera_configs", {})
         self.config.setdefault("plugins", {})
-        self.config["plugins"].setdefault("trackers", [])
-        self.config["plugins"].setdefault("utilities", [])
-        self.config["plugins"].setdefault("frame_processors", [])
+        self.config["plugins"].setdefault("trackers", {})
+        self.config["plugins"].setdefault("utilities", {})
+        self.config["plugins"].setdefault("frame_processors", {})
+
+    def _migrate_addons(self):
+        """Bring legacy add-on configuration up to date with the dict layout.
+
+        Legacy layouts stored the enabled add-ons as a list of names
+        (``plugins.trackers: ["object_tracker"]``) and their settings as
+        top-level config keys (``distance_threshold``, ``dbscan``,
+        ``use_network_tables``, ``record_mode``...).
+
+        New layout: ``plugins.<type>`` is a dict mapping an add-on name to a
+        dict of THAT add-on's settings. Presence == enabled.
+
+        Migration rules:
+        - lists of names become dicts (each entry starts with no settings -
+          schema defaults apply at runtime instead of being persisted);
+        - top-level settings are folded into the add-on they belong to, but
+          ONLY when that add-on is already enabled (an add-on that was not
+          running must not become enabled by migration);
+        - the legacy enabled-flags (use_network_tables, record_mode) are
+          translated into add-on presence and then dropped;
+        - all legacy top-level keys are removed from the config. Idempotent.
+        """
+        plugins = self.config.setdefault("plugins", {})
+        for addon_type in _ADDON_TYPES:
+            current = plugins.get(addon_type)
+            if isinstance(current, list):
+                plugins[addon_type] = {
+                    name: {} for name in current if isinstance(name, str)
+                }
+            elif not isinstance(current, dict):
+                plugins[addon_type] = {}
+
+        trackers = plugins.setdefault("trackers", {})
+        utilities = plugins.setdefault("utilities", {})
+
+        dbscan = self.config.get("dbscan")
+        if isinstance(dbscan, dict) and "path_planner" in trackers:
+            for legacy_key, target_key in (("epsilon", "epsilon"),
+                                           ("min_samples", "min_samples")):
+                if legacy_key in dbscan:
+                    trackers["path_planner"].setdefault(target_key, dbscan[legacy_key])
+
+        for legacy_key, addon_type, addon_name, target_key in _ADDON_LEGACY_FOLDS:
+            if target_key is None:
+                continue  # dbscan handled above (flattened into path_planner)
+            value = self.config.get(legacy_key)
+            if value is not None:
+                target = {"trackers": trackers, "utilities": utilities}[addon_type]
+                if addon_name in target:
+                    target[addon_name].setdefault(target_key, value)
+
+        for flag, (addon_type, addon_name) in _ADDON_LEGACY_FLAGS.items():
+            if self.config.get(flag):
+                {"trackers": trackers,
+                 "utilities": utilities}[addon_type].setdefault(addon_name, {})
+
+        for legacy_key, (addon_type, addon_name, target_key) in _ADDON_LEGACY_SETTINGS.items():
+            value = self.config.get(legacy_key)
+            if value is not None:
+                target = {"trackers": trackers, "utilities": utilities}[addon_type]
+                if addon_name in target:
+                    target[addon_name].setdefault(target_key, value)
+
+        for legacy_key in (
+            "dbscan", "distance_threshold", "stale_threshold",
+            "record_mode", "record_dir", "use_network_tables",
+            "network_tables_ip",
+        ):
+            self.config.pop(legacy_key, None)
 
     def _migrate_camera_configs(self):
         """Bring legacy camera entries up to date with the nested pipeline
@@ -408,6 +522,101 @@ class iSpyConfig:
             return val
         except (KeyError, TypeError):
             return default
+
+    # ------------------------------------------------------------------
+    # Add-on (plugin) configuration helpers
+    #
+    # plugins.<type> is a dict of enabled add-on name -> add-on settings.
+    # Presence == enabled; the value is the add-on's own settings dict.
+    # ------------------------------------------------------------------
+
+    def addon_entries(self, addon_type: str) -> dict:
+        """Enabled add-ons of a type: {name: settings}. Unknown types and
+        legacy list layouts return an empty dict."""
+        if addon_type not in _ADDON_TYPES:
+            return {}
+        entries = self.get_nested("plugins", addon_type, default={})
+        if not isinstance(entries, dict):
+            return {}
+        return entries
+
+    def get_addon_settings(self, addon_type: str, addon_name: str) -> dict:
+        """Settings dict for an enabled add-on (may be empty). Returns None
+        if the add-on is not enabled. Presence == enabled regardless of the
+        stored value shape (a malformed non-dict value counts as enabled
+        with no settings, mirroring the loader's tolerance)."""
+        entries = self.addon_entries(addon_type)
+        if addon_name not in entries:
+            return None
+        settings = entries[addon_name]
+        return settings if isinstance(settings, dict) else {}
+
+    def get_addon_setting(self, addon_type, addon_name, key, default=None):
+        settings = self.get_addon_settings(addon_type, addon_name)
+        if settings is None:
+            return default
+        if key in settings:
+            return settings[key]
+        return default
+
+    def is_addon_enabled(self, addon_type: str, addon_name: str) -> bool:
+        return self.get_addon_settings(addon_type, addon_name) is not None
+
+    def enable_addon(self, addon_type: str, addon_name: str,
+                     settings: dict | None = None, save: bool = True) -> None:
+        """Enable an add-on by adding it to the config. Existing settings are
+        preserved unless a settings dict is explicitly provided."""
+        if addon_type not in _ADDON_TYPES:
+            return
+        entries = self.addon_entries(addon_type)
+        if addon_name not in entries:
+            entries[addon_name] = {}
+        if isinstance(settings, dict):
+            entries[addon_name].update(settings)
+        if save:
+            self.save()
+
+    def disable_addon(self, addon_type: str, addon_name: str,
+                      save: bool = True) -> None:
+        """Disable an add-on by removing it from the config."""
+        if addon_type not in _ADDON_TYPES:
+            return
+        entries = self.addon_entries(addon_type)
+        if addon_name in entries:
+            del entries[addon_name]
+        if save:
+            self.save()
+
+    def set_addon_settings(self, addon_type: str, addon_name: str,
+                           settings: dict, save: bool = True) -> None:
+        """Replace the settings of an enabled add-on. No-op if the add-on is
+        not enabled (presence == enabled, so settings belong to a running
+        add-on only)."""
+        if addon_type not in _ADDON_TYPES:
+            return
+        entries = self.addon_entries(addon_type)
+        if addon_name not in entries:
+            return
+        entries[addon_name] = settings if isinstance(settings, dict) else {}
+        if save:
+            self.save()
+
+    def update_addon_settings(self, addon_type: str, addon_name: str,
+                              settings: dict, save: bool = True) -> None:
+        """Merge settings into an enabled add-on's existing settings. No-op if
+        the add-on is not enabled."""
+        if addon_type not in _ADDON_TYPES:
+            return
+        entries = self.addon_entries(addon_type)
+        if addon_name not in entries:
+            return
+        current = entries[addon_name]
+        if not isinstance(current, dict):
+            current = {}
+        current.update(settings if isinstance(settings, dict) else {})
+        entries[addon_name] = current
+        if save:
+            self.save()
 
     def set(self, *keys_and_value):
         if len(keys_and_value) < 2:
@@ -585,6 +794,59 @@ class iSpyCameraConfig:
 
     def get(self, key, default=None):
         return self.data.get(key, default)
+
+    def __contains__(self, key):
+        return key in self.data
+
+
+class iSpyAddonConfig:
+    """Per-add-on settings view, mirroring iSpyCameraConfig for cameras.
+
+    Each add-on in the config owns a settings dict
+    (``plugins.<type>.<name>``). Add-ons receive an iSpyAddonConfig instead of
+    the global iSpyConfig so they always read THEIR OWN settings and can
+    never accidentally depend on another add-on's (or the global) config.
+    Schema defaults (from the add-on's ``config_schema()`` classmethod) are
+    merged in at construction so an entry of ``{}`` still yields working
+    defaults, without persisting them."""
+
+    def __init__(self, settings: dict | None = None, defaults: dict | None = None):
+        self.data: dict = {}
+        if isinstance(settings, dict):
+            self.data.update(settings)
+        if isinstance(defaults, dict):
+            for key, value in defaults.items():
+                self.data.setdefault(key, value)
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def get_nested(self, *keys, default=None):
+        val = self.data
+        try:
+            for key in keys:
+                val = val[key]
+            return val
+        except (KeyError, TypeError):
+            return default
+
+    def set(self, key, value):
+        self.data[key] = value
+
+    def setdefault(self, key, value):
+        return self.data.setdefault(key, value)
+
+    def items(self):
+        return self.data.items()
+
+    def keys(self):
+        return self.data.keys()
+
+    def to_dict(self) -> dict:
+        return json.loads(json.dumps(self.data))
+
+    def __getitem__(self, key):
+        return self.data[key]
 
     def __contains__(self, key):
         return key in self.data

@@ -31,23 +31,11 @@
 
   <div class="settings-section">
     <h3>Detection</h3>
-    <div class="form-row">
-      <span class="form-label">Distance Threshold</span>
-      <input class="form-input" type="number" step="0.1" data-key="distance_threshold">
-    </div>
-    <div class="form-row">
-      <span class="form-label">Stale Threshold (s)</span>
-      <input class="form-input" type="number" step="0.1" data-key="stale_threshold">
-      <span class="restart-badge" style="display:none;">restart required</span>
-    </div>
-    <div class="form-row">
-      <span class="form-label">DBSCAN Epsilon</span>
-      <input class="form-input" type="number" step="0.05" data-key="dbscan.epsilon">
-    </div>
-    <div class="form-row">
-      <span class="form-label">DBSCAN Min Samples</span>
-      <input class="form-input" type="number" step="1" data-key="dbscan.min_samples">
-    </div>
+    <p class="text-dim text-sm">Detection and tracking thresholds are add-on
+      settings now - they live on the
+      <a href="/addons">Add-ons page</a> (object_tracker tracker:
+      distance_threshold, stale_threshold; path_planner tracker:
+      DBSCAN epsilon / min_samples).</p>
   </div>
 
   <div class="settings-section">
@@ -65,17 +53,9 @@
 <div id="tab-camera" class="settings-tab-content" style="display:none;">
   <div class="settings-section">
     <h3>Recording</h3>
-    <div class="form-row">
-      <span class="form-label">Record Mode</span>
-      <select class="form-input" data-key="record_mode">
-        <option value="true">Enabled</option>
-        <option value="false">Disabled</option>
-      </select>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Record Directory</span>
-      <input class="form-input" type="text" data-key="record_dir">
-    </div>
+    <p class="text-dim text-sm">Recording is an add-on now - enable it and
+      configure record_dir/fps on the <a href="/addons">Add-ons page</a>
+      (video_recorder utility).</p>
     <div class="form-row">
       <span class="form-label">Frame Sync</span>
       <select class="form-input" data-key="frame_sync">
@@ -94,19 +74,9 @@
 <div id="tab-network" class="settings-tab-content" style="display:none;">
   <div class="settings-section">
     <h3>NetworkTables</h3>
-    <div class="form-row">
-      <span class="form-label">Enable NetworkTables</span>
-      <select class="form-input" data-key="use_network_tables">
-        <option value="true">Enabled</option>
-        <option value="false">Disabled</option>
-      </select>
-      <span class="restart-badge" style="display:none;">restart required</span>
-    </div>
-    <div class="form-row">
-      <span class="form-label">NT Server IP</span>
-      <input class="form-input" type="text" data-key="network_tables_ip" placeholder="10.0.0.2">
-      <span class="restart-badge" style="display:none;">restart required</span>
-    </div>
+    <p class="text-dim text-sm">NetworkTables is an add-on now - enable it and
+      set the server IP on the <a href="/addons">Add-ons page</a>
+      (network_table_handler utility).</p>
   </div>
 </div>
 
@@ -157,7 +127,7 @@
 <script>
 let configData = {};
 let defaultsData = {};
-const BOOL_KEYS = new Set(["optimize", "record_mode", "frame_sync", "use_network_tables", "metrics", "debug_mode", "grayscale"]);
+const BOOL_KEYS = new Set(["optimize", "frame_sync", "metrics", "debug_mode", "grayscale"]);
 
 function parseValue(el) {
   const val = el.value;

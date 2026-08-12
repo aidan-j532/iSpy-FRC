@@ -22,15 +22,26 @@ class FuelStruct:
 class NetworkTableHandler(UtilityBase):
     plugin_name = "network_table_handler"
 
+    @classmethod
+    def config_schema(cls) -> dict:
+        return {
+            "network_tables_ip": {
+                "type": "text",
+                "label": "Robot IP",
+                "hint": "IP address of the robot's NetworkTables server "
+                        "(usually the roboRIO).",
+                "default": "10.0.0.2",
+            },
+        }
+
     def __init__(self, context: dict):
-        config = context["config"]
+        super().__init__(context)
         self.logger = logging.getLogger(__name__)
-        self._enabled = config.get("use_network_tables", False)
 
-        if not self._enabled:
-            return
-
-        ip = config.get("network_tables_ip", "10.0.0.2")
+        # No "enabled" flag: this add-on being present in the config IS the
+        # switch. The IP used to be a top-level config key - it now lives in
+        # this add-on's own settings.
+        ip = self.config.get("network_tables_ip", "10.0.0.2")
         self.inst = ntcore.NetworkTableInstance.getDefault()
         self.inst.setServer(ip)
         self.inst.startClient4("iSpy")
@@ -49,10 +60,10 @@ class NetworkTableHandler(UtilityBase):
         self._tables: dict = {}
 
     def isConnected(self) -> bool:
-        return self._enabled and self.inst.isConnected()
+        return self.inst.isConnected()
 
     def get_robot_pose(self) -> Pose2d:
-        if not self._enabled or not self.isConnected():
+        if not self.isConnected():
             return Pose2d()
         try:
             sub_key = "AdvantageKit/RealOutputs/Odometry/Robot"
@@ -67,7 +78,7 @@ class NetworkTableHandler(UtilityBase):
             return Pose2d()
 
     def update(self, frame_data: dict):
-        if not self._enabled or not self.isConnected():
+        if not self.isConnected():
             return
         fuel_list = frame_data.get("fuel_list", [])
         fps = frame_data.get("fps", 0)
