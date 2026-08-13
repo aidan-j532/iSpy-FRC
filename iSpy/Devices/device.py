@@ -1,15 +1,3 @@
-"""Base class for every iSpy Device.
-
-A Device is anything iSpy can talk to that is NOT a camera:
-a human (earpiece, phone, email) or hardware (the robot, a
-controller, etc). Devices are developer-controlled - they are
-not plugins, not user-configurable, and have no web UI.
-
-Each device decides WHEN it fires. The manager only feeds it
-vision data every frame and remembers when it last sent
-something (for cooldowns).
-"""
-
 import logging
 import threading
 import time

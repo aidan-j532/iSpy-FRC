@@ -178,7 +178,9 @@ class iSpyConfig:
         self.default_config = {
             "num_gpus": "auto",
             "device": 0,
-            "unit": "meter",
+            # "frc" = FRC/WPILib convention: outputs in meters (what robot code
+            # expects, matches Limelight/PhotonVision), calibration inputs in inches.
+            "unit": "frc",
             "debug_mode": True,
             "frame_sync": False,
             "optimize": False,

@@ -178,7 +178,7 @@ The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on dep
 | Key | What it does |
 |-----|-------------|
 | `auto_opt` | Automatically converts your `.pt` model to the fastest format for the current hardware |
-| `unit` | Output coordinate unit: `meter`, `inch`, `foot`, `centimeter` |
+| `unit` | Output coordinate unit: `frc` (meters - WPILib convention), `meter`, `inch`, `foot`, `centimeter` |
 | `debug_mode` | Draws bounding boxes and FPS on the video feed |
 | `margin` | Pixels to ignore at image edges (filters partial detections) |
 

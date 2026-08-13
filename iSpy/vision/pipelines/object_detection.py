@@ -116,6 +116,8 @@ class ObjectDetectionCamera(VisionPipeline):
             "feet": 1 / 12,
             "centimeter": 2.54,
             "centimeters": 2.54,
+            # FRC/WPILib convention: meters out (robot code), calibration in inches
+            "frc": 0.0254,
         }
 
         try:

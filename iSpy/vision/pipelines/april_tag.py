@@ -55,6 +55,7 @@ class AprilTagCamera(VisionPipeline):
             "inch": 1.0, "inches": 1.0,
             "foot": 1 / 12, "feet": 1 / 12,
             "centimeter": 2.54, "centimeters": 2.54,
+            "frc": 0.0254,
         }
 
         try:

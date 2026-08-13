@@ -64,5 +64,36 @@
     },
     "estimate_depth": true,
     "model_size": "base"
+  },
+  "##?#USB#VID_0BDA&PID_5634&MI_00#6&125ae00b&3&0000": {
+    "name": "aaaaaaaaaaaaaaaaa",
+    "source": 1,
+    "device_id": "##?#USB#VID_0BDA&PID_5634&MI_00#6&125ae00b&3&0000",
+    "yaw": 0,
+    "pitch": 0,
+    "height": 0,
+    "x": 0,
+    "y": 0,
+    "z": 0,
+    "grayscale": false,
+    "subsystem": "field",
+    "calibration": {
+      "distance": 0,
+      "game_piece_size": 0,
+      "size": 0,
+      "fov": 0
+    },
+    "pipeline": {
+      "name": "object_detection",
+      "settings": {
+        "vision_model": {
+          "file_path": "YoloModels\\pytorch\\_default_v26_detect_for_fuel.pt",
+          "source_pt": "YoloModels/pytorch/_default_detect.pt"
+        },
+        "min_conf": 0.5,
+        "optimize": false,
+        "quantize": false
+      }
+    }
   }
 }

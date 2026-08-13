@@ -12,7 +12,7 @@ button{padding:10px 20px;background:#2c7;color:#fff;border:none;border-radius:4p
 <label>Camera name <input id="cam_name" value="default_cam"></label>
 <label>Camera source (index or path) <input id="cam_source" value="0"></label>
 <label>Subsystem <input id="cam_subsystem" value="field"></label>
-<label>Unit <select id="unit"><option>meter</option><option>inch</option><option>foot</option></select></label>
+<label>Unit <select id="unit"><option value="frc">FRC (meters)</option><option>meter</option><option>inch</option><option>foot</option></select></label>
 <label>Use NetworkTables <select id="use_nt"><option value="false">No</option><option value="true">Yes</option></select></label>
 <label>NetworkTables IP <input id="nt_ip" value="10.0.0.2"></label>
 <button onclick="go()">Finish Setup</button><div id="msg"></div>
