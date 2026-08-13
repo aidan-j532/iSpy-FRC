@@ -16,6 +16,7 @@ from iSpy.plugins.bases import TrackerBase, UtilityBase, FrameProcessorBase
 from iSpy.config.iSpyConfig import iSpyAddonConfig
 from wpimath.geometry import Pose2d
 from iSpy.web.Backend.WebApp import create_app
+from iSpy.Devices.devices import DeviceManager
 
 
 PROJECT_ROOT = Path(__file__).resolve()
@@ -27,9 +28,10 @@ while not (PROJECT_ROOT / "plugins").exists():
 _PLUGIN_ROOT = PROJECT_ROOT / "plugins"
 
 class iSpy:
-    def __init__(self, cameras: list[VisionPipeline], config: iSpyConfig, web_app=None):
+    def __init__(self, cameras: list[VisionPipeline], config: iSpyConfig, web_app=None, devices: DeviceManager | None = None):
         self.cameras = cameras
         self.config = config
+        self.devices = devices
 
         self.shutdown_event = threading.Event()
         self.pause_event = threading.Event()
@@ -176,6 +178,11 @@ class iSpy:
                     plugin.stop()
                 except Exception:
                     self.logger.exception("Error stopping plugin '%s'", name)
+        if self.devices is not None:
+            try:
+                self.devices.stop()
+            except Exception:
+                self.logger.exception("Error stopping devices")
 
     def _get_pose(self) -> Pose2d:
         for util in self.utilities.values():
@@ -191,6 +198,11 @@ class iSpy:
                 util.update(frame_data)
             except Exception:
                 self.logger.exception("Utility update failed")
+        if self.devices is not None:
+            try:
+                self.devices.update(frame_data)
+            except Exception:
+                self.logger.exception("Device update failed")
 
     def _update_web(self, frame_data: dict):
         if self.web_app:
