@@ -380,6 +380,96 @@ pre {
 .empty-state { color: var(--text-dim); font-style: italic; font-size: 0.85rem; padding: 8px 0; }
 
 /* ==========================================
+   Add-ons page
+   ========================================== */
+.page-head h1 { margin: 0; }
+.page-sub { color: var(--text-dim); font-size: 0.85rem; margin: 4px 0 16px 0; }
+.card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.card-head h3 { margin: 0; }
+.addon-new-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+
+.addon-toolbar { display: flex; align-items: center; gap: 8px; }
+.addon-search { flex: 1; max-width: 240px; }
+.addon-type-filter { flex: none; width: auto; }
+
+.addon-list, .addon-row { display: flex; flex-direction: column; }
+.addon-row { border-bottom: 1px solid var(--border); }
+.addon-row:last-child { border-bottom: none; }
+.addon-row.is-enabled .addon-name { color: var(--accent); }
+.addon-row-main { display: flex; align-items: center; gap: 12px; padding: 10px 4px; flex-wrap: wrap; }
+.addon-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.addon-name { font-weight: 600; font-size: 0.9rem; }
+.addon-doc {
+  color: var(--text-dim); font-size: 0.8rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 320px;
+}
+.addon-status {
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+  font-size: 0.8rem; color: var(--text-dim); white-space: nowrap;
+}
+.addon-actions { display: flex; gap: 6px; }
+.addon-actions .btn-sm { white-space: nowrap; }
+.builtin-pill {
+  padding: 2px 8px; border-radius: var(--radius-sm);
+  background: var(--bg-surface); color: var(--text-dim);
+  font-size: 0.7rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+
+/* Switch (row-level enable/disable) */
+.switch { position: relative; display: inline-block; width: 40px; height: 22px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--border); border-radius: 11px;
+  transition: background 0.2s;
+}
+.switch .slider::before {
+  content: ""; position: absolute; width: 16px; height: 16px;
+  left: 3px; top: 3px; background: #fff; border-radius: 50%;
+  transition: transform 0.2s;
+}
+.switch input:checked + .slider { background: var(--ok); }
+.switch input:checked + .slider::before { transform: translateX(18px); }
+
+/* Inline settings panel */
+.addon-settings-panel { padding: 0 4px 14px 52px; }
+.addon-settings-inner {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px;
+}
+.addon-settings-title {
+  font-size: 0.78rem; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+.addon-settings-panel .form-label { min-width: 150px; }
+.addon-settings-panel .form-row { margin-bottom: 10px; }
+.settings-toggle-row { display: flex; align-items: center; gap: 10px; }
+.addon-settings-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+/* Source viewer */
+.modal-wide { max-width: 780px; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.modal-head h3 { margin: 0; }
+.modal-close {
+  background: transparent; color: var(--text-dim);
+  font-size: 1.4rem; line-height: 1; padding: 2px 8px;
+}
+.modal-close:hover { color: var(--text); filter: none; transform: none; }
+.source-view {
+  max-height: 60vh; overflow: auto; margin: 0;
+  font-family: var(--mono); font-size: 0.8rem; line-height: 1.4;
+  white-space: pre; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+/* ==========================================
    Responsive
    ========================================== */
 @media (max-width: 768px) {

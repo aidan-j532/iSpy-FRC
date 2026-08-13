@@ -167,13 +167,18 @@ class PluginStatusModule(WebModule):
                 except Exception:
                     logger.warning("Failed to load config schema for add-on '%s'", name)
                     schema = {}
+                filename = self._filename_for(subdir, name)
+                # Files under <subdir>/BuiltIn/ are iSpy's bundled add-ons:
+                # they can be enabled/disabled and configured, but not
+                # deleted, and are labelled as built-in in the UI.
+                is_builtin = bool(filename and filename.startswith("BuiltIn/"))
                 available.append({
                     "name": name,
                     "type": ptype,
                     "enabled": enabled,
-                    "builtin": False,
+                    "builtin": is_builtin,
                     "doc": (cls.__doc__ or "").strip()[:200],
-                    "filename": self._filename_for(subdir, name),
+                    "filename": filename,
                     "config_schema": schema if isinstance(schema, dict) else {},
                     "settings": settings,
                 })
@@ -212,10 +217,20 @@ class PluginStatusModule(WebModule):
                 return jsonify(error="Not found"), 404
             return jsonify(source=path.read_text(errors="ignore"), filename=path.name)
         subdir = info[0]
-        path = self._resolve_safe_path(subdir, name)
-        if path is None or not path.exists():
+        # Resolve the real file by plugin name (handles custom add-ons in
+        # <subdir>/ and bundled ones under <subdir>/BuiltIn/ uniformly).
+        rel = self._filename_for(subdir, name)
+        if not rel:
             return jsonify(error="Not found"), 404
-        return jsonify(source=path.read_text(errors="ignore"), filename=path.name)
+        base = (_PLUGIN_ROOT / subdir).resolve()
+        path = (base / rel).resolve()
+        try:
+            path.relative_to(base)
+        except ValueError:
+            return jsonify(error="Invalid filename"), 400
+        if not path.exists():
+            return jsonify(error="Not found"), 404
+        return jsonify(source=path.read_text(errors="ignore"), filename=rel)
 
     # ---------- toggle (enable/disable in config) ----------
 

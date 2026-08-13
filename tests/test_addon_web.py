@@ -77,6 +77,39 @@ class PluginStatusModuleTests(unittest.TestCase):
         self.assertTrue(any(p["builtin"] and p["type"] == "vision_pipeline"
                             for p in payload["available"]))
 
+    def test_builtin_flag_marks_bundled_addons(self):
+        mod, cfg = self._module()
+        with _app_context():
+            payload = mod._available().get_json()
+        by_name = {(p["type"], p["name"]): p for p in payload["available"]}
+        # Bundled add-ons under <type>/BuiltIn/ are marked built-in (they can
+        # be toggled and configured but never deleted)...
+        self.assertTrue(by_name[("tracker", "object_tracker")]["builtin"])
+        self.assertTrue(by_name[("utility", "video_recorder")]["builtin"])
+        # ...while user-authored add-ons are not.
+        self.assertFalse(by_name[("tracker", "example_tracker")]["builtin"])
+
+    def test_source_serves_bundled_addon_file(self):
+        mod, cfg = self._module()
+        with _app_context():
+            resp = mod._source("utility", "health_reporter")
+        payload = resp.get_json()
+        self.assertIn("class HealthReporter", payload["source"])
+        self.assertEqual(payload["filename"], "BuiltIn/HealthReporter.py")
+
+    def test_source_serves_custom_addon_file(self):
+        mod, cfg = self._module()
+        with _app_context():
+            resp = mod._source("tracker", "example_tracker")
+        payload = resp.get_json()
+        self.assertIn("plugin_name = \"example_tracker\"", payload["source"])
+
+    def test_source_unknown_addon_404(self):
+        mod, cfg = self._module()
+        with _app_context():
+            resp = mod._source("tracker", "nope")
+        self.assertEqual(resp[1], 404)
+
     def test_available_reflects_enabled_settings_from_config(self):
         mod, cfg = self._module({
             "trackers": {"object_tracker": {"distance_threshold": 0.9}},

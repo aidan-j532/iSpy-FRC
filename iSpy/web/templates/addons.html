@@ -1,20 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Add-ons - iSpy{% endblock %}
 {% block content %}
-<h1>Add-ons</h1>
-<div id="restart-banner" class="card" style="display:none; border-left:3px solid var(--warn);">
-  <p>Add-on changes require a vision restart to take effect.</p>
-  <button onclick="restartVision()">Restart Vision Now</button>
+<div class="page-head">
+  <h1>Add-ons</h1>
+  <p class="page-sub">Trackers, utilities, and frame processors that extend vision.
+    Changes take effect after the vision service restarts (Dashboard &rarr; Restart).</p>
 </div>
 
 <div class="card">
-  <h3>New Add-on</h3>
-  <div class="settings-tabs">
-    <button class="settings-tab active" onclick="switchNewTab('upload', this)">Upload File</button>
-    <button class="settings-tab" onclick="switchNewTab('paste', this)">Write Code</button>
+  <div class="card-head">
+    <h3>New Add-on</h3>
+    <div class="addon-new-tabs">
+      <button class="settings-tab active" onclick="switchNewTab('upload', this)">Upload File</button>
+      <button class="settings-tab" onclick="switchNewTab('paste', this)">Write Code</button>
+    </div>
   </div>
 
-  <div id="new-upload" style="margin-top:12px;">
+  <div id="new-upload">
     <div class="form-row">
       <span class="form-label">Kind</span>
       <select id="upload-type" class="form-input">
@@ -29,7 +31,7 @@
     </div>
   </div>
 
-  <div id="new-paste" style="margin-top:12px; display:none;">
+  <div id="new-paste" style="display:none;">
     <div class="form-row">
       <span class="form-label">Kind</span>
       <select id="paste-type" class="form-input">
@@ -42,7 +44,7 @@
       <span class="form-label">Filename</span>
       <input id="paste-filename" class="form-input" type="text" placeholder="e.g. april_tag_tracker">
     </div>
-    <textarea id="paste-code" class="raw-editor" style="height:40vh;" placeholder="from iSpy.plugins.bases import TrackerBase
+    <textarea id="paste-code" class="raw-editor" style="height:36vh;" placeholder="from iSpy.plugins.bases import TrackerBase
 
 class YourTracker(TrackerBase):
     plugin_name = &quot;my_tracker&quot;
@@ -54,29 +56,31 @@ class YourTracker(TrackerBase):
   </div>
 </div>
 
-<div class="dash-columns">
-  <div class="dash-col-left">
-    <div class="card">
-      <h3>Loaded Add-ons</h3>
-      <div id="loaded-list"></div>
+<div class="card">
+  <div class="card-head">
+    <h3>Add-ons</h3>
+    <div class="addon-toolbar">
+      <input id="addon-search" class="form-input addon-search" type="text" placeholder="Search add-ons&hellip;">
+      <select id="addon-type-filter" class="form-input addon-type-filter">
+        <option value="">All types</option>
+        <option value="tracker">Tracker</option>
+        <option value="utility">Utility</option>
+        <option value="frame_processor">Frame Processor</option>
+        <option value="vision_pipeline">Vision Pipeline</option>
+      </select>
+      <span id="addon-count" class="text-dim text-sm"></span>
     </div>
   </div>
-  <div class="dash-col-right">
-    <div class="card">
-      <h3>Available Add-ons</h3>
-      <div id="available-list"></div>
-    </div>
-  </div>
+  <div id="addon-list"></div>
 </div>
 
-<div id="addon-settings-modal" class="modal-overlay" style="display:none;">
-  <div class="modal">
-    <h3>Add-on Settings: <span id="settings-addon-name"></span></h3>
-    <div id="settings-form-body"></div>
-    <div class="modal-actions">
-      <button onclick="closeAddonSettings()">Cancel</button>
-      <button onclick="saveAddonSettings()">Save Settings</button>
+<div id="source-modal" class="modal-overlay" style="display:none;">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>Source: <span id="source-name"></span></h3>
+      <button class="modal-close" onclick="closeSource()">&times;</button>
     </div>
+    <pre id="source-view" class="source-view"></pre>
   </div>
 </div>
 
@@ -92,23 +96,21 @@ class YourTracker(TrackerBase):
 </div>
 
 <script>
+let allAddons = [];
+let loaded = {};
 let pendingDeleteAddon = null;
-let pendingSettingsAddon = null;
+let lastSnapshot = null;
 
-const SETTING_INPUTS = { text: 'text', number: 'number', toggle: 'checkbox' };
+const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const jsStr = s => String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
-function switchNewTab(name, btn) {
-  document.querySelectorAll('#new-upload, #new-paste').forEach(el => el.style.display = 'none');
-  document.getElementById('new-' + name).style.display = '';
-  btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
-  btn.classList.add('active');
-}
+const TYPE_COLORS = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#ff9800', vision_pipeline: '#9c27b0' };
+const TYPE_LABELS = { frame_processor: 'frame processor', vision_pipeline: 'vision pipeline' };
 
 function typeBadge(type) {
-  const colors = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#ff9800', vision_pipeline: '#9c27b0' };
-  const labels = { frame_processor: 'frame processor', vision_pipeline: 'vision pipeline' };
-  const label = labels[type] || type;
-  return `<span class="plugin-pill" style="background:${colors[type] || '#666'}">${label}</span>`;
+  const label = TYPE_LABELS[type] || type;
+  return `<span class="plugin-pill" style="background:${TYPE_COLORS[type] || '#666'}">${label}</span>`;
 }
 
 function statusDot(status) {
@@ -117,116 +119,220 @@ function statusDot(status) {
   return 'status-dot status-bad';
 }
 
-async function loadStatus() {
+function switchNewTab(name, btn) {
+  document.querySelectorAll('#new-upload, #new-paste').forEach(el => el.style.display = 'none');
+  document.getElementById('new-' + name).style.display = '';
+  btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+// ---------- list ----------
+
+function matchesFilter(p) {
+  const q = document.getElementById('addon-search').value.trim().toLowerCase();
+  const t = document.getElementById('addon-type-filter').value;
+  if (t && p.type !== t) return false;
+  if (!q) return true;
+  return `${p.name} ${p.type} ${p.doc || ''}`.toLowerCase().includes(q);
+}
+
+function settingsFields(schema, current) {
+  const keys = Object.keys(schema);
+  if (keys.length === 0) {
+    return '<p class="text-dim text-sm">This add-on has no settings beyond being enabled.</p>';
+  }
+  return keys.map(key => {
+    const def = schema[key] || {};
+    const label = esc(def.label || key);
+    const hint = def.hint ? `<small class="text-dim">${esc(def.hint)}</small>` : '';
+    const value = (key in current) ? current[key] : def.default;
+    if (def.type === 'toggle') {
+      return `<label class="form-row settings-toggle-row">
+        <input type="checkbox" class="toggle-input" data-key="${key}" data-type="toggle" ${value ? 'checked' : ''}>
+        <span><strong>${label}</strong> ${hint}</span>
+      </label>`;
+    }
+    const inputType = def.type === 'number' ? 'number' : 'text';
+    return `<div class="form-row">
+      <span class="form-label">${label}</span>
+      <input class="form-input" type="${inputType}" data-key="${key}" data-type="${def.type || 'text'}"
+        value="${esc(value == null ? '' : String(value))}" step="any">
+      ${hint}
+    </div>`;
+  }).join('');
+}
+
+function renderRow(p) {
+  const key = `${p.type}::${p.name}`;
+  const isPipeline = p.type === 'vision_pipeline';
+  const schema = p.config_schema || {};
+  const hasSettings = !isPipeline && Object.keys(schema).length > 0;
+  const status = loaded[`${p.type}/${p.name}`] || null;
+
+  let statusHtml = '';
+  if (status) {
+    statusHtml = `<span class="addon-status">${statusDot(status)}<span>${esc(status)}</span></span>`;
+  } else if (p.enabled) {
+    statusHtml = `<span class="addon-status"><span class="status-dot status-warn"></span><span title="Enabled in config - loads after a vision restart">pending restart</span></span>`;
+  }
+
+  const builtinPill = p.builtin
+    ? `<span class="builtin-pill" title="${isPipeline ? 'Bundled with iSpy - selected per camera in Camera settings' : 'Bundled with iSpy'}">built-in</span>`
+    : '';
+
+  const toggle = isPipeline ? '' : `
+    <label class="switch" title="${p.enabled ? 'Disable' : 'Enable'}">
+      <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlugin('${jsStr(p.name)}','${p.type}',this.checked)">
+      <span class="slider"></span>
+    </label>`;
+
+  const actions = [];
+  if (p.enabled && hasSettings) {
+    actions.push(`<button class="btn-sm" onclick="toggleSettings('${jsStr(p.name)}','${p.type}')" title="Edit settings">Settings</button>`);
+  }
+  const sourceFile = p.name;
+  actions.push(`<button class="btn-sm" onclick="viewSource('${p.type}','${jsStr(sourceFile)}')" title="View source">Code</button>`);
+  if (!p.builtin && !isPipeline) {
+    actions.push(`<button class="btn-sm btn-bad" onclick="openDeleteAddonModal('${p.type}','${jsStr(p.filename || p.name)}','${jsStr(p.name)}')" title="Delete">Delete</button>`);
+  }
+
+  const panel = (p.enabled && hasSettings) ? `
+    <div class="addon-settings-panel" data-addon="${key}" style="display:none;">
+      <div class="addon-settings-inner">
+        <div class="addon-settings-title">Settings &mdash; ${esc(p.name)}</div>
+        ${settingsFields(schema, p.settings || {})}
+        <div class="addon-settings-actions">
+          <button class="btn-ok" onclick="saveSettings('${jsStr(p.name)}','${p.type}')">Save Settings</button>
+          <button onclick="closeSettings('${key}')">Cancel</button>
+        </div>
+      </div>
+    </div>` : '';
+
+  return `
+  <div class="addon-row ${p.enabled ? 'is-enabled' : ''}">
+    <div class="addon-row-main">
+      ${toggle}
+      <div class="addon-title">
+        <strong class="addon-name">${esc(p.name)}</strong>
+        ${typeBadge(p.type)}
+        ${builtinPill}
+      </div>
+      ${p.doc ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
+      ${statusHtml}
+      <div class="addon-actions">${actions.join('')}</div>
+    </div>
+    ${panel}
+  </div>`;
+}
+
+function stashOpenPanels() {
+  const open = {};
+  document.querySelectorAll('.addon-settings-panel').forEach(panel => {
+    if (panel.style.display === 'none') return;
+    const vals = {};
+    panel.querySelectorAll('[data-key]').forEach(el => {
+      vals[el.dataset.key] = el.type === 'checkbox' ? el.checked : el.value;
+    });
+    open[panel.dataset.addon] = vals;
+  });
+  return open;
+}
+
+function restoreOpenPanels(open) {
+  Object.entries(open).forEach(([key, vals]) => {
+    const panel = document.querySelector(`.addon-settings-panel[data-addon="${CSS.escape(key)}"]`);
+    if (!panel) return;
+    panel.style.display = '';
+    Object.entries(vals).forEach(([k, v]) => {
+      const el = panel.querySelector(`[data-key="${k}"]`);
+      if (!el) return;
+      if (el.type === 'checkbox') el.checked = v; else el.value = v;
+    });
+  });
+}
+
+function renderList() {
+  const list = allAddons.filter(matchesFilter);
+  const container = document.getElementById('addon-list');
+  const count = document.getElementById('addon-count');
+  count.textContent = `${list.length} of ${allAddons.length}`;
+  const openVals = stashOpenPanels();
+  container.innerHTML = list.length === 0
+    ? '<div class="empty-state">No add-ons found.</div>'
+    : list.map(renderRow).join('');
+  restoreOpenPanels(openVals);
+}
+
+async function loadStatus(force) {
   try {
     const [statusResp, availResp] = await Promise.all([
       fetch('/api/plugins/status').then(r => r.json()),
       fetch('/api/plugins/available').then(r => r.json()),
     ]);
-
-    const loaded = statusResp.plugins || [];
-    const available = availResp.available || [];
-
-    const loadedDiv = document.getElementById('loaded-list');
-    loadedDiv.innerHTML = loaded.length === 0
-      ? '<div class="empty-state">No add-ons loaded. Enable one below and restart vision.</div>'
-      : loaded.map(p => `
-        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
-          <span class="${statusDot(p.status)}"></span>
-          <strong>${p.name}</strong>
-          ${typeBadge(p.type)}
-          <span style="margin-left:auto;color:var(--text-dim);font-size:0.85rem;">${p.status}</span>
-        </div>`).join('');
-
-    const availDiv = document.getElementById('available-list');
-    availDiv.innerHTML = available.length === 0
-      ? '<div class="empty-state">No add-ons found.</div>'
-      : available.map(p => {
-          const schemaKeys = Object.keys(p.config_schema || {}).length;
-          const settingsBtn = (p.enabled && schemaKeys > 0 && !p.builtin)
-            ? `<button class="btn-sm" style="margin-left:auto;" onclick="openAddonSettings('${p.name}','${p.type}')" title="Edit settings">Settings</button>`
-            : '';
-          const rightSide = p.builtin
-            ? `<span style="margin-left:auto;color:var(--text-dim);font-size:0.8rem;">built-in</span>`
-            : `${settingsBtn}<button class="btn-sm btn-bad" style="margin-left:4px;" onclick="openDeleteAddonModal('${p.type}','${p.filename || p.name}','${p.name}')" title="Delete">&#10005;</button>`;
-          return `
-        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
-          ${p.builtin ? '' : `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="checkbox" ${p.enabled ? 'checked' : ''}
-              onchange="togglePlugin('${p.name}', '${p.type}', this.checked)">
-          </label>`}
-          <strong>${p.name}</strong>
-          ${typeBadge(p.type)}
-          ${p.doc ? `<span style="margin-left:8px;color:var(--text-dim);font-size:0.8rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${p.doc.replace(/"/g, '&quot;')}">${p.doc}</span>` : ''}
-          ${rightSide}
-        </div>`;
-        }).join('');
+    const snapshot = JSON.stringify([statusResp.plugins || [], availResp.available || []]);
+    if (!force && snapshot === lastSnapshot) return;
+    lastSnapshot = snapshot;
+    loaded = {};
+    (statusResp.plugins || []).forEach(p => { loaded[`${p.type}/${p.name}`] = p.status; });
+    allAddons = availResp.available || [];
+    renderList();
   } catch (e) {
     console.error('Failed to load add-ons', e);
   }
 }
 
-async function openAddonSettings(name, type) {
-  pendingSettingsAddon = { name, type };
-  try {
-    const availResp = await fetch('/api/plugins/available').then(r => r.json());
-    const entry = (availResp.available || []).find(p => p.name === name && p.type === type);
-    const schema = (entry && entry.config_schema) || {};
-    const current = (entry && entry.settings) || {};
-    document.getElementById('settings-addon-name').textContent = name;
-    const body = document.getElementById('settings-form-body');
-    const keys = Object.keys(schema);
-    if (keys.length === 0) {
-      body.innerHTML = '<p style="color:var(--text-dim);">This add-on has no settings beyond being enabled.</p>';
-    } else {
-      body.innerHTML = keys.map(key => {
-        const def = schema[key] || {};
-        const label = def.label || key;
-        const hint = def.hint ? `<small style="display:block;color:var(--text-dim);">${hint}</small>` : '';
-        const value = (key in current) ? current[key] : def.default;
-        if (def.type === 'toggle') {
-          return `<label style="display:flex;align-items:center;gap:8px;margin:10px 0;cursor:pointer;">
-            <input type="checkbox" data-key="${key}" data-type="toggle" ${value ? 'checked' : ''}>
-            <span><strong>${label}</strong>${hint}</span>
-          </label>`;
-        }
-        const inputType = SETTING_INPUTS[def.type] || 'text';
-        return `<div class="form-row">
-          <span class="form-label">${label}</span>
-          <input class="form-input" type="${inputType}" data-key="${key}" data-type="${def.type || 'text'}"
-            value="${value == null ? '' : String(value).replace(/"/g, '&quot;')}" step="any">
-          ${hint}
-        </div>`;
-      }).join('');
-    }
-    document.getElementById('addon-settings-modal').style.display = 'flex';
-  } catch (e) {
-    console.error('Failed to load add-on settings', e);
-    showToast('Failed to load settings', 'error');
+// ---------- settings (inline) ----------
+
+function toggleSettings(name, type) {
+  const key = `${type}::${name}`;
+  const panel = document.querySelector(`.addon-settings-panel[data-addon="${CSS.escape(key)}"]`);
+  if (!panel) return;
+  const opening = panel.style.display === 'none';
+  closeAllSettings();
+  if (opening) {
+    panel.style.display = '';
+    panel.scrollIntoView({ block: 'nearest' });
   }
 }
 
-function closeAddonSettings() {
-  pendingSettingsAddon = null;
-  document.getElementById('addon-settings-modal').style.display = 'none';
+function closeAllSettings() {
+  document.querySelectorAll('.addon-settings-panel').forEach(p => p.style.display = 'none');
 }
 
-async function saveAddonSettings() {
-  if (!pendingSettingsAddon) return;
-  const { name, type } = pendingSettingsAddon;
+function closeSettings(key) {
+  const panel = document.querySelector(`.addon-settings-panel[data-addon="${CSS.escape(key)}"]`);
+  if (panel) panel.style.display = 'none';
+}
+
+async function saveSettings(name, type) {
+  const key = `${type}::${name}`;
+  const panel = document.querySelector(`.addon-settings-panel[data-addon="${CSS.escape(key)}"]`);
+  if (!panel) return;
   const settings = {};
-  document.querySelectorAll('#settings-form-body [data-key]').forEach(el => {
-    const key = el.dataset.key;
+  let invalid = false;
+  panel.querySelectorAll('[data-key]').forEach(el => {
+    const k = el.dataset.key;
     const stype = el.dataset.type;
     if (stype === 'toggle') {
-      settings[key] = el.checked;
+      settings[k] = el.checked;
     } else if (stype === 'number') {
       const v = el.value.trim();
-      if (v !== '') settings[key] = Number(v);
+      if (v !== '') {
+        const n = Number(v);
+        if (!Number.isFinite(n)) {
+          invalid = true;
+          showToast(`'${k}' must be a number`, 'error');
+          return;
+        }
+        settings[k] = n;
+      } else {
+        settings[k] = el.value;
+      }
     } else {
-      settings[key] = el.value;
+      settings[k] = el.value;
     }
   });
+  if (invalid) return;
   try {
     const r = await fetch('/api/plugins/settings', {
       method: 'POST',
@@ -235,38 +341,69 @@ async function saveAddonSettings() {
     });
     const j = await r.json();
     if (r.ok) {
-      showToast('Settings saved - restart vision to apply', 'success');
-      document.getElementById('restart-banner').style.display = '';
+      showToast('Settings saved - takes effect after vision restarts', 'success');
     } else {
       showToast(j.error || 'Failed to save settings', 'error');
     }
   } catch (e) {
     showToast('Request failed', 'error');
   }
-  closeAddonSettings();
-  loadStatus();
+  closeSettings(key);
+  loadStatus(true);
 }
 
 async function togglePlugin(name, type, enable) {
   try {
     const r = await fetch('/api/plugins/toggle', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, type, enable }),
     });
     const j = await r.json();
     if (r.ok) {
-      showToast(enable ? `${name} enabled` : `${name} disabled`, 'success');
-      if (j.needs_restart) document.getElementById('restart-banner').style.display = '';
+      showToast(`${name} ${enable ? 'enabled' : 'disabled'} - takes effect after vision restarts`, 'success');
     } else {
-      showToast(j.error || 'Failed', 'error');
-      loadStatus();
+      showToast(j.error || 'Toggle failed', 'error');
     }
   } catch (e) {
     showToast('Request failed', 'error');
-    loadStatus();
+  }
+  loadStatus(true);
+}
+
+// ---------- source viewer ----------
+
+async function viewSource(type, filename) {
+  const modal = document.getElementById('source-modal');
+  const pre = document.getElementById('source-view');
+  pre.textContent = 'Loading\u2026';
+  document.getElementById('source-name').textContent = filename;
+  modal.style.display = 'flex';
+  try {
+    const r = await fetch(`/api/plugins/${encodeURIComponent(type)}/${encodeURIComponent(filename)}/source`);
+    const j = await r.json();
+    if (r.ok) {
+      pre.textContent = j.source;
+      document.getElementById('source-name').textContent = j.filename;
+    } else {
+      modal.style.display = 'none';
+      showToast(j.error || 'Failed to load source', 'error');
+    }
+  } catch (e) {
+    modal.style.display = 'none';
+    showToast('Failed to load source', 'error');
   }
 }
+
+function closeSource() {
+  document.getElementById('source-modal').style.display = 'none';
+}
+
+document.getElementById('source-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeSource();
+});
+
+// ---------- create / upload ----------
 
 async function submitPasted() {
   const type = document.getElementById('paste-type').value;
@@ -277,7 +414,7 @@ async function submitPasted() {
 
   const r = await fetch('/api/plugins/create', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, filename, code }),
   });
   const j = await r.json();
@@ -285,11 +422,10 @@ async function submitPasted() {
     showToast('Add-on saved - restart vision to detect it', 'success');
     document.getElementById('paste-filename').value = '';
     document.getElementById('paste-code').value = '';
-    document.getElementById('restart-banner').style.display = '';
-    loadStatus();
   } else {
     showToast(j.error || 'Save failed', 'error');
   }
+  loadStatus(true);
 }
 
 const uploadZone = document.getElementById('upload-zone');
@@ -315,7 +451,6 @@ async function handleAddonUpload(file) {
     const j = await r.json();
     if (r.ok) {
       showToast('Add-on uploaded - restart vision to detect it', 'success');
-      document.getElementById('restart-banner').style.display = '';
     } else {
       showToast(j.error || 'Upload failed', 'error');
     }
@@ -323,52 +458,44 @@ async function handleAddonUpload(file) {
     showToast('Upload failed', 'error');
   }
   addonFileInput.value = '';
-  loadStatus();
+  loadStatus(true);
 }
+
+// ---------- delete ----------
 
 function openDeleteAddonModal(type, filename, name) {
   pendingDeleteAddon = { type, filename, name };
   document.getElementById('del-addon-name').textContent = name;
   document.getElementById('delete-addon-modal').style.display = 'flex';
 }
+
 function closeDeleteAddonModal() {
   pendingDeleteAddon = null;
   document.getElementById('delete-addon-modal').style.display = 'none';
 }
+
 async function confirmDeleteAddon() {
   if (!pendingDeleteAddon) return;
   const { type, filename } = pendingDeleteAddon;
   try {
-    const r = await fetch(`/api/plugins/${type}/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    const r = await fetch(`/api/plugins/${encodeURIComponent(type)}/${encodeURIComponent(filename)}`, { method: 'DELETE' });
     const j = await r.json();
-    showToast(r.ok ? 'Add-on deleted' : (j.error || 'Delete failed'), r.ok ? 'success' : 'error');
-    if (r.ok) document.getElementById('restart-banner').style.display = '';
+    showToast(r.ok ? 'Add-on deleted - takes effect after vision restarts' : (j.error || 'Delete failed'), r.ok ? 'success' : 'error');
   } catch (e) {
     showToast('Delete failed', 'error');
   }
   closeDeleteAddonModal();
-  loadStatus();
+  loadStatus(true);
 }
 
 document.getElementById('delete-addon-modal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeDeleteAddonModal();
 });
-document.getElementById('addon-settings-modal').addEventListener('click', e => {
-  if (e.target === e.currentTarget) closeAddonSettings();
-});
 
-async function restartVision() {
-  try {
-    const r = await fetch(`http://${location.hostname}:5050/service/restart`, { method: 'POST' });
-    const j = await r.json();
-    showToast(j.ok ? 'Restart sent' : (j.error || 'Failed'), j.ok ? 'success' : 'error');
-    document.getElementById('restart-banner').style.display = 'none';
-  } catch (e) {
-    showToast('Could not reach service daemon', 'error');
-  }
-}
+document.getElementById('addon-search').addEventListener('input', renderList);
+document.getElementById('addon-type-filter').addEventListener('change', renderList);
 
-loadStatus();
-setInterval(loadStatus, 3000);
+loadStatus(true);
+setInterval(() => loadStatus(false), 5000);
 </script>
 {% endblock %}
