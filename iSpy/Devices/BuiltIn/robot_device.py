@@ -1,11 +1,3 @@
-"""RobotDevice - writes alerts into NetworkTables for the robot to read.
-
-The robot subscribes to the "iSpy/DeviceMessage" table. This is
-the "human + hardware" half of Devices: the vision box can poke
-the robot (or any NT-connected hardware) directly without going
-through the normal VisionData stream.
-"""
-
 import logging
 import time
 

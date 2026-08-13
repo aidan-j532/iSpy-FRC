@@ -1,18 +1,3 @@
-"""EarpieceDevice - speaks alerts through a Bluetooth earpiece.
-
-The vision box plays a text-to-speech clip; if a BT earpiece is
-connected it becomes the audio output, so the person wearing it
-hears "NOTE DETECTED" without looking at a screen.
-
-TTS backends tried in order:
-  1. pyttsx3 (if installed)
-  2. espeak / espeak-ng (system binaries)
-
-verify() returns True when a Bluetooth audio sink is present
-(checked via pactl/bluetoothctl when available) or when an audio
-output exists at all - audio routing itself is handled by the OS.
-"""
-
 import shutil
 import subprocess
 import logging

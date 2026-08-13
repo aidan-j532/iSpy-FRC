@@ -1,9 +1,3 @@
-"""EmailDevice - sends alerts to a Gmail inbox.
-
-Uses SMTP with an app password (standard for Gmail). verify()
-checks the connection works without sending anything.
-"""
-
 import logging
 import smtplib
 from email.mime.text import MIMEText

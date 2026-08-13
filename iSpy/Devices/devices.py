@@ -1,5 +1,3 @@
-"""DeviceManager - the registry that holds every Device iSpy talks to."""
-
 import logging
 from typing import Iterable
 
@@ -14,7 +12,6 @@ class DeviceManager:
             self.register(device)
 
     def register(self, device: Device) -> None:
-        """Add a device. Its verify() result decides if it starts enabled."""
         if device.name in self._devices:
             self.logger.warning("Device '%s' already registered - replacing it.", device.name)
         device.verified = device.verify()
@@ -34,7 +31,6 @@ class DeviceManager:
         return list(self._devices.values())
 
     def update(self, frame_data: dict) -> None:
-        """Feed one vision frame to every verified device."""
         for device in self.devices:
             if getattr(device, "verified", False):
                 try:
@@ -43,13 +39,11 @@ class DeviceManager:
                     self.logger.exception("Device '%s' update failed", device.name)
 
     def notify_all(self, message: str, **payload) -> None:
-        """Push a message to every verified device at once."""
         for device in self.devices:
             if getattr(device, "verified", False):
                 device._send_safe(message, **payload)
 
     def stop(self) -> None:
-        """Stop every device."""
         for device in self.devices:
             try:
                 if hasattr(device, "_stop_event"):

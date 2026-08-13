@@ -1,15 +1,3 @@
-"""PhoneDevice - sends a text notification to an Android phone.
-
-Transport is a configurable HTTP endpoint, so it works with
-whatever bridge you run on the phone:
-  - KDE Connect's "share" / custom plugin
-  - a Tasker/MacroDroid HTTP shortcut
-  - a home-rolled listener app
-
-verify() checks the endpoint answers with HTTP 200 to a ping
-route. Subclass or change `ping_path` if your bridge differs.
-"""
-
 import logging
 from urllib.parse import urljoin
 
