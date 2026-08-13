@@ -4,8 +4,7 @@ import sys
 import os
 import threading
 
-# Must run before any cv2 import so OpenCV's own MSMF/DSHOW warnings are
-# suppressed (see iSpy/__init__.py).
+# set before any cv2 import so opencv's own msmf/dshow warnings stay quiet (see iSpy/__init__.py)
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
 
@@ -83,11 +82,9 @@ def main():
 
     config = iSpyConfig(str(config_path))
 
-    # Boot the web dashboard FIRST - it is the top priority and must be
-    # reachable while the vision stack is still initializing (camera open
-    # and model loading can take minutes). Until the vision loop below
-    # starts producing ticks, the dashboard shows a red
-    # "Vision is not running" banner.
+    # boot the dashboard FIRST - it must be up while the vision stack inits
+    # (cam open + model loading can take minutes). shows a "vision is not
+    # running" banner until the loop below produces ticks.
     prebuilt_web = None
     if config.config.get("app_mode", False):
         from iSpy.web.Backend.WebApp import create_app

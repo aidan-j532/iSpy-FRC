@@ -24,16 +24,13 @@ from iSpy.config.iSpyConfig import (
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
 
-# Legacy settings-key aliases that predate the current schemas. They are
-# dropped when the pipeline's canonical key is present, so old configs don't
-# carry dead twins around forever.
+# legacy alias keys - dropped when the canonical key is present so old configs
+# dont carry dead twins around forever
 _SETTING_ALIASES = {"quantized": "quantize", "auto_opt": "optimize"}
 
 
 def _pipeline_schema_keys(pipeline_name: str) -> set:
-    """Set of settings keys the named pipeline accepts (config_schema keys).
-    Returns an empty set when the pipeline is unknown so pruning never
-    destroys data for pipelines we can't describe."""
+    """settings keys the pipeline accepts; empty when unknown so pruning never nukes data"""
     try:
         from iSpy.vision.pipelines import get_pipeline_classes
         cls = get_pipeline_classes().get(pipeline_name)
@@ -49,11 +46,8 @@ def _pipeline_schema_keys(pipeline_name: str) -> set:
 
 
 def _prune_stale_pipeline_settings(entry: dict) -> None:
-    """Drop settings that belong to a *different* pipeline (they accumulate
-    when a camera switches pipelines or was edited under an older layout)
-    plus legacy alias keys whose canonical key is present. Keys unknown to
-    every pipeline schema are left untouched - they may be hand-written
-    tuning knobs (e.g. pnp, margin)."""
+    """drop settings from a different pipeline (they pile up when a cam
+    switches pipelines) + legacy aliases; unknown keys stay - hand-written tuning knobs"""
     if not isinstance(entry, dict):
         return
     pipeline_name = get_pipeline_name(entry)
@@ -81,12 +75,8 @@ def _prune_stale_pipeline_settings(entry: dict) -> None:
 
 
 def _windows_cameras_from_registry():
-    """Discover video capture sources from the Windows registry without opening cameras.
-
-    Reads the KSCATEGORY_VIDEO_CAMERA device-interface class, whose key order is
-    the same order cv2.VideoCapture(i, cv2.CAP_MSMF) assigns indices (index 0 is
-    the first camera). Returns a list of {"index": int, "name": str} dicts.
-    """
+    """find capture sources via the registry without opening cams; key order ==
+    the order CAP_MSMF assigns indices"""
     devices = []
     try:
         import winreg
@@ -113,8 +103,7 @@ def _windows_cameras_from_registry():
             devices.append({
                 "index": camera_index,
                 "name": _windows_camera_name(iface) or f"Camera {camera_index}",
-                # Unique per device interface (e.g. USB\VID_...&PID_...&MI_01\
-                # <instance>). Used to dedupe and as a stable device_id.
+                # unique per device interface (USB\VID_...&PID_...&MI_01\<instance>) - dedupe key + stable device_id
                 "hw_id": iface[:iface.find("#{")],
             })
             camera_index += 1
@@ -124,13 +113,8 @@ def _windows_cameras_from_registry():
 
 
 def _windows_camera_name(iface):
-    """Resolve a friendly camera name from a DeviceClasses interface key name.
-
-    Queries the device instance (Enum key) for FriendlyName/DriverDesc/
-    DeviceDesc. Generic UVC interface names ("USB Video Device") are replaced
-    by walking up to the parent USB device node, which carries the real
-    marketing name (e.g. "Logitech HD Pro Webcam C920").
-    """
+    """grab the friendly name from the registry; generic uvc names get replaced
+    by walking up to the parent usb node (thats where the real name lives)"""
     try:
         import winreg
     except ImportError:
@@ -164,8 +148,7 @@ def _windows_camera_name(iface):
                 if not isinstance(name, str):
                     continue
                 if name.startswith("@"):
-                    # "inf_path,%desc%;Friendly Name" -> drop the locator,
-                    # keep the trailing friendly text.
+                    # "inf_path,%desc%;Friendly Name" -> drop the locator, keep the friendly part
                     name = name.rsplit(";", 1)[-1] if ";" in name else ""
                 name = name.strip()
                 if name:
@@ -178,8 +161,7 @@ def _windows_camera_name(iface):
     if name and name.lower() not in _GENERIC_WINDOWS_NAMES:
         return name
 
-    # Generic interface name - the marketing name usually lives on the parent
-    # USB node (Enum\USB\VID_xxxx&PID_yyyy\<instance>), not the UVC interface.
+    # generic iface name -> real one usually lives on the parent usb node, not the uvc iface
     m = re.match(r"^USB\\(VID_\w+&PID_\w+)(?:&MI_\w+)?$", hw_id, re.IGNORECASE)
     if m:
         parent_hw = f"USB\\{m.group(1)}"
@@ -203,15 +185,13 @@ def _windows_camera_name(iface):
     return name or None
 
 
-# Names Windows hands out when it has nothing better - treat them as unknown
-# and keep digging (the parent USB node usually has the real name).
+# names windows hands out when it has nothing better - treat as unknown and keep digging
 _GENERIC_WINDOWS_NAMES = {
     "", "usb video device", "usb camera", "camera", "uvc camera",
     "video capture device", "usb2.0 camera",
 }
 
-# V4L2 capability bits (videodev2.h). QUERYCAP layout: driver[16], card[32],
-# bus_info[32], version u32 @80, capabilities u32 @84.
+# v4l2 capability bits (videodev2.h) - caps u32 lives at offset 84 in QUERYCAP
 _V4L2_CAP_VIDEO_CAPTURE = 0x00000001
 _V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
 _V4L2_CAP_VIDEO_M2M = 0x00004000
@@ -219,7 +199,6 @@ _VIDIOC_QUERYCAP = 0x80685600
 
 
 def _v4l2_caps(video_path):
-    """V4L2 capability bits of a /dev/videoN node (0 when unreadable)."""
     try:
         import fcntl
         import struct
@@ -241,26 +220,19 @@ def _v4l2_caps(video_path):
 
 
 def _linux_is_capture_node(video_path):
-    """True if the node is a real video-capture device. Returns None when the
-    capability bits can't be read (treated as unknown, i.e. keep the node)."""
+    """true if a real capture device; None = caps unreadable, keep the node"""
     caps = _v4l2_caps(video_path)
     if caps == 0:
         return None
     if caps & _V4L2_CAP_VIDEO_M2M:
-        # Memory-to-memory codecs (e.g. bcm2835-codec-decode) advertise the
-        # capture bit but are not cameras.
+        # m2m codecs (bcm2835-codec-decode) claim the capture bit but aint cameras
         return False
     return bool(caps & (_V4L2_CAP_VIDEO_CAPTURE | _V4L2_CAP_VIDEO_CAPTURE_MPLANE))
 
 
 def _linux_device_key(video_path):
-    """Identity of the physical device behind a /dev/videoN node.
-
-    video0 + video1 of one UVC camera resolve to the same sysfs device
-    interface and therefore share a key, while unrelated nodes (encoders,
-    metadata-only) resolve elsewhere. This is the dedupe key that kills
-    Linux "same camera twice" detection.
-    """
+    """physical device behind a /dev/videoN node - the dedupe key that kills
+    linux "same cam twice" detection (video0+video1 of one uvc cam share it)"""
     m = re.search(r"/video(?P<num>\d+)$", video_path)
     if not m:
         return video_path
@@ -276,7 +248,6 @@ def _linux_device_key(video_path):
 
 
 def _linux_sysfs_name(video_path):
-    """Friendly name Linux stores for a node (e.g. "Logitech Webcam C920")."""
     m = re.search(r"/video(\d+)$", video_path)
     if not m:
         return None
@@ -291,12 +262,7 @@ def _linux_sysfs_name(video_path):
 
 
 def _linux_device_groups():
-    """Group /dev/videoN nodes by physical device.
-
-    Prefers ``v4l2-ctl --list-devices`` (groups every node under one device
-    name per physical device); falls back to grouping the sysfs device
-    identity. Returns a list of (name_or_None, [nodes]).
-    """
+    """group /dev/videoN nodes by physical device - v4l2-ctl first, sysfs fallback"""
     try:
         result = subprocess.run(
             ["v4l2-ctl", "--list-devices"],
@@ -421,10 +387,8 @@ class CamerasModule(WebModule):
             self._evict_stale(now)
 
     def _device_key(self, cam) -> str:
-        """Stable hardware identity for a running camera - prefers the
-        resolved device_id (by-id path / vendor:product:serial), falling
-        back to the raw source if resolution failed (e.g. it's an image
-        placeholder, not a real device)."""
+        """hardware id for a running cam; falls back to source when device_id
+        resolution failed (image placeholders etc)"""
         dev_id = getattr(cam, "device_id", None)
         if dev_id:
             return dev_id
@@ -450,7 +414,7 @@ class CamerasModule(WebModule):
         if name in cams:
             return jsonify(error=f"Camera '{name}' already exists"), 409
 
-        # Refuse to add a device already claimed by another configured camera
+        # refuse to add a device already claimed by another configured cam
         if device_id:
             for existing in cams.values():
                 if existing.get("device_id") == device_id:
@@ -475,10 +439,8 @@ class CamerasModule(WebModule):
             "pipeline": {"name": pipeline_name, "settings": pipeline_settings},
         }
 
-        # Model-backed pipelines need a vision_model block in their pipeline
-        # settings or the pipeline crashes at construction. Accept the model
-        # picker's dict ({file_path, source_pt}), a raw path string, or let
-        # ensure_camera_entries_ready drop in a default below.
+        # model-backed pipelines crash at construction without a vision_model
+        # block - accept the picker dict, a raw path, or let ensure_camera_entries_ready drop one in
         vm = data.get("vision_model")
         if isinstance(vm, dict) and vm.get("file_path"):
             pipeline_settings["vision_model"] = vm
@@ -504,7 +466,6 @@ class CamerasModule(WebModule):
         return jsonify(success=True, note="Restart vision to apply.")
 
     def _find_camera_entry(self, cam_name):
-        """Locate a camera config entry by its config key, name, or source."""
         cams = self.context["config"].get("camera_configs", {})
         entry = cams.get(cam_name)
         if entry is not None:
@@ -563,9 +524,8 @@ class CamerasModule(WebModule):
                 else:
                     new_entry[key] = value
                 continue
-            # Anything else is a pipeline settings-field (min_conf, prompt,
-            # tag_size_inches, vision_model...). Route it into
-            # pipeline.settings so stale top-level keys can't reappear.
+            # everything else is a pipeline settings-field - route it into
+            # pipeline.settings so stale top-level keys cant reappear
             pipeline_entry.setdefault("settings", {})[key] = value
 
         new_name = str(new_entry.get("name") or "").strip()
@@ -584,10 +544,8 @@ class CamerasModule(WebModule):
         except Exception:
             pass
 
-        # Switching a camera onto a model-backed pipeline (e.g. from
-        # april_tag to object_detection) needs a vision_model block in its
-        # pipeline settings or the new pipeline instance crashes at
-        # construction.
+        # switching onto a model-backed pipeline needs a vision_model block
+        # or the new pipeline instance crashes at construction
         if is_model_backed_pipeline(pipeline_name) and not isinstance(
             pipeline_entry.get("settings", {}).get("vision_model"), dict
         ):
@@ -601,8 +559,7 @@ class CamerasModule(WebModule):
         config.set("camera_configs", cams)
         config.save()
 
-        # Settings changes are picked up on the next vision start - never
-        # rebuild/swap the running pipeline mid-run.
+        # settings apply on the next vision start - never rebuild the running pipeline mid-run
         return jsonify(
             success=True,
             note="Settings saved - restart vision to apply.",
@@ -677,11 +634,8 @@ class CamerasModule(WebModule):
                 self._discover_cache = devices
                 self._discover_cache_ts = now
 
-        # Cross-reference against configured cameras using the same identity
-        # that the add-camera flow writes into config. A discovered device is
-        # considered active if either its resolved device_id matches a
-        # configured camera, or (when device_id resolution failed) its raw
-        # source/path matches a configured camera source.
+        # a discovered device is active when its device_id (or raw source if
+        # resolution failed) matches a configured cam
         config = self.context.get("config")
         configured_device_ids = set()
         configured_sources = set()
@@ -703,106 +657,21 @@ class CamerasModule(WebModule):
 
         return jsonify(devices=devices)
 
-    # def _probe_devices(self):
-    #     devices = []
-    #     if platform.system() == "Linux":
-    #         v4l = subprocess.run(
-    #             ["v4l2-ctl", "--list-devices"],
-    #             capture_output=True, text=True, timeout=5,
-    #         )
-    #         if v4l.returncode == 0:
-    #             current_name = None
-    #             for line in v4l.stdout.splitlines():
-    #                 line = line.strip()
-    #                 if not line:
-    #                     continue
-    #                 if line.endswith(":"):
-    #                     current_name = line.rstrip(":")
-    #                 elif line.startswith("/dev/video"):
-    #                     devices.append({
-    #                         "path": line,
-    #                         "name": current_name or line,
-    #                         "device_id": _resolve_device_id(line),
-    #                     })
-
-    #         for path in sorted(glob.glob("/dev/video*")):
-    #             if any(existing.get("path") == path for existing in devices):
-    #                 continue
-    #             devices.append({
-    #                 "path": path,
-    #                 "name": path,
-    #                 "device_id": _resolve_device_id(path),
-    #             })
-    #     else:
-    #         with self.lock:
-    #             claimed = {s for s in self.sources.values() if s}
-
-    #         for path in sorted(glob.glob("/dev/video*")):
-    #             devices.append({
-    #                 "path": path, "name": path,
-    #                 "device_id": _resolve_device_id(path),
-    #             })
-    #         if not devices:
-    #             for i in range(0, 16):
-    #                 if str(i) in claimed:
-    #                     devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
-    #                     continue
-    #                 # Avoid repeated index-based OpenCV probe attempts on Windows,
-    #                 # which trigger the noisy DSHOW errors when no device is present.
-    #                 if platform.system() == "Windows":
-    #                     break
-    #                 try:
-    #                     cap = None
-    #                     for backend in [cv2.CAP_ANY]:
-    #                         try:
-    #                             cap = cv2.VideoCapture(i, backend)
-    #                         except Exception:
-    #                             cap = None
-    #                             continue
-    #                         if cap is not None and cap.isOpened():
-    #                             break
-    #                         cap = None
-    #                     if cap is not None and cap.isOpened():
-    #                         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    #                         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    #                         devices.append({
-    #                             "path": str(i), "name": f"Camera {i}",
-    #                             "resolution": f"{w}x{h}" if w and h else None,
-    #                             "device_id": None,
-    #                         })
-    #                     if cap is not None:
-    #                         cap.release()
-    #                 except Exception:
-    #                     continue
-
-    #     seen = {}
-    #     for dev in devices:
-    #         key = dev.get("device_id") or dev.get("path")
-    #         if key in seen:
-    #             continue
-    #         seen[key] = dev
-    #     return list(seen.values())
-
-
     def _probe_devices(self):
         devices = []
         system_name = platform.system()
 
         if system_name == "Linux":
-            # One entry per physical device, never one per /dev/videoN node:
-            # UVC cameras expose a capture node plus a metadata companion node
-            # (video0 + video1), and encoders/codecs/radio nodes (e.g.
-            # /dev/video10+, bcm2835-codec-*) pollute the /dev/video* glob.
-            # VIDIOC_QUERYCAP keeps only true capture nodes; identical sysfs
-            # device identity deduplicates the rest.
+            # one entry per physical device, not per node: uvc cams have a
+            # metadata companion node (video0+video1) and codec/radio nodes
+            # pollute the glob - QUERYCAP filters + sysfs identity dedupes
             seen_keys = set()
             for label, nodes in _linux_device_groups():
                 capture = [n for n in nodes if _linux_is_capture_node(n)]
                 if not capture:
                     capture = [n for n in nodes if _linux_is_capture_node(n) is None]
                 if not capture:
-                    # Every node is confirmed non-capture (encoder, codec,
-                    # radio, metadata...) - not a camera, skip the whole group.
+                    # all nodes confirmed non-capture (encoder/codec/radio...) - skip the group
                     continue
                 node = sorted(capture)[0]
                 key = _linux_device_key(node) or node
@@ -815,8 +684,7 @@ class CamerasModule(WebModule):
                     "device_id": key,
                 })
 
-            # Anything v4l2-ctl / sysfs grouping missed, still filter out
-            # confirmed non-capture nodes and already-seen devices.
+            # catch whatever grouping missed - still drop non-capture nodes + dupes
             for path in sorted(glob.glob("/dev/video*")):
                 is_capture = _linux_is_capture_node(path)
                 if is_capture is False:
@@ -832,13 +700,9 @@ class CamerasModule(WebModule):
                 })
 
         elif system_name == "Windows":
-            # Registry enumeration of video capture sources. No index probing:
-            # OpenCV's MSMF backend cannot open by index - every attempt emits
-            # "VIDEOIO(MSMF): backend is generally available but can't be
-            # used to capture by index", and the cameras page re-runs discover
-            # on its refresh interval, so probing would spam stderr forever.
-            # Registry key order is the order CAP_MSMF assigns indices, so
-            # names + indices come straight from there.
+            # no index probing - MSMF cant open by index, every attempt spams
+            # "VIDEOIO(MSMF)..." to stderr, and discover reruns on refresh so
+            # it'd spam forever. registry key order == CAP_MSMF index order
             with self.lock:
                 claimed = {s for s in self.sources.values() if s}
             seen_interfaces = set()
@@ -857,7 +721,7 @@ class CamerasModule(WebModule):
                 })
 
         else:
-            # macOS / other: best-effort /dev/video glob plus index probing.
+            # macos / other: best-effort /dev/video glob + index probing
             with self.lock:
                 claimed = {s for s in self.sources.values() if s}
 
@@ -886,7 +750,7 @@ class CamerasModule(WebModule):
                     except Exception:
                         continue
 
-        # Deduplicate final list
+        # dedupe
         seen = {}
         for dev in devices:
             key = dev.get("device_id") or dev.get("path")

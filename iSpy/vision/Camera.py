@@ -18,31 +18,22 @@ except AttributeError:
     pass
 
 class CameraOpenTimeout(ValueError):
-    """Raised when opening a capture backend exceeds ``_CAP_OPEN_TIMEOUT``.
-
-    Subclasses ValueError so existing fallback logic (try the next backend,
-    then a synthetic placeholder frame) applies unchanged."""
+    """raised when opening a capture backend exceeds _CAP_OPEN_TIMEOUT; subclasses ValueError so the fallback logic (next backend, then placeholder) still applies"""
 
 class Camera:
     # Resolution used for the synthetic "no camera" placeholder frame.
     _PLACEHOLDER_W = 640
     _PLACEHOLDER_H = 480
 
-    # How long to wait for the first frame after opening a capture before
-    # declaring the backend unusable. MSMF streams can be slow to reach the
-    # "run" state (they fail with MF_E_HW_MFT_FAILED_START_STREAMING,
-    # 0xC00D3704, until the hardware MFT actually starts); blind grab()
-    # bursts just flood stderr with warnings. Short enough that a dead
-    # camera doesn't stall startup for long.
+    # max wait for the first frame after opening before calling the backend unusable.
+    # MSMF is slow to reach "run" (MF_E_HW_MFT_FAILED_START_STREAMING, 0xC00D3704)
+    # and blind grab() bursts just flood stderr; short enough a dead cam doesnt stall startup
     _STREAM_START_TIMEOUT = 1.5
 
-    # Upper bound on how long cv2.VideoCapture() itself may block. The
-    # constructor runs native code, and a wedged MSMF driver (or a device
-    # held by another app) can sit inside it indefinitely with no way for
-    # the Python call to time out on its own. The open runs in a worker
-    # thread so a stuck backend is abandoned after this long instead of
-    # stalling startup; _open_camera then falls back to the next backend
-    # (DirectShow on Windows).
+    # upper bound on how long cv2.VideoCapture() itself may block - it runs native
+    # code and a wedged MSMF driver (or a device held by another app) can sit in it
+    # forever with no way for python to time out. open runs in a worker thread so a
+    # stuck backend is abandoned after this long instead of stalling startup
     _CAP_OPEN_TIMEOUT = 15.0
 
     # Reader retry cadence and warning throttle.
@@ -54,11 +45,9 @@ class Camera:
     def _get_capture_backend_candidates(sys_platform: str | None = None):
         platform_name = (sys_platform or platform.system()).lower()
         if platform_name == "windows":
-            # Media Foundation is the most stable Windows backend for OpenCV.
-            # The generic CAP_ANY path probes obsensor/DSHOW on every index and
-            # spams stderr (obsensor "Camera index out of range", DSHOW "can't be
-            # used to capture by index") while CAP_DSHOW is prone to freezing.
-            # A single backend keeps the stream from being disrupted on open.
+            # MSMF is the most stable Windows backend. CAP_ANY probes obsensor/DSHOW
+            # on every index and spams stderr while CAP_DSHOW freezes; one backend
+            # keeps the stream from being disrupted on open
             return [cv2.CAP_MSMF]
         if platform_name == "linux":
             return [cv2.CAP_V4L2, cv2.CAP_ANY]
@@ -91,17 +80,15 @@ class Camera:
         self._brightness_lut: np.ndarray | None = None
         self._brightness_frame_count = 0
 
-        # Toggled by the reader after repeated failures so re-opens alternate
-        # away from a backend whose stream keeps dying (MSMF -> DirectShow).
+        # toggled by the reader after repeated failures so re-opens alternate away
+        # from a backend whose stream keeps dying (MSMF -> DirectShow)
         self._prefer_alternate_backend = False
 
-        # UVC exposure/gain settings. Short exposure ensures the camera can
-        # deliver the requested frame rate even in moderate-to-low light.
+        # UVC exposure/gain; short exposure keeps the camera able to hit the requested fps in low light
         self._exposure_time = camera_config.get("exposure_time", 100)   # 10 ms
         self._gain = camera_config.get("gain", 200)
 
-        # Optional per-camera FPS cap (0 = uncapped). The reader thread
-        # sleeps to hold the average capture rate at or below this value.
+        # optional per-camera fps cap (0 = uncapped); the reader thread sleeps to hold the avg capture rate at/below this
         try:
             self._fps_cap = max(0, float(camera_config.get("fps_cap", 0) or 0))
         except (TypeError, ValueError):
@@ -124,8 +111,8 @@ class Camera:
                     self.source,
                     exc,
                 )
-                # Treat the object as an "image" source backed by the placeholder so
-                # the rest of the pipeline can keep running without modification.
+                # treat the object as an "image" source backed by the placeholder so
+                # the rest of the pipeline can keep running without modification
                 self.is_image = True
                 self.image = self._make_placeholder_frame()
                 return
@@ -168,14 +155,9 @@ class Camera:
         return frame
 
     def _wait_for_first_frame(self, cap, timeout: float = _STREAM_START_TIMEOUT) -> bool:
-        """Paced wait for the first valid frame.
-
-        ``grab()`` calls right after open() frequently fail on MSMF while the
-        hardware MFT is still starting the stream (0xC00D3704
-        MF_E_HW_MFT_FAILED_START_STREAMING). Instead of hammering the device
-        in a tight loop (which spams warnings), retry with a small sleep and
-        give the backend up to ``timeout`` seconds to produce a frame.
-        """
+        """paced wait for the first valid frame - grab() right after open() fails
+        on MSMF while the hardware MFT starts the stream (0xC00D3704); retry
+        with a small sleep instead of hammering the device in a tight loop"""
         deadline = time.perf_counter() + timeout
         while time.perf_counter() < deadline:
             try:
@@ -187,16 +169,11 @@ class Camera:
         return False
 
     def _open_capture(self, extra_backends: bool = False, prefer_dshow: bool = False):
-        """Open the capture with the platform's preferred backend(s).
-
-        Every candidate is verified by configuration + a real first frame
-        before being accepted; a backend that opens the device but never
-        starts the stream is discarded and the next one is tried.
-        ``extra_backends`` (used on recovery re-opens) additionally allows
-        DirectShow on Windows, which can open cameras that MSMF reports as
-        invalidated (e.g. while another app holds the device).
-        ``prefer_dshow`` tries DirectShow first (used to alternate away from
-        a MSMF stream that keeps dying)."""
+        """open the capture with the platform's preferred backend(s); every candidate
+        is verified by config + a real first frame before acceptance. extra_backends
+        adds DirectShow on windows (opens cams MSMF reports as invalidated, e.g.
+        while another app holds the device); prefer_dshow tries DirectShow first to
+        alternate away from a MSMF stream that keeps dying"""
         backend_candidates = self._get_capture_backend_candidates(platform.system())
         if extra_backends and cv2.CAP_DSHOW not in backend_candidates:
             backend_candidates = backend_candidates + [cv2.CAP_DSHOW]
@@ -214,9 +191,8 @@ class Camera:
             try:
                 self._configure_capture(cap)
                 if not self._wait_for_first_frame(cap):
-                    # Device opened but its stream never started (e.g. MSMF
-                    # hardware MFT failed to run). Keep the capture on the
-                    # old backend rather than losing it, but move on.
+                    # device opened but the stream never started (e.g. MSMF
+                    # hardware MFT failed to run); keep the old backend, move on
                     self.logger.info(
                         "Camera %s: no frame from backend %s within %.1fs - "
                         "trying the next backend.",
@@ -235,15 +211,11 @@ class Camera:
         raise ValueError(f"Camera failed to open: {self.source} ({last_error})")
 
     def _open_capture_bounded(self, backend):
-        """Open the capture with a hard wall-clock bound.
-
-        ``cv2.VideoCapture()`` is a native call that can block indefinitely
-        (a wedged Media Foundation driver, or another app holding the device,
-        never returns from the kernel). Run it in a daemon worker thread and
-        abandon the backend after ``_CAP_OPEN_TIMEOUT`` seconds; if the worker
-        ever unblocks afterwards it releases the capture instead of handing it
-        back, so a stuck open cannot leak the device to a path that never
-        uses it."""
+        """open the capture with a hard wall-clock bound - cv2.VideoCapture() is
+        native and can block forever (wedged MSMF driver, or another app holding
+        the device). run it in a daemon worker thread and abandon the backend
+        after _CAP_OPEN_TIMEOUT; if the worker unblocks later it releases the
+        capture instead of handing it back, so a stuck open cant leak the device"""
         holder = {"cap": None, "error": None, "abandoned": False}
 
         def _worker():
@@ -372,15 +344,13 @@ class Camera:
 
             time.sleep(0.15)
 
-        # CROSS-PLATFORM FIX: Try a safe backend order first and only fall back
-        # to another backend if the first cannot open the device. Each backend
-        # is configured and verified with a real first frame before acceptance.
+        # try a safe backend order first, only fall back if the first cant open
+        # the device; each backend is verified with a real first frame
         try:
             self.cap = self._open_capture()
         except ValueError:
-            # MSMF opened the device but its stream never started (common
-            # when another app holds the camera) - give DirectShow a shot
-            # before giving up on the source entirely.
+            # MSMF opened the device but its stream never started (common when
+            # another app holds the camera) - give DirectShow a shot before giving up
             self.cap = self._open_capture(extra_backends=True)
 
         if not self.cap.isOpened():
@@ -408,12 +378,10 @@ class Camera:
         self._frame_processors = []
 
     def _reopen_capture(self):
-        """Release and re-open the capture after a persistent grab failure
-        (e.g. MSMF error -1072873821 / MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED
-        or -1072875772 / MF_E_HW_MFT_FAILED_START_STREAMING when another app
-        grabs the webcam or the stream never starts). Alternates the backend
-        preference so a stuck MSMF stream is replaced by DirectShow. Returns
-        True on success."""
+        """release and re-open the capture after a persistent grab failure (e.g.
+        MSMF -1072873821 MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED or -1072875772
+        MF_E_HW_MFT_FAILED_START_STREAMING when another app grabs the webcam);
+        alternates backend preference so a stuck MSMF stream is replaced by DirectShow"""
         try:
             cap = getattr(self, "cap", None)
             if cap is not None:

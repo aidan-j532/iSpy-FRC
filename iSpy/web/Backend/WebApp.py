@@ -63,7 +63,7 @@ class iSpyWebApp:
         self.flask_app.add_url_rule("/", "root", lambda: render_template("dashboard.html"))
 
     def update(self, frame_data: dict):
-        """Called every tick when running inside the vision loop."""
+        """called every tick inside the vision loop"""
         for name, mod in self.modules.items():
             try:
                 mod.update(frame_data)
@@ -71,13 +71,12 @@ class iSpyWebApp:
                 self.logger.exception("Web module '%s' update failed", name)
 
     def set_vision_instance(self, vision):
-        """Called by iSpy.py once trackers/utilities/frame_processors exist."""
+        """called by iSpy.py once trackers/utilities/frame_processors exist"""
         self.context["vision_instance"] = vision
 
     def set_cameras(self, cameras):
-        """Hand the constructed camera pipelines to a dashboard that was
-        booted before they existed (see game_loop.main). Modules that cached
-        the camera list eagerly in __init__ are updated via set_cameras()."""
+        """hand the constructed pipelines to a dashboard that booted before
+        they existed (see game_loop.main)"""
         self.context["cameras"] = cameras
         for name, mod in self.modules.items():
             if hasattr(mod, "set_cameras"):

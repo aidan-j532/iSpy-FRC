@@ -1,9 +1,7 @@
 """Common vision pipeline base.
 
-Every vision capability in iSpy is an equal peer: object detection,
-AprilTag, QR codes, line tracking, YOLO World, Depth Anything, and any
-future pipeline. They share one lifecycle and are treated generically by
-the application:
+Every vision capability in iSpy (object detection, AprilTag, QR codes, YOLO
+World, Depth Anything, ...) shares one lifecycle and is treated generically:
 
     Pipeline created
         ↓
@@ -13,10 +11,8 @@ the application:
         ↓
     run()      (process frames)
 
-The pipeline owns its configuration, preparation, model downloads,
-optimization, quantization, initialization, readiness and processing.
-Generic application code (boot, web, iSpy runtime) only knows the common
-interface defined here.
+The pipeline owns its config, prep, model downloads, optimization, readiness
+and processing. Generic app code only knows the interface defined here.
 """
 
 import threading
@@ -37,37 +33,22 @@ class VisionPipeline(Camera, VisionBase):
     # ------------------------------------------------------------------
 
     def prepare(self):
-        """Begin whatever preparation this pipeline requires, without
-        blocking. Preparation runs in the background (a thread owned by
-        the pipeline); ``is_ready()`` reports progress. The default
-        implementation requires no preparation."""
+        """start prep without blocking - runs on a background thread"""
         pass
 
     def is_ready(self) -> tuple[bool, str]:
-        """(ready, status) for the whole pipeline.
-
-        A pipeline is only "ready" when everything it needs to process
-        frames has been prepared successfully:
-        * ready       - fully prepared, can process frames
-        * optimizing  - a model optimization/conversion is in flight
-        * downloading - a required model/weights download is in flight
-        * error: ...  - preparation failed (with a useful reason)
-
-        Must never block on a multi-minute operation: if work is needed
-        it should already be running in the background (see ``prepare``).
-        """
+        """(ready, status) for the whole pipeline. Only "ready" when
+        everything needed to process frames is prepared. Never blocks."""
         self._set_status("ready")
         return True, "ready"
 
     def get_status(self) -> str:
-        """Short human-readable status of this pipeline (last known)."""
+        """short human-readable status (last known)"""
         return getattr(self, "_status", "initializing")
 
     def get_state(self) -> str:
-        """Coarse machine-readable state derived from the status string:
-        one of ``ready``, ``optimizing``, ``downloading``, ``initializing``
-        or ``error``. Generic UI code uses this instead of parsing raw
-        pipeline statuses."""
+        """coarse machine-readable state: ready/optimizing/downloading/
+        initializing/error. UI uses this instead of parsing raw statuses."""
         status = self.get_status()
         lowered = status.lower()
         if status.startswith("error"):
@@ -84,11 +65,11 @@ class VisionPipeline(Camera, VisionBase):
         self._status = status
 
     def process(self, frame):
-        """Process a single frame. By default aliases ``run()``."""
+        """process a single frame; aliases run() by default"""
         return self.run()
 
     def stop(self):
-        """Stop background work and release resources."""
+        """stop bg work and release resources"""
         self.destroy()
 
     # ------------------------------------------------------------------
@@ -96,15 +77,11 @@ class VisionPipeline(Camera, VisionBase):
     # ------------------------------------------------------------------
 
     def get_optimization_options(self) -> dict:
-        """Describe the optimization options this pipeline supports, or
-        return {} if the pipeline has nothing to optimize. Used by generic
-        UI code; the keys are pipeline-specific."""
+        """describe supported optimization options, or {} if none"""
         return {}
 
     def optimize(self, **kwargs) -> str:
-        """Start an optimization/conversion of this pipeline's model as a
-        background job. Returns a status string. The default implementation
-        does nothing."""
+        """start a model optimization as a bg job; returns a status string"""
         return "not supported"
 
     @classmethod
@@ -113,30 +90,24 @@ class VisionPipeline(Camera, VisionBase):
 
     @classmethod
     def uses_user_model(cls) -> bool:
-        """True if this pipeline runs a user-selectable model file (e.g.
-        object detection lets users pick any supported .pt). Pipelines that
-        provision their own fixed models (YOLO World, Depth Anything) return
-        False. Generic UI code uses this to decide whether to show a model
-        picker."""
+        """True if users can pick the model file (UI shows a picker)"""
         return False
 
     @classmethod
     def show_common_fields(cls) -> bool:
-        """True if the camera settings UI should show the shared mount/
-        calibration fields (x/y/z/height/yaw/pitch) for this pipeline. These
-        feed every pipeline's camera-to-robot transform, so they default to
+        """True if the UI should show the shared mount/calibration fields.
+        Those feed every pipeline's camera-to-robot transform, so default
         on; pipelines that never use the transform may opt out."""
         return True
 
 
 class BackgroundPreparedPipeline(VisionPipeline):
-    """VisionPipeline whose preparation runs on a background thread.
+    """VisionPipeline whose prep runs on a background thread.
 
-    Pipelines that download or build models (Depth Anything, YOLO World,
-    ...) should not block construction on network/convert work: ``__init__``
-    must be cheap so boot can construct every camera concurrently, then wait
-    on ``is_ready()``. Subclasses implement ``_prepare()``; the thread is
-    started automatically by ``prepare()``.
+    Pipelines that download/build models shouldnt block construction on
+    network/convert work: __init__ must be cheap so boot can construct every
+    camera concurrently, then wait on is_ready(). Subclasses implement
+    _prepare(); the thread starts automatically in prepare().
     """
 
     def __init__(self, camera_config, input_size, grayscale):
@@ -159,7 +130,7 @@ class BackgroundPreparedPipeline(VisionPipeline):
             self._prep_thread.start()
 
     def _prepare(self):
-        """Do the actual preparation work. Runs once, on a daemon thread."""
+        """actual prep work, runs once on a daemon thread"""
         raise NotImplementedError
 
     def _preparing(self) -> bool:

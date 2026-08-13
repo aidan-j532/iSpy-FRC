@@ -1,23 +1,17 @@
 """Generalized model preparation and optimization system.
 
 This module owns everything about turning a base model into a
-hardware-optimized, possibly quantized artifact. It is deliberately
-pipeline-agnostic: it knows about YOLO, RKNN, OpenVINO, TFLite, formats,
-quantization, devices and backends - the pipelines that use it do not need
-to.
+hardware-optimized, possibly quantized artifact. Deliberately pipeline-agnostic:
+it knows YOLO/RKNN/OpenVINO/TFLite, formats, quantization, devices and backends -
+the pipelines that use it dont need to.
 
-Responsibilities extracted from the old object-detection-centric ``boot``:
+Responsibilities pulled out of the old object-detection-centric ``boot``:
+recommended format selection (AutoOpt), .pt -> optimized conversion, quantization
+with a reusable QuantizeDataset (never tied to one model), FP32/FP16/INT8,
+backend-specific dep installation, and checking whether conversion is even needed.
 
-* ``auto_opt`` / recommended format selection (AutoOpt.recommend_format)
-* model format detection and .pt -> optimized model conversion
-* quantization (with a reusable QuantizeDataset, never tied to one model)
-* FP32 / FP16 / INT8 behavior
-* hardware/backend-specific optimization and dependency installation
-* checking whether an optimized artifact already exists and whether
-  conversion is actually necessary
-
-Pipelines ask for optimization through their own interface; this module is
-the generic implementation underneath.
+Pipelines ask for optimization through their own interface; this is the generic
+implementation underneath.
 """
 
 import contextlib
@@ -136,9 +130,8 @@ _JETSON_SYSTEM_MANAGED = {"tensorrt", "onnxruntime"}
 
 
 def _model_supports_end2end(model: "ultralytics.YOLO") -> bool:
-    # Set by Ultralytics on every DetectionModel/SegmentationModel/PoseModel/
-    # OBBModel: self.end2end = getattr(self.model[-1], "end2end", False).
-    # Reflects the actual trained head - not a version guess.
+    # ultralytics sets this on every model head: end2end = getattr(model[-1], "end2end", False).
+    # reflects the actual trained head, not a version guess
     return bool(getattr(model.model, "end2end", False))
 
 
@@ -779,18 +772,12 @@ def _merge_rknn_build_outputs(outputs: list) -> "np.ndarray":
 
 
 def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
-    """Divide the constant input of `node` by `divisor`.
-
-    The constant may be a graph initializer (older Ultralytics exports) or a
-    Constant NODE (newer exports, e.g. 8.4.x emits the stride multipliers as
-    onnx::Constant nodes rather than initializers). If that constant feeds
-    other nodes too (RKNN toolkit's weight-sharing means the same const tensor
-    can feed multiple ops - confirmed in the layer dump, e.g. onnx::Split_244
-    reused 3x), it is cloned under a new name first so only `node` sees the
-    scaled value and every other consumer is untouched. No nodes are inserted
-    or removed - only a fresh initializer is added - so RKNN's graph topology
-    (and its NC1HWC2 layout/tiling decisions) are unaffected.
-    """
+    """divide the constant input of `node` by `divisor`. the constant may be a graph
+    initializer (older exports) or a Constant NODE (newer exports, e.g. 8.4.x bakes
+    the stride multipliers into onnx::Constant nodes). if that constant feeds other
+    nodes too (rknn toolkit weight-sharing reuses consts), clone it under a new name
+    so only `node` sees the scaled value. no nodes inserted or removed - only a fresh
+    initializer - so rknn's graph topology and layout/tiling are unaffected."""
     import numpy as np
     import onnx
     import onnx.numpy_helper
@@ -803,10 +790,10 @@ def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
             const_name = inp
             break
     if const_name is None:
-        # Newer Ultralytics exports bake stride multipliers into Constant
-        # nodes ('/model.23/Constant_15' -> output '/model.23/Constant_15_output_0')
-        # instead of graph initializers - resolve those too or quantization
-        # proceeds with unnormalized box coords and confidence collapses.
+        # newer ultralytics exports bake stride multipliers into Constant nodes
+        # ('/model.23/Constant_15' -> output) instead of graph initializers -
+        # resolve those too or quantization proceeds with unnormalized box coords
+        # and confidence collapses
         for inp in node.input:
             producer = node_by_output.get(inp)
             if producer is not None and producer.op_type == "Constant":
@@ -895,15 +882,11 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     else:
         divisor = float(input_size)
 
-    # Fold the scale into the box branch's EXISTING stride-multiply constant
-    # instead of inserting a new Div/Mul node. Inserting new nodes immediately
-    # upstream of the output Concat changed the NC1HWC2 layout/tiling RKNN
-    # chose for that region and corrupted the task submitted for the concat at
-    # runtime (confirmed: pose model's Concat_5 failed with new nodes present,
-    # built and ran clean with the exact same op count as an unmodified export
-    # once nodes were removed). Folding into an existing constant keeps graph
-    # topology identical to an unmodified export - only the constant's VALUES
-    # change - so RKNN's layout decisions for this region are unaffected.
+    # fold the scale into the box branch's EXISTING stride-multiply constant instead
+    # of inserting a new Div/Mul node - new nodes upstream of the output Concat changed
+    # the NC1HWC2 layout/tiling RKNN chose for that region and corrupted the concat at
+    # runtime (pose Concat_5 failed with new nodes present, ran clean once removed).
+    # folding keeps graph topology identical to an unmodified export - only values change
     _fold_scale_into_constant_input(graph, box_producer, divisor, node_by_output)
     logger.info(
         "Box-coordinate normalization applied: folded /%.1f into the existing "
@@ -915,10 +898,9 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     kpt_input_name = inputs[2] if len(inputs) > 2 else None
     kpt_coord_scale = None
     if kpt_input_name is not None:
-        # Walk back from the keypoint tensor to the Mul that scales x/y by
-        # stride, mirroring the box branch. Expected chain (Ultralytics
-        # kpts_decode): Reshape(kpt_input_name) <- Concat(xy_mul, conf_sigmoid)
-        # <- Mul(xy). Confidence is a separate branch and is never touched.
+        # walk back from the keypoint tensor to the Mul that scales x/y by stride,
+        # mirroring the box branch (kpts_decode: Reshape <- Concat(xy_mul, conf_sigmoid)
+        # <- Mul(xy)). confidence is a separate branch, never touched
         kpt_reshape = node_by_output.get(kpt_input_name)
         if kpt_reshape is None or kpt_reshape.op_type != "Reshape":
             raise RuntimeError(
@@ -968,10 +950,9 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
 
 
 def _find_pose_output_tensors(graph, concat_node):
-    """Identify box/conf/kpt tensors feeding the final output Concat by
-    structural role (Ultralytics export pattern), not by dimension guessing.
-    concat_node.input is [boxes, scores, keypoints] for pose,
-    or [boxes, scores] for detect - in that fixed order."""
+    """identify box/conf/kpt tensors feeding the final output Concat by structural
+    role (ultralytics export pattern), not by dimension guessing. concat.input is
+    [boxes, scores, keypoints] for pose, [boxes, scores] for detect - fixed order"""
     node_by_output = {out: n for n in graph.node for out in n.output}
     inputs = list(concat_node.input)
 
@@ -990,12 +971,11 @@ def _find_pose_output_tensors(graph, concat_node):
 
 
 def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
-    """(Re)build dataset.txt inside a user-picked calibration folder from
-    whatever images it contains. Absolute paths are used so
-    _downscale_calib_images can resolve files living outside the dataset dir.
-    An existing dataset.txt is kept only while every listed file still exists;
-    otherwise it is rebuilt from current contents (stale entries would silently
-    feed a partial calibration set to the backend)."""
+    """(re)build dataset.txt inside a user-picked calibration folder from whatever
+    images it contains, using absolute paths so _downscale_calib_images can resolve
+    files living outside the dir. keep an existing dataset.txt only while every
+    listed file still exists, else rebuild - stale entries would silently feed a
+    partial calibration set to the backend"""
     from iSpy.dataset.dataset import _find_images as _find_ds_images
 
     dataset_txt = user_ds / "dataset.txt"
@@ -1022,11 +1002,10 @@ def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
 
 
 def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
-    """data.yaml for ultralytics' int8 calibration that matches the model's
-    actual class count/names (falling back to the old single-class defaults
-    when no sidecar exists) and points straight at the user's images - nothing
-    is downloaded. An nc mismatch against a multi-class model would make the
-    export path reject the calibration data."""
+    """data.yaml for ultralytics int8 calibration matching the model's actual
+    class count/names (single-class defaults when no sidecar exists) and pointing
+    straight at the user's images - nothing is downloaded. an nc mismatch against
+    a multi-class model would make the export path reject the calibration data"""
     from iSpy.vision.metadata import read_metadata
 
     pt_meta = read_metadata(Path(pt_file)) or {}
@@ -1054,11 +1033,9 @@ def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
 
 
 def _resolve_calibration_dataset(dataset_path, keywords_list, count) -> tuple:
-    """Pick a usable calibration dataset, returning (dataset_dir, used_user_path).
-
-    A user-picked folder is used as-is when it contains images; an empty user
-    folder falls back to the auto-downloaded default dataset instead of
-    erroring out."""
+    """pick a usable calibration dataset, returning (dataset_dir, used_user_path);
+    a user-picked folder is used as-is when it contains images, an empty one falls
+    back to the auto-downloaded default instead of erroring out"""
     from iSpy.dataset.dataset import prepare_quantization_dataset
 
     if dataset_path:
@@ -1112,9 +1089,9 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
         logger.info("Intermediate ONNX routed to %s with sidecar", onnx_path)
     except Exception as e:
         logger.warning("Could not route intermediate ONNX: %s", e)
-        # Fall back to whichever copy actually exists. The raw file may have
-        # already been moved to onnx_path before the metadata step failed -
-        # pointing at raw_onnx then would strand the build on a dead path.
+        # fall back to whichever copy actually exists - the raw file may have
+        # already been moved to onnx_path before the metadata step failed, and
+        # pointing at raw_onnx then would strand the build on a dead path
         if not onnx_path.exists():
             if raw_onnx != onnx_path and raw_onnx.exists():
                 shutil.move(str(raw_onnx), str(onnx_path))
@@ -1154,7 +1131,7 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
             "Box/keypoint-coordinate normalization for RKNN quantization failed: %s. "
             "Proceeding without it; confidence may collapse to zero.",
             exc,
-            exc_info=True,   # <-- add this: prints the full traceback, not just str(exc)
+            exc_info=True,
         )
 
     try:
@@ -1346,9 +1323,9 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
                 ds_dir, data_yaml,
             )
         else:
-            # data.yaml lives inside the dataset folder that was just
-            # prepared - the root QuantizeDataset/data.yaml is never written,
-            # so pointing ultralytics int8 calibration at it would load nothing.
+            # data.yaml lives inside the dataset folder that was just prepared -
+            # the root QuantizeDataset/data.yaml is never written, so pointing
+            # ultralytics int8 calibration at it would load nothing
             data_yaml = str(ds_dir / "data.yaml")
     else:
         Path(dataset_root).mkdir(parents=True, exist_ok=True)
@@ -1444,8 +1421,8 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
             text=True,
         )
 
-        # Surface the worker's own logging - it just runs in a subprocess,
-        # it shouldn't run silently.
+        # surface the worker's own logging - it just runs in a subprocess,
+        # it shouldnt run silently
         if proc.stdout:
             print(proc.stdout, file=_REAL_STDOUT, end="")
         if proc.stderr:

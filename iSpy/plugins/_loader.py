@@ -50,8 +50,6 @@ def load_plugins(plugin_dir: Path, base_class) -> dict[str, type]:
 
                 plugins[name] = cls
 
-                # logger.info("Loaded plugin '%s' (%s) from %s", name, cls.__name__, path)
-
         except Exception:
             logger.exception("Failed to load plugin from %s", path)
 

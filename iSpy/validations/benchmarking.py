@@ -13,7 +13,7 @@ from pathlib import Path
 import ctypes
 from pathlib import Path
 
-# Load libc for fflush() - used by _quiet() to flush C stdio buffers
+# load libc for fflush() so _quiet() can flush C stdio buffers
 _libc = None
 if sys.platform == "win32":
     try:
@@ -40,7 +40,7 @@ import cv2
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parent.parent.resolve()
-# Fallback if installed non-editably (__file__ in site-packages)
+    # fallback if installed non-editably (__file__ in site-packages)
 if not (_PROJECT_ROOT / "iSpy").is_dir():
     _PROJECT_ROOT = Path.cwd()
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -99,7 +99,7 @@ def find_pt_files():
                                 p = _PROJECT_ROOT / p
                             if p.suffix == ".pt" and p.exists():
                                 models.append(p.resolve())
-            # Legacy top-level layout, tolerated for old configs.
+            # legacy top-level layout, tolerated for old configs
             if not models:
                 vm = cfg.get("vision_model", {})
                 for key in ("file_path", "source_pt"):
@@ -217,7 +217,7 @@ def _mute_kernel_rknn():
         pass
     except (FileNotFoundError, OSError):
         pass
-    # Fallback: try dmesg -n 4
+    # fallback: try dmesg -n 4
     try:
         import subprocess as _sp
         _sp.run(["dmesg", "-n", "4"], capture_output=True, timeout=5)
@@ -302,8 +302,7 @@ def benchmark(model_config, core_mask, duration=5.0):
     from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 
     config = iSpyConfig()
-    # Model selection lives in the camera's pipeline settings, never at the
-    # config root - the object detection camera only reads it from there.
+    # model config lives in the camera's pipeline settings, never the config root - that's all ObjectDetectionCamera reads
     cam_entry = {
         "name": "bench",
         "source": 99,  # won't open -> placeholder

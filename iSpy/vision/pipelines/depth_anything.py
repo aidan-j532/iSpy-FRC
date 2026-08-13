@@ -27,8 +27,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         return True
 
     def is_ready(self) -> tuple[bool, str]:
-        # Pure status report - never triggers or blocks on optimization.
-        # The optimize build is started at construction when needed.
+        # pure status report - never triggers/blocks on optimization
         if not self.estimate_depth:
             self._set_status("ready")
             return True, "ready"
@@ -124,8 +123,8 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self.max_depth = float(camera_config.get_pipeline_setting("max_depth", 10.0))
         self.estimate_depth = bool(camera_config.get_pipeline_setting("estimate_depth", True))
 
-        # max_depth is configured in meters; scale z output into the
-        # configured unit so every pipeline emits the same unit.
+        # max_depth is in meters; scale z into the configured unit so
+        # every pipeline emits the same unit.
         self._z_scale = {
             "meter": 1.0, "meters": 1.0,
             "inch": 39.37007874, "inches": 39.37007874,
@@ -153,10 +152,8 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             camera_config.get("grayscale", False),
         )
 
-        # If the config requests optimization and no matching artifact is
-        # active yet, kick off the build on a simple background thread so the
-        # app can keep running (is_ready() reports "optimizing" until the
-        # artifact is active; run() passes frames through untouched).
+        # optimization requested + no active artifact yet -> kick off the
+        # build on a bg thread so the app keeps running
         if self._optimization_requested() and not self._optimized_active():
             self.logger.info(
                 "Camera '%s': optimization requested - building ONNX artifact",
@@ -171,8 +168,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             self.prepare()
 
     def _prepare(self):
-        """Background preparation: download/export the depth model without
-        blocking construction of the other cameras."""
+        """download/export the model without blocking boot"""
         self._load_model()
 
     def get_optimization_options(self) -> dict:
@@ -184,9 +180,8 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         }
 
     def optimize(self, **kwargs) -> str:
-        """Build the optimized ONNX artifact synchronously. Blocks until the
-        build finishes; is_ready() reports (False, "optimizing") while it
-        runs and (True, "ready") once it has produced a matching artifact."""
+        """build the ONNX artifact synchronously; is_ready() reports
+        (False, "optimizing") while it runs"""
         if not self._optimization_requested():
             return "optimization disabled for this camera (set 'Optimize' in camera settings)"
         if self._optimizing:
@@ -198,8 +193,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self._optimizing = True
         self._set_status("optimizing (onnx build)")
         try:
-            # Reuse the cached ONNX artifact when present; only a full
-            # rebuild re-exports and re-quantizes from the HF weights.
+            # reuse cached artifact; only a full rebuild re-exports
             self._load_optimized(force=False)
             if not self._optimized_active():
                 self._load_optimized(force=True)
@@ -221,8 +215,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         return status
 
     def _optimize_forced(self) -> str:
-        """Force a full rebuild: re-export and re-quantize even when a
-        matching artifact is already cached (manual rebuild path)."""
+        """force a full rebuild even if an artifact is cached"""
         self._optimizing = True
         self._set_status("optimizing (onnx build)")
         try:
@@ -245,9 +238,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         return status
 
     def _optimize_runner(self):
-        """Run the synchronous optimize() off the main thread (started at
-        construction when the config requests a build). is_ready() reports
-        "optimizing" until this finishes."""
+        """runs optimize() off the main thread (started at construction)"""
         status = self.optimize()
         if not self._optimized_active():
             self._optimize_error = status
@@ -257,14 +248,12 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         return bool(getattr(self, "_auto_opt", False)) and bool(self.estimate_depth)
 
     def _optimized_active(self) -> bool:
-        """True once the optimized ONNX session is loaded (the Depth
-        Anything artifact is fixed-model and onnx-only, so a live session is
-        the whole check)."""
+        """True once the ONNX session is loaded (artifact is fixed-model
+        and onnx-only, so a live session is the whole check)"""
         return getattr(self, "_session", None) is not None
 
     def _is_processable(self) -> bool:
-        """True when run() may actually run inference. When False, run()
-        passes the raw camera feed through untouched."""
+        """True when run() can actually infer; otherwise pass frames through"""
         if getattr(self, "_optimizing", False):
             return False
         if self._optimization_requested():
@@ -355,9 +344,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             self._model = None
 
     def _infer_depth(self, frame: np.ndarray):
-        # Runtime is chosen once at load time (GenericYolo-style): the frame
-        # loop never re-decides between the ONNX session and the transformers
-        # pipeline - _load_optimized/_load_pipeline set one impl only.
+        # runtime picked once at load time - no re-deciding per frame
         if self._infer is not None:
             return self._infer(frame)
         return self._infer_depth_pipeline(frame)
@@ -369,8 +356,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
 
         result = self._model(image)
 
-        # Transformers versions can expose the depth as either
-        # predicted_depth or depth. Prefer the actual tensor output.
+        # some transformers versions expose depth as either key
         depth = result.get("predicted_depth")
 
         if depth is not None:
@@ -379,7 +365,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
 
             depth = np.asarray(depth)
 
-            # Remove batch/channel dimensions.
+        # strip batch/channel dims
             while depth.ndim > 2:
                 depth = depth[0]
 
@@ -426,7 +412,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
 
         closeness = (norm - d_min) / span
 
-        # Depth Anything provides relative depth, not real-world meters.
+        # Depth Anything gives relative depth, not real meters
         distance_m = self.max_depth * float(
             np.clip(1.0 - closeness, 0.0, 1.0)
         )
@@ -466,7 +452,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             )
         ]
 
-        # Nearest point = highest relative inverse-depth value.
+        # nearest point = highest relative inverse-depth value
         flat_near = np.unravel_index(
             np.argmax(depth),
             depth.shape,
@@ -517,7 +503,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             cv2.COLORMAP_JET,
         )
 
-        # Resize if the model's output resolution differs from the frame.
+        # resize if the model output resolution differs from the frame
         if heatmap.shape[:2] != frame.shape[:2]:
             heatmap = cv2.resize(
                 heatmap,
@@ -547,7 +533,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             2,
         )
 
-        # Map the center pixel to the depth-map coordinates.
+        # map the center pixel onto the depth map
         depth_x = min(
             depth.shape[1] - 1,
             int(cx * depth.shape[1] / frame.shape[1]),
@@ -593,7 +579,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         every = max(1, self._every)
         last_depth = self._last_depth
 
-        # Reuse the previous depth map between inference frames.
+        # reuse the last depth map between inference frames
         if (
             last_depth is not None
             and every > 1

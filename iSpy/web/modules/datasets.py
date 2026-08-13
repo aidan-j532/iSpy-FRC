@@ -23,7 +23,6 @@ def _validate_filename(name: str) -> str:
 
 
 def _count_images_in_dir(folder: Path) -> int:
-    """Count usable image files directly inside a folder (no recursion)."""
     if not folder.is_dir():
         return 0
     try:
@@ -42,9 +41,8 @@ class DatasetsModule(WebModule):
         super().__init__(context)
         self.dataset_root = Path.cwd() / "QuantizeDataset"
         self.dataset_root.mkdir(parents=True, exist_ok=True)
-        # A quantization dataset is a reusable folder of calibration images.
-        # `default` is the built-in dataset every pipeline falls back to when
-        # none is configured.
+        # quant dataset = reusable folder of cal images; `default` is the
+        # built-in fallback when none is configured
         (self.dataset_root / "default" / "images").mkdir(parents=True, exist_ok=True)
 
     def register_routes(self, flask_app):
@@ -86,8 +84,6 @@ class DatasetsModule(WebModule):
         return jsonify(success=True, name=name)
 
     def _browse_dirs(self):
-        """List the subdirectories of a folder for the interactive dataset
-        picker in the camera settings UI."""
         raw = request.args.get("path", "").strip()
         try:
             base = Path(raw) if raw else Path.cwd()
@@ -119,10 +115,8 @@ class DatasetsModule(WebModule):
         )
 
     def _frc_download(self):
-        """Download the bundled FRC calibration images (from the project's
-        GitHub release) flat into the selected folder, so the picker's
-        top-level image count reflects them. The images are written to disk
-        and stay there; nothing deletes them afterwards."""
+        """grab the bundled FRC cal images from the github release, flat into
+        the folder - they stay on disk, nothing deletes them"""
         from iSpy.dataset.dataset import _download_release_images
 
         data = request.get_json(force=True) or {}

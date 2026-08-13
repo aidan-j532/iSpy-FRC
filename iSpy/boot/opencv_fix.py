@@ -19,8 +19,7 @@ def cv2_has_gstreamer() -> bool:
 
 
 def _system_python() -> str:
-    # CROSS-PLATFORM FIX: Windows uses python.exe in the base directory, 
-    # while Unix-like environments use bin/python3
+    # platform thing: windows keeps python.exe in the base dir, unix has bin/python3
     if sys.platform == "win32":
         return str(Path(sys.base_prefix) / "python.exe")
     return str(Path(sys.base_prefix) / "bin" / "python3")
@@ -81,10 +80,8 @@ def _current_cv2_targets() -> tuple[Path, list[Path]]:
 
 
 def ensure_csi_capable_opencv(auto_fix: bool = True) -> bool:
-    """Ensures the running interpreter's cv2 has GStreamer support (required
-    for nvarguscamerasrc CSI capture). Returns True if a fix was applied."""
-    # CROSS-PLATFORM FIX: Instantly return False if not on Linux since 
-    # CSI cameras and apt-get are Linux-specific features.
+    """make sure cv2 has GStreamer support (needed for nvarguscamerasrc CSI capture); True if we applied a fix"""
+    # not linux? bail, CSI cams & apt-get are linux-only
     if sys.platform != "linux":
         return False
 

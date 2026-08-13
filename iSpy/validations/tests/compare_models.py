@@ -1,34 +1,19 @@
 """
 Compare a base .pt YOLO model against an optimized/converted model (RKNN,
-ONNX, TFLite, TensorRT .engine, CoreML, etc.) to verify a hardware-accelerator
-conversion didn't silently break detection quality or somehow make things
-slower.
+ONNX, TFLite, TensorRT, CoreML, etc) to verify a hardware-accelerator
+conversion didn't silently break detection quality or make things slower.
 
-This intentionally reuses the exact same inference pipeline the rest of iSpy
-runs in production - GenericYolo + fill_missing_config + metadata sidecars -
-instead of re-implementing pre/post-processing here. That way the comparison
-reflects real runtime behavior, not a synthetic stand-in for it.
-
-Supersedes test_rknn.py, which was RKNN-only. This works for any backend
-GenericYolo supports (RKNN, ONNX, TFLite, TensorRT, OpenVINO, CoreML, TPU).
+Reuses iSpy's real production inference pipeline (GenericYolo +
+fill_missing_config + metadata sidecars) instead of re-implementing pre/post
+processing, so the comparison reflects real runtime behavior. Supersedes
+test_rknn.py (RKNN-only).
 
 Usage:
-    # Reads vision_model.source_pt (base) + vision_model.file_path (optimized)
-    # straight out of a normal iSpy config.json (this is exactly what boot.py
-    # writes, so most of the time you don't need to pass anything else).
     python -m iSpy.validations.test_optimized_model --config Config/config.json
+    # or: --base YoloModels/pytorch/model.pt --optimized YoloModels/rknn/model.rknn
 
-    # Or point at models explicitly:
-    python -m iSpy.validations.test_optimized_model \
-        --base YoloModels/pytorch/model.pt \
-        --optimized YoloModels/rknn/model.rknn \
-        --core-mask 7 --num-images 10
-
-Test images are pulled at random from QuantizeDataset/valid/ (any
-.jpg/.jpeg/.png/.bmp found recursively under that folder).
+Test images are pulled at random from QuantizeDataset/valid/.
 """
-
-# Made by Claude
 
 import argparse
 import contextlib
@@ -50,8 +35,7 @@ if not (_PROJECT_ROOT / "iSpy").is_dir():
     _PROJECT_ROOT = Path.cwd()
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-# Same pipeline iSpy.py / game_loop.py / ObjectDetectionCamera.py run in
-# production - not re-implemented here.
+# same pipeline iSpy runs in prod - not re-implemented here.
 from iSpy.vision.genericYolo import GenericYolo, Box  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -59,10 +43,7 @@ logger.setLevel(logging.INFO)
 
 @contextlib.contextmanager
 def _quiet_ispy_logging():
-    """Suppress iSpy's own INFO-level logging for the duration of a
-    comparison run, so only the clean section()/subline() print output
-    shows - no interleaved '[iSpy] INFO:...' lines from GenericYolo,
-    ModelInspector, etc."""
+    """mute iSpy's INFO logging so only the clean section()/subline() print output shows"""
     ispy_logger = logging.getLogger("iSpy")
     old_level = ispy_logger.level
     ispy_logger.setLevel(logging.WARNING)
@@ -118,8 +99,7 @@ def warn(msg: str):
 
 @contextlib.contextmanager
 def _quiet_native():
-    """Suppress native C-library stdout/stderr spam (RKNN toolkit, etc. print
-    directly to fd 1/2, bypassing Python logging entirely)."""
+    """mute native C-library stdout/stderr spam (RKNN toolkit etc print straight to fd 1/2, bypassing python logging)"""
     devnull = "nul" if os.name == "nt" else "/dev/null"
     fd = os.open(devnull, os.O_WRONLY)
     old_out = os.dup(1)
@@ -151,8 +131,7 @@ def _load_config_paths(
         if cfg_file.exists():
             with open(cfg_file) as f:
                 data = json.load(f)
-            # Works with either a full iSpy config.json (top-level
-            # "vision_model" key) or a bare vision_model dict.
+            # works with a full iSpy config.json (top-level vision_model) or a bare vision_model dict
             vm = data.get("vision_model", data)
             optimized_path = optimized_path or vm.get("file_path")
             base_path = base_path or vm.get("source_pt")
@@ -232,9 +211,7 @@ def _iou(a, b) -> float:
 
 
 def _match_boxes(ref_boxes: list[Box], test_boxes: list[Box], iou_thresh: float):
-    """Greedily match each ref (base .pt) box to its best same-class IoU
-    partner in test_boxes (optimized model). Returns (ref_box, test_box, iou)
-    triples for every match found."""
+    """greedily match each ref (base .pt) box to its best same-class IoU partner in the optimized boxes; returns (ref, test, iou) triples"""
     used: set[int] = set()
     matches = []
     for rb in ref_boxes:
@@ -390,7 +367,7 @@ def _run_comparison_body(
         logger.error("No readable images among the selected test set.")
         sys.exit(1)
 
-    # Warm up optimized model once so the first real inference delay is visible
+    # warm up the optimized model once so the first real inference delay is visible
     try:
         logger.info("Warming optimized model with one inference (may take several seconds)...")
         with _quiet_native():
@@ -632,11 +609,7 @@ def _result_to_entry(results: ComparisonResults) -> dict:
 
 
 def upsert_json_report(results: ComparisonResults, out_path: Path) -> None:
-    """Append/update this comparison in a single running ledger file at
-    out_path. Entries are keyed by (base_model, optimized_model) - re-running
-    the comparison for the same pair (e.g. re-converting the same .pt to the
-    same format) updates that entry in place instead of piling up duplicates.
-    """
+    """append/update this comparison in a single running ledger at out_path, keyed by (base_model, optimized_model) so re-running the same pair updates in place instead of piling up duplicates"""
     entry = _result_to_entry(results)
 
     ledger: dict = {"models": []}
@@ -647,7 +620,7 @@ def upsert_json_report(results: ComparisonResults, out_path: Path) -> None:
             if isinstance(loaded, dict) and isinstance(loaded.get("models"), list):
                 ledger = loaded
             elif isinstance(loaded, list):
-                # Back-compat: file was previously a bare list of entries.
+                # back-compat: file was previously a bare list of entries
                 ledger = {"models": loaded}
             else:
                 logger.warning("Existing report at %s has an unexpected shape - starting a fresh ledger.", out_path)
@@ -690,12 +663,7 @@ def compare_models(
     output: str | Path | None = None,
     quiet: bool = False,
 ) -> ComparisonResults | None:
-    """Run the base-vs-optimized comparison without going through argparse or
-    exiting the process - meant to be called directly from other code (e.g.
-    boot.py right after a conversion). Returns None (and logs why) instead of
-    raising/exiting if inputs can't be resolved, so callers can treat a
-    skipped comparison as non-fatal.
-    """
+    """run the comparison without argparse or exiting the process - for calling from other code (e.g. boot.py right after a conversion); returns None (and logs why) instead of raising/exiting so callers can treat a skipped comparison as non-fatal"""
     images_dir = Path(images_dir)
     if not images_dir.exists():
         logger.warning("Comparison images dir not found (%s) - skipping optimized-model comparison.", images_dir)

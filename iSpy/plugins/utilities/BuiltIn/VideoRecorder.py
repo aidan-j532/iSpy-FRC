@@ -58,9 +58,8 @@ class VideoRecorder(UtilityBase):
     def __init__(self, context: dict):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
-        # No "enabled" flag: being present in the config IS the switch.
-        # record_mode/record_dir used to be top-level config keys - they now
-        # live in this add-on's own settings.
+        # no enabled flag - being present in the config IS the switch.
+        # record_mode/record_dir used to be top-level config, live here now
         self._output_dir = self.config.get("record_dir", "VideoRecordings")
         self._fps = float(self.config.get("fps", 30.0))
         self._forced_codec = None

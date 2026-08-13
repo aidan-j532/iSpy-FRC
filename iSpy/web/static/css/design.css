@@ -161,9 +161,7 @@ pre {
   white-space: pre-wrap; word-break: break-word;
 }
 
-/* ==========================================
-   Controls bar
-   ========================================== */
+/* Controls bar */
 .controls-bar {
   display: flex; gap: 12px; align-items: center; margin-bottom: 16px;
   padding: 10px 16px;
@@ -172,9 +170,7 @@ pre {
   display: flex; align-items: center; gap: 6px; color: var(--text-dim); font-size: 0.85rem;
 }
 
-/* ==========================================
-   Dashboard-specific styles
-   ========================================== */
+/* Dashboard-specific styles */
 
 /* Service bar */
 .dash-service-bar {
@@ -242,9 +238,7 @@ pre {
   text-transform: uppercase; letter-spacing: 0.5px; margin-right: 4px;
 }
 
-/* ==========================================
-   Log viewer
-   ========================================== */
+/* Log viewer */
 .log-view {
   height: 65vh; overflow-y: auto; margin: 0;
   font-family: var(--mono); font-size: 0.82rem; line-height: 1.5;
@@ -257,9 +251,7 @@ pre {
 .log-info { color: var(--text); }
 .log-dim { color: var(--text-dim); }
 
-/* ==========================================
-   Toast notifications
-   ========================================== */
+/* Toast notifications */
 .toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
 .toast {
   padding: 12px 16px; border-radius: var(--radius); color: white; font-size: 0.85rem; font-weight: 500;
@@ -271,9 +263,7 @@ pre {
 .toast-info { background: var(--accent); }
 @keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
 
-/* ==========================================
-   Modal
-   ========================================== */
+/* Modal */
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 10000;
   display: flex; align-items: center; justify-content: center;
@@ -291,9 +281,7 @@ pre {
 .modal-warning { color: var(--warn); font-size: 0.82rem; }
 .modal-danger-text { color: var(--bad); font-size: 0.82rem; }
 
-/* ==========================================
-   Settings form
-   ========================================== */
+/* Settings form */
 .settings-section { margin-bottom: 24px; }
 .settings-section h3 { font-size: 0.95rem; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .form-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
@@ -321,9 +309,7 @@ pre {
   border-radius: var(--radius); padding: 12px; resize: vertical;
 }
 
-/* ==========================================
-   Dataset grid
-   ========================================== */
+/* Dataset grid */
 .dataset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
 .dataset-card { cursor: pointer; transition: border-color var(--transition), transform var(--transition); }
 .dataset-card:hover { border-color: var(--accent); transform: translateY(-2px); }
@@ -346,9 +332,7 @@ pre {
 }
 .upload-zone:hover, .upload-zone.drag-over { border-color: var(--accent); color: var(--text); background: rgba(76,139,245,0.05); }
 
-/* ==========================================
-   Settings tabs
-   ========================================== */
+/* Settings tabs */
 .settings-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
 .settings-tab {
   padding: 8px 16px; border-radius: var(--radius) var(--radius) 0 0; cursor: pointer;
@@ -358,30 +342,22 @@ pre {
 .settings-tab:hover { color: var(--text); background: var(--bg-surface); }
 .settings-tab.active { color: var(--accent); border-bottom: 2px solid var(--accent); background: var(--bg-elevated); }
 
-/* ==========================================
-   Upload row
-   ========================================== */
+/* Upload row */
 .upload-row { display: flex; gap: 12px; align-items: center; }
 .upload-status { font-size: 0.8rem; color: var(--text-dim); }
 
-/* ==========================================
-   Badges
-   ========================================== */
+/* Badges */
 .badge-ok {
   color: var(--ok); font-size: 0.72rem; font-weight: 600; margin-left: 6px;
   text-transform: uppercase; letter-spacing: 0.3px;
 }
 
-/* ==========================================
-   Utility classes
-   ========================================== */
+/* Utility classes */
 .text-dim { color: var(--text-dim); }
 .text-sm { font-size: 0.85rem; }
 .empty-state { color: var(--text-dim); font-style: italic; font-size: 0.85rem; padding: 8px 0; }
 
-/* ==========================================
-   Add-ons page
-   ========================================== */
+/* Add-ons page */
 .page-head h1 { margin: 0; }
 .page-sub { color: var(--text-dim); font-size: 0.85rem; margin: 4px 0 16px 0; }
 .card-head {
@@ -469,9 +445,7 @@ pre {
   padding: 12px;
 }
 
-/* ==========================================
-   Responsive
-   ========================================== */
+/* Responsive */
 @media (max-width: 768px) {
   .sidebar { width: 60px; min-width: 60px; padding: 16px 8px; }
   .sidebar .brand { font-size: 0.9rem; text-align: center; }
@@ -484,9 +458,7 @@ pre {
   .service-controls { flex-wrap: wrap; }
 }
 
-/* ==========================================
-   Scrollbar
-   ========================================== */
+/* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }

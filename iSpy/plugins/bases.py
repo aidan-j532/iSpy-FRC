@@ -1,26 +1,16 @@
-"""Base classes for all iSpy add-ons (trackers, utilities, frame processors).
+"""base classes for all iSpy add-ons (trackers, utilities, frame processors).
 
-An add-on is enabled by being present in the config
-(``plugins.<type>.<name>``); the value of that entry is the add-on's OWN
-settings dict. Add-ons are constructed with a context dict::
-
-    context["config"]          -> iSpyAddonConfig view of this add-on's
-                                  settings (its schema defaults are merged in)
-    context["global_config"]   -> the global iSpyConfig
-    context["cameras"]         -> list of active vision cameras
-    context["flask_app"]       -> the Flask app when running in web mode,
-                                  otherwise None
-    context["vision_instance"] -> the running iSpy instance (set late)
-
-Add-ons expose their configurable settings declaratively through
-``config_schema()`` (mirroring vision pipelines) so the web UI can render a
-settings editor and the loader can apply defaults.
+an add-on is enabled by being present in the config (plugins.<type>.<name>);
+the entry value is that add-on's own settings dict. add-ons get a context:
+    config          -> iSpyAddonConfig view of THIS add-on's settings
+    global_config   -> the global iSpyConfig
+    cameras, flask_app, vision_instance
 """
 
 from abc import ABC, abstractmethod
 from iSpy.config.iSpyConfig import iSpyAddonConfig
 
-# Settings types the add-on settings editor understands.
+# settings types the add-on settings editor understands
 _SCHEMA_TYPES = ("text", "number", "toggle")
 _SCHEMA_TYPE_FALLBACK = {
     bool: "toggle",
@@ -30,7 +20,6 @@ _SCHEMA_TYPE_FALLBACK = {
 
 
 def default_settings_from_schema(config_schema: dict) -> dict:
-    """Extract ``{key: default}`` from an add-on's config_schema()."""
     defaults = {}
     for key, defn in config_schema.items():
         if isinstance(defn, dict) and "default" in defn:
@@ -50,9 +39,6 @@ class StatusMixin:
 
 
 class AddonBase(StatusMixin):
-    """Shared ground for every add-on type: context handling, the per-add-on
-    settings view, and the declarative settings schema."""
-
     def __init__(self, context: dict):
         StatusMixin.__init__(self)
         self.context: dict = context or {}
@@ -61,8 +47,7 @@ class AddonBase(StatusMixin):
             raw = raw if isinstance(raw, dict) else {}
             raw = iSpyAddonConfig(raw)
         self.config = raw
-        # Merge the add-on's schema defaults (absent keys only) so a config
-        # entry of {} still yields working settings without persisting them.
+        # merge schema defaults (absent keys only) so a config entry of {} still works
         for key, value in default_settings_from_schema(self.config_schema()).items():
             self.config.setdefault(key, value)
 
@@ -72,18 +57,11 @@ class AddonBase(StatusMixin):
 
     @classmethod
     def config_schema(cls) -> dict:
-        """Declare this add-on's configurable settings:
-
-            {"min_conf": {"type": "number", "label": "Min Confidence",
-                          "default": 0.5, "hint": "..."},
-             "enabled":  {"type": "toggle", "label": "...", "default": True}}
-
-        Returns {} when the add-on needs no settings beyond being enabled."""
+        """declare this add-on's configurable settings (see examples for the format); {} if none needed"""
         return {}
 
     @classmethod
     def default_settings(cls) -> dict:
-        """{key: default} resolved from config_schema()."""
         return default_settings_from_schema(cls.config_schema())
 
 
@@ -126,7 +104,7 @@ class UtilityBase(AddonBase):
         pass
 
     def get_robot_pose(self):
-        """Override in network utility to provide pose. Default returns None."""
+        """override in the network utility to give pose; defaults to None"""
         return None
 
     def stop(self):
@@ -142,26 +120,16 @@ class VisionBase(ABC):
 
     @classmethod
     def config_schema(cls) -> dict:
-        """Return {} if this plugin needs no extra config beyond the
-        standard camera fields."""
         return {}
 
     def is_ready(self) -> tuple[bool, str]:
-        """Cheap, idempotent, safe to call every boot cycle. Returns
-        (ready: bool, status: str) where status is a short human-readable
-        state like "ready", "loading weights", "optimizing (rknn build)",
-        "using unoptimized .pt fallback", "error: <reason>". Must NEVER
-        block on a multi-minute operation - if work is needed and isn't
-        already running, kick it off as a background job/subprocess and
-        return (False, "..."). If already in flight, just report status.
-        Default: ready immediately, no background work needed."""
+        """(ready, status) checked every boot cycle. NEVER block on multi-minute
+        work - kick it off as a bg job and report status. defaults to ready."""
         return True, "ready"
 
     @classmethod
     def needs_model_backend(cls) -> bool:
-        """True if this pipeline requires a model file, download, or
-        conversion step and should participate in the readiness scan
-        beyond simple __init__ success."""
+        """true if the pipeline needs a model/download/conversion and joins the readiness scan"""
         return False
 
     def start(self):
@@ -174,7 +142,6 @@ class VisionBase(ABC):
         return None
 
     def plot(self, frame):
-        """Return a frame annotated by the vision pipeline for display."""
         return frame
 
     @abstractmethod

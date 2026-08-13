@@ -599,8 +599,8 @@ class GenericYolo:
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         cpu_count = os.cpu_count() or 4
-        # Leave a core free for the camera reader / preprocess threads instead of
-        # letting ORT claim every logical core for intra-op parallelism.
+        # leave a core free for the camera reader / preprocess threads instead
+        # of letting ORT claim every logical core for intra-op parallelism
         sess_options.intra_op_num_threads = max(1, cpu_count - 1)
         sess_options.inter_op_num_threads = 1
         sess_options.enable_mem_pattern = True
@@ -782,8 +782,8 @@ class GenericYolo:
 
         self.model = raw_model
 
-        # Raw model output is [1, C, H, W] features_first, not hardware_nms.
-        # Override output config so postprocess() dispatches to _parse_raw_*.
+        # raw model output is [1, C, H, W] features_first, not hardware_nms -
+        # override the output config so postprocess() dispatches to _parse_raw_*
         if self.output.get("format") != "hardware_nms":
             self.output["format"] = "raw"
             self.output["layout"] = "features_first"
@@ -815,12 +815,9 @@ class GenericYolo:
         return tensor.astype(np.float32) / scale
 
     def _merge_rknn_outputs(self, raw_outputs: list) -> np.ndarray:
-        """Rejoin RKNN outputs when quantization splits the final Concat.
-
-        Quantized pose models often return separate tensors (e.g. boxes 4ch +
-        conf/kpts remainder) instead of one fused output. Ultralytics postprocess
-        expects a single features-first (C, N) tensor.
-        """
+        """rejoin RKNN outputs when quantization splits the final Concat - quantized
+        pose models often return separate tensors (boxes 4ch + conf/kpts remainder)
+        instead of one fused output; ultralytics postprocess wants a single (C, N) tensor"""
         if not raw_outputs:
             return np.empty((0,), dtype=np.float32)
 
@@ -1078,12 +1075,10 @@ class GenericYolo:
     def _rescale_camera_matrix(
         self, K: np.ndarray, img_w: int, img_h: int
     ) -> np.ndarray:
-        # The user-calibrated intrinsics are for one reference resolution; if
-        # the live frame is a different size the keypoints are unprojected on a
-        # different pixel scale and the skeleton comes out too big/small (a tiny
-        # speck of dots in the viewer).  Infer the calibration resolution from
-        # the principal point (centered sensor) and rescale fx/fy/cx/cy to the
-        # actual frame so the skeleton stays real-world scale.
+        # user-calibrated intrinsics are for one reference resolution; if the live
+        # frame is a different size the keypoints are unprojected on a different pixel
+        # scale and the skeleton comes out too big/small. infer calib resolution from
+        # the principal point (centered sensor) and rescale fx/fy/cx/cy to the frame
         if img_w <= 0 or img_h <= 0:
             return K
         calib_w = 2.0 * float(K[0, 2])
@@ -1130,11 +1125,10 @@ class GenericYolo:
         image_points = np.asarray(image_points, dtype=np.float64)
         model_points = np.asarray(model_points, dtype=np.float64)
 
-        # Auto-select the solver: EPNP is a global method (no initial guess
-        # needed) and is robust on near-planar keypoint templates, where
-        # ITERATIVE from an identity pose collapses to a degenerate local
-        # minimum.  When enough points are available, refine the EPNP pose
-        # with ITERATIVE using it as the initial guess for maximum accuracy.
+        # auto-select the solver: EPNP is global (no initial guess needed) and
+        # robust on near-planar keypoint templates, where ITERATIVE from an identity
+        # pose collapses to a degenerate local min; refine with ITERATIVE using the
+        # EPNP pose as the initial guess when enough points are available
         ok, rvec, tvec = cv2.solvePnP(
             model_points,
             image_points,
@@ -1162,15 +1156,13 @@ class GenericYolo:
         R, _ = cv2.Rodrigues(rvec)
 
         if mode == "rigid":
-            # Rigid object: the fitted pose is the whole story.  Return the
-            # canonical model transformed by the recovered (R, tvec), so the
-            # keypoints trace the object's actual 3D shape and the box carries
-            # exact xyz + roll/pitch/yaw.
+            # rigid: the fitted pose is the whole story - return the canonical
+            # model transformed by (R, tvec) so keypoints trace the real 3D shape
             keypoints_3d = [(R @ pt + tvec).tolist() for pt in object_points]
         else:
-            # Flexible/deformable object: keep every observed 2D keypoint but
-            # inflate it to 3D on a plane at the shared PnP depth, preserving
-            # the detected pose shape instead of forcing a rigid template.
+            # flexible/deformable: keep every observed 2D keypoint but inflate it to
+            # 3D on a plane at the shared PnP depth, preserving the detected pose
+            # shape instead of forcing a rigid template
             depth_z = float(tvec[2])
             fx = camera_matrix[0, 0]
             fy = camera_matrix[1, 1]

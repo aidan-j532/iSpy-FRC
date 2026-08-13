@@ -70,8 +70,7 @@ def run_unit_tests() -> None:
 
 def get_addon_setting(config: dict, addon_type: str, addon_name: str,
                       key: str, default=None):
-    """One setting from an add-on's config entry. Add-ons live at
-    plugins.<type>.<name> as dicts; presence == enabled."""
+    """one setting from an add-on's config entry; add-ons live at plugins.<type>.<name>, presence == enabled"""
     try:
         entry = config["plugins"][addon_type][addon_name]
     except (KeyError, TypeError):
@@ -127,8 +126,7 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
                 if field not in calib:
                     raise ValueError(f"Camera '{cam_name}' calibration missing: {field}")
 
-        # Models live in the camera's pipeline settings (nested layout) -
-        # legacy flat entries are folded into settings lazily.
+        # models live in the camera's pipeline settings (nested layout) - legacy flat entries are folded in lazily
         pipeline = cam_config.get("pipeline")
         if isinstance(pipeline, dict):
             pipeline_name = pipeline.get("name")
@@ -151,8 +149,7 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
     if model_cameras == 0:
         raise ValueError("No camera has a vision_model configured")
 
-    # network_tables_ip is an add-on setting now (network_table_handler
-    # utility); only validated when the add-on is enabled.
+    # network_tables_ip is an add-on setting now (network_table_handler utility); only validated when the add-on is enabled
     ip = get_addon_setting(config, "utilities", "network_table_handler",
                            "network_tables_ip")
     if ip:
@@ -351,11 +348,7 @@ def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset")
         )
         return True
 
-    # Named datasets live at QuantizeDataset/<name>/ - they are reusable
-    # calibration resources selected per camera via the camera's
-    # 'quantization_dataset' setting, never derived from a model filename.
-    # Validate each one instead of (or in addition to) the flat root, since
-    # that's what conversions actually use now.
+    # named datasets live at QuantizeDataset/<name>/ - reusable calibration picked per camera via its 'quantization_dataset' setting, never derived from a model filename. validate each one since that's what conversions actually use now
     per_model_dirs = [
         d for d in root.iterdir()
         if d.is_dir() and d.name not in ("valid",) and (d / "dataset.txt").exists()

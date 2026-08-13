@@ -1,31 +1,11 @@
 """
-fake_robot_nt.py
+Standalone NT4 server that fakes a robot so you can test iSpy's NetworkTables
+integration on one machine - no real robot needed. Publishes a fake Pose2d to
+"AdvantageKit/RealOutputs/Odometry/Robot" (what get_robot_pose() reads) and
+prints incoming VisionData (what NetworkTableHandler publishes).
 
-Standalone NT4 server that stands in for a real robot, so you can test
-iSpy's NetworkTables integration on a single machine - no second computer,
-no WPILib sim, no actual robot required.
-
-What it does:
-  1. Starts an NT4 server on this machine (default port 5810, ntcore's
-     default).
-  2. Publishes a slowly moving/rotating fake robot Pose2d to
-     "AdvantageKit/RealOutputs/Odometry/Robot" - the exact topic
-     NetworkTableHandler.get_robot_pose() reads from.
-  3. Subscribes to the "VisionData" table (vision_data struct array, fps,
-     num_detections, camera_lag) - the exact topics NetworkTableHandler
-     publishes to - and prints them as they update, so you can see iSpy's
-     detections coming back in real time.
-
-Usage:
-    1. In iSpy's Config/config.json, set:
-         "use_network_tables": true,
-         "network_tables_ip": "127.0.0.1"
-    2. In one terminal:  python fake_robot_nt.py
-    3. In another terminal, run iSpy normally (e.g. python -m iSpy.core.game_loop)
-    4. Watch this terminal for incoming VisionData, and optionally open
-       AdvantageScope pointed at 127.0.0.1:5810 to visualize both directions.
-
-Requires: pyntcore, wpimath (same deps iSpy already uses for NetworkTableHandler).
+Usage: set use_network_tables + network_tables_ip in Config/config.json,
+run this in one terminal, iSpy in another. Needs pyntcore + wpimath.
 """
 
 import argparse
@@ -38,8 +18,7 @@ import wpiutil.wpistruct
 from wpimath.geometry import Pose2d, Rotation2d
 
 
-# Mirrors iSpy/plugins/utilities/BuiltIn/NetworkHandler.py's FuelStruct so the
-# struct-array subscription below can decode what iSpy publishes.
+# mirrors NetworkHandler.py's FuelStruct so the subscription can decode what iSpy publishes
 @wpiutil.wpistruct.make_wpistruct(name="Fuel")
 @dataclasses.dataclass
 class FuelStruct:
@@ -75,9 +54,7 @@ def main():
 
     inst = ntcore.NetworkTableInstance.getDefault()
 
-    # API differs across pyntcore versions - some only expose startServer()
-    # (with persist_filename/listen_address/port3/port4 kwargs), others
-    # startServer4(). Try known signatures in order rather than hardcoding one.
+    # pyntcore API differs across versions - try known startServer/startServer4 signatures in order
     started = False
     for attempt in (
         lambda: inst.startServer(persist_filename="", listen_address="", port3=1735, port4=args.port),
@@ -126,8 +103,7 @@ def main():
             pose = Pose2d() if args.static else make_fake_pose(t, args.radius, args.period)
             pose_pub.set(pose)
 
-            # Print incoming vision data whenever the fuel list changes, and
-            # otherwise once a second so you can see it's still alive.
+            # print vision data on change, else once/sec so you know its still alive
             fuels = fuel_sub.get()
             now = time.time()
             if len(fuels) != last_fuel_count or now - last_print > 1.0:

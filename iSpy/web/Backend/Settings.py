@@ -38,8 +38,8 @@ class SettingsModule(WebModule):
             return jsonify(error="No snapshot available (already used, or none was taken)"), 404
         config = self.context["config"]
         config.config = snap["config"]
-        # The whole config dict was swapped underneath the camera wrapper
-        # views - normalize and rebuild them like _update_config does.
+        # whole config dict was swapped underneath the camera wrappers -
+        # normalize + rebuild them like _update_config does
         from iSpy.config.iSpyConfig import ensure_camera_entries_ready
         ensure_camera_entries_ready(config.config.get("camera_configs", {}))
         config._rebuild_camera_configs()
@@ -62,9 +62,9 @@ class SettingsModule(WebModule):
             changed_keys = self._find_changed_keys(old_config, config.config)
             needs_restart = bool(changed_keys & (_RESTART_REQUIRED_KEYS | frontend_restart_keys))
 
-            # Surface any critical post-save recommendations to the dashboard
-            # in real time via SSE, instead of leaving them to be discovered
-            # only when someone happens to visit /recommendations.
+            # push critical post-save recommendations to the dashboard via SSE so
+            # they show up in real time, not only when someone visits
+            # /recommendations
             recs = get_structured_recommendations(config.config)
             critical = [r for r in recs if r["severity"] == "critical"]
             dash = self.context.get("dashboard_module")

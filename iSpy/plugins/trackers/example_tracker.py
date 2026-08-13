@@ -5,9 +5,7 @@ class YourTracker(TrackerBase):
 
     @classmethod
     def config_schema(cls) -> dict:
-        # Declare your add-on's settings so the web UI can render an editor
-        # and the loader can apply defaults. Omitted keys get their default
-        # at runtime, so a config entry of {} "just works".
+        # declare settings so the web UI can render an editor; omitted keys get defaults at runtime
         return {
             "count_start": {
                 "type": "number",
@@ -19,9 +17,7 @@ class YourTracker(TrackerBase):
 
     def __init__(self, context: dict):
         super().__init__(context)
-        # self.config is an iSpyAddonConfig view of YOUR add-on's settings
-        # (schema defaults already merged in). Presence in the config ==
-        # enabled - there is no "enabled" flag.
+        # self.config = YOUR settings view (defaults already merged in); presence == enabled, no flag
         self.count = int(self.config.get("count_start", 0))
 
     def update(self, fuel_list, robot_x, robot_y, robot_yaw, robot_z: float = 0.0):

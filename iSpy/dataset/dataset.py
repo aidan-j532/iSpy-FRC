@@ -20,17 +20,17 @@ _VALIDATION_KEYWORDS = [
 ]
 
 _FORMAT_CALIB_COUNTS = {
-    "rknn": 20,      # KL-divergence quantization wants broader coverage
+    "rknn": 20,      # KL-divergence wants broader coverage
     "tflite": 100,     # simpler min/max calibration, converges faster
     "openvino": 300,
-    "engine": 500,     # TensorRT entropy calibration benefits most from more samples
+    "engine": 500,     # tensorrt entropy calibration wants more samples
     "coreml": 0,       # float16, no calibration needed
 }
 
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
-# Github release -> web search - > synthetic
-# Synthetic is a fallback, one of them will work, then you can quatnize
+# github release -> web search -> synthetic; synthetic is the fallback,
+# one of em will work, then you can quantize
 
 def calib_count_for_format(target_format: str, default: int = _CALIB_COUNT) -> int:
     return _FORMAT_CALIB_COUNTS.get(target_format, default)
@@ -262,9 +262,7 @@ def _search_urls_google(sess, keyword: str, count: int, headers: dict) -> list[s
     return found
 
 def get_active_dataset_dir(default_root: str = "QuantizeDataset") -> Path:
-    """Root folder for quantization datasets. The dataset used by a camera is
-    stored with the camera config itself (see 'quantization_dataset'), so this
-    is just the default storage root."""
+    """default storage root - each cam's actual dataset is stored in its config ('quantization_dataset')"""
     return Path.cwd() / default_root
 
 def _is_host_reachable(host: str, timeout: int = 3) -> bool:

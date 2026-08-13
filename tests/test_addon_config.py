@@ -1,18 +1,8 @@
-"""Tests for the add-on (plugin) config restructure.
+"""add-on (plugin) config restructure tests.
 
-Add-ons are configured as dicts, one entry per ENABLED add-on, where the
-value is that add-on's own settings:
-
-    "plugins": {
-        "trackers":  {"object_tracker": {"distance_threshold": 0.5}},
-        "utilities": {"network_table_handler": {"network_tables_ip": "10.0.0.2"}},
-        "frame_processors": {},
-    }
-
-Presence == enabled - there is no "enabled" flag. Settings that used to live
-at the top level (dbscan, distance_threshold, stale_threshold, record_mode,
-record_dir, use_network_tables, network_tables_ip) now live in the add-on
-they belong to. Legacy list-format configs migrate automatically.
+add-ons are dicts keyed by enabled add-on; presence == enabled, no flag.
+settings that used to live at the top level (dbscan, distance_threshold, ...)
+now live in their add-on; legacy list-format configs migrate automatically.
 """
 
 import json
@@ -121,8 +111,7 @@ class AddonMigrationTests(unittest.TestCase):
         )
 
     def test_legacy_enabled_flags_become_presence(self):
-        # record_mode + use_network_tables are gone; the add-ons they enabled
-        # are simply present in the dict.
+        # record_mode/use_network_tables are gone - the add-ons they enabled are just present
         cfg = self._load(self._legacy_config())
         self.assertTrue(cfg.is_addon_enabled("utilities", "video_recorder"))
         self.assertTrue(cfg.is_addon_enabled("utilities", "network_table_handler"))
@@ -136,8 +125,7 @@ class AddonMigrationTests(unittest.TestCase):
             self.assertNotIn(key, cfg.config)
 
     def test_disabled_addons_get_no_migrated_settings(self):
-        # Settings must never enable an add-on - a disabled tracker stays
-        # absent even though legacy values existed for it.
+        # settings must never enable an add-on - stays absent even with legacy values around
         data = self._legacy_config()
         data["plugins"]["trackers"] = ["path_planner"]  # object_tracker disabled
         cfg = self._load(data)
@@ -145,8 +133,7 @@ class AddonMigrationTests(unittest.TestCase):
         self.assertIsNone(cfg.get_addon_settings("trackers", "object_tracker"))
 
     def test_disabled_flags_do_not_enable_addons(self):
-        # A flag of False must keep an add-on disabled even when legacy
-        # settings for it still exist at the top level.
+        # a False flag keeps the add-on disabled even if legacy top-level settings exist
         data = {
             "plugins": {"trackers": [], "utilities": [], "frame_processors": []},
             "use_network_tables": False,
@@ -159,7 +146,7 @@ class AddonMigrationTests(unittest.TestCase):
         self.assertFalse(cfg.is_addon_enabled("utilities", "video_recorder"))
 
     def test_migration_is_idempotent(self):
-        # Loading twice must not duplicate or clobber anything.
+        # loading twice mustnt duplicate or clobber anything
         data = self._legacy_config()
         cfg1 = self._load(data)
         cfg2 = self._load(json.loads(json.dumps(cfg1.config)))
@@ -201,7 +188,7 @@ class AddonMigrationTests(unittest.TestCase):
         self.assertIn("object_tracker", cfg.config["plugins"]["trackers"])
         self.assertNotIn(3, cfg.config["plugins"]["trackers"])
         self.assertNotIn(None, cfg.config["plugins"]["trackers"])
-        # presence == enabled; a malformed value counts as enabled w/ no settings
+        # malformed value still counts as enabled (presence == enabled), just no settings
         self.assertTrue(cfg.is_addon_enabled("utilities", "network_table_handler"))
         self.assertEqual(
             cfg.get_addon_settings("utilities", "network_table_handler"), {}

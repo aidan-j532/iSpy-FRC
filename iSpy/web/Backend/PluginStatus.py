@@ -12,13 +12,9 @@ logger = logging.getLogger(__name__)
 
 _PLUGIN_ROOT = Path(_plugins_pkg.__file__).resolve().parent
 
-# Vision pipelines use a different loading strategy than the other plugin
-# types: they are imported directly and registered in a static PIPELINES dict
-# (iSpy/vision/pipelines/__init__.py), not discovered by scanning a directory
-# with load_plugins(). The _TYPE_MAP entry below makes them visible in /addons
-# as read-only built-ins: they are listed from the static registry, never
-# toggled/uploaded/created/deleted from the web UI (config selects one per
-# camera via the 'pipeline' key instead).
+# vision pipelines are imported directly + registered in a static dict
+# (iSpy/vision/pipelines/__init__.py), not scanned via load_plugins(). The
+# _TYPE_MAP entry below shows them in /addons as read-only built-ins.
 _VISION_PIPELINE_DIR = Path(__file__).resolve().parent.parent.parent / "vision" / "pipelines"
 
 _TYPE_MAP = {
@@ -37,8 +33,8 @@ _ADDON_TYPES_FROM_PTYPE = {
 
 
 def _coerce_setting_value(value, defn: dict):
-    """Validate + coerce one add-on setting against its schema definition.
-    Raises ValueError with a human-readable message on bad input."""
+    """validate + coerce one add-on setting against its schema; raises
+    ValueError with a human-readable message on bad input"""
     if not isinstance(defn, dict):
         return value
     stype = defn.get("type")
@@ -140,8 +136,8 @@ class PluginStatusModule(WebModule):
         available = []
         for ptype, (subdir, base_cls, _, _) in _TYPE_MAP.items():
             if ptype == "vision_pipeline":
-                # Built-in pipelines are core code, listed from the static
-                # registry instead of a directory scan - shown read-only.
+                # built-in pipelines are core code, listed from the static
+                # registry instead of a dir scan - shown read-only
                 from iSpy.vision.pipelines import get_pipeline_classes
                 for name, cls in sorted(get_pipeline_classes().items()):
                     available.append({
@@ -168,9 +164,8 @@ class PluginStatusModule(WebModule):
                     logger.warning("Failed to load config schema for add-on '%s'", name)
                     schema = {}
                 filename = self._filename_for(subdir, name)
-                # Files under <subdir>/BuiltIn/ are iSpy's bundled add-ons:
-                # they can be enabled/disabled and configured, but not
-                # deleted, and are labelled as built-in in the UI.
+                # files under <subdir>/BuiltIn/ are iSpy's bundled add-ons:
+                # toggleable/configureable but not deletable
                 is_builtin = bool(filename and filename.startswith("BuiltIn/"))
                 available.append({
                     "name": name,
@@ -185,8 +180,8 @@ class PluginStatusModule(WebModule):
         return jsonify(available=available)
 
     def _filename_for(self, subdir: str, plugin_name: str) -> str | None:
-        # Best-effort: scan for the file whose plugin_name matches, so the
-        # UI can offer delete/edit without re-parsing every module itself.
+        # best-effort: find the file whose plugin_name matches so the UI
+        # can offer delete/edit without re-parsing modules itself
         base_cls_map = {v[0]: v[1] for v in _TYPE_MAP.values()}
         base_cls = base_cls_map.get(subdir)
         if not base_cls:
@@ -217,8 +212,8 @@ class PluginStatusModule(WebModule):
                 return jsonify(error="Not found"), 404
             return jsonify(source=path.read_text(errors="ignore"), filename=path.name)
         subdir = info[0]
-        # Resolve the real file by plugin name (handles custom add-ons in
-        # <subdir>/ and bundled ones under <subdir>/BuiltIn/ uniformly).
+        # resolve the real file by plugin name - handles both custom
+        # add-ons in <subdir>/ and bundled ones under <subdir>/BuiltIn/
         rel = self._filename_for(subdir, name)
         if not rel:
             return jsonify(error="Not found"), 404
@@ -259,15 +254,14 @@ class PluginStatusModule(WebModule):
             return jsonify(error="No config available"), 500
 
         # plugins.<type> is a dict of enabled add-on -> settings; presence IS
-        # the enabled state, so toggling adds/removes the entry.
+        # the enabled state, so toggling adds/removes the entry
         config_type = {"tracker": "trackers", "utility": "utilities",
                        "frame_processor": "frame_processors"}[plugin_type]
 
         if enable:
-            # Write the add-on's schema defaults into the config entry so the
-            # settings are visible in Config/config.json immediately (not an
-            # empty {} that only gets values after a manual save). Explicit
-            # user settings are preserved if the entry already has them.
+            # write the schema defaults into the config entry so settings
+            # show up in Config/config.json right away (not an empty {}
+            # that only fills in after a manual save)
             defaults = {}
             try:
                 schema = discovered[name].config_schema() or {}
@@ -321,9 +315,8 @@ class PluginStatusModule(WebModule):
                       f"its settings."
             ), 409
 
-        # Validate + coerce against the add-on's schema so bad values never
-        # reach the config. Unknown keys are rejected - this config is
-        # forward-only and typo-proof.
+        # validate + coerce against the schema so bad values never hit config;
+        # unknown keys are rejected (typo-proof)
         try:
             schema = cls.config_schema() or {}
         except Exception:
@@ -360,8 +353,8 @@ class PluginStatusModule(WebModule):
         return target
 
     def _validate_addon_source(self, ptype: str, code: str, expected_class_name: str | None) -> str | None:
-        """Returns an error string, or None if OK. Cheap static checks only -
-        we don't execute untrusted code here."""
+        """error string, or None if OK. Cheap static checks - we dont
+        execute untrusted code here"""
         subdir, base_cls, base_name, _ = _TYPE_MAP[ptype]
         if base_name not in code:
             return f"Add-on must subclass {base_name} (import it from iSpy.plugins.bases)."
@@ -457,8 +450,8 @@ class PluginStatusModule(WebModule):
         if "BuiltIn" in path.parts:
             return jsonify(error="Cannot delete a built-in add-on."), 403
 
-        # If it's currently enabled in config, disable it first so we don't
-        # leave a dangling reference the loader can't resolve.
+        # if its enabled in config, disable it first so we dont leave a
+        # dangling ref the loader cant resolve
         config = self.context.get("config")
         discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
         plugin_name = None

@@ -64,7 +64,7 @@ class QRCodeCamera(VisionPipeline):
         self.detector = cv2.QRCodeDetector()
         self._last_objects: list[Object] = []
         
-        # Define the 3D corners of the QR code (assuming centered at origin)
+        # 3D corners of the QR code (centered at origin)
         half = self.qr_size / 2.0
         self.obj_pts = np.array([
             [-half,  half, 0],
@@ -81,8 +81,8 @@ class QRCodeCamera(VisionPipeline):
         configured = getattr(self, "focal_length_pixels", 0.0)
         if configured and configured > 1:
             return configured
-        # No calibration: assume a typical 60 deg horizontal FOV so the PnP
-        # solve produces sensible distances.
+        # no calibration: assume a typical 60 deg horizontal FOV so PnP
+        # gives sensible distances
         return (img_w / 2.0) / math.tan(math.radians(60.0 / 2.0))
 
     def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
@@ -109,10 +109,9 @@ class QRCodeCamera(VisionPipeline):
         return roll, pitch, yaw
 
     def _decode_scales(self, gray):
-        """Try decoding at several scales (upsample helps small/rotated QR
-        codes). Returns (points, decoded_info, scale) scaled back to the
-        original frame coordinates, or (None, [], 1.0). In 'fast' decode
-        mode only the native resolution is tried."""
+        """try several scales (upsampling helps small/rotated QRs); fast
+        mode only tries native res. Returns points/decoded_info scaled back
+        to the original frame, or (None, [], 1.0)."""
         img_h, img_w = gray.shape[:2]
         scales = [1.0] if self.decode_mode == "fast" else [1.0, 1.5, 2.0, 0.75]
         for scale in scales:
@@ -129,7 +128,7 @@ class QRCodeCamera(VisionPipeline):
                 if scale != 1.0:
                     points = [pts / scale for pts in points]
                 return points, list(decoded_info), scale
-            # Single-QR fallback - detectAndDecodeMulti can miss lone codes.
+            # single-QR fallback - detectAndDecodeMulti can miss lone codes
             try:
                 info, corners, _straight = self.detector.detectAndDecode(resized)
             except cv2.error:
@@ -147,8 +146,8 @@ class QRCodeCamera(VisionPipeline):
 
         detector = getattr(self, "detector", None)
         if detector is None:
-            # Uninitialized instance (e.g. tests construct via __new__) - emit
-            # a placeholder visualization rather than crashing.
+            # uninitialized instance (tests build via __new__) - show a
+            # placeholder viz instead of crashing
             self._last_objects = self.get_demo_objects(frame)
             return self._last_objects, frame
 
@@ -159,9 +158,8 @@ class QRCodeCamera(VisionPipeline):
         if points is not None:
             objects = self._build_objects(frame, points, decoded_info)
 
-        # Temporal persistence: keep the last decoded objects for a few
-        # frames so a single dropped/missed frame doesn't make the code
-        # flicker out of existence.
+        # keep the last decoded objects a few frames so a dropped frame
+        # doesnt make the code flicker out of existence
         if objects:
             self._stable = objects
             self._stability = getattr(self, "stability_frames", 3)
@@ -189,7 +187,6 @@ class QRCodeCamera(VisionPipeline):
                 cv2.putText(frame, info, tuple(qr_corners[0].astype(int)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
 
-            # Solve PnP
             ok, rvec, tvec = cv2.solvePnP(
                 self.obj_pts,
                 qr_corners,
@@ -202,10 +199,8 @@ class QRCodeCamera(VisionPipeline):
                 cv2.drawFrameAxes(frame, cam_mat, dist_coeffs, rvec, tvec, self.qr_size / 2)
 
                 tvec = tvec.reshape(3)
-                # solvePnP output is in the units of `obj_pts` (configured
-                # unit), but `_camera_point_to_robot` works in the codebase's
-                # internal inch convention, so convert configured unit ->
-                # inches first (mirrors ObjectDetectionCamera).
+                # solvePnP output is in obj_pts units (configured unit) but
+                # _camera_point_to_robot works in inches - convert first
                 to_inches = 1.0 / self.conversions.get(self.unit, self.conversions["meter"])
                 robot_pt = self._camera_point_to_robot(
                     (tvec[0] * to_inches, tvec[1] * to_inches, tvec[2] * to_inches)

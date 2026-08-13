@@ -73,8 +73,7 @@ def _is_admin_windows():
 
 def _relaunch_as_admin_windows(cmd):
     try:
-        # Write the exact schtasks command to a .bat file so there are no
-        # quoting/escaping issues passing arguments through Start-Process.
+        # write the cmd to a .bat so we avoid quoting/escaping issues through Start-Process
         public = "C:\\Users\\Public"
         bat_file = os.path.join(public, "vc_elevate.bat")
         out_file = os.path.join(public, "vc_schtasks_result.txt")
@@ -139,8 +138,7 @@ def setup_windows(script_path):
             else:
                 print("UAC elevation was declined or the task creation failed.")
 
-        # Either we ARE admin and schtasks still failed, or elevation was
-        # declined - fall back to a per-user startup entry.
+        # either we're admin and schtasks still failed, or elevation got declined - fall back to a per-user startup entry
         try:
             appdata = str(Path.home() / "AppData" / "Roaming")
             startup_dir = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
@@ -208,29 +206,6 @@ def setup(script_path: str):
     else:
         print("Unsupported platform (no systemd detected). Set up a cron job manually:")
         print(f"  @reboot {sys.executable} {os.path.abspath(script_path)}")
-
-# if __name__ == "__main__":
-#     if len(sys.argv) < 2:
-#         print("Usage: python setup_service.py <script.py>")
-#         sys.exit(1)
-
-#     script = sys.argv[1]
-#     if not os.path.isfile(script):
-#         print(f"File not found: {script}")
-#         sys.exit(1)
-
-#     detected = get_platform()
-#     print(f"Detected platform: {detected}")
-
-#     if detected == "linux_systemd":
-#         setup_systemd(script)
-#     elif detected == "windows":
-#         setup_windows(script)
-#     elif detected == "macos":
-#         setup_macos(script)
-#     else:
-#         print("Unsupported platform (no systemd detected). Set up a cron job manually:")
-#         print(f"  @reboot {sys.executable} {os.path.abspath(script)}")
 
 if __name__ == "__main__":
     setup("watchdog.py iSpy/boot/service_daemon.py")

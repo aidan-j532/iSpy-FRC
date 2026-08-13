@@ -14,40 +14,11 @@ def ensure_quantized_model(
     force=False,
     dataset_path=None,
 ):
-    """
-    This comment was written by OpenCode BigPickle :)
-    Provision a converted/quantized artifact for a YOLO .pt through iSpy's
-    boot conversion framework.
-
-    Shared by YOLO pipelines (object_detection, yolo_world, ...) that want to
-    run a hardware-accelerated build of a PyTorch model on the detected
-    backend. It reuses AutoOpt.recommend_format() for hardware detection,
-    convert_model() for the export/quantization itself, and the metadata
-    sidecar + dataset calibration machinery that convert_model already wires
-    up - so the output drops straight into GenericYolo.
-
-    Parameters
-    ----------
-    source_pt : str | Path
-        Path to the base YOLO .pt weights.
-    target_format : str
-        One of AutoOpt.SUPPORTED_FORMATS ("onnx", "rknn", "tflite",
-        "openvino", "engine", "coreml", "tpu"), or "auto" to pick the best
-        format for the current hardware.
-    input_size : tuple[int, int]
-        (height, width) letterbox resolution used for conversion and runtime.
-    quantize : bool
-        When False, returns the source .pt untouched.
-    force : bool
-        Re-run conversion even if a cached artifact already exists.
-
-    Returns
-    -------
-    tuple[str, bool]
-        (model_file, converted). `converted` is True when the framework
-        produced an artifact. On any failure this logs and falls back to
-        (source_pt, False) so the pipeline keeps running instead of dying.
-    """
+    """provision a converted/quantized artifact for a YOLO .pt through iSpy's
+    boot conversion framework. shared by the YOLO pipelines; reuses
+    AutoOpt.recommend_format() for hardware detection and convert_model() for
+    the export, so the output drops straight into GenericYolo. on failure logs
+    and falls back to (source_pt, False) so the pipeline keeps running"""
     source_pt = str(source_pt)
     if not quantize or not Path(source_pt).exists():
         return source_pt, False
@@ -108,24 +79,11 @@ def ensure_onnx_model(
     quantize=True,
     force=False,
 ):
-    """Export any torch model to a cached ONNX artifact, optionally int8-quantized.
-
-    This is the generic-model counterpart to ``ensure_quantized_model`` (which
-    only understands ultralytics YOLO .pt files). ``build_module`` is a
-    zero-argument callable that returns an eval-mode ``torch.nn.Module`` whose
-    ``forward`` takes a single ``(N, 3, H, W)`` tensor and returns a single
-    tensor. The artifact is written once under ``<project>/YoloModels/onnx/``
-    and reused on later runs. When ``quantize`` is true the export is also
-    int8-quantized (dynamic, via onnxruntime) and the quantized file is the
-    one returned.
-
-    Returns
-    -------
-    tuple[str | None, bool]
-        (artifact_path, converted). ``converted`` is True when a loadable
-        artifact exists. Any failure logs and returns ``(None, False)`` so the
-        caller can fall back to its non-optimized path.
-    """
+    """export any torch model to a cached ONNX artifact, optionally int8-quantized.
+    generic-model counterpart to ensure_quantized_model (which only understands
+    ultralytics .pt files); build_module returns an eval torch.nn.Module taking a
+    (N,3,H,W) tensor. artifact cached under YoloModels/onnx/ and reused; on failure
+    logs and returns (None, False) so the caller can fall back to its unoptimized path"""
     import torch
     import torch.nn as nn
 

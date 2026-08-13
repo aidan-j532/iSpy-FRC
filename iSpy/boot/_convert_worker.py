@@ -10,8 +10,7 @@ def main():
     with open(sys.argv[1]) as f:
         args = json.load(f)
 
-    # Imported here, not at module level, so a bad args file fails fast
-    # without paying boot.py's heavy import cost first.
+    # lazy import so a bad args file fails fast w/o paying boot.py's heavy import cost
     from iSpy.vision.optimizer import convert_model
 
     result = convert_model(

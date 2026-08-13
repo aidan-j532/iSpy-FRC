@@ -1,6 +1,5 @@
-"""Tests for the generic vision pipeline architecture: camera -> pipeline
-configuration, the common pipeline lifecycle (prepare / get_ready / state),
-generalized boot behavior, and the reusable quantization dataset system."""
+"""generic vision pipeline architecture: camera -> pipeline config, lifecycle
+(prepare/get_ready/state), boot behavior, and the reusable quant dataset"""
 
 import json
 import logging
@@ -54,9 +53,8 @@ class PipelineConfigTests(unittest.TestCase):
         )
 
     def test_legacy_flat_camera_config_migrates_to_nested_pipeline(self):
-        # Pre-restructure configs stored pipeline settings flat on the camera
-        # entry. Loading such a file must fold every non-camera key into
-        # pipeline.settings (so old config.json files keep working).
+        # old configs kept settings flat on the camera entry - fold every
+        # non-camera key into pipeline.settings so old config.json files still load
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             data = {
@@ -132,8 +130,7 @@ class PipelineConfigTests(unittest.TestCase):
         )
 
     def test_no_legacy_migration_happens(self):
-        # Legacy top-level vision_model must NOT be migrated into cameras -
-        # it is rejected loudly with a pointer to 'boot -f'.
+        # legacy top-level vision_model gets rejected loudly w/ a 'boot -f' hint, never migrated
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             data = {
@@ -164,9 +161,8 @@ class PipelineConfigTests(unittest.TestCase):
             self.assertIn("boot -f", str(ctx.exception))
 
     def test_pipeline_own_optimization_config(self):
-        # Optimization settings belong to the object_detection pipeline config
-        # (its per-camera vision_model block) - not the global config. A fresh
-        # default config is opt-in: no background build on first boot.
+        # optimization settings live in the pipeline config now, opt-in -
+        # no background build on first boot
         cfg = iSpyConfig()
         self.assertIsNone(cfg.get("vision_model"))
         cam = cfg.camera_config("default_cam")
@@ -273,8 +269,7 @@ class PipelineLifecycleTests(unittest.TestCase):
                          "not supported")
 
     def test_model_backed_pipelines_offer_optimization_options(self):
-        # YOLO World and Depth Anything are optimizable pipelines too - the
-        # generic optimize endpoint must not be object-detection-only.
+        # yolo world + depth anything are optimizable too - optimize() mustnt be od-only
         for cls, keys in (
             (YoloWorldCamera, ("optimize", "quantize", "target_format", "quantization_dataset", "input_size")),
             (DepthAnythingCamera, ("optimize", "model_size")),
@@ -284,8 +279,7 @@ class PipelineLifecycleTests(unittest.TestCase):
                 self.assertIn(key, options, f"{cls.__name__} missing {key}")
 
     def test_optimize_disabled_returns_explanation(self):
-        # Quantize/Optimize disabled in config -> optimize() explains instead
-        # of pretending to start a build.
+        # optimize disabled in config -> explain instead of pretending to build
         yw = YoloWorldCamera.__new__(YoloWorldCamera)
         yw.quantize = False
         yw._optimizing = False
@@ -298,8 +292,7 @@ class PipelineLifecycleTests(unittest.TestCase):
         self.assertIn("disabled", da.optimize())
 
     def test_optimize_runs_synchronously_and_gates_readiness(self):
-        # A failed optimized build leaves the pipeline not-ready and run()
-        # gated to the raw camera feed; a successful build flips it to ready.
+        # failed build -> not-ready + gated to raw feed; success -> ready
         da = DepthAnythingCamera.__new__(DepthAnythingCamera)
         da._auto_opt = True
         da.estimate_depth = True

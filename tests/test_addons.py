@@ -1,12 +1,6 @@
-"""Tests for every built-in add-on (tracker, utility, frame processor).
-
-Each add-on must:
-- be discoverable by the plugin loader under its type;
-- declare a valid config_schema() (known types, defaults, labels);
-- construct from a context dict whose config is an iSpyAddonConfig view of
-  its own settings (presence == enabled, no "enabled" flag);
-- honor its own settings and behave correctly.
-"""
+"""tests for every built-in add-on: discoverable, valid config_schema(),
+constructs from an iSpyAddonConfig view of its settings (presence == enabled),
+honors its own settings"""
 
 import json
 import tempfile
@@ -280,11 +274,9 @@ class VideoRecorderTests(unittest.TestCase):
 
 
 class NetworkTableHandlerTests(unittest.TestCase):
-    """The add-on modules are loaded by the plugin loader under synthetic
-    module names, and NetworkHandler imports ntcore at module level, so each
-    test imports a FRESH copy of the module with a patched ntcore in
-    sys.modules to keep the tests hermetic (no real network, no 15s retry
-    loop)."""
+    """NetworkHandler imports ntcore at module level, so each test loads a
+    FRESH copy w/ a patched ntcore in sys.modules - keeps tests hermetic
+    (no real network, no 15s retry loop)"""
 
     def _fresh_module(self, is_connected=True):
         import importlib

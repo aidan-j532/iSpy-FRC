@@ -1,11 +1,6 @@
-"""Tests for the add-on web layer (/addons API) and full iSpy integration.
-
-Covers the dict-based config semantics end to end:
-- /api/plugins/available exposes schemas + per-add-on settings + enabled state
-- toggling adds/removes add-on entries (presence == enabled)
-- /api/plugins/settings validates + coerces settings against the schema
-- deleting an add-on disables it first
-- iSpy loads every enabled add-on with its own settings view
+"""add-on web layer (/addons API) + full iSpy integration tests:
+schemas/settings/enabled state, toggling (presence == enabled), settings
+validation + coercion, disable-before-delete, iSpy loading every add-on.
 """
 
 import json
@@ -82,11 +77,10 @@ class PluginStatusModuleTests(unittest.TestCase):
         with _app_context():
             payload = mod._available().get_json()
         by_name = {(p["type"], p["name"]): p for p in payload["available"]}
-        # Bundled add-ons under <type>/BuiltIn/ are marked built-in (they can
-        # be toggled and configured but never deleted)...
+        # <type>/BuiltIn/ add-ons are builtin - toggleable + configurable but never deletable
         self.assertTrue(by_name[("tracker", "object_tracker")]["builtin"])
         self.assertTrue(by_name[("utility", "video_recorder")]["builtin"])
-        # ...while user-authored add-ons are not.
+        # ...user-authored ones arent
         self.assertFalse(by_name[("tracker", "example_tracker")]["builtin"])
 
     def test_source_serves_bundled_addon_file(self):
@@ -294,9 +288,8 @@ class PluginStatusModuleTests(unittest.TestCase):
 
     def test_delete_builtin_rejected(self):
         mod, cfg = self._module()
-        # Built-ins live under BuiltIn/ and resolve to non-existent plain
-        # files (the reserved dir is never reachable by filename) - deletion
-        # is refused, never touching the built-in code.
+        # builtins resolve to non-existent plain files (reserved dir unreachable
+        # by filename) so deletion always 404s, never touching built-in code
         with _app_context():
             resp = mod._delete("tracker", "BuiltIn/ObjectTracker")
         self.assertEqual(resp[1], 404)
@@ -361,8 +354,6 @@ class CoerceSettingValueTests(unittest.TestCase):
 
 
 class _FakeRequest:
-    """Minimal stand-in for flask.request.get_json used by the API handlers."""
-
     @staticmethod
     def get_json(data):
         fake = mock.Mock()
@@ -416,9 +407,7 @@ class iSpyAddonLoadingTests(unittest.TestCase):
             ispy._stop_all_plugins()
 
     def test_ispy_full_pipeline_builtin_addons(self):
-        """The real built-in add-ons must all load through iSpy with
-        defaults (video_recorder writes to a temp dir, NT is not enabled by
-        enabling health_reporter, etc.)."""
+        """all real builtin add-ons load through iSpy with defaults"""
         import tempfile
         from iSpy.iSpy import iSpy
         cfg = iSpyConfig()

@@ -52,20 +52,18 @@ class iSpy:
         if self.web_app is None and config["app_mode"]:
             self.web_app = create_app(cameras=cameras, config=config)
         if self.web_app is not None:
-            # The dashboard may have booted before the camera pipelines
-            # existed (game_loop boots it first so it is reachable during
-            # the slow camera/model initialization); hand them over now.
+            # dashboard may have booted before the pipelines existed (game_loop boots
+            # it first so it's up during slow cam/model init) - hand em over now.
             self.web_app.set_cameras(cameras)
 
-        # Shared context handed to every add-on; each add-on's constructor
-        # receives its OWN view of its settings via iSpy._addon_context.
+        # shared context for every add-on; each one gets its OWN settings view
         self._base_context = {
             "config": config,
             "global_config": config,
             "cameras": self.cameras,
             "flask_app": self.web_app.flask_app if self.web_app else None,
-            # HealthModule/PluginStatusModule read this lazily per-request,
-            # so it's fine that it's set for real a few lines down.
+            # HealthModule/PluginStatusModule read this lazily per-request, so
+            # it's fine that it's set properly a few lines down.
             "vision_instance": self,
         }
 
@@ -106,8 +104,7 @@ class iSpy:
             else:
                 self.logger.warning("Unknown frame processor: %s", name)
 
-        # Wire the NetworkTables handler (if the user enabled that plugin)
-        # into the merged HealthModule so /api/health can report NT status.
+        # wire the NT handler (if enabled) into the merged HealthModule so /api/health can report nt status
         nt = self.utilities.get("network_table_handler")
         health_mod = self.web_app.modules.get("health") if self.web_app else None
         if health_mod and nt:
@@ -117,8 +114,7 @@ class iSpy:
 
         if self.web_app:
             if web_app is None:
-                # Only start the server when we created it here; a pre-booted
-                # app was already serving before the cameras finished loading.
+                # only start the server if we made it here - a pre-booted app is already serving
                 threading.Thread(target=self.web_app.run, daemon=True).start()
             dash = self.web_app.modules.get("dashboard")
             if dash and hasattr(dash, "set_plugins"):
@@ -127,7 +123,6 @@ class iSpy:
 
         self._silence_external_loggers()
 
-        # Make sure cameras get frame processors if any are configured
         if self.frame_processors:
             for camera in self.cameras:
                 for name, processor in self.frame_processors.items():
@@ -138,9 +133,7 @@ class iSpy:
             self.web_app.set_vision_instance(self)
 
     def _enabled_addons(self, addon_type: str) -> list[tuple[str, dict]]:
-        """(name, settings) pairs from plugins.<type>. Presence == enabled, so
-        only dict entries are returned; entries with non-dict values are
-        treated as enabled with no settings."""
+        """(name, settings) pairs from plugins.<type> - presence == enabled"""
         raw = self.config.get_nested("plugins", addon_type, default={})
         if not isinstance(raw, dict):
             return []
@@ -152,9 +145,6 @@ class iSpy:
         return out
 
     def _addon_context(self, addon_cls, settings: dict) -> dict:
-        """Context for one add-on instance: the shared context plus an
-        iSpyAddonConfig view of the add-on's own settings (schema defaults
-        merged in)."""
         ctx = dict(self._base_context)
         ctx["config"] = iSpyAddonConfig(settings, defaults=addon_cls.default_settings())
         return ctx
@@ -165,9 +155,7 @@ class iSpy:
                 logging.getLogger(name).setLevel(logging.WARNING)
 
     def reload_camera(self, cam_key: str, new_config: dict):
-        """No longer supported: camera settings are only applied on the next
-        vision start (see CamerasModule._update_camera). Kept as a no-op to
-        fail loudly if any stale caller still invokes it."""
+        """not supported anymore - cam settings apply on the next vision start; kept so stale callers fail loudly"""
         raise RuntimeError(
             "reload_camera was removed - camera settings require a vision "
             "restart to take effect."
@@ -222,8 +210,7 @@ class iSpy:
             return objects, frame
         except Exception:
             self.logger.exception("Solo-vision exception")
-            # Never kill the loop because one pipeline hiccuped - fall back
-            # to the raw camera frame so the feed keeps flowing.
+            # never kill the loop on one pipeline hiccup - fall back to the raw frame so the feed keeps flowing
             return [], camera.get_frame() if hasattr(camera, "get_frame") else None
 
     def validate_vision_model(self, repo_root: Path | None = None):
@@ -271,8 +258,7 @@ class iSpy:
 
         t_track = time.perf_counter()
         for tracker in self.trackers.values():
-            # WPILib pose yaw is CCW-positive; Object.relative_to uses the
-            # codebase's convention (positive yaw = turned RIGHT), so negate.
+            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
             fuel_list = tracker.update(
                 fuel_list, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
@@ -318,8 +304,7 @@ class iSpy:
 
         t_track = time.perf_counter()
         for tracker in self.trackers.values():
-            # WPILib pose yaw is CCW-positive; Object.relative_to uses the
-            # codebase's convention (positive yaw = turned RIGHT), so negate.
+            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
             fuel_list = tracker.update(
                 fuel_list, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )

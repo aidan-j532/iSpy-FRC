@@ -38,12 +38,10 @@ class Object:
         self.ray_direction = ray_direction  # np.ndarray(3,) unit vector, or None
         self.depth_source = depth_source
 
-        # Drives which renderer the 3D viewer uses for this object. New
-        # detector types just need a value here + a matching entry in
-        # VIS_RENDERERS in viewer3d.html - no other file needs to change.
+        # drives which renderer the 3D viewer uses; new detector types just need
+        # a value here + an entry in VIS_RENDERERS in viewer3d.html - nothing else
         #   "generic" -> cube (default)
-        #   "points"  -> raw keypoint dots, no bones (auto-selected whenever
-        #                keypoints_3d is set, regardless of this field)
+        #   "points"  -> raw keypoint dots, no bones (auto-selected when keypoints_3d is set)
         #   "planar"  -> flat rectangle + orientation gizmo (AprilTags, QR, barcodes)
         self.vis_type = vis_type
         self.vis_meta = vis_meta or {}
@@ -62,8 +60,8 @@ class Object:
         robot_pitch: float = 0.0,
         robot_yaw: float = 0.0,
     ):
-        # Frame: +X right, +Y forward, +Z up. robot_yaw is positive when the
-        # robot has turned RIGHT (boresight rotated from +Y toward +X).
+        # frame: +X right, +Y forward, +Z up; robot_yaw is +ve when the
+        # robot turned RIGHT (boresight rotated from +Y toward +X)
         cos_y = math.cos(robot_yaw)
         sin_y = math.sin(robot_yaw)
         field_x = self.x * cos_y + self.y * sin_y

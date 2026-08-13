@@ -8,12 +8,12 @@ class WebModule(ABC):
         self.context = context  # {"config": ..., "cameras": ..., "flask_app": ...}
 
     def register_routes(self, flask_app):
-        """Attach Flask routes/blueprints. Called once at startup."""
+        """attach Flask routes/blueprints, called once at startup"""
         pass
 
     def update(self, frame_data: dict):
-        """Called once per loop tick with the same frame_data dict every
-        plugin utility already receives (fuel_list, frame, fps, cameras, etc.)."""
+        """called once per loop tick with the same frame_data dict every
+        plugin utility already gets (fuel_list, frame, fps, cameras, ...)"""
         pass
 
     def stop(self):

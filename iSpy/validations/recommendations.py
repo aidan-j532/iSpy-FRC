@@ -1,8 +1,6 @@
 def _addon_setting(config: dict, addon_type: str, addon_name: str,
                    key: str, default=None):
-    """One setting from an add-on's config entry. Add-ons live at
-    plugins.<type>.<name> as dicts; presence == enabled, so settings only
-    exist for enabled add-ons."""
+    """one setting from an add-on's config entry; add-ons live at plugins.<type>.<name>, presence == enabled"""
     try:
         entry = config["plugins"][addon_type][addon_name]
     except (KeyError, TypeError):
@@ -30,8 +28,7 @@ def get_structured_recommendations(config: dict) -> list[dict]:
             add("normal", f"deviceid.{cam_name}",
                 f"Camera '{cam_name}' has no saved device_id - it may not survive a USB replug/reindex.")
 
-    # DBSCAN / tracking settings belong to their add-ons now. Absent add-on
-    # (not enabled) = no recommendation, since the add-on is not running.
+    # dbscan/tracking settings live in their add-ons now; add-on not enabled = no rec, since it aint running
     if _addon_setting(config, "trackers", "path_planner", "epsilon", 0) == 0:
         add("normal", "dbscan_eps",
             "PathPlanner DBSCAN epsilon is 0 - clustering is disabled.")

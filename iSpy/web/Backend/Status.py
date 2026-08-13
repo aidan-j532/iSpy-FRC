@@ -25,8 +25,8 @@ class StatusReporter(UtilityBase):
         self._detections = 0
         self._last_tick = time.perf_counter()
         self._uptime_start = time.perf_counter()
-        # stale_threshold used to be a global config key; it now belongs to
-        # the health_reporter add-on (schema default 1.0 when not enabled).
+        # stale_threshold used to be a global config key; now lives in the
+        # health_reporter add-on (schema default 1.0 when not enabled)
         self._stale_threshold = config.get_addon_setting(
             "utilities", "health_reporter", "stale_threshold", 1.0
         )

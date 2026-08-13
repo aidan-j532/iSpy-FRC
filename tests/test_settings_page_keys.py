@@ -1,10 +1,6 @@
-"""Regression tests for the settings page field list.
-
-The moved global keys (distance_threshold, stale_threshold, dbscan.*,
-record_mode, record_dir, use_network_tables, network_tables_ip) now live as
-add-on settings on the Add-ons page. If they reappear as data-key fields in
-settings.html, saving the form would resurrect them as top-level config keys.
-"""
+"""settings page field regressions: moved global keys (distance_threshold,
+stale_threshold, dbscan.*, record_*, network_tables_*) mustnt reappear as
+data-key fields or saving would resurrect them as top-level config keys"""
 
 import re
 import unittest

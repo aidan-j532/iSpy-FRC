@@ -11,8 +11,7 @@ class YourTracker(FrameProcessorBase):
 
     def __init__(self, context: dict):
         super().__init__(context)
-        # self.config is an iSpyAddonConfig view of YOUR add-on's settings.
-        # Presence in the config == enabled - there is no "enabled" flag.
+        # self.config = iSpyAddonConfig view of YOUR settings; presence == enabled, no flag
         self.count = 0
 
     def process(self, frame):

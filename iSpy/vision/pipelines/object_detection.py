@@ -46,10 +46,9 @@ class ObjectDetectionCamera(VisionPipeline):
         except KeyError as e:
             raise ValueError(f"Missing camera config key: {e}")
 
-        # Model architecture fields come exclusively from metadata sidecars,
-        # not from config.  Config holds only user-preference fields.  The
-        # vision_model block is per-camera pipeline settings (pipeline.settings),
-        # migrated from the legacy top-level key in a prior pass.
+        # Model architecture fields come only from metadata sidecars, not config.
+        # Config holds user-preference fields; vision_model is per-camera
+        # pipeline settings (migrated from the old top-level key).
         from iSpy.vision.ModelInspector import fill_missing_config
         vm_cfg = camera_config.get_pipeline_setting("vision_model")
         if not isinstance(vm_cfg, dict) or not vm_cfg:
@@ -57,13 +56,10 @@ class ObjectDetectionCamera(VisionPipeline):
                 f"Camera '{self._cam_name}' uses pipeline 'object_detection' "
                 "but has no vision_model block in its pipeline settings."
             )
-        # Schema fields set via the config UI live in the pipeline settings;
-        # merge them into the model config so they drive loading, readiness
-        # gating and optimization identically to the nested vision_model keys.
-        # The merge happens on a copy: the persisted vision_model block must
-        # keep only model identity (file_path, source_pt, ...), otherwise
-        # every setting gets duplicated into it the next time the config is
-        # saved.
+        # schema fields set via the config UI live in pipeline settings; merge
+        # them into the model config. Merge on a copy so the persisted
+        # vision_model keeps only model identity - otherwise every setting
+        # gets duplicated on the next save.
         vm_cfg = dict(vm_cfg)
         for _k in (
             "quantize", "min_conf", "target_format", "input_size",
@@ -173,10 +169,8 @@ class ObjectDetectionCamera(VisionPipeline):
             )
             self._preproc_thread.start()
 
-        # If the config requests optimization and no matching artifact is
-        # active yet, kick off the build on a simple background thread so the
-        # app can keep running (is_ready() reports "optimizing" and run()
-        # passes frames through untouched until the build finishes).
+        # optimization requested + no active artifact yet -> kick off the
+        # build on a bg thread so the app keeps running
         self._optimizing = False
         self._optimize_error: str | None = None
         if self._optimization_requested() and not self._optimized_active():
@@ -297,8 +291,7 @@ class ObjectDetectionCamera(VisionPipeline):
         return self._target_format
 
     def _is_processable(self) -> bool:
-        """True when run() may actually run inference. When False, run()
-        passes the raw camera feed through untouched."""
+        """True when run() can actually infer; otherwise pass frames through"""
         if getattr(self, "_optimizing", False):
             return False
         if self.model is None:
@@ -308,7 +301,7 @@ class ObjectDetectionCamera(VisionPipeline):
         return True
 
     def _source_model_path(self) -> Path | None:
-        """The .pt this camera's optimization builds from, or None."""
+        """the .pt this camera's optimization builds from, or None"""
         vm = self._current_vm_config()
         source = vm.get("source_pt") or vm.get("file_path")
         p = self._resolve_model_path(str(source or ""))
@@ -317,7 +310,7 @@ class ObjectDetectionCamera(VisionPipeline):
         return None
 
     def _optimized_artifact_path(self) -> Path | None:
-        """Existing build artifact at YoloModels/{format}/{stem}.{ext}."""
+        """existing build artifact at YoloModels/{format}/{stem}.{ext}"""
         src = self._source_model_path()
         if src is None:
             return None
@@ -331,9 +324,8 @@ class ObjectDetectionCamera(VisionPipeline):
         return None
 
     def _optimization_requested(self) -> bool:
-        # Quantize flag OR the old boot auto_opt behavior (camera-level
-        # auto_opt, falling back to the top-level config auto_opt). Legacy
-        # 'quantized'/'auto_opt' keys are still honored.
+        # quantize flag OR the old boot auto_opt behavior; legacy
+        # 'quantized'/'auto_opt' keys still honored
         if bool(getattr(self, "quantize", False)):
             return True
         if getattr(self, "_auto_opt", False):
@@ -345,7 +337,6 @@ class ObjectDetectionCamera(VisionPipeline):
 
     @staticmethod
     def _path_format(path: str) -> str:
-        """Format of a model path: 'pytorch', 'onnx', 'openvino', ... or ''."""
         p = str(path).lower()
         if "openvino_model" in p or p.endswith(".xml"):
             return "openvino"
@@ -362,12 +353,10 @@ class ObjectDetectionCamera(VisionPipeline):
         return ""
 
     def _optimized_active(self) -> bool:
-        """True once the loaded model is a backend artifact in the requested
-        target format AND derived from this camera's source model. A stale
-        artifact for a different model (or same model in another format) does
-        not count, so boot re-optimizes instead of silently running the wrong
-        weights. Falls back to a format-only match if the source .pt is gone -
-        a still-valid artifact can then boot.""" 
+        """True when the loaded model is a backend artifact in the requested
+        format AND built from this camera's source model - a stale artifact
+        for another model doesnt count, so boot re-optimizes. Falls back to
+        a format-only match if the source .pt is gone."""
         if getattr(self, "model", None) is None:
             return False
         if getattr(self.model, "model_type", "") == "tpu":
@@ -381,8 +370,7 @@ class ObjectDetectionCamera(VisionPipeline):
         return self._resolve_model_path(path) == expected
 
     def is_ready(self) -> tuple[bool, str]:
-        # Pure status report - never triggers or blocks on optimization.
-        # The optimize build is started at construction when needed.
+        # pure status report - never triggers/blocks on optimization
         if not self._optimization_requested():
             status = "ready" if self.model is not None else "error: no model configured/found"
             self._set_status(status)
@@ -409,9 +397,8 @@ class ObjectDetectionCamera(VisionPipeline):
         }
 
     def optimize(self, **kwargs) -> str:
-        """Build the optimized model artifact synchronously. Blocks until the
-        build finishes; is_ready() reports (False, "optimizing") while it
-        runs and (True, "ready") once it has produced an artifact."""
+        """build the optimized artifact synchronously; is_ready() reports
+        (False, "optimizing") while it runs"""
         if self._optimizing:
             return "optimizing"
 
@@ -431,8 +418,7 @@ class ObjectDetectionCamera(VisionPipeline):
         try:
             target = self._target_format_cached()
             if target == "tpu":
-                # TPU consumes the .pt directly via torch_xla at runtime
-                # (device="tpu" makes GenericYolo load it as model_type "tpu").
+                # TPU runs the .pt directly via torch_xla, no conversion
                 self.logger.info(
                     "Camera '%s': TPU backend - keeping .pt, no conversion.",
                     self._cam_name,
@@ -470,9 +456,7 @@ class ObjectDetectionCamera(VisionPipeline):
             self._optimizing = False
 
     def _optimize_runner(self):
-        """Run the synchronous optimize() off the main thread (started at
-        construction when the config requests a build). is_ready() reports
-        "optimizing" until this finishes."""
+        """runs optimize() off the main thread (started at construction)"""
         status = self.optimize()
         if not self._optimized_active():
             self._optimize_error = status
@@ -488,12 +472,10 @@ class ObjectDetectionCamera(VisionPipeline):
         }
 
     def _activate_optimized_model(self, artifact_path: str, vm_extra: dict | None = None):
-        """Swap this camera onto the freshly built backend artifact: reload the
-        model, start the pipeline worker if needed, and persist the per-camera
-        file_path. Raises RuntimeError if the optimized model fails to load -
-        the camera then stays on its fallback. vm_extra is merged into the
-        persisted vision_model (e.g. {"device": "tpu"}) so the artifact is
-        loaded the same way on subsequent boots."""
+        """swap the camera onto the fresh artifact: reload the model, start
+        the pipeline worker if needed, persist the per-camera file_path.
+        vm_extra gets merged into the persisted vision_model so the artifact
+        loads the same way on the next boot."""
         vm = self._current_vm_config()
         vm["file_path"] = artifact_path
         vm["quantize"] = True
@@ -614,11 +596,10 @@ class ObjectDetectionCamera(VisionPipeline):
             self._preproc_q.put((preprocessed, frame, orig_shape))
 
     def _focal_length_px_fov(self, img_w: int) -> float:
-        # FOV-derived intrinsic - independent of any specific game piece's
-        # known size, unlike self.focal_length_pixels.
+        # FOV-derived intrinsic - doesnt rely on a game piece's known size
         if self.fov and self.fov > 0:
             return (img_w / 2.0) / math.tan(math.radians(self.fov / 2.0))
-        return self.focal_length_pixels  # fallback if FOV isn't calibrated
+        return self.focal_length_pixels  # fallback when FOV isnt calibrated
 
     def _pixel_ray(self, pixel_x: float, pixel_y: float, img_w: int, img_h: int) -> triangulation.Ray:
         f = self._focal_length_px_fov(img_w)
@@ -649,11 +630,9 @@ class ObjectDetectionCamera(VisionPipeline):
     def _box_to_robot_point(
         self, box: Box, img_w: int, img_h: int
     ) -> np.ndarray | None:
-        # Unified depth model: cast the bottom-center ray and intersect it
-        # with the ground plane (objects are assumed to sit on the ground).
-        # This is geometrically exact and consistent for every pitch; the
-        # old size-based two-zone heuristic is kept only as a fallback for
-        # the degenerate case where the ray runs parallel to the ground.
+        # unified depth model: cast the bottom-center ray and hit the ground
+        # plane (objects assumed to sit on the ground). size-based heuristic
+        # is only a fallback for when the ray runs parallel to the ground.
         x1, y1, x2, y2 = box.xyxy
         ray = self._pixel_ray((x1 + x2) / 2.0, y2, img_w, img_h)
         gp = triangulation.ground_plane_intersection(ray, ground_z=0.0)
@@ -769,12 +748,9 @@ class ObjectDetectionCamera(VisionPipeline):
         ) * scale
 
     def _pnp_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
-        # solvePnP output is in the units of `pnp.object_points`, which the
-        # config documents as meters (the ~1.8 m tall COCO skeleton).  The rest
-        # of the pipeline (camera offsets, _camera_point_to_robot) works in the
-        # codebase's internal inch convention, so convert meters -> inches
-        # first.  Without this a 3 m deep object/keypoint set renders ~39x too
-        # small - a skeleton the size of a speck of dots in the viewer.
+        # solvePnP output is in the units of pnp.object_points (meters, ~1.8m
+        # tall COCO skeleton), but the rest of the pipeline works in inches -
+        # without this conversion things render ~39x too small
         meters_to_inches = 1.0 / self.conversions["meter"]
         return self._camera_point_to_robot(
             (
@@ -801,10 +777,8 @@ class ObjectDetectionCamera(VisionPipeline):
             pt = self._box_to_robot_point(box, img_w, img_h)
             if pt is None:
                 return None
-            # Both depth models assume the object sits on the ground, so the
-            # reported z is the ground-plane intersection (0). z_mode is kept
-            # as an accepted config key for backwards compatibility; both
-            # "size_based" and "ground_plane" now use the same ray+plane math.
+            # both depth models assume the object sits on the ground, so z
+            # is the ground-plane intersection (0). z_mode kept for back-compat
             if self.z_mode == "ground_plane":
                 depth_source = "ground_plane"
             pt = np.array([pt[0], pt[1], 0.0])

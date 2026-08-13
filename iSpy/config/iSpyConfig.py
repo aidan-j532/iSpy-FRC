@@ -7,9 +7,8 @@ _REPO_ROOT = Path.cwd()
 
 _MODEL_BACKED_PIPELINES = ("object_detection",)
 
-# Keys that belong to the camera itself (mount/capture/calibration) and stay
-# at the camera level. Everything else on a camera entry is pipeline
-# configuration and lives under ``pipeline.settings``.
+# keys that belong to the camera itself (mount/capture/calibration) stay at
+# cam level; everything else is pipeline config under pipeline.settings.
 _CAMERA_CORE_KEYS = {
     "name", "source", "device_id", "subsystem", "grayscale",
     "x", "y", "z", "height", "yaw", "pitch", "calibration",
@@ -17,52 +16,32 @@ _CAMERA_CORE_KEYS = {
     "csi", "path",
 }
 
-# User-facing model settings. These belong at pipeline.settings level, never
-# duplicated inside pipeline.settings.vision_model - older builds merged them
-# into the persisted vision_model block, so every camera save (or optimization
-# activation) wrote each setting twice. The vision_model block holds model
-# identity only (file_path, source_pt, input_size, device, ...).
+# user-facing model settings, kept at pipeline.settings level, never inside
+# vision_model - older builds merged em in there and every save wrote em twice.
+# vision_model block is model identity only (file_path, source_pt, ...).
 _VISION_MODEL_SETTINGS_KEYS = (
     "min_conf", "quantize", "quantization_dataset", "optimize",
     "target_format",
 )
 
-# Legacy names for the same settings. 'optimize' was 'auto_opt' and 'quantize'
-# was 'quantized' in older configs; the legacy key is dropped whenever the
-# canonical one is present so old configs don't store both.
+# legacy names for the same settings ('auto_opt' was 'optimize', 'quantized'
+# was 'quantize') - old key gets dropped when the canonical one exists.
 _LEGACY_SETTING_ALIASES = {
     "auto_opt": "optimize",
     "quantized": "quantize",
 }
 
 # ---------------------------------------------------------------------------
-# Add-on (plugin) configuration
-#
-# Add-ons are configured as dicts, one entry per enabled add-on, where the
-# value is that add-on's OWN settings:
-#
-#     "plugins": {
-#         "trackers": {
-#             "object_tracker": {"distance_threshold": 0.5, "stale_threshold": 1.0},
-#             "path_planner":   {"epsilon": 0.3, "min_samples": 3},
-#         },
-#         "utilities": {
-#             "network_table_handler": {"network_tables_ip": "10.0.0.2"},
-#         },
-#         "frame_processors": {},
-#     }
-#
-# An add-on that is present in its dict is ENABLED; removing it disables it -
-# there is no separate "enabled" flag. Settings that used to live at the top
-# level of the config (dbscan, distance_threshold, stale_threshold,
-# record_mode, record_dir, use_network_tables, network_tables_ip) now live
-# inside the add-on they belong to.
+# add-on (plugin) config: plugins.<type> is a dict of enabled add-ons
+# (name -> that add-on's own settings). presence == enabled, no flag;
+# legacy top-level settings (dbscan, record_mode, ...) got folded into the
+# add-ons they belong to.
 # ---------------------------------------------------------------------------
 
 _ADDON_TYPES = ("trackers", "utilities", "frame_processors")
 
-# Top-level legacy keys that were folded into individual add-ons. (key, addon
-# type, addon name, target setting key) - used by _migrate_addons.
+# legacy top-level keys folded into individual add-ons. (key, addon type,
+# addon name, target setting key) - used by _migrate_addons.
 _ADDON_LEGACY_FOLDS = (
     ("dbscan",           "trackers",    "object_tracker", None),  # special: dict
     ("distance_threshold", "trackers",  "object_tracker", "distance_threshold"),
@@ -70,8 +49,7 @@ _ADDON_LEGACY_FOLDS = (
     ("stale_threshold",  "utilities",   "health_reporter", "stale_threshold"),
 )
 
-# Legacy top-level flags that decided whether an add-on was enabled. The flag
-# value itself is discarded once it has been translated into add-on presence.
+# legacy enabled flags - the flag value is discarded once it becomes add-on presence
 _ADDON_LEGACY_FLAGS = {
     "use_network_tables": ("utilities", "network_table_handler"),
     "record_mode": ("utilities", "video_recorder"),
@@ -84,13 +62,7 @@ _ADDON_LEGACY_SETTINGS = {
 
 
 def _normalize_vision_model_settings(settings: dict) -> None:
-    """Drop user-facing settings duplicated inside the vision_model block.
-
-    When a key exists at pipeline.settings level AND inside vision_model, the
-    settings copy wins and the vision_model copy is dropped, so the config
-    never stores the same setting twice. Keys that live ONLY inside
-    vision_model are left untouched - they are valid legacy fallbacks (the
-    web UI and pipeline read through both locations). Idempotent."""
+    """drop user-facing settings duped inside vision_model - the settings copy wins. idempotent"""
     if not isinstance(settings, dict):
         return
     vm = settings.get("vision_model")
@@ -107,12 +79,7 @@ def _normalize_vision_model_settings(settings: dict) -> None:
 
 
 def default_vision_model() -> dict:
-    """Pipeline-settings vision_model block for model-backed pipelines.
-
-    Used when a config predates the per-camera vision_model restructure (or a
-    camera was added without one). User-uploaded models (anything not prefixed
-    with ``_default``) take priority; otherwise fall back to the same bundled
-    pose model the default config ships with."""
+    """default vision_model block for old configs / cams without one - user models win, else the bundled pose model"""
     pts = sorted((_REPO_ROOT / "YoloModels" / "pytorch").glob("*.pt"))
     user_pts = [p for p in pts if not p.name.startswith("_default")]
     if user_pts:
@@ -128,9 +95,7 @@ def is_model_backed_pipeline(pipeline: str) -> bool:
 
 
 def get_pipeline_name(cam_entry: dict) -> str:
-    """Name of the pipeline a camera entry uses: ``"object_detection"`` for
-    BOTH the legacy flat ``pipeline: "object_detection"`` layout and the new
-    nested ``pipeline: {"name": ...}`` layout."""
+    """pipeline name for a cam entry - works for both the legacy flat and new nested layouts"""
     if not isinstance(cam_entry, dict):
         return "object_detection"
     p = cam_entry.get("pipeline")
@@ -144,9 +109,7 @@ def get_pipeline_name(cam_entry: dict) -> str:
 
 
 def get_pipeline_settings(cam_entry: dict) -> dict:
-    """Settings dict for a camera entry. For the legacy flat layout this
-    coalesces every non-camera key into one settings dict; for the nested
-    layout it returns ``pipeline.settings`` directly."""
+    """settings dict for a cam entry - nested layout returns pipeline.settings, flat layout coalesces the rest"""
     if not isinstance(cam_entry, dict):
         return {}
     p = cam_entry.get("pipeline")
@@ -157,15 +120,7 @@ def get_pipeline_settings(cam_entry: dict) -> dict:
 
 
 def normalize_camera_entry(cam_entry: dict) -> dict:
-    """Migrate a legacy FLAT camera entry into the nested pipeline layout:
-
-        legacy:  {"pipeline": "object_detection", "min_conf": 0.7, ...}
-        new:     {"pipeline": {"name": "object_detection",
-                               "settings": {"min_conf": 0.7, ...}}, ...}
-
-    Camera-level keys (mount, calibration, capture, source...) stay where they
-    are; every other key is folded into ``pipeline.settings``. Idempotent -
-    already-nested entries are left alone."""
+    """migrate legacy flat entries into pipeline: {name, settings} - idempotent, nested entries left alone"""
     if not isinstance(cam_entry, dict):
         return cam_entry
     p = cam_entry.get("pipeline")
@@ -188,7 +143,7 @@ def normalize_camera_entry(cam_entry: dict) -> dict:
             cam_entry.pop(k)
         cam_entry["pipeline"] = {"name": p, "settings": settings}
         return cam_entry
-    # No pipeline key at all (e.g. raw JSON editor) - tag with the default.
+    # no pipeline key at all (raw JSON editor) - tag with the default.
     settings = {
         k: v for k, v in cam_entry.items()
         if k not in _CAMERA_CORE_KEYS and k != "pipeline"
@@ -200,8 +155,7 @@ def normalize_camera_entry(cam_entry: dict) -> dict:
 
 
 def ensure_camera_entries_ready(camera_configs: dict) -> None:
-    """Normalize every camera entry into the nested pipeline layout and make
-    sure model-backed pipelines have a per-camera vision_model block."""
+    """normalize every cam entry; model-backed pipelines get a per-cam vision_model block"""
     if not isinstance(camera_configs, dict):
         return
     for cam_cfg in camera_configs.values():
@@ -245,9 +199,7 @@ class iSpyConfig:
                         "size": 0,
                         "fov": 0,
                     },
-                    # Camera mount offsets are kept on the camera entry itself;
-                    # everything that configures the *pipeline* lives under
-                    # pipeline.settings.
+                    # mount offsets stay on the cam entry; pipeline stuff lives under pipeline.settings
                     "yaw": 0,
                     "pitch": 0,
                     "height": 1.0,
@@ -257,19 +209,13 @@ class iSpyConfig:
                         "name": "object_detection",
                         "settings": {
                             "vision_model": {
-                                # output.* and input.* vision model fields are
-                                # auto-detected from the model's _metadata.yaml
-                                # sidecar file. You do not need to set them.
-                                # Override here only if you know the metadata
-                                # is wrong.
+                                # input.*/output.* are auto-detected from the model's
+                                # _metadata.yaml sidecar - only override if its wrong.
                                 "file_path": "YoloModels/pytorch/_default_pose.pt",
                                 "source_pt": "YoloModels/pytorch/_default_pose.pt",
                                 "min_conf": 0.5,
-                                # Optimization (quantization/RKNN builds) is
-                                # opt-in per camera via the Optimize toggle in
-                                # the web UI - a fresh install should boot
-                                # instantly, not kick off a multi-minute
-                                # backend build.
+                                # quantization/rknn builds are opt-in per cam (Optimize
+                                # toggle in the web UI) so a fresh install boots fast.
                                 "quantize": False,
                                 # Optional PnP for pose (translation stored on
                                 # Box; rotation stored as roll/pitch/yaw on
@@ -292,10 +238,8 @@ class iSpyConfig:
                 }
             },
             "plugins": {
-                # Enabled add-ons only. Each entry maps an add-on name to a
-                # dict of that add-on's own settings (schema defaults apply at
-                # runtime, so omitted keys are fine). Removing an entry
-                # disables the add-on - there is no "enabled" flag.
+                # enabled add-ons only - presence == enabled, no flag. each entry maps
+                # a name to that add-on's own settings (schema defaults apply at runtime).
                 # "trackers": {"object_tracker": {"distance_threshold": 0.5}},
                 # "utilities": {"network_table_handler": {"network_tables_ip": "10.0.0.2"}},
                 "trackers": {},
@@ -340,26 +284,10 @@ class iSpyConfig:
         self.config["plugins"].setdefault("frame_processors", {})
 
     def _migrate_addons(self):
-        """Bring legacy add-on configuration up to date with the dict layout.
+        """migrate legacy add-on config (name lists + top-level settings) to the dict layout.
 
-        Legacy layouts stored the enabled add-ons as a list of names
-        (``plugins.trackers: ["object_tracker"]``) and their settings as
-        top-level config keys (``distance_threshold``, ``dbscan``,
-        ``use_network_tables``, ``record_mode``...).
-
-        New layout: ``plugins.<type>`` is a dict mapping an add-on name to a
-        dict of THAT add-on's settings. Presence == enabled.
-
-        Migration rules:
-        - lists of names become dicts (each entry starts with no settings -
-          schema defaults apply at runtime instead of being persisted);
-        - top-level settings are folded into the add-on they belong to, but
-          ONLY when that add-on is already enabled (an add-on that was not
-          running must not become enabled by migration);
-        - the legacy enabled-flags (use_network_tables, record_mode) are
-          translated into add-on presence and then dropped;
-        - all legacy top-level keys are removed from the config. Idempotent.
-        """
+        presence == enabled; legacy settings/flags only fold into add-ons that
+        were already enabled. idempotent."""
         plugins = self.config.setdefault("plugins", {})
         for addon_type in _ADDON_TYPES:
             current = plugins.get(addon_type)
@@ -382,7 +310,7 @@ class iSpyConfig:
 
         for legacy_key, addon_type, addon_name, target_key in _ADDON_LEGACY_FOLDS:
             if target_key is None:
-                continue  # dbscan handled above (flattened into path_planner)
+                continue  # dbscan handled above, folded into path_planner
             value = self.config.get(legacy_key)
             if value is not None:
                 target = {"trackers": trackers, "utilities": utilities}[addon_type]
@@ -409,16 +337,10 @@ class iSpyConfig:
             self.config.pop(legacy_key, None)
 
     def _migrate_camera_configs(self):
-        """Bring legacy camera entries up to date with the nested pipeline
-        layout (pipeline: {name, settings}).
+        """migrate legacy flat cam entries to pipeline: {name, settings}.
 
-        Legacy entries stored everything flat on the camera entry (e.g.
-        ``"pipeline": "object_detection"`` plus ``min_conf``, ``tag_size_inches``
-        or ``vision_model`` at camera level). Every non-camera key is folded
-        into ``pipeline.settings``. Model-backed pipelines (object_detection)
-        additionally require a vision_model dict in their settings or the
-        pipeline crashes at construction - inject a default so those configs
-        keep working."""
+        model-backed pipelines need a vision_model dict in their settings or
+        they crash at construction - inject a default so old configs work."""
         cams = self.config.get("camera_configs", {})
         if not isinstance(cams, dict):
             self.config["camera_configs"] = cams = {}
@@ -449,17 +371,11 @@ class iSpyConfig:
         return cfg
 
     def _rebuild_camera_configs(self):
-        """Recreate the iSpyCameraConfig wrapper views from the current
-        raw entries, keeping them in sync with self.config["camera_configs"].
+        """rebuild the iSpyCameraConfig wrappers from raw entries.
 
-        Web saves replace the whole camera_configs dict with a fresh deep
-        copy (Settings._post -> _update_config, CamerasModule._update_camera
-        -> set), which silently orphans the wrappers built in __init__ - the
-        shared-reference link breaks on the first save and every later
-        settings read through them returns stale values. The wrappers share
-        their nested pipeline dicts with the raw entries, so in-place edits
-        made by ensure_camera_entries_ready / _activate_optimized_model stay
-        visible."""
+        web saves replace the whole camera_configs dict with a fresh deep copy,
+        which orphans the wrappers built in __init__ - rebuild so they stay in
+        sync."""
         cams = self.config.get("camera_configs", {})
         if not isinstance(cams, dict):
             self.config["camera_configs"] = cams = {}
@@ -481,8 +397,8 @@ class iSpyConfig:
                 )
             self._update_config(data)
         except json.JSONDecodeError as e:
-            # Invalid config is an error - boot never silently regenerates it.
-            # First-run initialization is explicitly the job of `boot -f`.
+            # bad config is an error - boot never silently regenerates it.
+            # first-run setup is explicitly the job of `boot -f`.
             raise RuntimeError(
                 f"Config at {file_path} is invalid JSON ({e}). Fix it or run "
                 "'boot -f' to start from a fresh default configuration."
@@ -523,16 +439,15 @@ class iSpyConfig:
         except (KeyError, TypeError):
             return default
 
-    # ------------------------------------------------------------------
-    # Add-on (plugin) configuration helpers
+    # ---------------------------------------------------------------
+    # add-on config helpers
     #
-    # plugins.<type> is a dict of enabled add-on name -> add-on settings.
-    # Presence == enabled; the value is the add-on's own settings dict.
-    # ------------------------------------------------------------------
+    # plugins.<type> is a dict of enabled add-on name -> its settings.
+    # presence == enabled; the value is the add-on's own settings dict.
+    # ---------------------------------------------------------------
 
     def addon_entries(self, addon_type: str) -> dict:
-        """Enabled add-ons of a type: {name: settings}. Unknown types and
-        legacy list layouts return an empty dict."""
+        """enabled add-ons of a type: {name: settings}; unknown types and legacy list layouts -> {}"""
         if addon_type not in _ADDON_TYPES:
             return {}
         entries = self.get_nested("plugins", addon_type, default={})
@@ -541,10 +456,7 @@ class iSpyConfig:
         return entries
 
     def get_addon_settings(self, addon_type: str, addon_name: str) -> dict:
-        """Settings dict for an enabled add-on (may be empty). Returns None
-        if the add-on is not enabled. Presence == enabled regardless of the
-        stored value shape (a malformed non-dict value counts as enabled
-        with no settings, mirroring the loader's tolerance)."""
+        """settings for an enabled add-on, None if not enabled; malformed non-dict value still counts as enabled (no settings)"""
         entries = self.addon_entries(addon_type)
         if addon_name not in entries:
             return None
@@ -564,8 +476,7 @@ class iSpyConfig:
 
     def enable_addon(self, addon_type: str, addon_name: str,
                      settings: dict | None = None, save: bool = True) -> None:
-        """Enable an add-on by adding it to the config. Existing settings are
-        preserved unless a settings dict is explicitly provided."""
+        """enable an add-on by adding it to the config; existing settings kept unless a new dict is given"""
         if addon_type not in _ADDON_TYPES:
             return
         entries = self.addon_entries(addon_type)
@@ -578,7 +489,7 @@ class iSpyConfig:
 
     def disable_addon(self, addon_type: str, addon_name: str,
                       save: bool = True) -> None:
-        """Disable an add-on by removing it from the config."""
+        """disable an add-on by removing it from the config"""
         if addon_type not in _ADDON_TYPES:
             return
         entries = self.addon_entries(addon_type)
@@ -589,9 +500,7 @@ class iSpyConfig:
 
     def set_addon_settings(self, addon_type: str, addon_name: str,
                            settings: dict, save: bool = True) -> None:
-        """Replace the settings of an enabled add-on. No-op if the add-on is
-        not enabled (presence == enabled, so settings belong to a running
-        add-on only)."""
+        """replace the settings of an enabled add-on; no-op if not enabled"""
         if addon_type not in _ADDON_TYPES:
             return
         entries = self.addon_entries(addon_type)
@@ -603,8 +512,7 @@ class iSpyConfig:
 
     def update_addon_settings(self, addon_type: str, addon_name: str,
                               settings: dict, save: bool = True) -> None:
-        """Merge settings into an enabled add-on's existing settings. No-op if
-        the add-on is not enabled."""
+        """merge settings into an enabled add-on's existing settings; no-op if not enabled"""
         if addon_type not in _ADDON_TYPES:
             return
         entries = self.addon_entries(addon_type)
@@ -629,16 +537,15 @@ class iSpyConfig:
             target = target[key]
         target[keys[-1]] = value
         if keys[-1] == "camera_configs":
-            # A whole-dict replacement orphans the wrapper views - rebuild
-            # them so config.camera_configs stays a live view of the config.
+            # whole-dict replace orphans the wrapper views - rebuild em
             self._rebuild_camera_configs()
 
     def _update_config(self, data: dict, current_dict: dict = None):
         if current_dict is None:
             current_dict = self.config
         if isinstance(data, dict) and "vision_model" in data and current_dict is self.config:
-            # Model settings live inside each camera's pipeline.settings now -
-            # a top-level key is either a stale UI payload or a legacy config.
+            # model settings live per-cam under pipeline.settings now - a top-level
+            # key is either a stale UI payload or a legacy config.
             raise ValueError(
                 "A top-level 'vision_model' key is no longer supported - "
                 "model settings are configured per camera under "
@@ -649,15 +556,13 @@ class iSpyConfig:
                 if not isinstance(value, dict):
                     continue
                 if current_dict is not self.config:
-                    # _compare() runs the same merge on a scratch copy - keep
-                    # the raw entries so the diff sees what was actually sent.
+                    # _compare() merges on a scratch copy - keep the raw entries
+                    # so the diff sees what was actually sent.
                     current_dict[key] = value
                 else:
                     self.config[key] = json.loads(json.dumps(value))
                     ensure_camera_entries_ready(self.config[key])
-                    # Every camera entry was replaced with a fresh deep copy -
-                    # rebuild the wrapper views so they don't keep pointing at
-                    # the orphaned pre-save dicts.
+                    # fresh deep copy orphaned the wrappers - rebuild em
                     self._rebuild_camera_configs()
             elif (
                 isinstance(value, dict)
@@ -748,11 +653,11 @@ class iSpyCameraConfig:
         if config_dict:
             self.data.update(config_dict)
 
-    # ------------------------------------------------------------------
-    # Pipeline (nested pipeline: {name, settings}) accessors. Legacy flat
-    # entries (pipeline as a bare string + settings spread on the camera)
-    # are migrated lazily, in place, the first time they are touched.
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------
+    # pipeline (pipeline: {name, settings}) accessors. legacy flat entries
+    # (bare-string pipeline + settings spread on the cam) migrate lazily on
+    # first touch.
+    # ---------------------------------------------------------------
 
     def pipeline_entry(self) -> dict:
         p = self.data.get("pipeline")
@@ -780,8 +685,7 @@ class iSpyCameraConfig:
         settings = self.pipeline_entry()["settings"]
         if key in settings:
             return settings[key]
-        # Legacy flat layout: the setting may still live directly on the
-        # camera entry (configs constructed without a nested pipeline block).
+        # legacy flat layout - the setting may still live directly on the cam entry
         if key not in _CAMERA_CORE_KEYS and key in self.data:
             return self.data[key]
         return default
@@ -800,15 +704,9 @@ class iSpyCameraConfig:
 
 
 class iSpyAddonConfig:
-    """Per-add-on settings view, mirroring iSpyCameraConfig for cameras.
-
-    Each add-on in the config owns a settings dict
-    (``plugins.<type>.<name>``). Add-ons receive an iSpyAddonConfig instead of
-    the global iSpyConfig so they always read THEIR OWN settings and can
-    never accidentally depend on another add-on's (or the global) config.
-    Schema defaults (from the add-on's ``config_schema()`` classmethod) are
-    merged in at construction so an entry of ``{}`` still yields working
-    defaults, without persisting them."""
+    """per-add-on settings view (like iSpyCameraConfig but for add-ons) so an
+    add-on only ever reads ITS OWN settings, never the global config. schema
+    defaults merged in at construction without persisting them."""
 
     def __init__(self, settings: dict | None = None, defaults: dict | None = None):
         self.data: dict = {}

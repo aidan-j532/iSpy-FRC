@@ -10,8 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def _camera_vision_model(cam) -> dict | None:
-    """The vision_model block of a camera entry: pipeline.settings for the
-    new nested layout, flat entry for legacy configs."""
+    """the vision_model block - nested pipeline.settings or legacy flat entry"""
     if not isinstance(cam, dict):
         return None
     settings = get_pipeline_settings(cam) or {}
@@ -38,8 +37,7 @@ class ModelsModule(WebModule):
         self.pytorch_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_protected_model_names(self) -> set[str]:
-        """Names of model files referenced by any camera's pipeline config
-        (per-camera vision_model blocks)."""
+        """model filenames referenced by any camera's vision_model block"""
         config = self.context.get("config")
         if not config:
             return set()
@@ -56,8 +54,7 @@ class ModelsModule(WebModule):
         return names
 
     def _get_current_model(self) -> str | None:
-        # kept for the "active" badge in the list/detail views - still just
-        # the primary file_path's basename of the first model-backed camera.
+        # for the "active" badge - basename of the first model-backed cam's file_path
         config = self.context.get("config")
         if not config:
             return None
@@ -84,7 +81,6 @@ class ModelsModule(WebModule):
         out = []
         for pt in sorted(self.pytorch_dir.glob("*.pt")):
             meta = read_metadata(pt) or {}
-            # is_active = pt.name == current
             protected = self._get_protected_model_names()
             out.append({
                 "name": pt.name,
@@ -102,7 +98,6 @@ class ModelsModule(WebModule):
         if pt is None or not pt.exists():
             return jsonify(error="Model not found"), 404
         meta = read_metadata(pt) or {}
-        # current = self._get_current_model()
         protected = self._get_protected_model_names()
         return jsonify(
             name=pt.name,
@@ -143,8 +138,7 @@ class ModelsModule(WebModule):
         config = self.context.get("config")
         if not config:
             return jsonify(error="No config available"), 500
-        # Model selection lives in the object_detection pipeline config of
-        # every model-backed camera (per-camera vision_model blocks).
+        # model selection = the per-camera vision_model block of every model-backed cam
         updated = []
         cams = config.get_nested("camera_configs", default={})
         for cam_name, cam in cams.items():

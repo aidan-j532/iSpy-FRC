@@ -51,8 +51,7 @@ def _lsusb_output() -> str:
 
 @lru_cache()
 def has_jetson() -> bool:
-    """Detect Jetson boards. They don't expose /dev/nvidia0 or nvidia-smi the
-    way desktop/server NVIDIA GPUs do, so has_nvidia() needs a separate check."""
+    """jetson dont expose /dev/nvidia0 or nvidia-smi, so has_nvidia() needs its own check"""
     if os.path.exists("/etc/nv_tegra_release"):
         return True
     for path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
@@ -104,7 +103,7 @@ def has_tensorrt() -> bool:
         return True
     except ImportError:
         pass
-    # Check the system Python in case we're in a venv that doesn't have it
+    # check system python too, in case we're in a venv without it
     return _cmd_ok("python3 -c 'import tensorrt' 2>/dev/null")
 
 
@@ -197,7 +196,7 @@ def resolve_openvino_device(requested_device=None) -> str:
 
 
 def recommend_format(ignore_dependencies: bool = False) -> str:
-    # 1. Dedicated embedded NPUs / TPUs
+    # 1. embedded NPUs / TPUs
     if has_rockchip_npu():
         logger.info("Rockchip NPU detected - using RKNN format for hardware acceleration.")
         return "rknn"
@@ -208,17 +207,17 @@ def recommend_format(ignore_dependencies: bool = False) -> str:
         logger.info("Edge TPU detected - using TFLite format for hardware acceleration.")
         return "tflite"
 
-    # 2. Apple ecosystem
+    # 2. apple ecosystem
     if has_apple_silicon():
         logger.info("Apple Silicon detected - using Core ML format for hardware acceleration.")
         return "coreml"
 
-    # 3. Google TPU - run PyTorch models via XLA
+    # 3. google TPU - pytorch via XLA
     if has_tpu():
         logger.info("Google TPU detected - using TPU format for hardware acceleration.")
         return "tpu"
 
-    # 4. NVIDIA - prefer TensorRT engine over raw ONNX for max FPS     ─
+    # 4. nvidia - tensorrt engine > onnx for max fps
     if has_nvidia():
         if has_tensorrt() or ignore_dependencies:
             logger.info(
@@ -231,7 +230,7 @@ def recommend_format(ignore_dependencies: bool = False) -> str:
         )
         return "onnx"
 
-    # 5. Other desktop hardware                       ─
+    # 5. desktop hardware
     if os.name != "nt" and has_intel_vpu():
         logger.info("Intel VPU detected - using OpenVINO format for hardware acceleration.")
         return "openvino"
@@ -240,9 +239,9 @@ def recommend_format(ignore_dependencies: bool = False) -> str:
         return "openvino"
     if has_amd_gpu():
         logger.info("AMD GPU detected - using ONNX format for hardware acceleration.")
-        return "onnx"  # ROCm / DirectML execution providers
+        return "onnx"  # rocm / directml exec providers
 
-    # 6. ARM edge (Jetson, RPi, etc.)
+    # 6. arm edge (jetson, rpi, etc.)
     if has_arm():
         logger.info("ARM edge device detected - using TFLite format for hardware acceleration.")
         return "tflite"

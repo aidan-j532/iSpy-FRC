@@ -246,9 +246,8 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
     ]
     detected_fields: list[str] = []
  
-    # Defaults tuned for RKNN TOOLKIT export (ONNX -> rknn.build())
-    # If you used Ultralytics' own RKNN export path these would be wrong,
-    # but that path is not used here.
+    # defaults tuned for RKNN TOOLKIT export (ONNX -> rknn.build());
+    # the ultralytics rknn export path isnt used here, its values would be wrong
     result: dict[str, Any] = {
         "file_path": model_path,
         "task": task,
@@ -886,8 +885,8 @@ def _detect_output_format(
         num_classes = score_cols
         score_mode = "multi_class"
 
-    # YOLO always uses cxcywh internally (even when xyxy in Ultralytics output)
-    # Raw ONNX exports preserve the internal cxcywh encoding.
+    # yolo always uses cxcywh internally (even when xyxy in ultralytics output);
+    # raw onnx exports preserve that internal encoding
     box_format = "cxcywh"
 
     return "raw", num_classes, score_mode, box_format, "inferred from feat_width"

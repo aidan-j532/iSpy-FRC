@@ -71,8 +71,7 @@ class DashboardModule(WebModule):
             config = self.context.get("config")
             if not config:
                 return
-            # Models are selected per camera under the pipeline settings,
-            # so report the first model-backed camera's model.
+            # models are per-camera now - just report the first model-backed cam's
             from iSpy.config.iSpyConfig import get_pipeline_settings
             cams = config.get("camera_configs", {})
             model_cfg = None
@@ -112,7 +111,6 @@ class DashboardModule(WebModule):
                     "memory_total_mb": None, "temperature": None}
 
         try:
-            # cpu = psutil.cpu_percent(interval=0.05)
             cpu = psutil.cpu_percent(interval=None)
         except Exception:
             cpu = None

@@ -15,8 +15,7 @@ class MetricsModule(WebModule):
         "vision_s": ("Vision time", "ms", 1000.0),
         "camera_lag_s": ("Camera lag", "ms", 1000.0),
     }
-    # Which pipeline stage is the slowest, over time.  Display-only: never
-    # written to the saved metrics file.
+    # which pipeline stage is slowest; display-only, never written to the saved file
     CODE_PARTS = {
         "vision": ("Vision", "#e63946"),
         "trackers": ("Trackers", "#f4a261"),
@@ -24,7 +23,7 @@ class MetricsModule(WebModule):
         "utilities": ("Utilities", "#457b9d"),
         "web": ("Web", "#9b5de5"),
     }
-    MAX_POINTS = 600  # ring buffer - keeps memory bounded on long runs
+    MAX_POINTS = 600  # ring buffer, keeps memory bounded on long runs
 
     def __init__(self, context: dict):
         super().__init__(context)

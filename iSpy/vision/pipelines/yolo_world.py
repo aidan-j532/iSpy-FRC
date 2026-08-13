@@ -28,8 +28,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return True
 
     def is_ready(self) -> tuple[bool, str]:
-        # Pure status report - never triggers or blocks on optimization.
-        # The optimize build is started at construction when needed.
+        # pure status report - never triggers/blocks on optimization
         if not self._optimization_requested():
             if self._preparing():
                 self._set_status("downloading (model weights)")
@@ -122,8 +121,8 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
 
     @staticmethod
     def _parse_classes(prompt: str) -> list[str]:
-        """Split a comma-separated prompt into YOLO World class tokens,
-        stripping leading articles and trailing punctuation."""
+        """split the comma-separated prompt into class tokens, stripping
+        leading articles and trailing punctuation"""
         classes = []
         for part in str(prompt).split(","):
             token = part.strip().rstrip(".!?").strip()
@@ -179,10 +178,8 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self._target_format: str | None = None
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
 
-        # If the config requests optimization and no matching artifact is
-        # active yet, kick off the build on a simple background thread so the
-        # app can keep running (is_ready() reports "optimizing" until the
-        # artifact is active; run() passes frames through untouched).
+        # optimization requested + no active artifact yet -> kick off the
+        # build on a bg thread so the app keeps running
         if self._optimization_requested() and not self._optimized_active():
             self.logger.info(
                 "Camera '%s': optimization requested - building %s artifact",
@@ -197,8 +194,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
             self.prepare()
 
     def _prepare(self):
-        """Background preparation: download/convert the YOLO World model
-        without blocking construction of the other cameras."""
+        """download/convert the model without blocking boot"""
         self._load_model()
 
     def get_optimization_options(self) -> dict:
@@ -210,9 +206,8 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         }
 
     def optimize(self, **kwargs) -> str:
-        """Build the quantized backend artifact synchronously. Blocks until
-        the build finishes; is_ready() reports (False, "optimizing") while it
-        runs and (True, "ready") once it has produced a matching artifact."""
+        """build the quantized artifact synchronously; is_ready() reports
+        (False, "optimizing") while it runs"""
         if not self._optimization_requested():
             return "optimization disabled for this camera (set 'Quantize' in camera settings)"
         if self._optimizing:
@@ -224,8 +219,8 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self._optimizing = True
         self._set_status("optimizing (backend build)")
         try:
-            # Reuse a cached artifact when one matches the requested
-            # target format; only a full rebuild re-exports and re-quantizes.
+            # reuse a cached artifact matching the target format;
+            # only a full rebuild re-exports and re-quantizes
             self._load_quantized_model(force=False)
             if not self._optimized_active():
                 self._load_quantized_model(force=True)
@@ -247,8 +242,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return status
 
     def _optimize_forced(self) -> str:
-        """Force a full rebuild: re-export and re-quantize even when a
-        matching artifact is already cached (manual rebuild path)."""
+        """force a full rebuild even if an artifact is cached"""
         self._optimizing = True
         self._set_status("optimizing (backend build)")
         try:
@@ -271,9 +265,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return status
 
     def _optimize_runner(self):
-        """Run the synchronous optimize() off the main thread (started at
-        construction when the config requests a build). is_ready() reports
-        "optimizing" until this finishes."""
+        """runs optimize() off the main thread (started at construction)"""
         status = self.optimize()
         if not self._optimized_active():
             self._optimize_error = status
@@ -289,8 +281,8 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         if explicit and explicit != "auto":
             target = explicit
         else:
-            # Same resolution ensure_quantized_model uses so the readiness
-            # format check agrees with the artifact that actually gets built.
+            # same resolution ensure_quantized_model uses so readiness
+            # agrees with the artifact that actually gets built
             from iSpy.config.AutoOpt import recommend_format
             target = recommend_format()
         supported = {"onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu"}
@@ -308,7 +300,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
 
     @staticmethod
     def _path_format(path: str) -> str:
-        """Format of a model path: 'onnx', 'openvino', ... or ''."""
         p = str(path).lower()
         if "openvino_model" in p or p.endswith(".xml"):
             return "openvino"
@@ -325,9 +316,8 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return ""
 
     def _optimized_active(self) -> bool:
-        """True once the loaded model is the quantized backend artifact in
-        the requested target format (a full-precision fallback or an artifact
-        in another format does not count)."""
+        """True when the loaded model is the quantized backend artifact in
+        the requested format (a full-precision fallback doesnt count)"""
         if getattr(self, "model", None) is None or not getattr(self, "_quantized", False):
             return False
         if getattr(self.model, "model_type", "") == "tpu":
@@ -338,8 +328,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return self._path_format(path) == self._target_format_cached()
 
     def _is_processable(self) -> bool:
-        """True when run() may actually run inference. When False, run()
-        passes the raw camera feed through untouched."""
+        """True when run() can actually infer; otherwise pass frames through"""
         if getattr(self, "_optimizing", False):
             return False
         if self.model is None:
@@ -349,7 +338,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return True
 
     def _ensure_world_model(self, size: str) -> str | None:
-        """Download YOLO World weights into <project>/YoloModels/pytorch on first use."""
+        """download weights into <project>/YoloModels/pytorch on first use"""
         url = _WORLD_MODEL_URLS.get(size, _WORLD_MODEL_URLS["s"])
         filename = url.rsplit("/", 1)[-1]
         target = _WORLD_MODEL_DIR / filename
@@ -381,10 +370,9 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return str(target)
 
     def _resolve_weights(self) -> str | None:
-        """Bundled asset takes priority, then auto-downloaded weights."""
-        # Bundled asset takes priority, then auto-downloaded weights.
-        # assets lives at iSpy/assets; this file moved to iSpy/vision/pipelines/,
-        # so parents[2] resolves to the iSpy package directory.
+        """bundled asset takes priority, then auto-downloaded weights"""
+        # assets lives at iSpy/assets; this file moved to
+        # iSpy/vision/pipelines/, so parents[2] resolves to the iSpy package
         asset_path = Path(__file__).resolve().parents[2] / "assets" / "yolo-world.pt"
         if asset_path.exists():
             self.logger.info("Using bundled YOLO World weights at %s", asset_path)
@@ -392,9 +380,9 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return self._ensure_world_model(self.model_size)
 
     def _reparameterize_world(self, weights: str) -> str | None:
-        """Bake the configured classes into the open-vocabulary YOLO World
-        weights so the result is a standard fixed-vocabulary detector that the
-        conversion framework can export and quantize."""
+        """bake the configured classes into the open-vocabulary weights so
+        the result is a normal fixed-vocab detector that can be exported
+        and quantized"""
         try:
             from ultralytics import YOLOWorld, YOLO
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
@@ -450,12 +438,9 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
             return
 
         try:
-            # Bake the configured classes into the open-vocabulary weights and
-            # run the result as a plain fixed-vocabulary detector. Running the
-            # world head directly after set_classes() hits an ultralytics
-            # channel mismatch (convs built for the checkpoint's nc=80, head
-            # switched to nc=len(classes) at runtime) -> RuntimeError:
-            # shape '[1, <nc+64>, -1]' is invalid for input of size <n>.
+            # bake classes into the weights and run the result as a plain
+            # fixed-vocab detector. running the world head directly after
+            # set_classes() hits an ultralytics channel mismatch -> RuntimeError
             fixed = self._reparameterize_world(weights)
             if not fixed:
                 self._set_load_error("failed to reparameterize YOLO World model")

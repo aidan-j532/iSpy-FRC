@@ -57,7 +57,6 @@ class AprilTagCamera(VisionPipeline):
             "centimeter": 2.54, "centimeters": 2.54,
         }
 
-        # Calculate focal length
         try:
             if self.known_calibration_pixel_height <= 0 or self.known_calibration_distance <= 0:
                 self.focal_length_pixels = 1.0
@@ -165,7 +164,7 @@ class AprilTagCamera(VisionPipeline):
                         y=float(robot_pt[1]),
                         z=float(robot_pt[2]),
                         name=f"tag_{tag_id}",
-                        confidence=1.0, # April tags come at a very high confidence if detected
+                        confidence=1.0, # tags are basically always right when detected
                         roll=roll,
                         pitch=pitch,
                         yaw=yaw,

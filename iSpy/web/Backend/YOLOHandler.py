@@ -39,9 +39,9 @@ class YOLOHandler(UtilityBase):
         if not p.exists():
             return jsonify(error=f"Model not found: {p}"), 404
 
-        # Model selection lives in each model-backed camera's pipeline
+        # model selection lives in each model-backed camera's pipeline
         # settings (per-camera vision_model blocks) - never at the config
-        # root, where it is ignored and would trip the next boot.
+        # root, where it gets ignored and trips the next boot
         updated = []
         cams = self.config.get("camera_configs", {})
         for cam in cams.values():

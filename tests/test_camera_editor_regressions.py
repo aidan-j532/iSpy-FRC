@@ -1,10 +1,6 @@
-"""Regression tests for the camera editor model/dataset pickers.
-
-The pickers must update only the input value. In edit mode the save flow
-compares ``el.value`` against ``el.dataset.original`` to decide whether a
-field changed; if a picker overwrites ``dataset.original`` the change is
-silently dropped and the config keeps the old model/dataset.
-"""
+"""camera editor picker regressions: a picker must only update the input
+value - if it overwrites el.dataset.original, save silently drops the change
+and the config keeps the old model/dataset"""
 
 import re
 import unittest

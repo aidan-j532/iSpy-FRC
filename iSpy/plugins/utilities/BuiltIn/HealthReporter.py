@@ -121,16 +121,13 @@ class HealthReporter(UtilityBase):
         self._last_tick = time.perf_counter()
         self._uptime_start = time.perf_counter()
         self._loop_count = 0
-        # stale_threshold used to be a top-level config key - it now lives in
-        # this add-on's own settings.
+        # stale_threshold used to be top-level config - lives in this add-on's settings now
         self._stale_threshold = self.config.get("stale_threshold", 1.0)
         self._network_handler = None  # set externally after all utilities load
 
         if flask_app and FLASK_AVAILABLE:
-            # The /health/detailed route is registered by the HealthModule web
-            # module at app startup - registering it again here breaks once
-            # the app has served its first request (and is a duplicate rule
-            # anyway), so only add it if it isn't already present.
+            # health module registers this route at startup - re-registering breaks after
+            # the first request, so only add it if it isn't already present.
             registered = any(
                 rule.endpoint == "health_detailed"
                 for rule in flask_app.url_map.iter_rules()

@@ -32,8 +32,7 @@ _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
 _READINESS_POLL_S = 2.0
 _READINESS_WAIT_TIMEOUT_S = 1200
 
-# Bound to the real stdout/stderr before anything can swap sys.stdout, so
-# silencing third-party libs later can't take iSpy's own logging down with it.
+# grab real stdout/stderr before anything swaps sys.stdout so silencing 3rd-party libs cant kill our logging
 _REAL_STDOUT_FD = os.dup(1)
 _REAL_STDERR_FD = os.dup(2)
 _REAL_STDOUT = os.fdopen(_REAL_STDOUT_FD, "w", buffering=1, closefd=False)
@@ -99,9 +98,7 @@ def _configure_quiet_logging() -> None:
 
     formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
-    # Bind directly to the real stdout object (captured before anything ever
-    # swaps sys.stdout) so silencing third-party libs later can't take
-    # iSpy's own logging down with it - no fd tricks, works on every OS.
+    # bind to the real stdout captured before sys.stdout gets swapped, so silencing 3rd-party libs cant kill our logging
     stream_handler = logging.StreamHandler(_REAL_STDOUT)
     stream_handler.setLevel(logging.INFO)
     stream_handler.setFormatter(formatter)
@@ -136,10 +133,7 @@ def search_for_config():
 
 
 def setup_files(fresh: bool = False):
-    """Fresh boot (`boot -f`): wipe generated application state (Config,
-    Outputs, YoloModels, QuantizeDataset) and stage the bundled models.
-    Normal boot: ensure runtime directories exist, stage any missing bundled
-    assets, and keep model metadata sidecars up to date."""
+    """boot -f wipes generated state (Config, Outputs, YoloModels, QuantizeDataset) & stages bundled models; normal boot just fills in the gaps"""
     yolo_dir = _PROJECT_ROOT / "YoloModels"
     config_dir = _PROJECT_ROOT / "Config"
     outputs_dir = _PROJECT_ROOT / "Outputs"
@@ -196,11 +190,7 @@ def setup_files(fresh: bool = False):
 def _wait_for_pipeline_ready(
     config: iSpyConfig, pipeline_classes: dict[str, type]
 ) -> None:
-    """Construct every configured camera pipeline (each pipeline starts its
-    own background preparation in __init__) and wait until every pipeline
-    reports ready. Fails fast with a clear error if a pipeline enters an
-    unrecoverable error state, and raises if readiness is not reached within
-    the timeout - boot never silently proceeds on an unready system."""
+    """construct every camera pipeline & wait till they're all ready; fail fast if one errors or the timeout hits, never boot on an unready system"""
     from iSpy.config.iSpyConfig import iSpyCameraConfig
 
     cams = {k: v for k, v in config.config.get("camera_configs", {}).items() if isinstance(v, dict)}

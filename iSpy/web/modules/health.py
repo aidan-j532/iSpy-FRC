@@ -8,11 +8,8 @@ logger = logging.getLogger(__name__)
 
 
 class HealthModule(WebModule):
-    """Single source of truth for system health. Replaces the old
-    StatusReporter (utility, /health) and HealthReporter (plugin utility,
-    /health/detailed) - both computed near-identical payloads independently
-    and had drifted. This also surfaces live plugin status, which neither
-    of the old classes could see."""
+    """single source of truth for health - replaces StatusReporter +
+    HealthReporter which computed near-identical payloads and drifted"""
 
     plugin_name = "health"
 
@@ -29,8 +26,7 @@ class HealthModule(WebModule):
         self._loop_count = 0
         self._last_tick = time.perf_counter()
         self._uptime_start = time.perf_counter()
-        # stale_threshold used to be a global config key; it now belongs to
-        # the health_reporter add-on (schema default 1.0 when not enabled).
+        # stale_threshold moved from the global config into the health_reporter add-on
         self._stale_threshold = config.get_addon_setting(
             "utilities", "health_reporter", "stale_threshold", 1.0
         )
@@ -43,12 +39,11 @@ class HealthModule(WebModule):
         self.cameras = cameras
 
     def register_routes(self, flask_app):
-        # Minimal machine-readable contract for watchdogs/external monitors.
-        # Keep this endpoint's shape stable - external tooling may depend on it.
+        # minimal stable contract for watchdogs - external tooling may depend on the shape
         flask_app.add_url_rule("/health", "health", self._health_route)
-        # Fuller JSON payload (uptime, loop_count, per-camera detail).
+        # fuller payload: uptime, loop_count, per-cam detail
         flask_app.add_url_rule("/health/detailed", "health_detailed", self._detailed_route)
-        # New human-facing page: everything above + live plugin status.
+        # human-facing page: everything above + live plugin status
         flask_app.add_url_rule("/health-page", "health_page", lambda: render_template("health.html"))
         flask_app.add_url_rule("/api/health", "api_health", self._api_health)
 
@@ -131,7 +126,7 @@ class HealthModule(WebModule):
 
     def _health_route(self):
         payload, healthy = self._build_payload()
-        # keep this response body minimal/stable for watchdog consumers
+        # keep the body minimal/stable for watchdogs
         return jsonify(status=payload["status"], uptime_s=payload["uptime_s"]), (200 if healthy else 503)
 
     def _detailed_route(self):

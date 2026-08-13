@@ -1,5 +1,4 @@
 # iSpy/web/test_web.py
-# Made by claude
 import logging
 import math
 import random

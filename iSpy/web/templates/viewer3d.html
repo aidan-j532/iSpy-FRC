@@ -130,13 +130,10 @@ window.setViewPreset = function() {
 
 const boxes = {};
 const BOX_COLOR = 0x4c8bf5;
-// Adaptive scene scale (units of the data). Markers size off this so dots and
-// cubes stay clearly visible no matter what unit/resolution the pipeline runs in.
+// markers size off scene scale so dots + cubes stay visible in any unit/resolution
 let sceneScale = 2;
 
-// ============================================================
-//  HELPERS
-// ============================================================
+// helpers
 
 function disposeMesh(obj) {
   if (obj.geometry) obj.geometry.dispose();
@@ -160,12 +157,7 @@ function skeletonExtent(pts) {
   return max;
 }
 
-// ============================================================
-//  VIS RENDERER REGISTRY
-//  To add a new detector's visualization: register a { create, update }
-//  pair here keyed by the Object's vis_type (set in Python when you build
-//  the Object). Nothing else in this file needs to change.
-// ============================================================
+// vis renderer registry - register a {create, update} pair keyed by vis_type, nothing else changes
 
 function makeCubeMarker() {
   const base = Math.max(0.25, Math.min(2.5, sceneScale * 0.12));
@@ -188,9 +180,7 @@ function updateCubeMarker(mesh, o) {
   mesh.scale.setScalar(target / base);
 }
 
-// Flat rectangle + RGB axes gizmo - for AprilTags, QR codes, barcodes, or
-// any other planar fiducial. vis_meta.size (in the config's unit) controls
-// the plane's edge length; defaults to a sensible visible size.
+// flat rect + axes gizmo for planar fiducials (apriltags etc); vis_meta.size sets edge length
 function makePlanarMarker(o) {
   const g = new THREE.Group();
   const size = Math.max(0.05, (o.vis_meta && o.vis_meta.size) || Math.max(0.3, sceneScale * 0.08));
@@ -223,8 +213,7 @@ function updatePlanarMarker(g, o) {
   g.scale.setScalar(size / base);
 }
 
-// Flexible pose / any keypoint set - just plot the points in 3D, no bones.
-// Point count can vary frame to frame (occluded keypoints dropped, etc.).
+// just plot the points, no bones - count can vary frame to frame
 function buildPointCloud(kpts3d) {
   const g = new THREE.Group();
 
@@ -268,17 +257,14 @@ const VIS_RENDERERS = {
 };
 
 function resolveVisType(o) {
-  // keypoints_3d presence still forces the point-cloud renderer even if a
-  // detector forgets to set vis_type, for back-compat with pose detectors.
+  // back-compat: keypoints_3d forces the points renderer even if vis_type is missing
   const hasKp = o.keypoints_3d && o.keypoints_3d.length >= 3;
   if (hasKp) return "points";
   if (o.vis_type && VIS_RENDERERS[o.vis_type]) return o.vis_type;
   return "generic";
 }
 
-// ============================================================
-//  MAIN SYNC
-// ============================================================
+// main sync
 
 function createBoxForDetection(o) {
   const key = o.id;
@@ -355,9 +341,7 @@ function sync(objects) {
   tbody.innerHTML = rows || '<tr><td colspan="6" class="empty-state">No detections</td></tr>';
 }
 
-// ============================================================
-//  POLL & ANIMATE
-// ============================================================
+// poll & animate
 
 async function poll() {
   try {

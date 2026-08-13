@@ -140,8 +140,7 @@ class MultipleCameraHandler:
         return f
 
     def get_camera_frames(self) -> dict[str, np.ndarray]:
-        """Named per-camera frames for the web layer - lets CamerasModule
-        serve individual feeds instead of only the stitched combined view."""
+        """named per-camera frames so CamerasModule can serve individual feeds, not just the stitched view"""
         result = {}
         for i, cam in enumerate(self.cameras):
             with self._locks[i]:

@@ -29,8 +29,7 @@ class VisionPipelineSchemaTests(unittest.TestCase):
 
         april_tag = next((p for p in pipelines if p["name"] == "april_tag"), None)
         self.assertIsNotNone(april_tag)
-        # Camera mount/calibration fields are shown for every pipeline - each
-        # one computes robot coordinates from the camera transform.
+        # common fields for every pipeline - they all derive robot coords from the camera transform
         self.assertTrue(april_tag["show_common_fields"])
 
     def test_additional_pipeline_schemas_are_discovered(self):
@@ -121,8 +120,7 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         camera.logger = None
         camera._last_frame = None
 
-        # With no model/session loaded, the pipeline must pass the raw camera
-        # frame through unchanged instead of faking a depth result.
+        # no model loaded -> pass the raw frame through, dont fake a depth result
         objects, frame = camera.run()
         self.assertEqual(objects, [])
         self.assertIsNotNone(frame)
