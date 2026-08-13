@@ -272,7 +272,7 @@ class PipelineLifecycleTests(unittest.TestCase):
         # yolo world + depth anything are optimizable too - optimize() mustnt be od-only
         for cls, keys in (
             (YoloWorldCamera, ("optimize", "quantize", "target_format", "quantization_dataset", "input_size")),
-            (DepthAnythingCamera, ("optimize", "model_size")),
+            (DepthAnythingCamera, ("optimize", "quantize", "target_format", "quantization_dataset", "input_size", "model_size")),
         ):
             options = cls.__new__(cls).get_optimization_options()
             for key in keys:

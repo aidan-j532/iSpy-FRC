@@ -43,9 +43,10 @@ function fmtUptime(s) {
 }
 
 function typeBadge(type) {
-  const colors = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#ff9800' };
+  const colors = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#b07a3c' };
   const label = type === 'frame_processor' ? 'frame processor' : type;
-  return `<span class="plugin-pill" style="background:${colors[type] || '#666'}">${label}</span>`;
+  const color = colors[type] || '#8b8f9a';
+  return `<span class="plugin-pill" style="color:${color};background:${color}22;border:1px solid ${color}44">${label}</span>`;
 }
 
 function statusDot(status) {

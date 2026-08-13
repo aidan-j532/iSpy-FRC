@@ -14,6 +14,9 @@ _DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 _DEPTH_INPUT_SIZE = 518
 _DEPTH_ARTIFACT_STEM = "depth_anything_v2_small"
 _DEPTH_HF_CACHE_DIR = Path(__file__).resolve().parents[3] / "YoloModels" / "huggingface"
+_YOLO_MODELS_DIR = Path(__file__).resolve().parents[3] / "YoloModels"
+
+_DEPTH_BACKEND_FORMATS = {"onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu"}
 
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
@@ -72,12 +75,45 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 "label": "Optimize/Convert",
                 "default": False,
                 "optimize_toggle": True,
-                "help": "Export Depth Anything to an int8-quantized ONNX artifact "
-                        "and run it via onnxruntime in the background. Depth "
-                        "Anything is always converted to ONNX - device 'auto' "
-                        "format selection does not apply, and there is no "
-                        "calibration dataset option. Falls back to the "
-                        "top-level config 'optimize' when unset.",
+                "help": "Build the best optimized backend artifact for this device "
+                        "(onnx for the Depth Anything model) in the background. "
+                        "Falls back to the top-level config 'optimize' when unset.",
+            },
+            "target_format": {
+                "type": "select",
+                "label": "Target format",
+                "options": ["auto", "onnx"],
+                "default": "auto",
+                "quantization": True,
+                "help": "'auto' picks the best backend for this device via "
+                        "recommend_format(). Set an explicit format to override.",
+            },
+            "quantize": {
+                "type": "toggle",
+                "label": "Quantize model",
+                "default": False,
+                "quantization": True,
+                "help": "Quantize the optimized artifact (int8). Only meaningful "
+                        "with optimize or target_format set.",
+            },
+            "quantization_dataset": {
+                "type": "browse",
+                "label": "Quantization dataset",
+                "default": "",
+                "browse_root": "QuantizeDataset",
+                "quantization": True,
+                "gated_by": "quantize",
+                "help": "Optional folder of calibration images used for "
+                        "quantization. Leave empty to auto-download images "
+                        "from the model's calibration keywords.",
+            },
+            "input_size": {
+                "type": "number",
+                "label": "Input Size",
+                "default": 518,
+                "quantization": True,
+                "help": "Square resolution used for the optimized ONNX export "
+                        "and inference.",
             },
             "estimate_depth": {
                 "type": "toggle",
@@ -123,6 +159,23 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self.max_depth = float(camera_config.get_pipeline_setting("max_depth", 10.0))
         self.estimate_depth = bool(camera_config.get_pipeline_setting("estimate_depth", True))
 
+        raw_quantize = camera_config.get_pipeline_setting("quantize")
+        if raw_quantize is None:
+            raw_quantize = camera_config.get_pipeline_setting("quantized")  # legacy key
+        if raw_quantize is None:
+            raw_quantize = False
+        if isinstance(raw_quantize, str):
+            raw_quantize = raw_quantize.strip().lower() in ("1", "true", "yes", "on")
+        self.quantize = bool(raw_quantize)
+
+        self._requested_format = str(camera_config.get_pipeline_setting("target_format") or "auto").lower()
+        self._quantization_dataset = camera_config.get_pipeline_setting("quantization_dataset") or None
+        try:
+            self._input_size = int(camera_config.get_pipeline_setting("input_size") or _DEPTH_INPUT_SIZE)
+        except (TypeError, ValueError):
+            self._input_size = _DEPTH_INPUT_SIZE
+        self._target_format: str | None = None
+
         # max_depth is in meters; scale z into the configured unit so
         # every pipeline emits the same unit.
         self._z_scale = {
@@ -165,8 +218,8 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         # build on a bg thread so the app keeps running
         if self._optimization_requested() and not self._optimized_active():
             self.logger.info(
-                "Camera '%s': optimization requested - building ONNX artifact",
-                self.config.get("name", "?"),
+                "Camera '%s': optimization requested - building %s artifact",
+                self.config.get("name", "?"), self._target_format_cached(),
             )
             threading.Thread(
                 target=self._optimize_runner,
@@ -184,9 +237,24 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         schema = self.config_schema()
         return {
             key: schema[key]
-            for key in ("optimize", "model_size")
+            for key in (
+                "optimize", "quantize", "target_format",
+                "quantization_dataset", "input_size", "model_size",
+            )
             if key in schema
         }
+
+    @classmethod
+    def recommended_format(cls) -> str:
+        try:
+            from iSpy.config.AutoOpt import recommend_format
+
+            return recommend_format(ignore_dependencies=True)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "AutoOpt.recommend_format did NOT work for your device, falling back to ONNX!"
+            )
+            return "onnx"
 
     def optimize(self, **kwargs) -> str:
         """build the ONNX artifact synchronously; is_ready() reports
@@ -253,8 +321,33 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             self._optimize_error = status
         self._set_status(status)
 
+    def _resolve_target_format(self) -> str:
+        explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
+        if explicit and explicit != "auto":
+            target = explicit
+        else:
+            target = self.recommended_format()
+
+        # same supported set as object_detection - 'auto' can pick any
+        # backend the device + installed toolchains can actually run
+        # (rknn on Rockchip, engine on NVIDIA, openvino on Intel, ...).
+        if target not in _DEPTH_BACKEND_FORMATS:
+            self.logger.warning(
+                "Recommended target format %r unsupported - using onnx", target,
+            )
+            return "onnx"
+        return target
+
+    def _target_format_cached(self) -> str:
+        if self._target_format is None:
+            self._target_format = self._resolve_target_format()
+        return self._target_format
+
     def _optimization_requested(self) -> bool:
-        return bool(getattr(self, "_auto_opt", False)) and bool(self.estimate_depth)
+        return bool(getattr(self, "estimate_depth", True)) and (
+            bool(getattr(self, "_auto_opt", False))
+            or bool(getattr(self, "quantize", False))
+        )
 
     def _optimized_active(self) -> bool:
         """True once the ONNX session is loaded (artifact is fixed-model
@@ -280,21 +373,52 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self._load_pipeline()
 
     def _load_optimized(self, force: bool = False):
-        import torch.nn as nn
+        """build/load the requested backend artifact. every backend falls
+        back to onnx when its toolchain is missing or the build fails, so
+        the camera keeps running either way"""
+        target = self._target_format_cached()
 
-        from transformers import AutoModelForDepthEstimation
+        if target == "onnx":
+            return self._load_onnx(force)
+        if target == "openvino":
+            return self._load_openvino(force)
+        if target == "engine":
+            return self._load_tensorrt(force)
+        if target == "coreml":
+            return self._load_coreml(force)
+        if target == "tflite":
+            return self._load_tflite(force)
+        if target == "rknn":
+            return self._load_rknn(force)
+        if target == "tpu":
+            return self._load_tpu(force)
+
+        self.logger.warning(
+            "Unknown optimized target format %r - falling back to onnx", target,
+        )
+        return self._load_onnx(force)
+
+    def _export_onnx_source(self, force: bool = False, quantize: bool | None = None):
+        """export the depth model to a cached ONNX artifact; the onnx backend
+        runs it directly, every other backend converts from it. quantize is
+        honored only when explicitly given (backends that self-quantize ask
+        for the fp32 source)."""
 
         from iSpy.vision.QuantizedModel import ensure_onnx_model
 
-        class _DepthModule(nn.Module):
-            def __init__(self, model):
-                super().__init__()
-                self.model = model
-
-            def forward(self, pixel_values):
-                return self.model(pixel_values=pixel_values).predicted_depth
-
         def build():
+            import torch.nn as nn
+
+            from transformers import AutoModelForDepthEstimation
+
+            class _DepthModule(nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.model = model
+
+                def forward(self, pixel_values):
+                    return self.model(pixel_values=pixel_values).predicted_depth
+
             self.logger.info(
                 "Loading Depth Anything V2 Small weights from Hugging Face..."
             )
@@ -304,13 +428,27 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             model.eval()
             return _DepthModule(model)
 
-        artifact, converted = ensure_onnx_model(
+        return ensure_onnx_model(
             build,
             _DEPTH_ARTIFACT_STEM,
-            input_size=(_DEPTH_INPUT_SIZE, _DEPTH_INPUT_SIZE),
-            quantize=True,
+            input_size=(self._input_size, self._input_size),
+            quantize=self.quantize if quantize is None else quantize,
             force=force,
+            dataset_path=self._quantization_dataset,
         )
+
+    def _artifact_path(self, target: str) -> Path:
+        ext = {  # openvino compiles the onnx directly, no artifact of its own
+            "engine": ".engine", "coreml": ".mlpackage",
+            "rknn": ".rknn", "tflite": ".tflite",
+        }.get(target, f".{target}")
+        return (
+            _YOLO_MODELS_DIR / target
+            / f"{_DEPTH_ARTIFACT_STEM}_{self._input_size}x{self._input_size}{ext}"
+        )
+
+    def _load_onnx(self, force: bool = False):
+        artifact, converted = self._export_onnx_source(force)
         if not converted or not artifact:
             self._session = None
             self._load_error = "optimized ONNX conversion produced no artifact"
@@ -323,6 +461,313 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self._infer = self._infer_depth_onnx
         self._load_error = None
         self.logger.info("Loaded optimized Depth Anything ONNX from %s", artifact)
+
+    def _load_openvino(self, force: bool = False):
+        # OpenVINO compiles the fp32 ONNX export and runs it on the best
+        # available device (GPU/NPU, else CPU).
+        artifact, converted = self._export_onnx_source(force, quantize=False)
+        if not converted or not artifact:
+            self._session = None
+            self._load_error = "OpenVINO build produced no ONNX source"
+            return
+
+        try:
+            import openvino as ov
+
+            from iSpy.config.AutoOpt import resolve_openvino_device
+
+            device = resolve_openvino_device()
+            if device.startswith("intel:"):
+                device = device.split(":", 1)[1]  # OpenVINO wants 'GPU', not 'intel:gpu'
+            core = ov.Core()
+            registered = next(
+                (d for d in core.available_devices if d.lower() == device.lower()),
+                None,
+            )
+            if registered is None:
+                registered = next(
+                    (d for d in core.available_devices if device.lower() in d.lower()),
+                    None,
+                )
+            if registered is None:
+                self.logger.warning(
+                    "OpenVINO device %r not registered (%s) - using AUTO",
+                    device, core.available_devices,
+                )
+                registered = "AUTO"
+            self._session = core.compile_model(artifact, registered)
+            self._infer = self._infer_depth_openvino
+            self._load_error = None
+            self.logger.info(
+                "Loaded optimized Depth Anything OpenVINO (%s) from %s", registered, artifact,
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "OpenVINO backend failed (%s) - falling back to onnx", exc,
+            )
+            self._load_onnx(force)
+
+    def _load_tensorrt(self, force: bool = False):
+        try:
+            import tensorrt as trt  # noqa: F401
+        except ImportError:
+            self.logger.warning(
+                "TensorRT not installed - 'engine' backend unavailable, falling back to onnx"
+            )
+            return self._load_onnx(force)
+
+        artifact, converted = self._export_onnx_source(force, quantize=False)
+        if not converted or not artifact:
+            self._session = None
+            self._load_error = "TensorRT build produced no ONNX source"
+            return
+
+        engine_path = self._artifact_path("engine")
+        engine_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not engine_path.exists() or force:
+                self.logger.info("Building TensorRT engine from %s ...", artifact)
+                trt_logger = trt.Logger(trt.Logger.WARNING)
+                builder = trt.Builder(trt_logger)
+                network = builder.create_network(
+                    1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+                )
+                parser = trt.OnnxParser(network, trt_logger)
+                with open(artifact, "rb") as f:
+                    if not parser.parse(f.read()):
+                        raise RuntimeError(parser.get_error(0).desc())
+                config = builder.create_builder_config()
+                config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)
+                serialized = builder.build_serialized_network(network, config)
+                if serialized is None:
+                    raise RuntimeError("TensorRT engine build returned None")
+                engine_path.write_bytes(serialized)
+
+            runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
+            self._session = runtime.deserialize_cuda_engine(engine_path.read_bytes())
+            self._infer = self._infer_depth_engine
+            self._load_error = None
+            self.logger.info("Loaded optimized Depth Anything TensorRT from %s", engine_path)
+        except Exception as exc:
+            self.logger.warning(
+                "TensorRT build/load failed (%s) - falling back to onnx", exc,
+            )
+            self._session = None
+            self._load_onnx(force)
+
+    def _load_coreml(self, force: bool = False):
+        try:
+            import coremltools as ct  # noqa: F401
+        except ImportError:
+            self.logger.warning(
+                "coremltools not installed - 'coreml' backend unavailable, falling back to onnx"
+            )
+            return self._load_onnx(force)
+
+        artifact, converted = self._export_onnx_source(force, quantize=False)
+        if not converted or not artifact:
+            self._session = None
+            self._load_error = "CoreML build produced no ONNX source"
+            return
+
+        model_path = self._artifact_path("coreml")
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not model_path.exists() or force:
+                self.logger.info("Converting %s -> CoreML ...", artifact)
+                mlmodel = ct.convert(artifact, source="onnx", compute_units=ct.ComputeUnit.ALL)
+                mlmodel.save(str(model_path))
+            self._session = ct.models.MLModel(str(model_path))
+            self._infer = self._infer_depth_coreml
+            self._load_error = None
+            self.logger.info("Loaded optimized Depth Anything CoreML from %s", model_path)
+        except Exception as exc:
+            self.logger.warning(
+                "CoreML build/load failed (%s) - falling back to onnx", exc,
+            )
+            self._session = None
+            self._load_onnx(force)
+
+    def _load_tflite(self, force: bool = False):
+        try:
+            import onnx2tf  # noqa: F401
+        except ImportError:
+            self.logger.warning(
+                "onnx2tf not installed - 'tflite' backend unavailable, falling back to onnx"
+            )
+            return self._load_onnx(force)
+
+        artifact, converted = self._export_onnx_source(force, quantize=False)
+        if not converted or not artifact:
+            self._session = None
+            self._load_error = "TFLite build produced no ONNX source"
+            return
+
+        out_dir = _YOLO_MODELS_DIR / "tflite"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        tflite_path = out_dir / f"{_DEPTH_ARTIFACT_STEM}_{self._input_size}x{self._input_size}.tflite"
+        try:
+            if not tflite_path.exists() or force:
+                self.logger.info("Converting %s -> TFLite ...", artifact)
+                onnx2tf.convert(
+                    input_onnx_file_path=artifact,
+                    output_folder_path=str(out_dir),
+                    non_verbose=True,
+                )
+                generated = out_dir / f"{Path(artifact).stem}_float32.tflite"
+                if generated.exists():
+                    generated.replace(tflite_path)
+            interpreter = self._tflite_interpreter(tflite_path)
+            interpreter.allocate_tensors()
+            self._session = interpreter
+            self._infer = self._infer_depth_tflite
+            self._load_error = None
+            self.logger.info("Loaded optimized Depth Anything TFLite from %s", tflite_path)
+        except Exception as exc:
+            self.logger.warning(
+                "TFLite build/load failed (%s) - falling back to onnx", exc,
+            )
+            self._session = None
+            self._load_onnx(force)
+
+    @staticmethod
+    def _tflite_interpreter(model_path: Path):
+        for mod in ("tflite_runtime.interpreter", "ai_edge_litert"):
+            try:
+                if mod == "tflite_runtime.interpreter":
+                    from tflite_runtime.interpreter import Interpreter
+                else:
+                    from ai_edge_litert import Interpreter
+                return Interpreter(model_path=str(model_path))
+            except Exception:
+                continue
+        import tensorflow as tf
+
+        return tf.lite.Interpreter(model_path=str(model_path))
+
+    def _load_rknn(self, force: bool = False):
+        try:
+            from rknn.api import RKNN  # noqa: F401
+        except ImportError:
+            self.logger.warning(
+                "rknn-toolkit2 not installed - 'rknn' backend unavailable, falling back to onnx"
+            )
+            return self._load_onnx(force)
+
+        artifact, converted = self._export_onnx_source(force, quantize=False)
+        if not converted or not artifact:
+            self._session = None
+            self._load_error = "RKNN build produced no ONNX source"
+            return
+
+        rknn_path = self._artifact_path("rknn")
+        rknn_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not rknn_path.exists() or force:
+                self.logger.info("Building RKNN model from %s ...", artifact)
+                from rknn.api import RKNN
+
+                rknn = RKNN(verbose=False)
+                try:
+                    rknn.config(target_platform="rk3588")
+                    rknn.load_onnx(model=artifact, input_size_list=[[1, 3, self._input_size, self._input_size]])
+                    dataset = self._rknn_calibration_txt()
+                    rknn.build(do_quantization=self.quantize, dataset=dataset)
+                    rknn.export_rknn(str(rknn_path))
+                finally:
+                    rknn.release()
+
+            from rknnlite.api import RKNNLite
+
+            rknn_lite = RKNNLite(verbose=False)
+            if rknn_lite.load_rknn(str(rknn_path)) != 0:
+                raise RuntimeError(f"Failed to load RKNN model: {rknn_path}")
+            if rknn_lite.init_runtime() != 0:
+                raise RuntimeError("Failed to init RKNN runtime")
+            self._session = rknn_lite
+            self._infer = self._infer_depth_rknn
+            self._load_error = None
+            self.logger.info("Loaded optimized Depth Anything RKNN from %s", rknn_path)
+        except Exception as exc:
+            self.logger.warning(
+                "RKNN build/load failed (%s) - falling back to onnx", exc,
+            )
+            self._session = None
+            self._load_onnx(force)
+
+    def _rknn_calibration_txt(self) -> str | None:
+        """rknn-toolkit2 quantizes from a text file of image paths; reuse the
+        configured QuantizeDataset when present"""
+        if not self._quantization_dataset:
+            return None
+        ds = Path(self._quantization_dataset)
+        if not ds.exists():
+            return None
+        images = sorted(
+            p for ext in ("*.jpg", "*.jpeg", "*.png", "*.bmp") for p in ds.rglob(ext)
+        )
+        if not images:
+            return None
+        txt = ds / "rknn_calibration.txt"
+        txt.write_text("\n".join(str(p) for p in images))
+        return str(txt)
+
+    def _load_tpu(self, force: bool = False):
+        try:
+            import torch_xla.core.xla_model as xm  # noqa: F401
+        except ImportError:
+            self.logger.warning(
+                "torch_xla not installed - 'tpu' backend unavailable, falling back to onnx"
+            )
+            return self._load_onnx(force)
+
+        try:
+            import torch
+            from transformers import AutoModelForDepthEstimation
+
+            import torch_xla.core.xla_model as xm
+
+            device = xm.xla_device()
+            self._model = (
+                AutoModelForDepthEstimation.from_pretrained(
+                    _DEPTH_MODEL_ID, cache_dir=str(_DEPTH_HF_CACHE_DIR)
+                )
+                .to(device)
+                .eval()
+            )
+            self._session = self._model
+            self._infer = self._infer_depth_tpu
+            self._load_error = None
+            self.logger.info("Loaded Depth Anything on TPU device %s", device)
+        except Exception as exc:
+            self.logger.warning(
+                "TPU backend failed (%s) - falling back to onnx", exc,
+            )
+            self._model = None
+            self._session = None
+            self._load_onnx(force)
+
+    def _preprocess_depth(self, frame: np.ndarray) -> np.ndarray:
+        size = getattr(self, "_input_size", _DEPTH_INPUT_SIZE)
+        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = (
+            cv2.resize(img, (size, size), interpolation=cv2.INTER_CUBIC)
+            .astype(np.float32)
+            / 255.0
+        )
+        return (
+            (img.transpose(2, 0, 1) - _IMAGENET_MEAN) / _IMAGENET_STD
+        ).astype(np.float32)[None]
+
+    def _postprocess_depth(self, depth, frame: np.ndarray) -> np.ndarray:
+        depth = np.asarray(depth)
+        while depth.ndim > 2:
+            depth = depth[0]
+        return cv2.resize(
+            depth.astype(np.float32),
+            (frame.shape[1], frame.shape[0]),
+            interpolation=cv2.INTER_LINEAR,
+        )
 
     def _load_pipeline(self):
         if not self.estimate_depth:
@@ -390,24 +835,75 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         )
 
     def _infer_depth_onnx(self, frame: np.ndarray) -> np.ndarray:
-        size = _DEPTH_INPUT_SIZE
+        pixel_values = self._preprocess_depth(frame)
+        depth = self._session.run(None, {"pixel_values": pixel_values})[0]
+        return self._postprocess_depth(depth, frame)
+
+    def _infer_depth_openvino(self, frame: np.ndarray) -> np.ndarray:
+        pixel_values = self._preprocess_depth(frame)
+        outputs = self._session({"pixel_values": pixel_values})
+        depth = next(iter(outputs.values()))
+        return self._postprocess_depth(depth, frame)
+
+    def _infer_depth_engine(self, frame: np.ndarray) -> np.ndarray:
+        import numpy as np
+
+        import tensorrt as trt
+
+        pixel_values = self._preprocess_depth(frame)
+        engine = self._session
+        context = engine.create_execution_context()
+        for idx in range(engine.num_io_tensors):
+            name = engine.get_tensor_name(idx)
+            if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                context.set_tensor_shape(name, pixel_values.shape)
+        bindings = []
+        output = None
+        for idx in range(engine.num_io_tensors):
+            name = engine.get_tensor_name(idx)
+            shape = context.get_tensor_shape(name)
+            if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                bindings.append(np.array(pixel_values).ctypes.data)
+            else:
+                out = np.empty(tuple(shape), dtype=np.float32)
+                bindings.append(out.ctypes.data)
+                output = out
+        context.execute_v2(bindings)
+        return self._postprocess_depth(output, frame)
+
+    def _infer_depth_coreml(self, frame: np.ndarray) -> np.ndarray:
+        pixel_values = self._preprocess_depth(frame)
+        out = self._session.predict({"pixel_values": pixel_values})
+        depth = next(iter(out.values()))
+        return self._postprocess_depth(depth, frame)
+
+    def _infer_depth_tflite(self, frame: np.ndarray) -> np.ndarray:
+        interpreter = self._session
+        details = interpreter.get_input_details()[0]
+        pixel_values = self._preprocess_depth(frame).astype(details["dtype"])
+        interpreter.set_tensor(details["index"], pixel_values)
+        interpreter.invoke()
+        depth = interpreter.get_tensor(interpreter.get_output_details()[0]["index"])
+        return self._postprocess_depth(depth, frame)
+
+    def _infer_depth_rknn(self, frame: np.ndarray) -> np.ndarray:
+        size = getattr(self, "_input_size", _DEPTH_INPUT_SIZE)
         img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = (
-            cv2.resize(img, (size, size), interpolation=cv2.INTER_CUBIC)
-            .astype(np.float32)
-            / 255.0
-        )
-        pixel_values = (
-            (img.transpose(2, 0, 1) - _IMAGENET_MEAN) / _IMAGENET_STD
-        ).astype(np.float32)[None]
+        img = cv2.resize(img, (size, size), interpolation=cv2.INTER_CUBIC)
+        out = self._session.inference(inputs=[img])
+        depth = out[0]
+        return self._postprocess_depth(depth, frame)
 
-        depth = self._session.run(None, {"pixel_values": pixel_values})[0][0]
+    def _infer_depth_tpu(self, frame: np.ndarray) -> np.ndarray:
+        import torch
 
-        return cv2.resize(
-            np.asarray(depth, dtype=np.float32),
-            (frame.shape[1], frame.shape[0]),
-            interpolation=cv2.INTER_LINEAR,
-        )
+        import torch_xla.core.xla_model as xm
+
+        pixel_values = torch.from_numpy(self._preprocess_depth(frame))
+        with torch.no_grad():
+            pred = self._session(pixel_values=pixel_values.to(self._session.device)).predicted_depth
+        depth = xm.send_cpu(pred).cpu().numpy()
+        return self._postprocess_depth(depth, frame)
 
     def _distance_from_depth(self, raw: float) -> float:
         norm = float(np.clip(raw, 0.0, 1e6))

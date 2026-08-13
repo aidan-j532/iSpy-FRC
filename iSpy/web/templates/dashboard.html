@@ -11,7 +11,7 @@
   <div class="card stat-card"><div class="stat-label">Camera Lag</div><div class="stat-value" id="s-lag">--<span class="stat-unit">ms</span></div></div>
   <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value" id="s-up">--</div></div>
 </div>
-<div id="vision-status" class="vision-banner"></div>
+<div id="vision-status" class="vision-banner">Connecting&hellip;</div>
 
 <div class="dash-columns">
   <div class="dash-col-left">
@@ -134,19 +134,18 @@ function applyTick(data) {
   if (data.system) applySystem(data.system);
 }
 
+function applyVisionBanner(running) {
+  const visionBanner = document.getElementById('vision-status');
+  visionBanner.className = 'vision-banner ' + (running ? 'vision-ok' : 'vision-bad');
+  visionBanner.textContent = running ? 'Vision is running' : 'Vision is not running';
+}
+
 function applyFull(data) {
   applyTick(data);
 
   document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
 
-  const visionBanner = document.getElementById('vision-status');
-  if (data.vision_running) {
-    visionBanner.className = 'vision-banner vision-ok';
-    visionBanner.textContent = 'Vision is running';
-  } else {
-    visionBanner.className = 'vision-banner vision-bad';
-    visionBanner.textContent = 'Vision is not running';
-  }
+  applyVisionBanner(!!data.vision_running);
 
   const model = data.model || {};
   document.getElementById('model-info').innerHTML = model.name
@@ -205,5 +204,15 @@ function connectSSE() {
 }
 
 connectSSE();
+
+async function pollVisionStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const j = await r.json();
+    applyVisionBanner(!!j.vision_running);
+  } catch (e) {}
+}
+setInterval(pollVisionStatus, 5000);
+pollVisionStatus();
 </script>
 {% endblock %}

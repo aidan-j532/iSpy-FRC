@@ -105,12 +105,13 @@ const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
   .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const jsStr = s => String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
-const TYPE_COLORS = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#ff9800', vision_pipeline: '#9c27b0' };
+const TYPE_COLORS = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#b07a3c', vision_pipeline: '#8a6bb5' };
 const TYPE_LABELS = { frame_processor: 'frame processor', vision_pipeline: 'vision pipeline' };
 
 function typeBadge(type) {
   const label = TYPE_LABELS[type] || type;
-  return `<span class="plugin-pill" style="background:${TYPE_COLORS[type] || '#666'}">${label}</span>`;
+  const color = TYPE_COLORS[type] || '#8b8f9a';
+  return `<span class="plugin-pill" style="color:${color};background:${color}22;border:1px solid ${color}44">${label}</span>`;
 }
 
 function statusDot(status) {
@@ -180,6 +181,10 @@ function renderRow(p) {
     ? `<span class="builtin-pill" title="${isPipeline ? 'Bundled with iSpy - selected per camera in Camera settings' : 'Bundled with iSpy'}">built-in</span>`
     : '';
 
+  const betaPill = p.beta
+    ? `<span class="builtin-pill beta-pill" title="Experimental - may change or misbehave">beta</span>`
+    : '';
+
   const toggle = isPipeline ? '' : `
     <label class="switch" title="${p.enabled ? 'Disable' : 'Enable'}">
       <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlugin('${jsStr(p.name)}','${p.type}',this.checked)">
@@ -190,8 +195,9 @@ function renderRow(p) {
   if (p.enabled && hasSettings) {
     actions.push(`<button class="btn-sm" onclick="toggleSettings('${jsStr(p.name)}','${p.type}')" title="Edit settings">Settings</button>`);
   }
-  const sourceFile = p.name;
-  actions.push(`<button class="btn-sm" onclick="viewSource('${p.type}','${jsStr(sourceFile)}')" title="View source">Code</button>`);
+  if (!isPipeline) {
+    actions.push(`<button class="btn-sm" onclick="viewSource('${p.type}','${jsStr(p.name)}')" title="View source">Code</button>`);
+  }
   if (!p.builtin && !isPipeline) {
     actions.push(`<button class="btn-sm btn-bad" onclick="openDeleteAddonModal('${p.type}','${jsStr(p.filename || p.name)}','${jsStr(p.name)}')" title="Delete">Delete</button>`);
   }
@@ -216,10 +222,13 @@ function renderRow(p) {
         <strong class="addon-name">${esc(p.name)}</strong>
         ${typeBadge(p.type)}
         ${builtinPill}
+        ${betaPill}
       </div>
       ${p.doc ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
-      ${statusHtml}
-      <div class="addon-actions">${actions.join('')}</div>
+      <div class="addon-right">
+        ${statusHtml}
+        <div class="addon-actions">${actions.join('')}</div>
+      </div>
     </div>
     ${panel}
   </div>`;

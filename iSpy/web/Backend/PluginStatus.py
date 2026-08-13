@@ -15,8 +15,6 @@ _PLUGIN_ROOT = Path(_plugins_pkg.__file__).resolve().parent
 # vision pipelines are imported directly + registered in a static dict
 # (iSpy/vision/pipelines/__init__.py), not scanned via load_plugins(). The
 # _TYPE_MAP entry below shows them in /addons as read-only built-ins.
-_VISION_PIPELINE_DIR = Path(__file__).resolve().parent.parent.parent / "vision" / "pipelines"
-
 _TYPE_MAP = {
     "tracker": ("trackers", TrackerBase, "TrackerBase", "update"),
     "utility": ("utilities", UtilityBase, "UtilityBase", "update"),
@@ -80,6 +78,7 @@ def _build_vision_pipeline_payloads():
             "class_name": cls.__name__,
             "config_schema": schema,
             "show_common_fields": bool(getattr(cls, "show_common_fields", lambda: True)()),
+            "beta": bool(getattr(cls, "beta", False)),
         }
         if hasattr(cls, "recommended_format"):
             try:
@@ -145,6 +144,7 @@ class PluginStatusModule(WebModule):
                         "type": ptype,
                         "enabled": False,
                         "builtin": True,
+                        "beta": bool(getattr(cls, "beta", False)),
                         "doc": (cls.__doc__ or "").strip()[:200],
                         "filename": f"{name}.py",
                     })
@@ -203,14 +203,10 @@ class PluginStatusModule(WebModule):
         if not info:
             return jsonify(error="Unknown addon type"), 400
         if ptype == "vision_pipeline":
-            path = (_VISION_PIPELINE_DIR / f"{name}.py").resolve()
-            try:
-                path.relative_to(_VISION_PIPELINE_DIR)
-            except ValueError:
-                return jsonify(error="Invalid filename"), 400
-            if not path.exists():
-                return jsonify(error="Not found"), 404
-            return jsonify(source=path.read_text(errors="ignore"), filename=path.name)
+            return jsonify(
+                error="Built-in vision pipelines are bundled with iSpy - "
+                      "their source is not viewable from the web UI."
+            ), 403
         subdir = info[0]
         # resolve the real file by plugin name - handles both custom
         # add-ons in <subdir>/ and bundled ones under <subdir>/BuiltIn/

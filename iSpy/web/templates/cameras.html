@@ -489,7 +489,8 @@ function populatePipelineSelect() {
   keys.forEach(name => {
     const option = document.createElement('option');
     option.value = name;
-    option.textContent = humanizePipelineName(name);
+    const meta = pipelineSchemas[name] || {};
+    option.textContent = humanizePipelineName(name) + (meta.beta ? ' (beta)' : '');
     sel.appendChild(option);
   });
   // back-compat: pipeline may be a nested dict or an old flat string, resolve either way

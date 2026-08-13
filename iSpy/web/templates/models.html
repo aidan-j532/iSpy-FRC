@@ -69,7 +69,7 @@ async function loadModels() {
       <td style="text-align:right;">
         ${m.active
           ? '<span class="text-dim text-sm">in use</span>'
-          : `<button class="btn btn-bad btn-sm" onclick="openDeleteModal('${m.name}')" title="Delete model">&#128465;</button>`
+          : `<button class="btn btn-bad btn-sm" onclick="openDeleteModal('${m.name}')" title="Delete model">Delete</button>`
         }
       </td>
     </tr>`).join('');
