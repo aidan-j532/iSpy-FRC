@@ -1,3 +1,4 @@
+import base64
 import copy
 import glob
 import os
@@ -20,6 +21,7 @@ from iSpy.config.iSpyConfig import (
     get_pipeline_settings,
     ensure_camera_entries_ready,
 )
+from iSpy.vision import calibration as cam_calibration
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
@@ -27,6 +29,24 @@ _FEED_TIMEOUT_S = 15.0
 # legacy alias keys - dropped when the canonical key is present so old configs
 # dont carry dead twins around forever
 _SETTING_ALIASES = {"quantized": "quantize", "auto_opt": "optimize"}
+
+
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _decode_base64_frame(image_b64):
+    if isinstance(image_b64, str) and image_b64.startswith("data:"):
+        image_b64 = image_b64.split(",", 1)[-1]
+    try:
+        raw = base64.b64decode(image_b64)
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
 
 
 def _pipeline_schema_keys(pipeline_name: str) -> set:
@@ -305,6 +325,8 @@ class CamerasModule(WebModule):
         self._discover_cache: list = []
         self._discover_cache_ts: float = 0.0
         self._discover_lock = threading.Lock()
+        self.calib_sessions: dict[str, dict] = {}
+        self.calib_lock = threading.Lock()
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/cameras", "cameras_page", lambda: render_template("cameras.html"))
@@ -317,6 +339,12 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_delete", self._remove_camera, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/profile/<device_id>", "api_cameras_profile", self._get_profile, methods=["GET"])
         flask_app.add_url_rule("/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines)
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>", "api_cameras_calibration_get", self._calibration_get, methods=["GET"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>", "api_cameras_calibration_reset", self._calibration_reset, methods=["DELETE"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/focal", "api_cameras_calibration_focal", self._calibration_focal, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/chessboard/capture", "api_cameras_chessboard_capture", self._chessboard_capture, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/chessboard", "api_cameras_chessboard_clear", self._chessboard_clear, methods=["DELETE"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/chessboard/finish", "api_cameras_chessboard_finish", self._chessboard_finish, methods=["POST"])
 
     def _camera_display_name(self, cam, fallback: str = "camera") -> str:
         if hasattr(cam, "config") and cam.config is not None:
@@ -400,6 +428,149 @@ class CamerasModule(WebModule):
 
     def _vision_pipelines(self):
         return jsonify(pipelines=_build_vision_pipeline_payloads())
+
+    # ------------------------------------------------------------------
+    # Camera calibration (web wizard)
+    # ------------------------------------------------------------------
+
+    def _save_calibration(self, cam_name: str, calib_dict: dict):
+        """merge calib_dict into the camera's calibration and persist; returns the merged dict"""
+        config = self.context["config"]
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return None
+        merged = dict(entry.get("calibration") or {})
+        merged.update(calib_dict)
+        entry["calibration"] = merged
+        config.set("camera_configs", cams)
+        config.save()
+        return merged
+
+    def _calibration_get(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+        return jsonify(
+            camera=key,
+            pipeline=get_pipeline_name(entry),
+            calibration=entry.get("calibration") or {},
+            chessboard_captures=len(session.get("captures", [])),
+            chessboard_pattern=session.get("pattern", list(cam_calibration.DEFAULT_CHESSBOARD_PATTERN)),
+        )
+
+    def _calibration_reset(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            self.calib_sessions.pop(key, None)
+        saved = self._save_calibration(key, {
+            "distance": 0, "game_piece_size": 0, "size": 0, "fov": 0,
+        })
+        for stale in ("camera_matrix", "dist_coeffs", "resolution", "rms",
+                      "count", "focal_length_pixels"):
+            saved.pop(stale, None)
+        config = self.context["config"]
+        entry["calibration"] = saved
+        config.set("camera_configs", cams)
+        config.save()
+        return jsonify(success=True, calibration=saved)
+
+    def _calibration_focal(self, cam_name):
+        data = request.get_json(force=True) or {}
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        real_size = _to_float(data.get("real_size"))
+        distance = _to_float(data.get("distance"))
+        pixel_height = _to_float(data.get("pixel_height"))
+        frame_width = int(_to_float(data.get("frame_width")))
+        if real_size <= 0 or distance <= 0 or pixel_height <= 0 or frame_width <= 0:
+            return jsonify(
+                error="Object size, distance, measured pixel height and frame width must all be positive"
+            ), 400
+        focal_px = cam_calibration.focal_from_object(real_size, distance, pixel_height)
+        fov_deg = cam_calibration.fov_from_focal(focal_px, frame_width)
+        saved = self._save_calibration(key, {
+            "distance": round(distance, 4),
+            "game_piece_size": round(real_size, 4),
+            "size": round(pixel_height, 2),
+            "fov": round(fov_deg, 3),
+            "focal_length_pixels": round(focal_px, 2),
+        })
+        return jsonify(
+            success=True,
+            focal_length_px=round(focal_px, 2),
+            fov_deg=round(fov_deg, 3),
+            calibration=saved,
+        )
+
+    def _chessboard_capture(self, cam_name):
+        data = request.get_json(force=True) or {}
+        image_b64 = data.get("image")
+        if not image_b64:
+            return jsonify(error="No image provided"), 400
+        cols = int(_to_float(data.get("cols"), cam_calibration.DEFAULT_CHESSBOARD_PATTERN[0]))
+        rows = int(_to_float(data.get("rows"), cam_calibration.DEFAULT_CHESSBOARD_PATTERN[1]))
+        if cols < 2 or rows < 2 or cols > 20 or rows > 20:
+            return jsonify(error="Invalid chessboard pattern"), 400
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        frame = _decode_base64_frame(image_b64)
+        if frame is None:
+            return jsonify(error="Could not decode image"), 400
+        found, corners, gray = cam_calibration.detect_chessboard(frame, cols, rows)
+        if not found:
+            return jsonify(
+                success=False,
+                board_found=False,
+                message="Chessboard not detected in that frame. Show the whole board, use even lighting, or try another pattern.",
+            )
+        with self.calib_lock:
+            session = self.calib_sessions.setdefault(key, {})
+            session["pattern"] = [cols, rows]
+            session.setdefault("captures", []).append((gray, corners))
+            count = len(session["captures"])
+        preview = None
+        try:
+            drawn = cam_calibration.draw_chessboard(frame, corners, cols, rows)
+            ok, buf = cv2.imencode(".jpg", drawn, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+        except Exception:
+            preview = None
+        return jsonify(success=True, board_found=True, captured=count, preview=preview)
+
+    def _chessboard_clear(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            self.calib_sessions.pop(key, None)
+        return jsonify(success=True)
+
+    def _chessboard_finish(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+            captures = list(session.get("captures", []))
+            pattern = tuple(session.get("pattern", list(cam_calibration.DEFAULT_CHESSBOARD_PATTERN)))
+        if len(captures) < 3:
+            return jsonify(
+                error=f"Need at least 3 captured chessboard frames, have {len(captures)}"
+            ), 400
+        result = cam_calibration.calibrate_chessboard(captures, pattern)
+        if result is None:
+            return jsonify(error="Calibration failed - try capturing more varied frames"), 500
+        saved = self._save_calibration(key, result)
+        with self.calib_lock:
+            self.calib_sessions.pop(key, None)
+        return jsonify(success=True, result=result, calibration=saved)
 
     def _add_camera(self):
         data = request.get_json(force=True) or {}

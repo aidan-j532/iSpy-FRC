@@ -42,6 +42,22 @@
   </div>
 </div>
 
+<!-- camera calibration wizard: known-object (focal/FOV) + chessboard intrinsics -->
+<div id="calibration-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeCalibrationWizard()">
+  <div class="modal calibration-modal">
+    <div id="calibration-header">
+      <h3 id="calibration-title">Calibrate Camera</h3>
+      <span id="calibration-note" class="restart-badge">Applies after vision restart</span>
+    </div>
+    <div id="calibration-body"></div>
+    <div class="modal-actions">
+      <button onclick="resetCalibration()" class="btn-sm" style="background:var(--warn);">Reset calibration</button>
+      <span style="flex:1"></span>
+      <button onclick="closeCalibrationWizard()" style="background:var(--border);">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="folder-picker-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeFolderPicker()">
   <div class="modal" style="max-width:560px;">
     <h3 id="folder-picker-title">Select Folder</h3>
@@ -148,6 +164,19 @@
   #camera-modal-header h3 { margin: 0; }
   #camera-modal-note { margin-left: auto; }
 
+  .calibration-modal { max-width: 720px; width: 94%; }
+  #calibration-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  #calibration-header h3 { margin: 0; }
+  #calibration-note { margin-left: auto; }
+  .calib-stage { position: relative; margin: 8px 0; border-radius: 6px; overflow: hidden; }
+  .calib-stage img { width: 100%; display: block; background: #000; }
+  .calib-stage canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; cursor: crosshair; touch-action: none; }
+  .calib-preview { max-width: 100%; border-radius: 6px; margin: 8px 0; }
+  .calib-status { margin: 8px 0; font-size: 0.85rem; color: var(--text-dim); line-height: 1.5; }
+  .calib-status.ok { color: #2c7; }
+  .calib-status.err { color: #f66; }
+  .form-unit { color: var(--text-dim); font-weight: 400; font-size: 0.8rem; }
+
   .settings-section details summary {
     list-style: none;
     cursor: pointer;
@@ -220,9 +249,9 @@ const COMMON_FIELDS = {
   exposure_time: { label: 'Exposure', type: 'number', step: 1, unit: '\u00b5s', nullable: true, help: 'Fixed exposure in microseconds. Leave empty for the camera default.' },
   gain: { label: 'Gain', type: 'number', step: 1, nullable: true, help: 'Fixed sensor gain. Leave empty for the camera default.' },
   fps_cap: { label: 'FPS cap', type: 'number', step: 1, nullable: true, help: 'Hard cap on capture framerate. Leave empty for uncapped.' },
-  'calibration.distance': { label: 'Known distance', type: 'number', step: 0.01, unit: 'm', default: 0 },
-  'calibration.game_piece_size': { label: 'Game piece size', type: 'number', step: 0.01, unit: 'm', default: 0, help: 'Real-world height of the tracked game piece.' },
-  'calibration.size': { label: 'Object height in frame', type: 'number', step: 1, unit: 'px', default: 0, help: 'Vertical pixel size the object appears at the known distance.' },
+  'calibration.distance': { label: 'Known distance', type: 'number', step: 0.1, unit: 'in', default: 0, help: 'Distance from the camera to the object at which the size below was measured.' },
+  'calibration.game_piece_size': { label: 'Game piece size', type: 'number', step: 0.1, unit: 'in', default: 0, help: 'Real-world height of the tracked game piece. Calibration values are inches internally.' },
+  'calibration.size': { label: 'Object height in frame', type: 'number', step: 0.5, unit: 'px', default: 0, help: 'Vertical pixel size the object appears at the known distance.' },
   'calibration.fov': { label: 'Horizontal FOV', type: 'number', step: 0.1, unit: 'deg', default: 0, help: 'Horizontal field of view used for ray/depth estimation.' },
 };
 
@@ -581,6 +610,21 @@ async function openCameraModal(mode, arg) {
     if (group.title === 'Mount & Location' && !showMount) return;
     const sec = renderSection(group.title, { collapsible: true });
     renderSectionBody(sec.body, group.fields.map(k => [k, COMMON_FIELDS[k]]), 'common');
+    if (group.title === 'Calibration') {
+      const row = document.createElement('div');
+      row.className = 'form-row';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn-sm btn-ok';
+      btn.textContent = 'Open calibration wizard';
+      btn.onclick = openCalibrationWizard;
+      row.appendChild(btn);
+      sec.body.appendChild(row);
+      const help = document.createElement('div');
+      help.className = 'form-help';
+      help.textContent = 'The wizard measures a known object (object_detection) or a chessboard (AprilTag / QR) and fills these values in.';
+      sec.body.appendChild(help);
+    }
     body.appendChild(sec.holder);
   });
 
@@ -1148,6 +1192,424 @@ function setRefreshRate() {
   currentRate = Number($id('refresh-rate').value);
   clearInterval(refreshTimer);
   refreshTimer = setInterval(refreshCameras, currentRate);
+}
+
+/* ------------------------------------------------------------------
+ * Camera calibration wizard
+ * ------------------------------------------------------------------ */
+
+const calibrationState = {
+  camera: null,      // camera key (name) used for the API and the /video feed
+  mode: null,        // 'focal' | 'chessboard' | 'beta' | 'none'
+  frozen: false,
+  frame: null,       // ImageData of the frozen frame (focal mode)
+  canvas: null,
+  ctx: null,
+  dragging: false,
+  start: null,
+  end: null,
+  captured: 0,
+};
+
+function calibrationModeFor(pipeline) {
+  if (pipeline === 'object_detection') return 'focal';
+  if (pipeline === 'april_tag' || pipeline === 'qr_code') return 'chessboard';
+  if (pipeline === 'optical_flow') return 'beta';
+  return 'none';
+}
+
+async function openCalibrationWizard() {
+  if (camModal.mode === 'add') {
+    showToast('Save the camera first, then open the calibration wizard.', 'error');
+    return;
+  }
+  calibrationState.camera = (camModal.data && camModal.data.name) || '';
+  if (!calibrationState.camera) { showToast('Camera not loaded', 'error'); return; }
+  calibrationState.mode = calibrationModeFor(camModal.pipeline);
+  calibrationState.frozen = false;
+  calibrationState.captured = 0;
+
+  $id('calibration-title').textContent = 'Calibrate ' + calibrationState.camera;
+  const body = $id('calibration-body');
+  body.innerHTML = '';
+
+  if (calibrationState.mode === 'focal') renderFocalCalibration(body);
+  else if (calibrationState.mode === 'chessboard') renderChessboardCalibration(body);
+  else if (calibrationState.mode === 'beta')
+    body.innerHTML = '<div class="card empty-state">The optical_flow pipeline is in beta - its motion estimation reads the camera FOV, so it is excluded from the calibration wizard for now.</div>';
+  else
+    body.innerHTML = '<div class="card empty-state">This pipeline does not use distance calibration (no depth-from-size or PnP), so there is nothing to calibrate here.</div>';
+
+  $id('calibration-modal').style.display = 'flex';
+}
+
+function closeCalibrationWizard() {
+  $id('calibration-modal').style.display = 'none';
+  $id('calibration-body').innerHTML = '';
+  calibrationState.camera = null;
+  calibrationState.canvas = null;
+  calibrationState.ctx = null;
+  calibrationState.frame = null;
+}
+
+function renderFocalCalibration(body) {
+  body.innerHTML = `
+    <div class="form-row"><span class="form-label">Live view</span>
+      <div class="calib-stage" style="width:100%;">
+        <img id="calib-feed" src="/video/${encodeURIComponent(calibrationState.camera)}" alt="live feed"
+             onload="calibrationFeedReady()" onerror="calibrationFeedError()">
+        <canvas id="calib-canvas"></canvas>
+      </div>
+    </div>
+    <div class="calib-status" id="focal-feed-note">Point the camera at an object of known size, then click "Freeze &amp; measure".</div>
+    <div class="form-row">
+      <span class="form-label">Measure</span>
+      <div style="display:flex;gap:8px;flex:1;">
+        <button type="button" class="btn-sm btn-ok" id="calib-freeze-btn" onclick="toggleCalibrationFreeze()">Freeze &amp; measure</button>
+      </div>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Pixel height <span class="form-unit">px</span></span>
+      <input type="number" step="0.5" class="form-input" id="focal-pixel-height" placeholder="drag on the frozen frame, or type it">
+    </div>
+    <div class="form-row">
+      <span class="form-label">Object size <span class="form-unit">in</span></span>
+      <input type="number" step="0.1" class="form-input" id="focal-real-size" placeholder="e.g. 6.5">
+    </div>
+    <div class="form-row">
+      <span class="form-label">Distance <span class="form-unit">in</span></span>
+      <input type="number" step="0.1" class="form-input" id="focal-distance" placeholder="camera to object">
+    </div>
+    <div class="form-row">
+      <span class="form-label">Frame width <span class="form-unit">px</span></span>
+      <span id="focal-frame-width" class="form-input" style="border:none;padding-top:8px;background:transparent;">from the live frame</span>
+    </div>
+    <div class="form-row">
+      <span class="form-label"></span>
+      <button type="button" class="btn-sm btn-ok" onclick="computeFocalCalibration()">Compute &amp; save</button>
+    </div>
+    <div class="calib-status" id="focal-result"></div>
+  `;
+}
+
+function calibrationFeedReady() {
+  const img = $id('calib-feed');
+  const note = $id('focal-feed-note');
+  if (!img || !img.naturalWidth) return;
+  if (note) note.textContent = 'Click "Freeze &amp; measure", then drag vertically across the object to mark its height.';
+  const fw = $id('focal-frame-width');
+  if (fw) fw.textContent = img.naturalWidth + ' px';
+}
+
+function calibrationFeedError() {
+  const note = $id('focal-feed-note');
+  if (note) note.textContent = 'Live feed not loading - start vision from the dashboard first.';
+}
+
+function freezeCalibrationFrame() {
+  const img = $id('calib-feed');
+  if (!img || !img.complete || !img.naturalWidth) {
+    showToast('Wait for the live feed to load first.', 'error');
+    return;
+  }
+  const canvas = $id('calib-canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  calibrationState.frozen = true;
+  calibrationState.frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  calibrationState.canvas = canvas;
+  calibrationState.ctx = ctx;
+  calibrationState.start = null;
+  calibrationState.end = null;
+  calibrationState.liveSrc = img.src;
+  img.src = canvas.toDataURL('image/jpeg', 0.9);
+  canvas.style.display = 'block';
+  canvas.onmousedown = onCalibMouseDown;
+  canvas.onmousemove = onCalibMouseMove;
+  canvas.onmouseup = onCalibMouseUp;
+  canvas.onmouseleave = onCalibMouseUp;
+  const ph = $id('focal-pixel-height');
+  if (ph) ph.value = '';
+  updateCalibrationFreezeButton();
+}
+
+function toggleCalibrationFreeze() {
+  if (calibrationState.frozen) {
+    unfreezeCalibrationFrame();
+  } else {
+    freezeCalibrationFrame();
+  }
+}
+
+function updateCalibrationFreezeButton() {
+  const btn = $id('calib-freeze-btn');
+  if (btn) btn.textContent = calibrationState.frozen ? 'Unfreeze' : 'Freeze & measure';
+}
+
+function unfreezeCalibrationFrame() {
+  calibrationState.frozen = false;
+  const img = $id('calib-feed');
+  const canvas = $id('calib-canvas');
+  if (img) {
+    if (calibrationState.liveSrc) {
+      // MJPEG streams don't reconnect when re-setting an identical src -
+      // bust the cache so the browser opens a fresh /video connection.
+      const sep = calibrationState.liveSrc.indexOf('?') >= 0 ? '&' : '?';
+      img.src = calibrationState.liveSrc + sep + 't=' + Date.now();
+    }
+    img.style.display = 'block';
+  }
+  if (canvas) canvas.style.display = 'none';
+  updateCalibrationFreezeButton();
+}
+
+function calibCanvasPoint(e) {
+  const canvas = calibrationState.canvas;
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (canvas.width / rect.width),
+    y: (e.clientY - rect.top) * (canvas.height / rect.height),
+  };
+}
+
+function onCalibMouseDown(e) {
+  if (!calibrationState.frozen) return;
+  e.preventDefault();
+  calibrationState.dragging = true;
+  calibrationState.start = calibCanvasPoint(e);
+  calibrationState.end = null;
+  drawCalibMeasure();
+}
+
+function onCalibMouseMove(e) {
+  if (!calibrationState.dragging) return;
+  calibrationState.end = calibCanvasPoint(e);
+  drawCalibMeasure();
+}
+
+function onCalibMouseUp(e) {
+  if (!calibrationState.dragging) return;
+  calibrationState.dragging = false;
+  calibrationState.end = calibCanvasPoint(e);
+  drawCalibMeasure();
+}
+
+function drawCalibMeasure() {
+  const ctx = calibrationState.ctx;
+  if (!ctx) return;
+  if (calibrationState.frame) ctx.putImageData(calibrationState.frame, 0, 0);
+  const a = calibrationState.start;
+  if (!a) return;
+  if (!calibrationState.end) {
+    ctx.fillStyle = '#2c7';
+    ctx.fillRect(a.x - 3, a.y - 3, 6, 6);
+    return;
+  }
+  const b = calibrationState.end;
+  ctx.strokeStyle = '#2c7';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(a.x, b.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(a.x - 8, a.y);
+  ctx.lineTo(a.x + 8, a.y);
+  ctx.moveTo(a.x - 8, b.y);
+  ctx.lineTo(a.x + 8, b.y);
+  ctx.stroke();
+  const px = Math.max(1, Math.round(Math.abs(b.y - a.y)));
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 3;
+  ctx.font = 'bold 14px sans-serif';
+  const label = px + ' px';
+  const lx = Math.min(a.x, b.x) + 10;
+  const ly = (a.y + b.y) / 2;
+  ctx.strokeText(label, lx, ly);
+  ctx.fillText(label, lx, ly);
+  const el = $id('focal-pixel-height');
+  if (el) el.value = px;
+}
+
+async function computeFocalCalibration() {
+  const pixel_height = Number(($id('focal-pixel-height') || {}).value || 0);
+  const real_size = Number(($id('focal-real-size') || {}).value || 0);
+  const distance = Number(($id('focal-distance') || {}).value || 0);
+  const fw = $id('focal-frame-width');
+  const frame_width = Number(fw ? fw.textContent.split(' ')[0] : 0) || 0;
+  if (pixel_height <= 0 || real_size <= 0 || distance <= 0) {
+    showToast('Enter a pixel height, object size, and distance.', 'error');
+    return;
+  }
+  const res = $id('focal-result');
+  res.className = 'calib-status';
+  res.textContent = 'Computing...';
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/focal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ real_size, distance, pixel_height, frame_width }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Calibration failed');
+    res.className = 'calib-status ok';
+    res.innerHTML = `Focal length <strong>${j.focal_length_px} px</strong> &middot; horizontal FOV <strong>${j.fov_deg}&deg;</strong> - saved. Restart vision to apply.`;
+    refreshCalibrationFields(j.calibration);
+  } catch (e) {
+    res.className = 'calib-status err';
+    res.textContent = e.message || 'Failed to compute calibration';
+  }
+}
+
+function refreshCalibrationFields(cal) {
+  if (!cal) return;
+  setFieldValue('calibration.distance', cal.distance ?? 0);
+  setFieldValue('calibration.game_piece_size', cal.game_piece_size ?? 0);
+  setFieldValue('calibration.size', cal.size ?? 0);
+  setFieldValue('calibration.fov', cal.fov ?? 0);
+}
+
+function renderChessboardCalibration(body) {
+  body.innerHTML = `
+    <div class="form-row"><span class="form-label">Live view</span>
+      <div class="calib-stage" style="width:100%;">
+        <img id="calib-feed" src="/video/${encodeURIComponent(calibrationState.camera)}" alt="live feed" onerror="calibrationFeedError()">
+      </div>
+    </div>
+    <div class="calib-status" id="chess-note">Hold a printed chessboard in view and fill the frame with it, then click Capture. Move it around - 10+ varied frames give the best result.</div>
+    <div class="form-row">
+      <span class="form-label">Board pattern</span>
+      <select id="chess-pattern" class="form-input">
+        <option value="9,6" selected>9 x 6 inner corners (10 x 7 board)</option>
+        <option value="8,6">8 x 6 inner corners</option>
+        <option value="7,6">7 x 6 inner corners</option>
+        <option value="7,5">7 x 5 inner corners</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Capture</span>
+      <div style="display:flex;gap:8px;flex:1;">
+        <button type="button" class="btn-sm btn-ok" onclick="captureChessboardFrame()" id="chess-capture-btn">Capture frame</button>
+        <button type="button" class="btn-sm" onclick="clearChessboardSession()">Clear</button>
+      </div>
+    </div>
+    <div class="calib-status" id="chess-status">Captured frames: 0</div>
+    <img id="chess-preview" class="calib-preview" style="display:none;" alt="detected board preview">
+    <div class="form-row" style="margin-top:10px;">
+      <span class="form-label"></span>
+      <button type="button" class="btn-ok" onclick="finishChessboardCalibration()" id="chess-finish-btn">Calibrate intrinsics</button>
+    </div>
+    <div class="calib-status" id="chess-result"></div>
+  `;
+}
+
+async function captureChessboardFrame() {
+  const img = $id('calib-feed');
+  if (!img || !img.complete || !img.naturalWidth) {
+    showToast('Wait for the live feed to load first.', 'error');
+    return;
+  }
+  const btn = $id('chess-capture-btn');
+  const status = $id('chess-status');
+  btn.disabled = true;
+  status.className = 'calib-status';
+  status.textContent = 'Detecting board...';
+  try {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext('2d').drawImage(img, 0, 0);
+    const [cols, rows] = $id('chess-pattern').value.split(',').map(Number);
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/chessboard/capture`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: c.toDataURL('image/jpeg', 0.92), cols, rows }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Capture failed');
+    if (!j.board_found) {
+      status.className = 'calib-status err';
+      status.textContent = j.message || 'Board not found in that frame.';
+    } else {
+      calibrationState.captured = j.captured;
+      status.className = 'calib-status ok';
+      status.textContent = `Captured frames: ${j.captured} (move the board for a different view)`;
+      const preview = $id('chess-preview');
+      if (j.preview) {
+        preview.src = j.preview;
+        preview.style.display = 'block';
+      }
+    }
+  } catch (e) {
+    status.className = 'calib-status err';
+    status.textContent = e.message || 'Failed to capture frame';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function clearChessboardSession() {
+  calibrationState.captured = 0;
+  try {
+    await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/chessboard`, { method: 'DELETE' });
+  } catch (e) {}
+  const status = $id('chess-status');
+  if (status) { status.className = 'calib-status'; status.textContent = 'Captured frames: 0'; }
+  const preview = $id('chess-preview');
+  if (preview) preview.style.display = 'none';
+  const result = $id('chess-result');
+  if (result) result.textContent = '';
+}
+
+async function finishChessboardCalibration() {
+  const btn = $id('chess-finish-btn');
+  const result = $id('chess-result');
+  btn.disabled = true;
+  result.className = 'calib-status';
+  result.textContent = 'Calibrating - this can take a moment...';
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/chessboard/finish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Calibration failed');
+    const res = j.result;
+    const fx = res.camera_matrix[0][0].toFixed(1);
+    const fy = res.camera_matrix[1][1].toFixed(1);
+    result.className = 'calib-status ok';
+    result.innerHTML = `Done! Reprojection error <strong>${res.rms.toFixed(3)} px</strong> (lower is better), focal <strong>${fx} x ${fy} px</strong> at ${res.resolution[0]}x${res.resolution[1]}. Restart vision to apply.`;
+    refreshCalibrationFields(j.calibration);
+  } catch (e) {
+    result.className = 'calib-status err';
+    result.textContent = e.message || 'Calibration failed';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function resetCalibration() {
+  if (!calibrationState.camera) return;
+  if (!confirm(`Reset '${calibrationState.camera}' calibration (known-object and intrinsics) to defaults?`)) return;
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}`, { method: 'DELETE' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Reset failed');
+    showToast('Calibration reset.', 'success');
+    refreshCalibrationFields(j.calibration);
+    clearChessboardSession();
+    if (calibrationState.mode === 'focal') {
+      unfreezeCalibrationFrame();
+      const el = $id('focal-result');
+      if (el) el.textContent = '';
+    }
+  } catch (e) {
+    showToast(e.message || 'Reset failed', 'error');
+  }
 }
 
 refreshCameras();

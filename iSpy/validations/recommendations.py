@@ -15,13 +15,12 @@ def get_structured_recommendations(config: dict) -> list[dict]:
     def add(severity, key, message):
         out.append({"severity": severity, "key": key, "message": message})
 
-    calib_issues = False
     for cam_name, cam_cfg in config.get("camera_configs", {}).items():
         calib = cam_cfg.get("calibration", {})
-        if calib.get("size", 0) == 0 and calib.get("distance", 0) == 0:
+        # chessboard-calibrated intrinsics are a valid calibration on their own
+        if calib.get("camera_matrix") is None and calib.get("size", 0) == 0 and calib.get("distance", 0) == 0:
             add("critical", f"calib.{cam_name}",
                 f"Camera '{cam_name}' is uncalibrated (size/distance are 0) - distance estimates will be wrong.")
-            calib_issues = True
         if cam_cfg.get("height", 0) == 0:
             add("normal", f"height.{cam_name}", f"Camera '{cam_name}' height is 0 - verify this is intentional.")
         if not cam_cfg.get("device_id"):

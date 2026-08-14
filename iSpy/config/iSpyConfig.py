@@ -388,7 +388,10 @@ class iSpyConfig:
 
     def load_from_file(self, file_path: str):
         try:
-            with open(file_path, "r") as f:
+            # utf-8-sig strips a UTF-8 BOM, which editors like Notepad add on
+            # save - json.load() would otherwise fail at char 0 with a bogus
+            # "Expecting value: line 1 column 1" error.
+            with open(file_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if isinstance(data, dict) and "vision_model" in data:
                 raise RuntimeError(

@@ -438,14 +438,16 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         )
 
     def _artifact_path(self, target: str) -> Path:
-        ext = {  # openvino compiles the onnx directly, no artifact of its own
+        stem = f"{_DEPTH_ARTIFACT_STEM}_{self._input_size}x{self._input_size}"
+        if target == "openvino":
+            # real OpenVINO IR folder, same convention as object_detection:
+            # YoloModels/openvino/<stem>_openvino_model/<stem>_openvino_model.xml
+            return _YOLO_MODELS_DIR / "openvino" / f"{stem}_openvino_model"
+        ext = {  # every other backend keeps a single artifact file
             "engine": ".engine", "coreml": ".mlpackage",
             "rknn": ".rknn", "tflite": ".tflite",
         }.get(target, f".{target}")
-        return (
-            _YOLO_MODELS_DIR / target
-            / f"{_DEPTH_ARTIFACT_STEM}_{self._input_size}x{self._input_size}{ext}"
-        )
+        return _YOLO_MODELS_DIR / target / f"{stem}{ext}"
 
     def _load_onnx(self, force: bool = False):
         artifact, converted = self._export_onnx_source(force)
@@ -463,8 +465,10 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self.logger.info("Loaded optimized Depth Anything ONNX from %s", artifact)
 
     def _load_openvino(self, force: bool = False):
-        # OpenVINO compiles the fp32 ONNX export and runs it on the best
-        # available device (GPU/NPU, else CPU).
+        # OpenVINO converts the fp32 ONNX export into a real OpenVINO IR
+        # (.xml + .bin) cached under YoloModels/openvino/, then runs it on
+        # the best available device (GPU/NPU, else CPU). compiled blobs are
+        # cached too, so boot does not re-compile the model every time.
         artifact, converted = self._export_onnx_source(force, quantize=False)
         if not converted or not artifact:
             self._session = None
@@ -480,6 +484,19 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             if device.startswith("intel:"):
                 device = device.split(":", 1)[1]  # OpenVINO wants 'GPU', not 'intel:gpu'
             core = ov.Core()
+            core.set_property({"CACHE_DIR": str(_YOLO_MODELS_DIR / "openvino" / ".cache")})
+
+            ir_dir = self._artifact_path("openvino")
+            ir_xml = ir_dir / f"{ir_dir.name}.xml"
+            if not ir_xml.exists() or force:
+                self.logger.info(
+                    "Converting Depth Anything ONNX -> OpenVINO IR in %s ...", ir_dir,
+                )
+                ir_dir.mkdir(parents=True, exist_ok=True)
+                ov.save_model(core.read_model(str(artifact)), str(ir_xml))
+            if not ir_xml.exists():
+                raise RuntimeError(f"OpenVINO conversion produced no IR: {ir_dir}")
+
             registered = next(
                 (d for d in core.available_devices if d.lower() == device.lower()),
                 None,
@@ -495,17 +512,36 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                     device, core.available_devices,
                 )
                 registered = "AUTO"
-            self._session = core.compile_model(artifact, registered)
+            self._session = self._compile_openvino(core, ir_xml, registered)
             self._infer = self._infer_depth_openvino
             self._load_error = None
             self.logger.info(
-                "Loaded optimized Depth Anything OpenVINO (%s) from %s", registered, artifact,
+                "Loaded optimized Depth Anything OpenVINO (%s) from %s", registered, ir_dir,
             )
         except Exception as exc:
             self.logger.warning(
                 "OpenVINO backend failed (%s) - falling back to onnx", exc,
             )
             self._load_onnx(force)
+
+    def _compile_openvino(self, core, ir_xml: Path, device: str):
+        """compile the IR, retrying once with a fresh GPU blob cache - the Intel
+        GPU plugin can leave a corrupt blob behind after an interrupted compile,
+        and a failed cache write then breaks every later compile"""
+        cache_dir = _YOLO_MODELS_DIR / "openvino" / ".cache"
+        for attempt in range(2):
+            try:
+                return core.compile_model(str(ir_xml), device)
+            except Exception as exc:
+                if attempt == 0:
+                    self.logger.warning(
+                        "OpenVINO compile failed (%s) - clearing blob cache and retrying",
+                        exc,
+                    )
+                    import shutil
+                    shutil.rmtree(cache_dir, ignore_errors=True)
+                    continue
+                raise
 
     def _load_tensorrt(self, force: bool = False):
         try:
@@ -1146,14 +1182,73 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         if frame is None:
             return None
 
-        try:
-            overlay = frame.copy()
+        depth = getattr(self, "_last_depth", None)
+        if depth is None or not getattr(depth, "size", 0):
+            return frame
 
-            h, w = overlay.shape[:2]
+        try:
+            h, w = frame.shape[:2]
+
+            normalized = cv2.normalize(
+                depth,
+                None,
+                0,
+                255,
+                cv2.NORM_MINMAX,
+            ).astype(np.uint8)
+
+            if normalized.ndim == 2:
+                map_img = cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
+            else:
+                map_img = normalized
+
+            if map_img.shape[:2] != (h, w):
+                map_img = cv2.resize(
+                    map_img,
+                    (w, h),
+                    interpolation=cv2.INTER_LINEAR,
+                )
+
+            cx, cy = w // 2, h // 2
+            radius = max(
+                6,
+                min(w, h) // 30,
+            )
+
+            depth_x = min(
+                depth.shape[1] - 1,
+                int(cx * depth.shape[1] / w),
+            )
+            depth_y = min(
+                depth.shape[0] - 1,
+                int(cy * depth.shape[0] / h),
+            )
+            center_d = self._distance_from_depth(
+                float(depth[depth_y, depth_x])
+            )
+
+            cv2.circle(
+                map_img,
+                (cx, cy),
+                radius,
+                (255, 255, 255),
+                2,
+            )
 
             cv2.putText(
-                overlay,
-                "Depth",
+                map_img,
+                f"Depth {center_d:.2f} {self._unit_label}",
+                (cx - radius * 2, cy + radius + 18),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+            cv2.putText(
+                map_img,
+                "Depth Map",
                 (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.8,
@@ -1161,15 +1256,7 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 2,
             )
 
-            cv2.rectangle(
-                overlay,
-                (8, 38),
-                (w - 8, h - 8),
-                (255, 255, 255),
-                1,
-            )
-
-            return overlay
+            return map_img
 
         except Exception:
             return frame

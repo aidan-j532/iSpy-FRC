@@ -12,6 +12,7 @@ from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.genericYolo import Box, Results, GenericYolo, ModelFileError
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, get_pipeline_settings
 from iSpy.vision import triangulation
+from iSpy.vision import calibration as cam_calibration
 
 class ObjectDetectionCamera(VisionPipeline):
     plugin_name = "object_detection"
@@ -598,7 +599,13 @@ class ObjectDetectionCamera(VisionPipeline):
             self._preproc_q.put((preprocessed, frame, orig_shape))
 
     def _focal_length_px_fov(self, img_w: int) -> float:
-        # FOV-derived intrinsic - doesnt rely on a game piece's known size
+        # FOV-derived intrinsic - doesnt rely on a game piece's known size.
+        # A chessboard-calibrated camera matrix is the most accurate source.
+        intr = cam_calibration.intrinsics_for_frame(
+            self.config.get("calibration", {}), img_w, 1
+        )
+        if intr is not None:
+            return float(intr[0][0, 0])
         if self.fov and self.fov > 0:
             return (img_w / 2.0) / math.tan(math.radians(self.fov / 2.0))
         return self.focal_length_pixels  # fallback when FOV isnt calibrated

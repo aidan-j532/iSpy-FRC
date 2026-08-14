@@ -7,6 +7,7 @@ from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 from iSpy.vision import triangulation
+from iSpy.vision import calibration as cam_calibration
 
 class QRCodeCamera(VisionPipeline):
     plugin_name = "qr_code"
@@ -178,6 +179,12 @@ class QRCodeCamera(VisionPipeline):
         cx, cy = img_w / 2.0, img_h / 2.0
         cam_mat = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64)
         dist_coeffs = np.zeros(5, dtype=np.float64)
+
+        intr = cam_calibration.intrinsics_for_frame(
+            self.config.get("calibration", {}), img_w, img_h
+        )
+        if intr is not None:
+            cam_mat, dist_coeffs = intr
 
         for i in range(len(points)):
             qr_corners = points[i]

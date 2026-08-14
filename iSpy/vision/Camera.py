@@ -63,8 +63,14 @@ class Camera:
 
         self.source = camera_config["source"]
 
-        self.is_image = isinstance(self.source, str) and self.source.lower().endswith(
-            (".png", ".jpg", ".jpeg", ".bmp")
+        self._is_url_source = (
+            isinstance(self.source, str) and "://" in self.source
+        )
+
+        self.is_image = (
+            isinstance(self.source, str)
+            and self.source.lower().endswith((".png", ".jpg", ".jpeg", ".bmp"))
+            and not self._is_url_source
         )
 
         self.stopped = False
@@ -174,6 +180,21 @@ class Camera:
         adds DirectShow on windows (opens cams MSMF reports as invalidated, e.g.
         while another app holds the device); prefer_dshow tries DirectShow first to
         alternate away from a MSMF stream that keeps dying"""
+        if self._is_url_source:
+            # network streams (RTSP / HTTP MJPEG / RTMP / snapshot) - let OpenCV
+            # auto-pick the backend (FFmpeg) instead of forcing a device backend
+            # like MSMF or V4L2 that cannot open URLs
+            try:
+                cap = self._open_capture_bounded(None)
+            except Exception as exc:
+                raise ValueError(f"Camera failed to open stream: {self.source} ({exc})")
+            if not self._wait_for_first_frame(cap):
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                raise ValueError(f"Camera stream did not start: {self.source}")
+            return cap
         backend_candidates = self._get_capture_backend_candidates(platform.system())
         if extra_backends and cv2.CAP_DSHOW not in backend_candidates:
             backend_candidates = backend_candidates + [cv2.CAP_DSHOW]
@@ -269,6 +290,8 @@ class Camera:
         return cap
 
     def _configure_capture(self, cap):
+        if self._is_url_source:
+            return
         is_windows = platform.system() == "Windows"
         is_linux = platform.system() == "Linux"
 
@@ -296,7 +319,7 @@ class Camera:
         is_linux = sys_platform == "Linux"
 
         # CROSS-PLATFORM FIX: Only run v4l2-ctl configurations if specifically on Linux
-        if is_linux:
+        if is_linux and not self._is_url_source:
             device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
 
             _fmt_resolutions = [
