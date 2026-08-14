@@ -206,6 +206,9 @@ class iSpy:
 
     def run_solo_vision(self, camera):
         try:
+            if camera.in_calibration_mode():
+                # calibration wizard is open - pause detections, feed raw frames
+                return [], camera.get_raw_frame()
             objects, frame = camera.run()
             return objects, frame
         except Exception:
@@ -276,15 +279,16 @@ class iSpy:
         }
         if hasattr(camera, "get_debug_data"):
             frame_data["debug_data"] = camera.get_debug_data() or {}
-        if hasattr(camera, "get_debug_frame"):
-            debug_frame = camera.get_debug_frame(frame)
-            if debug_frame is not None:
-                frame_data["debug_frame"] = debug_frame
-        if hasattr(camera, "plot"):
-            plotted_frame = camera.plot(frame)
-            if plotted_frame is not None:
-                frame_data["frame"] = plotted_frame
-                frame_data["debug_frame"] = plotted_frame
+        if not camera.in_calibration_mode():
+            if hasattr(camera, "get_debug_frame"):
+                debug_frame = camera.get_debug_frame(frame)
+                if debug_frame is not None:
+                    frame_data["debug_frame"] = debug_frame
+            if hasattr(camera, "plot"):
+                plotted_frame = camera.plot(frame)
+                if plotted_frame is not None:
+                    frame_data["frame"] = plotted_frame
+                    frame_data["debug_frame"] = plotted_frame
         return frame_data
 
     def _run_loop_body_multi(self, handler) -> dict:

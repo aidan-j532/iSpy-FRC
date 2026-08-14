@@ -59,6 +59,47 @@ class IntrinsicsScalingTests(unittest.TestCase):
         self.assertEqual(m[0][0], 500.0)
 
 
+class CharucoCalibrationTests(unittest.TestCase):
+    def test_detects_synthetic_board(self):
+        pattern = (7, 5)
+        board = c.make_charuco_board(*pattern)
+        img = board.generateImage((700, 500), marginSize=20)
+        found, corners, ids, mc, mid, gray = c.detect_charuco(img, *pattern)
+        self.assertTrue(found)
+        self.assertGreaterEqual(len(corners), 4)
+        self.assertIsNotNone(ids)
+        self.assertIsNotNone(mc)
+
+    def test_calibrates_varied_frames(self):
+        pattern = (7, 5)
+        board = c.make_charuco_board(*pattern)
+        captures = []
+        sizes = [(640, 480), (800, 600), (640, 480), (800, 600), (640, 480)]
+        for i, size in enumerate(sizes):
+            img = board.generateImage(size, marginSize=20)
+            if i % 2 == 1:
+                img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+            elif i % 4 == 3:
+                img = cv2.resize(img, (int(img.shape[1] * 0.9), int(img.shape[0] * 0.9)))
+            found, corners, ids, _, _, gray = c.detect_charuco(img, *pattern)
+            if found:
+                captures.append((gray, corners, ids))
+        self.assertGreaterEqual(len(captures), 3)
+        res = c.calibrate_charuco(captures, pattern)
+        self.assertIsNotNone(res)
+        self.assertEqual(len(res["camera_matrix"]), 3)
+        self.assertEqual(len(res["dist_coeffs"]), 5)
+
+    def test_rejects_degenerate_frames(self):
+        pattern = (7, 5)
+        board = c.make_charuco_board(*pattern)
+        img = board.generateImage((640, 480), marginSize=20)
+        found, corners, ids, _, _, gray = c.detect_charuco(img, *pattern)
+        self.assertTrue(found)
+        captures = [(gray, corners, ids) for _ in range(5)]
+        self.assertIsNone(c.calibrate_charuco(captures, pattern))
+
+
 class ChessboardCalibrationTests(unittest.TestCase):
     def test_detects_synthetic_board(self):
         pattern = (9, 6)

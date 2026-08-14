@@ -41,6 +41,10 @@ class Camera:
     _READ_REOPEN_AFTER = 10
     _READ_WARN_EVERY = 20
 
+    # calibration wizard pings /heartbeat this often; detections stay paused
+    # while the last heartbeat is this recent (so a closed tab auto-resumes)
+    _CALIBRATION_HEARTBEAT_TIMEOUT = 10.0
+
     @staticmethod
     def _get_capture_backend_candidates(sys_platform: str | None = None):
         platform_name = (sys_platform or platform.system()).lower()
@@ -79,6 +83,9 @@ class Camera:
         self.frame_lock = threading.Lock()
         self._frame_event = threading.Event()
         self._frame_processors = []
+
+        self.calibration_active = False
+        self.calibration_last_seen = 0.0
 
         self.auto_brightness = camera_config.get("auto_brightness", True)
         self._brightness_target = 128.0
@@ -491,6 +498,33 @@ class Camera:
             self._frame_event.set()
             if frame_interval > 0:
                 next_frame_time = time.perf_counter() + frame_interval
+
+    def set_calibration(self, active: bool):
+        """temporarily pause detections so the calibration wizard can feed on
+        raw frames. The pause auto-expires when heartbeats stop arriving."""
+        self.calibration_active = bool(active)
+        self.calibration_last_seen = time.monotonic() if active else 0.0
+
+    def calibration_heartbeat(self):
+        """refresh the calibration session's liveness timer"""
+        self.calibration_last_seen = time.monotonic()
+
+    def in_calibration_mode(self) -> bool:
+        """True while the calibration wizard is open (with a recent heartbeat)"""
+        if not self.calibration_active:
+            return False
+        return (
+            time.monotonic() - self.calibration_last_seen
+        ) < self._CALIBRATION_HEARTBEAT_TIMEOUT
+
+    def get_raw_frame(self) -> np.ndarray | None:
+        """latest frame straight from the capture thread - no frame
+        processors, no detection annotations. What the calibration wizard
+        should look at."""
+        if self.is_image:
+            return self.image.copy() if self.image is not None else None
+        with self.frame_lock:
+            return self.frame.copy() if self.frame is not None else None
 
     def get_frame_age(self) -> float:
         if self.is_image:

@@ -622,7 +622,7 @@ async function openCameraModal(mode, arg) {
       sec.body.appendChild(row);
       const help = document.createElement('div');
       help.className = 'form-help';
-      help.textContent = 'The wizard measures a known object (object_detection) or a chessboard (AprilTag / QR) and fills these values in.';
+      help.textContent = 'The wizard measures a known object (object_detection) or a ChArUco board (AprilTag / QR) and fills these values in. It uses a raw camera feed while open, so detections are paused.';
       sec.body.appendChild(help);
     }
     body.appendChild(sec.holder);
@@ -1199,8 +1199,8 @@ function setRefreshRate() {
  * ------------------------------------------------------------------ */
 
 const calibrationState = {
-  camera: null,      // camera key (name) used for the API and the /video feed
-  mode: null,        // 'focal' | 'chessboard' | 'beta' | 'none'
+  camera: null,      // camera key (name) used for the API and the raw feed
+  mode: null,        // 'focal' | 'charuco' | 'chessboard' | 'beta' | 'none'
   frozen: false,
   frame: null,       // ImageData of the frozen frame (focal mode)
   canvas: null,
@@ -1211,11 +1211,54 @@ const calibrationState = {
   captured: 0,
 };
 
+let calibrationHeartbeatTimer = null;
+
 function calibrationModeFor(pipeline) {
   if (pipeline === 'object_detection') return 'focal';
-  if (pipeline === 'april_tag' || pipeline === 'qr_code') return 'chessboard';
+  if (pipeline === 'april_tag' || pipeline === 'qr_code') return 'charuco';
   if (pipeline === 'optical_flow') return 'beta';
   return 'none';
+}
+
+function calibrationFeedUrl() {
+  return `/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/feed`;
+}
+
+async function startCalibrationMode(camera) {
+  try {
+    await fetch(`/api/cameras/calibration/${encodeURIComponent(camera)}/mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: true }),
+    });
+  } catch (e) {}
+  stopCalibrationHeartbeat();
+  calibrationHeartbeatTimer = setInterval(() => {
+    fetch(`/api/cameras/calibration/${encodeURIComponent(camera)}/heartbeat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }).catch(() => {});
+  }, 5000);
+}
+
+function stopCalibrationHeartbeat() {
+  if (calibrationHeartbeatTimer) {
+    clearInterval(calibrationHeartbeatTimer);
+    calibrationHeartbeatTimer = null;
+  }
+}
+
+async function endCalibrationMode(camera) {
+  stopCalibrationHeartbeat();
+  if (!camera) return;
+  try {
+    await fetch(`/api/cameras/calibration/${encodeURIComponent(camera)}/mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: false }),
+    });
+  } catch (e) {}
 }
 
 async function openCalibrationWizard() {
@@ -1234,6 +1277,7 @@ async function openCalibrationWizard() {
   body.innerHTML = '';
 
   if (calibrationState.mode === 'focal') renderFocalCalibration(body);
+  else if (calibrationState.mode === 'charuco') renderCharucoCalibration(body);
   else if (calibrationState.mode === 'chessboard') renderChessboardCalibration(body);
   else if (calibrationState.mode === 'beta')
     body.innerHTML = '<div class="card empty-state">The optical_flow pipeline is in beta - its motion estimation reads the camera FOV, so it is excluded from the calibration wizard for now.</div>';
@@ -1241,22 +1285,25 @@ async function openCalibrationWizard() {
     body.innerHTML = '<div class="card empty-state">This pipeline does not use distance calibration (no depth-from-size or PnP), so there is nothing to calibrate here.</div>';
 
   $id('calibration-modal').style.display = 'flex';
+  startCalibrationMode(calibrationState.camera);
 }
 
 function closeCalibrationWizard() {
+  const camera = calibrationState.camera;
   $id('calibration-modal').style.display = 'none';
   $id('calibration-body').innerHTML = '';
   calibrationState.camera = null;
   calibrationState.canvas = null;
   calibrationState.ctx = null;
   calibrationState.frame = null;
+  endCalibrationMode(camera);
 }
 
 function renderFocalCalibration(body) {
   body.innerHTML = `
     <div class="form-row"><span class="form-label">Live view</span>
       <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="/video/${encodeURIComponent(calibrationState.camera)}" alt="live feed"
+        <img id="calib-feed" src="${calibrationFeedUrl()}" alt="live feed"
              onload="calibrationFeedReady()" onerror="calibrationFeedError()">
         <canvas id="calib-canvas"></canvas>
       </div>
@@ -1414,6 +1461,17 @@ function drawCalibMeasure() {
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(a.x, b.y);
   ctx.stroke();
+  // horizontal dotted guide lines across the full frame at the top/bottom of the measurement
+  ctx.setLineDash([8, 6]);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, a.y);
+  ctx.lineTo(ctx.canvas.width, a.y);
+  ctx.moveTo(0, b.y);
+  ctx.lineTo(ctx.canvas.width, b.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(a.x - 8, a.y);
   ctx.lineTo(a.x + 8, a.y);
@@ -1476,7 +1534,7 @@ function renderChessboardCalibration(body) {
   body.innerHTML = `
     <div class="form-row"><span class="form-label">Live view</span>
       <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="/video/${encodeURIComponent(calibrationState.camera)}" alt="live feed" onerror="calibrationFeedError()">
+        <img id="calib-feed" src="${calibrationFeedUrl()}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
     <div class="calib-status" id="chess-note">Hold a printed chessboard in view and fill the frame with it, then click Capture. Move it around - 10+ varied frames give the best result.</div>
@@ -1503,6 +1561,41 @@ function renderChessboardCalibration(body) {
       <button type="button" class="btn-ok" onclick="finishChessboardCalibration()" id="chess-finish-btn">Calibrate intrinsics</button>
     </div>
     <div class="calib-status" id="chess-result"></div>
+  `;
+}
+
+function renderCharucoCalibration(body) {
+  body.innerHTML = `
+    <div class="form-row"><span class="form-label">Live view</span>
+      <div class="calib-stage" style="width:100%;">
+        <img id="calib-feed" src="${calibrationFeedUrl()}" alt="live feed" onerror="calibrationFeedError()">
+      </div>
+    </div>
+    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it, then click Capture. Move it around - 10+ varied frames give the best result. Detections are paused while this is open.</div>
+    <div class="form-row">
+      <span class="form-label">Board pattern</span>
+      <select id="charuco-pattern" class="form-input">
+        <option value="7,5" selected>7 x 5 squares (6 x 4 ArUco markers)</option>
+        <option value="5,7">5 x 7 squares</option>
+        <option value="6,4">6 x 4 squares</option>
+        <option value="8,6">8 x 6 squares</option>
+        <option value="5,4">5 x 4 squares</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Capture</span>
+      <div style="display:flex;gap:8px;flex:1;">
+        <button type="button" class="btn-sm btn-ok" onclick="captureCharucoFrame()" id="charuco-capture-btn">Capture frame</button>
+        <button type="button" class="btn-sm" onclick="clearCharucoSession()">Clear</button>
+      </div>
+    </div>
+    <div class="calib-status" id="charuco-status">Captured frames: 0</div>
+    <img id="charuco-preview" class="calib-preview" style="display:none;" alt="detected board preview">
+    <div class="form-row" style="margin-top:10px;">
+      <span class="form-label"></span>
+      <button type="button" class="btn-ok" onclick="finishCharucoCalibration()" id="charuco-finish-btn">Calibrate intrinsics</button>
+    </div>
+    <div class="calib-status" id="charuco-result"></div>
   `;
 }
 
@@ -1592,6 +1685,92 @@ async function finishChessboardCalibration() {
   }
 }
 
+async function captureCharucoFrame() {
+  const img = $id('calib-feed');
+  if (!img || !img.complete || !img.naturalWidth) {
+    showToast('Wait for the live feed to load first.', 'error');
+    return;
+  }
+  const btn = $id('charuco-capture-btn');
+  const status = $id('charuco-status');
+  btn.disabled = true;
+  status.className = 'calib-status';
+  status.textContent = 'Detecting board...';
+  try {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext('2d').drawImage(img, 0, 0);
+    const [cols, rows] = $id('charuco-pattern').value.split(',').map(Number);
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/charuco/capture`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: c.toDataURL('image/jpeg', 0.92), cols, rows }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Capture failed');
+    if (!j.board_found) {
+      status.className = 'calib-status err';
+      status.textContent = j.message || 'Board not found in that frame.';
+    } else {
+      calibrationState.captured = j.captured;
+      status.className = 'calib-status ok';
+      status.textContent = `Captured frames: ${j.captured} (move the board for a different view)`;
+      const preview = $id('charuco-preview');
+      if (j.preview) {
+        preview.src = j.preview;
+        preview.style.display = 'block';
+      }
+    }
+  } catch (e) {
+    status.className = 'calib-status err';
+    status.textContent = e.message || 'Failed to capture frame';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function clearCharucoSession() {
+  calibrationState.captured = 0;
+  try {
+    await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/charuco`, { method: 'DELETE' });
+  } catch (e) {}
+  const status = $id('charuco-status');
+  if (status) { status.className = 'calib-status'; status.textContent = 'Captured frames: 0'; }
+  const preview = $id('charuco-preview');
+  if (preview) preview.style.display = 'none';
+  const result = $id('charuco-result');
+  if (result) result.textContent = '';
+}
+
+async function finishCharucoCalibration() {
+  const btn = $id('charuco-finish-btn');
+  const result = $id('charuco-result');
+  btn.disabled = true;
+  result.className = 'calib-status';
+  result.textContent = 'Calibrating - this can take a moment...';
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/charuco/finish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Calibration failed');
+    const res = j.result;
+    const fx = res.camera_matrix[0][0].toFixed(1);
+    const fy = res.camera_matrix[1][1].toFixed(1);
+    result.className = 'calib-status ok';
+    result.innerHTML = `Done! Reprojection error <strong>${res.rms.toFixed(3)} px</strong> (lower is better), focal <strong>${fx} x ${fy} px</strong> at ${res.resolution[0]}x${res.resolution[1]}. Restart vision to apply.`;
+    refreshCalibrationFields(j.calibration);
+  } catch (e) {
+    result.className = 'calib-status err';
+    result.textContent = e.message || 'Calibration failed';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function resetCalibration() {
   if (!calibrationState.camera) return;
   if (!confirm(`Reset '${calibrationState.camera}' calibration (known-object and intrinsics) to defaults?`)) return;
@@ -1601,7 +1780,8 @@ async function resetCalibration() {
     if (!r.ok) throw new Error(j.error || 'Reset failed');
     showToast('Calibration reset.', 'success');
     refreshCalibrationFields(j.calibration);
-    clearChessboardSession();
+    if (calibrationState.mode === 'charuco') clearCharucoSession();
+    else if (calibrationState.mode === 'chessboard') clearChessboardSession();
     if (calibrationState.mode === 'focal') {
       unfreezeCalibrationFrame();
       const el = $id('focal-result');

@@ -37,7 +37,11 @@ class MultipleCameraHandler:
         stop_event = self._stop_events[i]
         while not self._stopped and not stop_event.is_set():
             try:
-                objects, frame = camera.run()
+                if camera.in_calibration_mode():
+                    # calibration wizard is open - pause detections, feed raw frames
+                    objects, frame = [], camera.get_raw_frame()
+                else:
+                    objects, frame = camera.run()
                 if frame is None:
                     objects, frame = [], camera.get_frame()
             except Exception as e:

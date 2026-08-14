@@ -345,6 +345,12 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/chessboard/capture", "api_cameras_chessboard_capture", self._chessboard_capture, methods=["POST"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/chessboard", "api_cameras_chessboard_clear", self._chessboard_clear, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/chessboard/finish", "api_cameras_chessboard_finish", self._chessboard_finish, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/capture", "api_cameras_charuco_capture", self._charuco_capture, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco", "api_cameras_charuco_clear", self._charuco_clear, methods=["DELETE"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/finish", "api_cameras_charuco_finish", self._charuco_finish, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/feed", "api_cameras_calibration_feed", self._calibration_feed)
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/mode", "api_cameras_calibration_mode", self._calibration_mode, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/heartbeat", "api_cameras_calibration_heartbeat", self._calibration_heartbeat, methods=["POST"])
 
     def _camera_display_name(self, cam, fallback: str = "camera") -> str:
         if hasattr(cam, "config") and cam.config is not None:
@@ -458,6 +464,8 @@ class CamerasModule(WebModule):
             calibration=entry.get("calibration") or {},
             chessboard_captures=len(session.get("captures", [])),
             chessboard_pattern=session.get("pattern", list(cam_calibration.DEFAULT_CHESSBOARD_PATTERN)),
+            charuco_captures=len(session.get("charuco_captures", [])),
+            charuco_pattern=session.get("charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)),
         )
 
     def _calibration_reset(self, cam_name):
@@ -570,6 +578,125 @@ class CamerasModule(WebModule):
         saved = self._save_calibration(key, result)
         with self.calib_lock:
             self.calib_sessions.pop(key, None)
+        return jsonify(success=True, result=result, calibration=saved)
+
+    def _calibration_mode(self, cam_name):
+        """pause/resume detections while the calibration wizard is open"""
+        data = request.get_json(force=True) or {}
+        active = bool(data.get("active", True))
+        cam = self.live_cameras.get(cam_name)
+        if cam is not None and hasattr(cam, "set_calibration"):
+            cam.set_calibration(active)
+        return jsonify(success=True)
+
+    def _calibration_heartbeat(self, cam_name):
+        """keeps the calibration pause alive; stops arriving -> detections resume"""
+        cam = self.live_cameras.get(cam_name)
+        if cam is not None and hasattr(cam, "calibration_heartbeat"):
+            cam.calibration_heartbeat()
+        return jsonify(success=True)
+
+    def _calibration_feed(self, cam_name):
+        """raw MJPEG feed for the calibration wizard - straight from the
+        capture thread, never annotated or run through detection"""
+        return Response(
+            self._generate_calibration(cam_name),
+            mimetype="multipart/x-mixed-replace; boundary=frame",
+        )
+
+    def _generate_calibration(self, cam_name):
+        last_frame_time = time.monotonic()
+        try:
+            while True:
+                cam = self.live_cameras.get(cam_name)
+                frame = None
+                if cam is not None and hasattr(cam, "get_raw_frame"):
+                    frame = cam.get_raw_frame()
+                if frame is None:
+                    if time.monotonic() - last_frame_time > _FEED_TIMEOUT_S:
+                        break
+                    time.sleep(0.05)
+                    continue
+                last_frame_time = time.monotonic()
+                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if not ok:
+                    continue
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+                time.sleep(1.0 / 20)
+        except GeneratorExit:
+            pass
+
+    def _charuco_capture(self, cam_name):
+        data = request.get_json(force=True) or {}
+        image_b64 = data.get("image")
+        if not image_b64:
+            return jsonify(error="No image provided"), 400
+        cols = int(_to_float(data.get("cols"), cam_calibration.DEFAULT_CHARUCO_PATTERN[0]))
+        rows = int(_to_float(data.get("rows"), cam_calibration.DEFAULT_CHARUCO_PATTERN[1]))
+        if cols < 2 or rows < 2 or cols > 30 or rows > 30:
+            return jsonify(error="Invalid ChArUco board pattern"), 400
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        frame = _decode_base64_frame(image_b64)
+        if frame is None:
+            return jsonify(error="Could not decode image"), 400
+        found, corners, ids, marker_corners, marker_ids, gray = cam_calibration.detect_charuco(
+            frame, cols, rows
+        )
+        if not found:
+            return jsonify(
+                success=False,
+                board_found=False,
+                message="ChArUco board not detected in that frame. Show the whole board, use even lighting, or try another pattern.",
+            )
+        with self.calib_lock:
+            session = self.calib_sessions.setdefault(key, {})
+            session["charuco_pattern"] = [cols, rows]
+            session.setdefault("charuco_captures", []).append((gray, corners, ids))
+            count = len(session["charuco_captures"])
+        preview = None
+        try:
+            drawn = cam_calibration.draw_charuco(frame, corners, ids, marker_corners, marker_ids)
+            ok, buf = cv2.imencode(".jpg", drawn, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+        except Exception:
+            preview = None
+        return jsonify(success=True, board_found=True, captured=count, preview=preview)
+
+    def _charuco_clear(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            session = self.calib_sessions.get(key)
+            if session:
+                session.pop("charuco_captures", None)
+                session.pop("charuco_pattern", None)
+        return jsonify(success=True)
+
+    def _charuco_finish(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+            captures = list(session.get("charuco_captures", []))
+            pattern = tuple(session.get("charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)))
+        if len(captures) < 3:
+            return jsonify(
+                error=f"Need at least 3 captured ChArUco frames, have {len(captures)}"
+            ), 400
+        result = cam_calibration.calibrate_charuco(captures, pattern)
+        if result is None:
+            return jsonify(error="Calibration failed - try capturing more varied frames"), 500
+        saved = self._save_calibration(key, result)
+        with self.calib_lock:
+            session = self.calib_sessions.get(key)
+            if session:
+                session.pop("charuco_captures", None)
+                session.pop("charuco_pattern", None)
         return jsonify(success=True, result=result, calibration=saved)
 
     def _add_camera(self):
