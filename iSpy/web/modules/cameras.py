@@ -346,6 +346,7 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/chessboard", "api_cameras_chessboard_clear", self._chessboard_clear, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/chessboard/finish", "api_cameras_chessboard_finish", self._chessboard_finish, methods=["POST"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/capture", "api_cameras_charuco_capture", self._charuco_capture, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/status", "api_cameras_charuco_status", self._charuco_status)
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco", "api_cameras_charuco_clear", self._charuco_clear, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/finish", "api_cameras_charuco_finish", self._charuco_finish, methods=["POST"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/feed", "api_cameras_calibration_feed", self._calibration_feed)
@@ -597,15 +598,27 @@ class CamerasModule(WebModule):
         return jsonify(success=True)
 
     def _calibration_feed(self, cam_name):
-        """raw MJPEG feed for the calibration wizard - straight from the
-        capture thread, never annotated or run through detection"""
+        """MJPEG feed for the calibration wizard - frames straight from the
+        capture thread (never run through the pipeline's detectors). Pass
+        ?overlay=charuco to draw the detected ChArUco board on top so the
+        user can see what the board detector sees while they move it."""
+        overlay = request.args.get("overlay", "")
+        pattern_arg = request.args.get("pattern")
+        pattern = None
+        if pattern_arg:
+            try:
+                pattern = tuple(int(p) for p in pattern_arg.split(",")[:2])
+            except ValueError:
+                pattern = None
         return Response(
-            self._generate_calibration(cam_name),
+            self._generate_calibration(cam_name, overlay=overlay, pattern=pattern),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
 
-    def _generate_calibration(self, cam_name):
+    def _generate_calibration(self, cam_name, overlay="", pattern=None):
         last_frame_time = time.monotonic()
+        last_detect = 0.0
+        corners, ids, marker_corners, marker_ids = None, None, None, None
         try:
             while True:
                 cam = self.live_cameras.get(cam_name)
@@ -618,13 +631,65 @@ class CamerasModule(WebModule):
                     time.sleep(0.05)
                     continue
                 last_frame_time = time.monotonic()
-                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                to_serve = frame
+                if overlay == "charuco":
+                    now = time.monotonic()
+                    # board detection is the expensive bit - refresh the
+                    # overlay ~10x/s and reuse the last result in between
+                    if now - last_detect >= 0.1:
+                        last_detect = now
+                        if pattern is None:
+                            with self.calib_lock:
+                                session = self.calib_sessions.get(cam_name) or {}
+                                session_pattern = session.get("charuco_pattern")
+                            if session_pattern:
+                                pattern = tuple(int(p) for p in session_pattern[:2])
+                        if pattern is not None and len(pattern) == 2:
+                            found, corners, ids, marker_corners, marker_ids, _ = (
+                                cam_calibration.detect_charuco(frame, pattern[0], pattern[1])
+                            )
+                            if not found:
+                                corners, ids, marker_corners, marker_ids = None, None, None, None
+                    if corners is not None and ids is not None:
+                        to_serve = cam_calibration.draw_charuco(
+                            frame, corners, ids, marker_corners, marker_ids
+                        )
+                ok, buf = cv2.imencode(".jpg", to_serve, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 if not ok:
                     continue
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
                 time.sleep(1.0 / 20)
         except GeneratorExit:
             pass
+
+    def _charuco_status(self, cam_name):
+        """one-shot board detection on the latest raw frame - the wizard polls
+        this to show live 'board found: N corners' feedback next to the feed"""
+        cam = self.live_cameras.get(cam_name)
+        if cam is None or not hasattr(cam, "get_raw_frame"):
+            return jsonify(found=False, message="Camera not live")
+        frame = cam.get_raw_frame()
+        if frame is None:
+            return jsonify(found=False, message="No frame yet")
+        pattern = None
+        with self.calib_lock:
+            session = self.calib_sessions.get(cam_name) or {}
+            session_pattern = session.get("charuco_pattern")
+        if session_pattern:
+            pattern = tuple(int(p) for p in session_pattern[:2])
+        pattern = pattern or tuple(cam_calibration.DEFAULT_CHARUCO_PATTERN)
+        found, corners, ids, marker_corners, marker_ids, _ = cam_calibration.detect_charuco(
+            frame, pattern[0], pattern[1]
+        )
+        payload = {
+            "found": bool(found),
+            "corners": int(len(corners)) if found else 0,
+            "markers": int(len(marker_corners)) if found else 0,
+            "pattern": list(pattern),
+        }
+        if not found:
+            payload["message"] = "Board not visible - show the whole board in frame, even lighting helps."
+        return jsonify(**payload)
 
     def _charuco_capture(self, cam_name):
         data = request.get_json(force=True) or {}

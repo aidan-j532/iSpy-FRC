@@ -27,6 +27,12 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
     def needs_model_backend(cls) -> bool:
         return True
 
+    @classmethod
+    def show_calibration(cls) -> bool:
+        # open-vocabulary detections carry no known real-world size - there is
+        # nothing for the focal/known-distance calibration to estimate
+        return False
+
     def is_ready(self) -> tuple[bool, str]:
         # pure status report - never triggers/blocks on optimization
         if not self._optimization_requested():

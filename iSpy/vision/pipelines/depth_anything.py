@@ -29,6 +29,12 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
     def needs_model_backend(cls) -> bool:
         return True
 
+    @classmethod
+    def show_calibration(cls) -> bool:
+        # depth output is a per-pixel range map - no focal length / known-size
+        # distance calibration to configure
+        return False
+
     def is_ready(self) -> tuple[bool, str]:
         # pure status report - never triggers/blocks on optimization
         if not self.estimate_depth:

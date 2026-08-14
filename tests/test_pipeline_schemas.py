@@ -44,6 +44,23 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         depth_schema = DepthAnythingCamera.config_schema()
         self.assertIn("estimate_depth", depth_schema)
 
+    def test_calibration_fields_hidden_when_pipeline_does_not_use_them(self):
+        by_name = {p["name"]: p for p in _build_vision_pipeline_payloads()}
+
+        # these turn known size / focal length into distance - calibration applies
+        for name in ("object_detection", "april_tag", "qr_code", "optical_flow"):
+            self.assertTrue(
+                by_name[name]["show_calibration"],
+                f"{name} should expose calibration settings",
+            )
+
+        # depth output is a range map, open-vocab detections carry no size - no calibration
+        for name in ("depth_anything", "yolo_world"):
+            self.assertFalse(
+                by_name[name]["show_calibration"],
+                f"{name} should hide calibration settings",
+            )
+
     def test_vision_base_exposes_debug_contract(self):
         class DummyVision(VisionBase):
             def run(self):

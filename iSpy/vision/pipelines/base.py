@@ -100,6 +100,14 @@ class VisionPipeline(Camera, VisionBase):
         on; pipelines that never use the transform may opt out."""
         return True
 
+    @classmethod
+    def show_calibration(cls) -> bool:
+        """True if the UI should show the camera calibration fields (known
+        distance, game piece size, object height, FOV) and the calibration
+        wizard. Only pipelines that turn focal length / object size into a
+        distance estimate need them; depth-estimation pipelines opt out."""
+        return True
+
 
 class BackgroundPreparedPipeline(VisionPipeline):
     """VisionPipeline whose prep runs on a background thread.

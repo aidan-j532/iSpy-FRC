@@ -135,6 +135,48 @@ class CalibrationWebTests(unittest.TestCase):
         img = cv2.imdecode(np.frombuffer(body, dtype=np.uint8), cv2.IMREAD_COLOR)
         self.assertEqual(int(img[50, 80, 0]), 77)
 
+    def _first_jpeg(self, gen):
+        try:
+            chunk = next(gen)
+        finally:
+            gen.close()
+        body = chunk.split(b"\r\n\r\n", 1)[1].split(b"\r\n")[0]
+        return cv2.imdecode(np.frombuffer(body, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+    def test_charuco_overlay_feed_draws_detected_board(self):
+        cfg, cam, mod, client = self._setup()
+        board_img = c.make_charuco_board(7, 5).generateImage((640, 480), marginSize=20)
+        cam._frame = board_img
+        served = self._first_jpeg(mod._generate_calibration("cam_0", overlay="charuco", pattern=(7, 5)))
+        b, g, r = served[:, :, 0].astype(int), served[:, :, 1].astype(int), served[:, :, 2].astype(int)
+        green = (g > r + 20) & (g > b + 20)
+        self.assertTrue(bool(green.any()), "expected green detection overlay on the served frame")
+
+    def test_charuco_overlay_feed_leaves_non_board_plain(self):
+        cfg, cam, mod, client = self._setup()
+        cam._frame = np.full((100, 160, 3), 30, dtype=np.uint8)
+        served = self._first_jpeg(mod._generate_calibration("cam_0", overlay="charuco", pattern=(7, 5)))
+        b, g, r = served[:, :, 0].astype(int), served[:, :, 1].astype(int), served[:, :, 2].astype(int)
+        green = (g > r + 20) & (g > b + 20)
+        self.assertFalse(bool(green.any()), "no board should mean no overlay")
+
+    def test_charuco_status_reports_detection(self):
+        cfg, cam, mod, client = self._setup()
+        cam._frame = c.make_charuco_board(7, 5).generateImage((640, 480), marginSize=20)
+        r = client.get("/api/cameras/calibration/cam_0/charuco/status")
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["found"])
+        self.assertGreater(j["corners"], 0)
+        self.assertGreater(j["markers"], 0)
+        self.assertEqual(j["pattern"], [7, 5])
+
+    def test_charuco_status_not_found(self):
+        cfg, cam, mod, client = self._setup()
+        cam._frame = np.full((100, 160, 3), 30, dtype=np.uint8)
+        r = client.get("/api/cameras/calibration/cam_0/charuco/status")
+        self.assertFalse(r.get_json()["found"])
+
 
 if __name__ == "__main__":
     unittest.main()

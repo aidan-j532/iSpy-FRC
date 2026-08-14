@@ -172,6 +172,8 @@
   .calib-stage img { width: 100%; display: block; background: #000; }
   .calib-stage canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; cursor: crosshair; touch-action: none; }
   .calib-preview { max-width: 100%; border-radius: 6px; margin: 8px 0; }
+  .calib-thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .calib-thumb { width: 72px; height: 54px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); }
   .calib-status { margin: 8px 0; font-size: 0.85rem; color: var(--text-dim); line-height: 1.5; }
   .calib-status.ok { color: #2c7; }
   .calib-status.err { color: #f66; }
@@ -503,10 +505,10 @@ async function loadPipelines() {
     (data.pipelines || []).forEach(p => { pipelineSchemas[p.name] = p; });
   } catch (e) {
     console.warn('Failed to load pipeline schemas', e);
-    pipelineSchemas = { object_detection: { name: 'object_detection', config_schema: {}, show_common_fields: true } };
+    pipelineSchemas = { object_detection: { name: 'object_detection', config_schema: {}, show_common_fields: true, show_calibration: true } };
   }
   if (!Object.keys(pipelineSchemas).length) {
-    pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {}, show_common_fields: true };
+    pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {}, show_common_fields: true, show_calibration: true };
   }
 }
 
@@ -606,8 +608,10 @@ async function openCameraModal(mode, arg) {
   // Common collapsible groups.
   const pipeline = pipelineSchemas[camModal.pipeline] || {};
   const showMount = pipeline.show_common_fields !== false;
+  const showCalibration = pipeline.show_calibration !== false;
   COMMON_SECTIONS.forEach(group => {
     if (group.title === 'Mount & Location' && !showMount) return;
+    if (group.title === 'Calibration' && !showCalibration) return;
     const sec = renderSection(group.title, { collapsible: true });
     renderSectionBody(sec.body, group.fields.map(k => [k, COMMON_FIELDS[k]]), 'common');
     if (group.title === 'Calibration') {
@@ -1209,9 +1213,11 @@ const calibrationState = {
   start: null,
   end: null,
   captured: 0,
+  overlayPattern: null, // [cols, rows] used by the live charuco overlay feed
 };
 
 let calibrationHeartbeatTimer = null;
+let charucoStatusTimer = null;
 
 function calibrationModeFor(pipeline) {
   if (pipeline === 'object_detection') return 'focal';
@@ -1220,8 +1226,13 @@ function calibrationModeFor(pipeline) {
   return 'none';
 }
 
-function calibrationFeedUrl() {
-  return `/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/feed`;
+function calibrationFeedUrl(overlay, pattern) {
+  let url = `/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/feed`;
+  const params = [];
+  if (overlay) params.push('overlay=' + encodeURIComponent(overlay));
+  if (pattern) params.push('pattern=' + encodeURIComponent(pattern.join(',')));
+  if (params.length) url += '?' + params.join('&');
+  return url;
 }
 
 async function startCalibrationMode(camera) {
@@ -1296,6 +1307,8 @@ function closeCalibrationWizard() {
   calibrationState.canvas = null;
   calibrationState.ctx = null;
   calibrationState.frame = null;
+  calibrationState.overlayPattern = null;
+  stopCharucoStatusPoll();
   endCalibrationMode(camera);
 }
 
@@ -1565,16 +1578,18 @@ function renderChessboardCalibration(body) {
 }
 
 function renderCharucoCalibration(body) {
+  calibrationState.overlayPattern = [7, 5];
   body.innerHTML = `
     <div class="form-row"><span class="form-label">Live view</span>
       <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="${calibrationFeedUrl()}" alt="live feed" onerror="calibrationFeedError()">
+        <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
-    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it, then click Capture. Move it around - 10+ varied frames give the best result. Detections are paused while this is open.</div>
+    <div class="calib-status" id="charuco-live">Waiting for camera feed...</div>
+    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners = board detected. Click Capture, move the board to a different angle, and repeat - 10+ varied frames give the best result. Detections are paused while this is open.</div>
     <div class="form-row">
       <span class="form-label">Board pattern</span>
-      <select id="charuco-pattern" class="form-input">
+      <select id="charuco-pattern" class="form-input" onchange="onCharucoPatternChange()">
         <option value="7,5" selected>7 x 5 squares (6 x 4 ArUco markers)</option>
         <option value="5,7">5 x 7 squares</option>
         <option value="6,4">6 x 4 squares</option>
@@ -1590,6 +1605,7 @@ function renderCharucoCalibration(body) {
       </div>
     </div>
     <div class="calib-status" id="charuco-status">Captured frames: 0</div>
+    <div id="charuco-thumbs"></div>
     <img id="charuco-preview" class="calib-preview" style="display:none;" alt="detected board preview">
     <div class="form-row" style="margin-top:10px;">
       <span class="form-label"></span>
@@ -1597,6 +1613,57 @@ function renderCharucoCalibration(body) {
     </div>
     <div class="calib-status" id="charuco-result"></div>
   `;
+  startCharucoStatusPoll();
+}
+
+function onCharucoPatternChange() {
+  const sel = $id('charuco-pattern');
+  if (!sel) return;
+  calibrationState.overlayPattern = sel.value.split(',').map(Number);
+  reconnectCalibrationFeed();
+  startCharucoStatusPoll();
+}
+
+function reconnectCalibrationFeed() {
+  const img = $id('calib-feed');
+  if (!img || calibrationState.frozen) return;
+  // MJPEG streams don't reconnect on an identical src - re-open with a cache-bust
+  const base = calibrationState.mode === 'charuco'
+    ? calibrationFeedUrl('charuco', calibrationState.overlayPattern)
+    : calibrationFeedUrl();
+  img.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
+}
+
+async function pollCharucoStatus() {
+  const live = $id('charuco-live');
+  if (!live || !calibrationState.camera) return;
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/charuco/status`);
+    const j = await r.json();
+    if (j.found) {
+      live.className = 'calib-status ok';
+      live.textContent = `Board detected: ${j.corners} corners from ${j.markers} markers - move the board around and capture.`;
+    } else {
+      live.className = 'calib-status err';
+      live.textContent = j.message || 'Board not visible in the live feed.';
+    }
+  } catch (e) {
+    live.className = 'calib-status err';
+    live.textContent = 'Board detection status unavailable.';
+  }
+}
+
+function startCharucoStatusPoll() {
+  stopCharucoStatusPoll();
+  pollCharucoStatus();
+  charucoStatusTimer = setInterval(pollCharucoStatus, 1000);
+}
+
+function stopCharucoStatusPoll() {
+  if (charucoStatusTimer) {
+    clearInterval(charucoStatusTimer);
+    charucoStatusTimer = null;
+  }
 }
 
 async function captureChessboardFrame() {
@@ -1720,6 +1787,14 @@ async function captureCharucoFrame() {
       if (j.preview) {
         preview.src = j.preview;
         preview.style.display = 'block';
+        const thumbs = $id('charuco-thumbs');
+        if (thumbs) {
+          const thumb = document.createElement('img');
+          thumb.src = j.preview;
+          thumb.className = 'calib-thumb';
+          thumb.alt = 'captured frame';
+          thumbs.appendChild(thumb);
+        }
       }
     }
   } catch (e) {
@@ -1739,6 +1814,8 @@ async function clearCharucoSession() {
   if (status) { status.className = 'calib-status'; status.textContent = 'Captured frames: 0'; }
   const preview = $id('charuco-preview');
   if (preview) preview.style.display = 'none';
+  const thumbs = $id('charuco-thumbs');
+  if (thumbs) thumbs.innerHTML = '';
   const result = $id('charuco-result');
   if (result) result.textContent = '';
 }

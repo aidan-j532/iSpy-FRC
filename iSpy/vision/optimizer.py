@@ -136,9 +136,12 @@ def _model_supports_end2end(model: "ultralytics.YOLO") -> bool:
 
 
 def _find_lite_wheel_dir() -> Path:
-    local = _PACKAGE_ROOT.parent.parent / "rknn_wheels"
-    if local.exists():
-        return local
+    # the lite wheels ship bundled inside the iSpy package (iSpy/rknn_wheels,
+    # per pyproject package-data). _PACKAGE_ROOT is iSpy/vision, so the
+    # package dir is one level up - not the project root.
+    pkg_dir = _PACKAGE_ROOT.parent / "rknn_wheels"
+    if pkg_dir.exists():
+        return pkg_dir
     try:
         spec = importlib.util.find_spec("iSpy")
         if spec and spec.origin:
@@ -147,7 +150,8 @@ def _find_lite_wheel_dir() -> Path:
                 return pkg
     except Exception:
         pass
-    return local
+    # fall back to a user-dropped copy at the project root
+    return _PACKAGE_ROOT.parent.parent / "rknn_wheels"
 
 
 _RKNN_LITE_DIR = _find_lite_wheel_dir()

@@ -78,6 +78,7 @@ def _build_vision_pipeline_payloads():
             "class_name": cls.__name__,
             "config_schema": schema,
             "show_common_fields": bool(getattr(cls, "show_common_fields", lambda: True)()),
+            "show_calibration": bool(getattr(cls, "show_calibration", lambda: True)()),
             "beta": bool(getattr(cls, "beta", False)),
         }
         if hasattr(cls, "recommended_format"):
