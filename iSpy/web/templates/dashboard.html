@@ -137,7 +137,7 @@ function applyTick(data) {
 function applyVisionBanner(running) {
   const visionBanner = document.getElementById('vision-status');
   visionBanner.className = 'vision-banner ' + (running ? 'vision-ok' : 'vision-bad');
-  visionBanner.textContent = running ? 'Vision is running' : 'Vision is not running';
+  visionBanner.textContent = running ? 'Vision is running' : 'Vision is not running, data will be stale';
 }
 
 function applyFull(data) {

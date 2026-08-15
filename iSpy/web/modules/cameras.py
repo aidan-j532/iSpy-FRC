@@ -6,6 +6,7 @@ import platform
 import re
 import subprocess
 import threading
+from pathlib import Path
 import cv2
 import time
 from flask import Response, jsonify, render_template, request
@@ -349,9 +350,16 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/status", "api_cameras_charuco_status", self._charuco_status)
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco", "api_cameras_charuco_clear", self._charuco_clear, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/finish", "api_cameras_charuco_finish", self._charuco_finish, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/april/status", "api_cameras_april_status", self._april_status)
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/april/capture", "api_cameras_april_capture", self._april_capture, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/april", "api_cameras_april_clear", self._april_clear, methods=["DELETE"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/april/finish", "api_cameras_april_finish", self._april_finish, methods=["POST"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/feed", "api_cameras_calibration_feed", self._calibration_feed)
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/mode", "api_cameras_calibration_mode", self._calibration_mode, methods=["POST"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/heartbeat", "api_cameras_calibration_heartbeat", self._calibration_heartbeat, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_get", self._pnp_get, methods=["GET"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_save", self._pnp_save, methods=["POST"])
+        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_clear", self._pnp_clear, methods=["DELETE"])
 
     def _camera_display_name(self, cam, fallback: str = "camera") -> str:
         if hasattr(cam, "config") and cam.config is not None:
@@ -362,6 +370,101 @@ class CamerasModule(WebModule):
         if source is not None:
             return str(source)
         return fallback
+
+    def _pnp_model_info(self, entry):
+        """(vision_model dict, num_keypoints, error) - error is None if usable"""
+        settings = get_pipeline_settings(entry) or {}
+        vm = settings.get("vision_model")
+        if not isinstance(vm, dict) or not vm.get("file_path"):
+            return None, None, "Camera has no vision_model configured"
+        from iSpy.vision.metadata import read_metadata
+        model_path = Path(vm["file_path"])
+        if not model_path.is_absolute():
+            model_path = Path.cwd() / model_path
+        meta = read_metadata(model_path) or {}
+        if meta.get("task") != "pose":
+            return vm, None, "Model is not a pose model - PnP needs keypoints (task=pose)"
+        kpt_shape = meta.get("kpt_shape")
+        if not kpt_shape:
+            return vm, None, "Model metadata has no kpt_shape - re-run boot to regenerate the sidecar"
+        return vm, int(kpt_shape[0]), None
+
+    def _pnp_get(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        vm, num_kpts, err = self._pnp_model_info(entry)
+        calib = entry.get("calibration") or {}
+        has_intrinsics = bool(calib.get("camera_matrix") and calib.get("dist_coeffs"))
+        existing_pnp = vm.get("pnp") if isinstance(vm, dict) else None
+        return jsonify(
+            model_error=err,
+            num_keypoints=num_kpts,
+            has_intrinsics=has_intrinsics,
+            pnp=existing_pnp,
+        )
+
+    def _pnp_save(self, cam_name):
+        data = request.get_json(force=True) or {}
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+
+        vm, num_kpts, err = self._pnp_model_info(entry)
+        if err:
+            return jsonify(error=err), 400
+
+        calib = entry.get("calibration") or {}
+        camera_matrix = calib.get("camera_matrix")
+        dist_coeffs = calib.get("dist_coeffs")
+        if not camera_matrix or dist_coeffs is None:
+            return jsonify(error="No chessboard/ChArUco intrinsics on this camera yet - run that calibration first"), 400
+
+        object_points = data.get("object_points")
+        if not isinstance(object_points, list) or len(object_points) != num_kpts:
+            return jsonify(error=f"object_points must have exactly {num_kpts} [x,y,z] entries"), 400
+        for pt in object_points:
+            if not (isinstance(pt, list) and len(pt) == 3 and all(isinstance(v, (int, float)) for v in pt)):
+                return jsonify(error="Each object_points entry must be [x, y, z] numbers"), 400
+
+        mode = data.get("mode", "flexible")
+        if mode not in ("flexible", "rigid"):
+            return jsonify(error="mode must be 'flexible' or 'rigid'"), 400
+        try:
+            min_keypoint_conf = float(data.get("min_keypoint_conf", 0.5))
+        except (TypeError, ValueError):
+            return jsonify(error="min_keypoint_conf must be a number"), 400
+
+        settings = get_pipeline_settings(entry)
+        vm_entry = settings.get("vision_model")
+        if not isinstance(vm_entry, dict):
+            return jsonify(error="Camera has no vision_model configured"), 400
+
+        vm_entry["pnp"] = {
+            "object_points": object_points,
+            "camera_matrix": camera_matrix,
+            "dist_coeffs": dist_coeffs,
+            "min_keypoint_conf": min_keypoint_conf,
+            "mode": mode,
+        }
+
+        config = self.context["config"]
+        config.set("camera_configs", cams)
+        config.save()
+        return jsonify(success=True, pnp=vm_entry["pnp"], note="Restart vision to apply.")
+
+    def _pnp_clear(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        settings = get_pipeline_settings(entry)
+        vm_entry = settings.get("vision_model")
+        if isinstance(vm_entry, dict):
+            vm_entry.pop("pnp", None)
+        config = self.context["config"]
+        config.set("camera_configs", cams)
+        config.save()
+        return jsonify(success=True)
 
     def _camera_aliases(self, cam) -> set[str]:
         aliases = {self._camera_display_name(cam, "camera")}
@@ -467,6 +570,8 @@ class CamerasModule(WebModule):
             chessboard_pattern=session.get("pattern", list(cam_calibration.DEFAULT_CHESSBOARD_PATTERN)),
             charuco_captures=len(session.get("charuco_captures", [])),
             charuco_pattern=session.get("charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)),
+            charuco_dict=session.get("charuco_dict"),
+            april_captures=len(session.get("april_captures", [])),
         )
 
     def _calibration_reset(self, cam_name):
@@ -600,8 +705,8 @@ class CamerasModule(WebModule):
     def _calibration_feed(self, cam_name):
         """MJPEG feed for the calibration wizard - frames straight from the
         capture thread (never run through the pipeline's detectors). Pass
-        ?overlay=charuco to draw the detected ChArUco board on top so the
-        user can see what the board detector sees while they move it."""
+        ?overlay=charuco or ?overlay=april to draw the detected board on top
+        so the user can see what the detector sees while they move it."""
         overlay = request.args.get("overlay", "")
         pattern_arg = request.args.get("pattern")
         pattern = None
@@ -614,6 +719,15 @@ class CamerasModule(WebModule):
             self._generate_calibration(cam_name, overlay=overlay, pattern=pattern),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
+
+    def _charuco_session_layout(self, cam_name):
+        """cached (pattern, dictionary_id) the wizard auto-detected for this
+        camera, so the live feed/captures stay on the board's actual layout."""
+        with self.calib_lock:
+            session = self.calib_sessions.get(cam_name) or {}
+            p = session.get("charuco_pattern")
+            d = session.get("charuco_dict")
+        return tuple(p) if p else None, d
 
     def _generate_calibration(self, cam_name, overlay="", pattern=None):
         last_frame_time = time.monotonic()
@@ -638,20 +752,35 @@ class CamerasModule(WebModule):
                     # overlay ~10x/s and reuse the last result in between
                     if now - last_detect >= 0.1:
                         last_detect = now
+                        session_pattern, session_dict = self._charuco_session_layout(cam_name)
                         if pattern is None:
-                            with self.calib_lock:
-                                session = self.calib_sessions.get(cam_name) or {}
-                                session_pattern = session.get("charuco_pattern")
-                            if session_pattern:
-                                pattern = tuple(int(p) for p in session_pattern[:2])
+                            pattern = session_pattern
                         if pattern is not None and len(pattern) == 2:
+                            kwargs = {}
+                            if session_dict is not None:
+                                kwargs["dictionary_id"] = session_dict
                             found, corners, ids, marker_corners, marker_ids, _ = (
-                                cam_calibration.detect_charuco(frame, pattern[0], pattern[1])
+                                cam_calibration.detect_charuco(
+                                    frame, pattern[0], pattern[1], **kwargs
+                                )
                             )
                             if not found:
                                 corners, ids, marker_corners, marker_ids = None, None, None, None
                     if corners is not None and ids is not None:
                         to_serve = cam_calibration.draw_charuco(
+                            frame, corners, ids, marker_corners, marker_ids
+                        )
+                elif overlay == "april":
+                    now = time.monotonic()
+                    if now - last_detect >= 0.1:
+                        last_detect = now
+                        found, corners, ids, marker_corners, marker_ids, _ = (
+                            cam_calibration.detect_april(frame)
+                        )
+                        if not found:
+                            corners, ids, marker_corners, marker_ids = None, None, None, None
+                    if corners is not None and ids is not None:
+                        to_serve = cam_calibration.draw_april(
                             frame, corners, ids, marker_corners, marker_ids
                         )
                 ok, buf = cv2.imencode(".jpg", to_serve, [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -664,31 +793,46 @@ class CamerasModule(WebModule):
 
     def _charuco_status(self, cam_name):
         """one-shot board detection on the latest raw frame - the wizard polls
-        this to show live 'board found: N corners' feedback next to the feed"""
+        this to show live 'board found: N corners' feedback next to the feed.
+        The board layout + dictionary are auto-detected across the common
+        printed sizes and cached so the feed and captures stay consistent."""
         cam = self.live_cameras.get(cam_name)
         if cam is None or not hasattr(cam, "get_raw_frame"):
             return jsonify(found=False, message="Camera not live")
         frame = cam.get_raw_frame()
         if frame is None:
             return jsonify(found=False, message="No frame yet")
-        pattern = None
-        with self.calib_lock:
-            session = self.calib_sessions.get(cam_name) or {}
-            session_pattern = session.get("charuco_pattern")
-        if session_pattern:
-            pattern = tuple(int(p) for p in session_pattern[:2])
-        pattern = pattern or tuple(cam_calibration.DEFAULT_CHARUCO_PATTERN)
-        found, corners, ids, marker_corners, marker_ids, _ = cam_calibration.detect_charuco(
-            frame, pattern[0], pattern[1]
+        session_pattern, session_dict = self._charuco_session_layout(cam_name)
+        preferred_pattern = session_pattern or tuple(cam_calibration.DEFAULT_CHARUCO_PATTERN)
+        found, corners, ids, marker_corners, marker_ids, _, found_pattern, found_dict = (
+            cam_calibration.detect_charuco_auto(
+                frame,
+                preferred_pattern=preferred_pattern,
+                preferred_dict=session_dict,
+            )
         )
+        if found and (
+            found_pattern != (tuple(session_pattern) if session_pattern else None)
+            or found_dict != session_dict
+        ):
+            with self.calib_lock:
+                session = self.calib_sessions.setdefault(cam_name, {})
+                session["charuco_pattern"] = list(found_pattern)
+                session["charuco_dict"] = found_dict
         payload = {
             "found": bool(found),
             "corners": int(len(corners)) if found else 0,
             "markers": int(len(marker_corners)) if found else 0,
-            "pattern": list(pattern),
+            "pattern": list(found_pattern) if found else list(preferred_pattern),
+            "dictionary": found_dict if found else session_dict,
         }
         if not found:
             payload["message"] = "Board not visible - show the whole board in frame, even lighting helps."
+        else:
+            payload["message"] = (
+                f"Board detected as {found_pattern[0]}x{found_pattern[1]} "
+                f"(dictionary {found_dict}). Move it around and capture."
+            )
         return jsonify(**payload)
 
     def _charuco_capture(self, cam_name):
@@ -706,9 +850,27 @@ class CamerasModule(WebModule):
         frame = _decode_base64_frame(image_b64)
         if frame is None:
             return jsonify(error="Could not decode image"), 400
+        session_pattern, session_dict = self._charuco_session_layout(cam_name)
+        matched_dict = session_dict
+        kwargs = {}
+        if matched_dict is not None:
+            kwargs["dictionary_id"] = matched_dict
         found, corners, ids, marker_corners, marker_ids, gray = cam_calibration.detect_charuco(
-            frame, cols, rows
+            frame, cols, rows, **kwargs
         )
+        if not found:
+            # fall back to a full auto-detect - the board may simply be a
+            # different layout/dictionary than the one selected in the UI
+            found, corners, ids, marker_corners, marker_ids, gray, found_pattern, found_dict = (
+                cam_calibration.detect_charuco_auto(
+                    frame,
+                    preferred_pattern=(cols, rows),
+                    preferred_dict=matched_dict,
+                )
+            )
+            if found:
+                cols, rows = found_pattern
+                matched_dict = found_dict
         if not found:
             return jsonify(
                 success=False,
@@ -718,6 +880,8 @@ class CamerasModule(WebModule):
         with self.calib_lock:
             session = self.calib_sessions.setdefault(key, {})
             session["charuco_pattern"] = [cols, rows]
+            if matched_dict is not None:
+                session["charuco_dict"] = matched_dict
             session.setdefault("charuco_captures", []).append((gray, corners, ids))
             count = len(session["charuco_captures"])
         preview = None
@@ -739,6 +903,7 @@ class CamerasModule(WebModule):
             if session:
                 session.pop("charuco_captures", None)
                 session.pop("charuco_pattern", None)
+                session.pop("charuco_dict", None)
         return jsonify(success=True)
 
     def _charuco_finish(self, cam_name):
@@ -749,11 +914,15 @@ class CamerasModule(WebModule):
             session = self.calib_sessions.get(key) or {}
             captures = list(session.get("charuco_captures", []))
             pattern = tuple(session.get("charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)))
+            dict_id = session.get("charuco_dict")
         if len(captures) < 3:
             return jsonify(
                 error=f"Need at least 3 captured ChArUco frames, have {len(captures)}"
             ), 400
-        result = cam_calibration.calibrate_charuco(captures, pattern)
+        kwargs = {}
+        if dict_id is not None:
+            kwargs["dictionary_id"] = dict_id
+        result = cam_calibration.calibrate_charuco(captures, pattern, **kwargs)
         if result is None:
             return jsonify(error="Calibration failed - try capturing more varied frames"), 500
         saved = self._save_calibration(key, result)
@@ -762,6 +931,112 @@ class CamerasModule(WebModule):
             if session:
                 session.pop("charuco_captures", None)
                 session.pop("charuco_pattern", None)
+        return jsonify(success=True, result=result, calibration=saved)
+
+    def _april_status(self, cam_name):
+        """one-shot AprilTag detection on the latest raw frame - the wizard
+        polls this for live 'tag seen' feedback. Also reports the tag's pixel
+        height so the UI can auto-derive focal length from a known size+range."""
+        cam = self.live_cameras.get(cam_name)
+        if cam is None or not hasattr(cam, "get_raw_frame"):
+            return jsonify(found=False, message="Camera not live")
+        frame = cam.get_raw_frame()
+        if frame is None:
+            return jsonify(found=False, message="No frame yet")
+        found, corners, ids, marker_corners, marker_ids, _ = cam_calibration.detect_april(frame)
+        tag_ids = []
+        pixel_height = 0.0
+        if found:
+            tag_ids = [int(i[0]) for i in ids]
+            heights = []
+            for corner in corners:
+                pts = np.asarray(corner).reshape(4, 2)
+                h = float(np.max(pts[:, 1]) - np.min(pts[:, 1]))
+                w = float(np.max(pts[:, 0]) - np.min(pts[:, 0]))
+                heights.append(max(h, w))
+            pixel_height = round(max(heights) if heights else 0.0, 2)
+        return jsonify(
+            found=bool(found),
+            tag_ids=tag_ids,
+            pixel_height=pixel_height,
+            message=(
+                f"Tag{'s' if len(tag_ids) != 1 else ''} detected: {', '.join(map(str, tag_ids))} "
+                f"({pixel_height} px tall). Vary the tag's angle/range and capture."
+                if found else "No AprilTag visible - hold a tag in frame."
+            ),
+        )
+
+    def _april_capture(self, cam_name):
+        data = request.get_json(force=True) or {}
+        image_b64 = data.get("image")
+        if not image_b64:
+            return jsonify(error="No image provided"), 400
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        frame = _decode_base64_frame(image_b64)
+        if frame is None:
+            return jsonify(error="Could not decode image"), 400
+        found, corners, ids, marker_corners, marker_ids, gray = cam_calibration.detect_april(frame)
+        if not found:
+            return jsonify(
+                success=False,
+                board_found=False,
+                message="No AprilTag detected in that frame. Show a tag, use even lighting, and try again.",
+            )
+        with self.calib_lock:
+            session = self.calib_sessions.setdefault(key, {})
+            session.setdefault("april_captures", []).append((gray, corners, ids))
+            count = len(session["april_captures"])
+        preview = None
+        try:
+            drawn = cam_calibration.draw_april(frame, corners, ids)
+            ok, buf = cv2.imencode(".jpg", drawn, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+        except Exception:
+            preview = None
+        return jsonify(
+            success=True,
+            board_found=True,
+            captured=count,
+            tag_ids=[int(i[0]) for i in ids],
+            preview=preview,
+        )
+
+    def _april_clear(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            session = self.calib_sessions.get(key)
+            if session:
+                session.pop("april_captures", None)
+        return jsonify(success=True)
+
+    def _april_finish(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        data = request.get_json(force=True) or {}
+        tag_size = _to_float(data.get("tag_size"), cam_calibration.DEFAULT_APRIL_SIZE)
+        if tag_size <= 0:
+            return jsonify(error="tag_size must be positive"), 400
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+            captures = list(session.get("april_captures", []))
+        if len(captures) < 3:
+            return jsonify(
+                error=f"Need at least 3 captured AprilTag frames, have {len(captures)}"
+            ), 400
+        result = cam_calibration.calibrate_april(captures, tag_size_inches=tag_size)
+        if result is None:
+            return jsonify(error="Calibration failed - capture more varied tag poses"), 500
+        saved = self._save_calibration(key, result)
+        with self.calib_lock:
+            session = self.calib_sessions.get(key)
+            if session:
+                session.pop("april_captures", None)
         return jsonify(success=True, result=result, calibration=saved)
 
     def _add_camera(self):

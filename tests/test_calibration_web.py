@@ -53,6 +53,58 @@ def _charuco_b64(pattern=(7, 5), size=(640, 480), rotate=False):
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _april_tag_image():
+    tag = cv2.aruco.generateImageMarker(
+        cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11), 0, 200
+    )
+    return np.stack([tag] * 3, axis=-1)
+
+
+def _april_pose(rx, ry, t):
+    """tag rendered at a genuinely different pose each call (focal 300 px)."""
+    tag = _april_tag_image()
+    R, _ = cv2.Rodrigues(np.array([rx, ry, 0.0], dtype=np.float64))
+    K = np.array([[300.0, 0, 320.0], [0, 300.0, 240.0], [0, 0, 1.0]], dtype=np.float64)
+    H = K @ np.hstack([R[:, :2], np.array([[0.0], [0.0], [t]])])
+    canvas = np.full((480, 640, 3), 255, np.uint8)
+    return cv2.warpPerspective(tag, H, (640, 480), canvas, borderValue=(255, 255, 255))
+
+
+def _pose_camera_setup(num_kpts=17, intrinsics=False):
+    """config with a pose-model camera (fake .pt + YAML sidecar) and a live cam."""
+    tmpdir = Path(tempfile.mkdtemp())
+    model = tmpdir / "pose_model.pt"
+    sidecar = tmpdir / "pose_model_metadata.yaml"
+    sidecar.write_text(f"task: pose\nkpt_shape: [{num_kpts}, 3]\n", encoding="utf-8")
+    cfg = iSpyConfig(file_path=str(tmpdir / "config.json"))
+    cfg.config["app_mode"] = False
+    calibration = (
+        {
+            "camera_matrix": [[300.0, 0, 320.0], [0, 300.0, 240.0], [0, 0, 1.0]],
+            "dist_coeffs": [0, 0, 0, 0, 0],
+        }
+        if intrinsics
+        else {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0}
+    )
+    cfg.config["camera_configs"] = {
+        "cam_0": {
+            "name": "cam_0",
+            "source": 0,
+            "pipeline": {
+                "name": "object_detection",
+                "settings": {"vision_model": {"file_path": str(model)}},
+            },
+            "calibration": calibration,
+        }
+    }
+    cam = _FakeCamera("cam_0")
+    mod = CamerasModule({"config": cfg, "vision_instance": _FakeVision()})
+    mod.live_cameras = {"cam_0": cam}
+    app = flask.Flask(__name__)
+    mod.register_routes(app)
+    return cfg, model, app.test_client()
+
+
 class CalibrationWebTests(unittest.TestCase):
     def _setup(self):
         tmp = Path(tempfile.mkdtemp()) / "config.json"
@@ -176,6 +228,120 @@ class CalibrationWebTests(unittest.TestCase):
         cam._frame = np.full((100, 160, 3), 30, dtype=np.uint8)
         r = client.get("/api/cameras/calibration/cam_0/charuco/status")
         self.assertFalse(r.get_json()["found"])
+
+    def test_charuco_status_auto_detects_layout_and_dictionary(self):
+        cfg, cam, mod, client = self._setup()
+        board = c.make_charuco_board(8, 6, dictionary_id=cv2.aruco.DICT_5X5_250)
+        cam._frame = board.generateImage((900, 700), marginSize=20)
+        r = client.get("/api/cameras/calibration/cam_0/charuco/status")
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["found"])
+        self.assertEqual(j["pattern"], [8, 6])
+        self.assertEqual(j["dictionary"], cv2.aruco.DICT_5X5_250)
+
+    def test_april_status_reports_detection(self):
+        cfg, cam, mod, client = self._setup()
+        cam._frame = _april_pose(0, 0, 500)
+        r = client.get("/api/cameras/calibration/cam_0/april/status")
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["found"])
+        self.assertEqual(j["tag_ids"], [0])
+        self.assertGreater(j["pixel_height"], 0)
+
+    def test_april_capture_finish_flow(self):
+        cfg, cam, mod, client = self._setup()
+        for rx, ry, t in [(0, 0, 500), (0.5, 0, 460), (-0.4, 0.6, 520),
+                          (0.6, -0.5, 470), (-0.3, -0.4, 540), (0.2, 0.8, 500)]:
+            cam._frame = _april_pose(rx, ry, t)
+            ok, buf = cv2.imencode(".jpg", cam._frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            b64 = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+            r = client.post("/api/cameras/calibration/cam_0/april/capture", json={"image": b64})
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(r.get_json()["board_found"])
+        self.assertEqual(r.get_json()["captured"], 6)
+
+        r = client.post("/api/cameras/calibration/cam_0/april/finish", json={"tag_size": 6.5})
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["success"])
+        self.assertIn("camera_matrix", j["result"])
+        self.assertAlmostEqual(j["result"]["camera_matrix"][0][0], 300.0, delta=60)
+        self.assertIn("camera_matrix", j["calibration"])
+
+    def test_april_capture_clear(self):
+        cfg, cam, mod, client = self._setup()
+        cam._frame = _april_pose(0, 0, 500)
+        ok, buf = cv2.imencode(".jpg", cam._frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        b64 = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+        client.post("/api/cameras/calibration/cam_0/april/capture", json={"image": b64})
+        r = client.delete("/api/cameras/calibration/cam_0/april")
+        self.assertEqual(r.status_code, 200)
+        get = client.get("/api/cameras/calibration/cam_0")
+        self.assertEqual(get.get_json()["april_captures"], 0)
+
+    def test_pnp_get_reports_pose_model(self):
+        cfg, model, client = _pose_camera_setup(num_kpts=17, intrinsics=False)
+        r = client.get("/api/cameras/calibration/cam_0/pnp")
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertIsNone(j["model_error"])
+        self.assertEqual(j["num_keypoints"], 17)
+        self.assertFalse(j["has_intrinsics"])
+        self.assertIsNone(j["pnp"])
+
+    def test_pnp_save_requires_intrinsics(self):
+        cfg, model, client = _pose_camera_setup(num_kpts=17, intrinsics=False)
+        r = client.post(
+            "/api/cameras/calibration/cam_0/pnp",
+            json={"object_points": [[0, 0, 0]] * 17, "min_keypoint_conf": 0.5, "mode": "flexible"},
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("intrinsics", r.get_json()["error"])
+
+    def test_pnp_save_validates_point_count(self):
+        cfg, model, client = _pose_camera_setup(num_kpts=17, intrinsics=True)
+        r = client.post(
+            "/api/cameras/calibration/cam_0/pnp",
+            json={"object_points": [[0, 0, 0]] * 4, "min_keypoint_conf": 0.5, "mode": "flexible"},
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("exactly 17", r.get_json()["error"])
+
+    def test_pnp_save_and_clear_persists(self):
+        cfg, model, client = _pose_camera_setup(num_kpts=3, intrinsics=True)
+        points = [[0, 0, 0], [0.1, 0, 0], [0.1, 0.1, 0]]
+        r = client.post(
+            "/api/cameras/calibration/cam_0/pnp",
+            json={"object_points": points, "min_keypoint_conf": 0.7, "mode": "rigid"},
+        )
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["success"])
+        self.assertEqual(j["pnp"]["object_points"], points)
+        self.assertEqual(j["pnp"]["mode"], "rigid")
+        self.assertEqual(j["pnp"]["min_keypoint_conf"], 0.7)
+        self.assertEqual(
+            j["pnp"]["camera_matrix"][0][0], 300.0,
+        )
+        stored = cfg.get("camera_configs", {}).get("cam_0", {})
+        self.assertEqual(
+            stored["pipeline"]["settings"]["vision_model"]["pnp"]["object_points"], points
+        )
+        r = client.delete("/api/cameras/calibration/cam_0/pnp")
+        self.assertEqual(r.status_code, 200)
+        stored = cfg.get("camera_configs", {}).get("cam_0", {})
+        self.assertNotIn("pnp", stored["pipeline"]["settings"]["vision_model"])
+
+    def test_pnp_get_non_pose_model_reports_error(self):
+        cfg, model, client = _pose_camera_setup(num_kpts=17, intrinsics=True)
+        sidecar = model.with_name(model.stem + "_metadata.yaml")
+        sidecar.write_text("task: detect\n", encoding="utf-8")
+        r = client.get("/api/cameras/calibration/cam_0/pnp")
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertIn("pose model", j["model_error"])
 
 
 if __name__ == "__main__":

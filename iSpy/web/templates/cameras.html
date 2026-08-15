@@ -37,7 +37,7 @@
     <div id="camera-modal-body"></div>
     <div class="modal-actions">
       <button onclick="closeCameraModal()" style="background:var(--border);">Cancel</button>
-      <button id="camera-modal-submit" onclick="submitCameraModal()" class="btn-ok">Save</button>
+      <button id="camera-modal-submit" onclick="handleCameraSubmit()" class="btn-ok">Save and Continue</button>
     </div>
   </div>
 </div>
@@ -199,6 +199,9 @@
   }
   .settings-section details[open] summary::before { transform: rotate(90deg); }
   .settings-section details summary:hover { color: var(--accent); }
+  .settings-section.step-hidden { display: none; }
+  .settings-section.step-active { outline: 1px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
+  .form-field.field-invalid input, .form-field.field-invalid select { border-color: #f66; }
 
   .form-field { margin-bottom: 10px; }
   .form-help {
@@ -225,6 +228,7 @@ const camModal = {
   data: null,        // camera config entry (edit) or null (add)
   pipeline: 'object_detection',
   fields: new Map(), // fieldKey -> { el, def, source: 'common' | 'schema' }
+  flow: { index: 0 }, // index into the modal's stepped section flow
 };
 
 /* Common (non-schema) field definitions */
@@ -425,6 +429,9 @@ function buildField(key, def, source) {
   }
 
   if (def.gated_by) row.dataset.gatedBy = def.gated_by;
+  row.dataset.fieldKey = key;
+  control.addEventListener('input', () => row.classList.remove('field-invalid'));
+  control.addEventListener('change', () => row.classList.remove('field-invalid'));
 
   camModal.fields.set(key, { el: control, def, source });
   return row;
@@ -496,6 +503,7 @@ function closeCameraModal() {
   $id('camera-modal-body').innerHTML = '';
   camModal.fields.clear();
   camModal.data = null;
+  camModal.flow.index = 0;
 }
 
 async function loadPipelines() {
@@ -588,7 +596,6 @@ async function openCameraModal(mode, arg) {
 
   $id('camera-modal-title').textContent = mode === 'add' ? 'Add Camera' : 'Edit Camera';
   $id('camera-modal-note').style.display = mode === 'add' ? 'none' : '';
-  $id('camera-modal-submit').textContent = mode === 'add' ? 'Add Camera' : 'Save Settings';
 
   const body = $id('camera-modal-body');
   body.innerHTML = '';
@@ -638,13 +645,103 @@ async function openCameraModal(mode, arg) {
     camModal.pipeline = pipelineSel.value;
     renderPipelineSections();
     if (mode === 'add') prefillFirstModel();
+    initSettingsFlow();
   };
 
   // device profile (add mode) fills on top so saved mount values dont get clobbered
   renderPipelineSections();
   fillCommonValues();
   if (mode === 'add') { await populateDevices(arg); prefillFirstModel(); }
+  initSettingsFlow();
   $id('camera-modal').style.display = 'flex';
+}
+
+/* Stepped settings flow: one section at a time, "Save and Continue" advances,
+   the last section's button is "Save and Quit". Every visible field must be
+   filled before a section counts as done (nullable numbers and toggles/selects
+   always count as filled). */
+
+function flowSections() {
+  // document order = the section order; gated-off sections (optimization with
+  // no master toggle checked) have nothing to fill, so they drop out of the flow
+  return Array.from($id('camera-modal-body').querySelectorAll('.settings-section'))
+    .filter(sec => !sec.classList.contains('camera-hidden'));
+}
+
+function initSettingsFlow() {
+  camModal.flow.index = 0;
+  const sections = flowSections();
+  sections.forEach(s => s.classList.remove('step-hidden', 'step-active'));
+  showFlowSection(sections[0]);
+  updateSubmitLabel();
+}
+
+function showFlowSection(holder) {
+  flowSections().forEach(sec => {
+    const on = sec === holder;
+    sec.classList.toggle('step-hidden', !on);
+    sec.classList.toggle('step-active', on);
+    const d = sec.querySelector('details');
+    if (d) d.open = on;
+  });
+}
+
+function currentFlowSection() {
+  const sections = flowSections();
+  return sections[Math.min(camModal.flow.index, sections.length - 1)] || null;
+}
+
+function advanceSettingsFlow() {
+  const sections = flowSections();
+  camModal.flow.index = Math.min(camModal.flow.index + 1, sections.length - 1);
+  showFlowSection(sections[camModal.flow.index]);
+  updateSubmitLabel();
+}
+
+function updateSubmitLabel() {
+  const btn = $id('camera-modal-submit');
+  if (!btn) return;
+  const sections = flowSections();
+  const last = camModal.flow.index >= sections.length - 1;
+  btn.textContent = last
+    ? (camModal.mode === 'add' ? 'Add Camera' : 'Save and Quit')
+    : 'Save and Continue';
+}
+
+function validateCurrentSection() {
+  const sec = currentFlowSection();
+  if (!sec) return null;
+  let firstBad = null;
+  sec.querySelectorAll('.form-field').forEach(row => {
+    if (row.classList.contains('camera-hidden')) return;
+    const field = camModal.fields.get(row.dataset.fieldKey);
+    if (!field) return;
+    const { el, def } = field;
+    let ok = true;
+    if (def.type === 'toggle' || def.type === 'boolean' || def.type === 'select') {
+      ok = true; // always in a valid state
+    } else if (def.type === 'number') {
+      ok = def.nullable || el.value !== '';
+    } else {
+      ok = String(el.value || '').trim() !== '';
+    }
+    row.classList.toggle('field-invalid', !ok);
+    if (!ok && !firstBad) firstBad = row;
+  });
+  if (firstBad) firstBad.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  return firstBad;
+}
+
+async function handleCameraSubmit() {
+  if (validateCurrentSection()) {
+    showToast('Fill in every field in this section to continue.', 'error');
+    return;
+  }
+  if (camModal.flow.index < flowSections().length - 1) {
+    advanceSettingsFlow();
+  } else {
+    await submitCameraModal();
+  }
 }
 
 /* Pipeline (schema-driven) sections */
@@ -1218,6 +1315,7 @@ const calibrationState = {
 
 let calibrationHeartbeatTimer = null;
 let charucoStatusTimer = null;
+let aprilStatusTimer = null;
 
 function calibrationModeFor(pipeline) {
   if (pipeline === 'object_detection') return 'focal';
@@ -1272,6 +1370,99 @@ async function endCalibrationMode(camera) {
   } catch (e) {}
 }
 
+async function renderPnpSectionIfApplicable(body) {
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/pnp`);
+    const j = await r.json();
+    if (!j.num_keypoints) return; // not a pose model - nothing to show
+    const section = document.createElement('div');
+    section.className = 'card';
+    section.style.marginTop = '16px';
+    section.innerHTML = pnpSectionHtml(j);
+    body.appendChild(section);
+    fillPnpKeypointTable(j);
+  } catch (e) { /* pose PnP not applicable, skip quietly */ }
+}
+
+function pnpSectionHtml(info) {
+  const note = info.has_intrinsics ? '' :
+    '<div class="calib-status err">Run chessboard/ChArUco intrinsics on this camera first - PnP needs camera_matrix + dist_coeffs.</div>';
+  return `
+    <h3>Pose PnP (${info.num_keypoints} keypoints)</h3>
+    ${note}
+    <p class="form-help" style="margin:0 0 10px 0;">3D position (meters) of each model keypoint in the object's own local frame. Model-specific - matches however your pose model's keypoints were labeled during training.</p>
+    <div id="pnp-kpt-table"></div>
+    <div class="form-row"><span class="form-label">Min keypoint conf</span>
+      <input type="number" step="0.05" class="form-input" id="pnp-min-conf" value="0.5"></div>
+    <div class="form-row"><span class="form-label">Mode</span>
+      <select class="form-input" id="pnp-mode">
+        <option value="flexible">Flexible (deformable, per-keypoint depth)</option>
+        <option value="rigid">Rigid (fixed shape, whole-object pose)</option>
+      </select></div>
+    <div class="form-row"><span class="form-label"></span>
+      <div style="display:flex;gap:8px;">
+        <button type="button" class="btn-sm btn-ok" onclick="savePnpConfig()" ${info.has_intrinsics ? '' : 'disabled'}>Save PnP Config</button>
+        <button type="button" class="btn-sm btn-bad" onclick="clearPnpConfig()">Clear</button>
+      </div></div>
+    <div class="calib-status" id="pnp-result"></div>`;
+}
+
+function fillPnpKeypointTable(info) {
+  const wrap = document.getElementById('pnp-kpt-table');
+  if (!wrap) return;
+  const existing = (info.pnp && info.pnp.object_points) || [];
+  let rows = '';
+  for (let i = 0; i < info.num_keypoints; i++) {
+    const pt = existing[i] || [0, 0, 0];
+    rows += `<div class="form-row" style="gap:6px;">
+      <span class="form-label" style="min-width:70px;">kp ${i}</span>
+      <input type="number" step="0.001" class="form-input pnp-kpt-x" data-idx="${i}" value="${pt[0]}">
+      <input type="number" step="0.001" class="form-input pnp-kpt-y" data-idx="${i}" value="${pt[1]}">
+      <input type="number" step="0.001" class="form-input pnp-kpt-z" data-idx="${i}" value="${pt[2]}"></div>`;
+  }
+  wrap.innerHTML = rows;
+  if (info.pnp) {
+    document.getElementById('pnp-min-conf').value = info.pnp.min_keypoint_conf ?? 0.5;
+    document.getElementById('pnp-mode').value = info.pnp.mode || 'flexible';
+  }
+}
+
+async function savePnpConfig() {
+  const xs = document.querySelectorAll('.pnp-kpt-x');
+  const object_points = Array.from(xs).map(xEl => {
+    const i = xEl.dataset.idx;
+    const y = document.querySelector(`.pnp-kpt-y[data-idx="${i}"]`).value;
+    const z = document.querySelector(`.pnp-kpt-z[data-idx="${i}"]`).value;
+    return [Number(xEl.value) || 0, Number(y) || 0, Number(z) || 0];
+  });
+  const min_keypoint_conf = Number(document.getElementById('pnp-min-conf').value) || 0.5;
+  const mode = document.getElementById('pnp-mode').value;
+  const result = document.getElementById('pnp-result');
+  result.className = 'calib-status';
+  result.textContent = 'Saving...';
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/pnp`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ object_points, min_keypoint_conf, mode }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Save failed');
+    result.className = 'calib-status ok';
+    result.textContent = 'Saved - restart vision to apply.';
+  } catch (e) {
+    result.className = 'calib-status err';
+    result.textContent = e.message || 'Save failed';
+  }
+}
+
+async function clearPnpConfig() {
+  if (!confirm('Remove the PnP config for this camera?')) return;
+  try {
+    await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/pnp`, { method: 'DELETE' });
+    showToast('PnP config cleared', 'success');
+  } catch (e) {}
+}
+
 async function openCalibrationWizard() {
   if (camModal.mode === 'add') {
     showToast('Save the camera first, then open the calibration wizard.', 'error');
@@ -1287,14 +1478,21 @@ async function openCalibrationWizard() {
   const body = $id('calibration-body');
   body.innerHTML = '';
 
-  if (calibrationState.mode === 'focal') renderFocalCalibration(body);
-  else if (calibrationState.mode === 'charuco') renderCharucoCalibration(body);
-  else if (calibrationState.mode === 'chessboard') renderChessboardCalibration(body);
-  else if (calibrationState.mode === 'beta')
+  if (calibrationState.mode === 'focal') {
+    renderFocalCalibration(body);
+    renderPnpSectionIfApplicable(body);
+  } else if (calibrationState.mode === 'charuco') {
+    renderCharucoCalibration(body);
+  } else if (calibrationState.mode === 'april') {
+    renderAprilCalibration(body);
+  } else if (calibrationState.mode === 'chessboard') {
+    renderChessboardCalibration(body);
+  } else if (calibrationState.mode === 'beta') {
     body.innerHTML = '<div class="card empty-state">The optical_flow pipeline is in beta - its motion estimation reads the camera FOV, so it is excluded from the calibration wizard for now.</div>';
-  else
+  } else {
     body.innerHTML = '<div class="card empty-state">This pipeline does not use distance calibration (no depth-from-size or PnP), so there is nothing to calibrate here.</div>';
-
+  }
+  
   $id('calibration-modal').style.display = 'flex';
   startCalibrationMode(calibrationState.camera);
 }
@@ -1309,6 +1507,7 @@ function closeCalibrationWizard() {
   calibrationState.frame = null;
   calibrationState.overlayPattern = null;
   stopCharucoStatusPoll();
+  stopAprilStatusPoll();
   endCalibrationMode(camera);
 }
 
@@ -1586,7 +1785,7 @@ function renderCharucoCalibration(body) {
       </div>
     </div>
     <div class="calib-status" id="charuco-live">Waiting for camera feed...</div>
-    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners = board detected. Click Capture, move the board to a different angle, and repeat - 10+ varied frames give the best result. Detections are paused while this is open.</div>
+    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners = board detected. The board layout and marker dictionary are auto-detected - watch the status line to confirm it found yours. Click Capture, move the board to a different angle, and repeat - 10+ varied frames give the best result. Detections are paused while this is open.</div>
     <div class="form-row">
       <span class="form-label">Board pattern</span>
       <select id="charuco-pattern" class="form-input" onchange="onCharucoPatternChange()">
@@ -1630,7 +1829,9 @@ function reconnectCalibrationFeed() {
   // MJPEG streams don't reconnect on an identical src - re-open with a cache-bust
   const base = calibrationState.mode === 'charuco'
     ? calibrationFeedUrl('charuco', calibrationState.overlayPattern)
-    : calibrationFeedUrl();
+    : calibrationState.mode === 'april'
+      ? calibrationFeedUrl('april')
+      : calibrationFeedUrl();
   img.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
 }
 
@@ -1642,7 +1843,7 @@ async function pollCharucoStatus() {
     const j = await r.json();
     if (j.found) {
       live.className = 'calib-status ok';
-      live.textContent = `Board detected: ${j.corners} corners from ${j.markers} markers - move the board around and capture.`;
+      live.textContent = j.message || `Board detected: ${j.corners} corners from ${j.markers} markers - move the board around and capture.`;
     } else {
       live.className = 'calib-status err';
       live.textContent = j.message || 'Board not visible in the live feed.';
@@ -1663,6 +1864,212 @@ function stopCharucoStatusPoll() {
   if (charucoStatusTimer) {
     clearInterval(charucoStatusTimer);
     charucoStatusTimer = null;
+  }
+}
+
+function renderAprilCalibration(body) {
+  body.innerHTML = `
+    <div class="form-row"><span class="form-label">Live view</span>
+      <div class="calib-stage" style="width:100%;">
+        <img id="calib-feed" src="${calibrationFeedUrl('april')}" alt="live feed" onerror="calibrationFeedError()">
+      </div>
+    </div>
+    <div class="calib-status" id="april-live">Waiting for camera feed...</div>
+    <div class="calib-status" id="april-note">Hold your printed AprilTag in front of the camera. A green box + ID means it is detected. Enter the tag's real size and the distance from the camera to it, then save focal length. To also calibrate intrinsics, capture the tag from 6+ different angles/ranges and hit Calibrate intrinsics. Detections are paused while this is open.</div>
+    <div class="form-row">
+      <span class="form-label">Tag size (in)</span>
+      <input type="number" id="april-tag-size" class="form-input" value="6.5" step="0.1" min="0.1">
+    </div>
+    <div class="form-row">
+      <span class="form-label">Distance (in)</span>
+      <input type="number" id="april-distance" class="form-input" value="24" step="1" min="1">
+    </div>
+    <div class="form-row">
+      <span class="form-label">Focal length</span>
+      <div style="display:flex;gap:8px;flex:1;">
+        <button type="button" class="btn-sm btn-ok" onclick="saveAprilFocal()" id="april-focal-btn">Save focal length from tag</button>
+      </div>
+    </div>
+    <div class="calib-status" id="april-focal-result"></div>
+    <div class="form-row" style="margin-top:8px;">
+      <span class="form-label">Intrinsics</span>
+      <div style="display:flex;gap:8px;flex:1;">
+        <button type="button" class="btn-sm btn-ok" onclick="captureAprilFrame()" id="april-capture-btn">Capture frame</button>
+        <button type="button" class="btn-sm" onclick="clearAprilSession()">Clear</button>
+      </div>
+    </div>
+    <div class="calib-status" id="april-status">Captured frames: 0</div>
+    <div id="april-thumbs"></div>
+    <div class="form-row" style="margin-top:10px;">
+      <span class="form-label"></span>
+      <button type="button" class="btn-ok" onclick="finishAprilCalibration()" id="april-finish-btn">Calibrate intrinsics</button>
+    </div>
+    <div class="calib-status" id="april-result"></div>
+  `;
+  startAprilStatusPoll();
+}
+
+async function pollAprilStatus() {
+  const live = $id('april-live');
+  if (!live || !calibrationState.camera) return;
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april/status`);
+    const j = await r.json();
+    if (j.found) {
+      live.className = 'calib-status ok';
+      live.textContent = j.message || `Tag${j.tag_ids.length !== 1 ? 's' : ''} detected: ${j.tag_ids.join(', ')} (${j.pixel_height} px).`;
+    } else {
+      live.className = 'calib-status err';
+      live.textContent = j.message || 'No AprilTag visible in the live feed.';
+    }
+  } catch (e) {
+    live.className = 'calib-status err';
+    live.textContent = 'Tag detection status unavailable.';
+  }
+}
+
+function startAprilStatusPoll() {
+  stopAprilStatusPoll();
+  pollAprilStatus();
+  aprilStatusTimer = setInterval(pollAprilStatus, 1000);
+}
+
+function stopAprilStatusPoll() {
+  if (aprilStatusTimer) {
+    clearInterval(aprilStatusTimer);
+    aprilStatusTimer = null;
+  }
+}
+
+async function saveAprilFocal() {
+  const img = $id('calib-feed');
+  const result = $id('april-focal-result');
+  if (!result) return;
+  const real_size = Number(($id('april-tag-size') || {}).value || 0);
+  const distance = Number(($id('april-distance') || {}).value || 0);
+  if (real_size <= 0 || distance <= 0) {
+    result.className = 'calib-status err';
+    result.textContent = 'Enter a tag size and distance first.';
+    return;
+  }
+  result.className = 'calib-status';
+  result.textContent = 'Measuring tag in the live feed...';
+  try {
+    const status = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april/status`).then(r => r.json());
+    const pixel_height = status.pixel_height || 0;
+    if (pixel_height <= 0) {
+      result.className = 'calib-status err';
+      result.textContent = 'Hold the tag in front of the camera so it is detected first.';
+      return;
+    }
+    const frame_width = (img && img.naturalWidth) || 640;
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/focal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ real_size, distance, pixel_height, frame_width }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Calibration failed');
+    result.className = 'calib-status ok';
+    result.innerHTML = `Focal length <strong>${j.focal_length_px} px</strong> &middot; horizontal FOV <strong>${j.fov_deg}&deg;</strong> from tag ${pixel_height} px tall - saved. Restart vision to apply.`;
+    refreshCalibrationFields(j.calibration);
+  } catch (e) {
+    result.className = 'calib-status err';
+    result.textContent = e.message || 'Failed to compute focal length';
+  }
+}
+
+async function captureAprilFrame() {
+  const img = $id('calib-feed');
+  if (!img || !img.complete || !img.naturalWidth) {
+    showToast('Wait for the live feed to load first.', 'error');
+    return;
+  }
+  const btn = $id('april-capture-btn');
+  const status = $id('april-status');
+  btn.disabled = true;
+  status.className = 'calib-status';
+  status.textContent = 'Detecting tag...';
+  try {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext('2d').drawImage(img, 0, 0);
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april/capture`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: c.toDataURL('image/jpeg', 0.92) }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Capture failed');
+    if (!j.board_found) {
+      status.className = 'calib-status err';
+      status.textContent = j.message || 'Tag not found in that frame.';
+    } else {
+      status.className = 'calib-status ok';
+      status.textContent = `Captured frames: ${j.captured} (move the tag to a different angle/range)`;
+      const thumbs = $id('april-thumbs');
+      if (thumbs && j.preview) {
+        const thumb = document.createElement('img');
+        thumb.src = j.preview;
+        thumb.className = 'calib-thumb';
+        thumb.alt = 'captured frame';
+        thumbs.appendChild(thumb);
+      }
+    }
+  } catch (e) {
+    status.className = 'calib-status err';
+    status.textContent = e.message || 'Failed to capture frame';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function clearAprilSession() {
+  calibrationState.captured = 0;
+  try {
+    await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april`, { method: 'DELETE' });
+  } catch (e) {}
+  const status = $id('april-status');
+  if (status) { status.className = 'calib-status'; status.textContent = 'Captured frames: 0'; }
+  const thumbs = $id('april-thumbs');
+  if (thumbs) thumbs.innerHTML = '';
+  const result = $id('april-result');
+  if (result) result.textContent = '';
+}
+
+async function finishAprilCalibration() {
+  const btn = $id('april-finish-btn');
+  const result = $id('april-result');
+  if (!result) return;
+  const tag_size = Number(($id('april-tag-size') || {}).value || 0);
+  if (tag_size <= 0) {
+    result.className = 'calib-status err';
+    result.textContent = 'Enter the tag size first.';
+    return;
+  }
+  btn.disabled = true;
+  result.className = 'calib-status';
+  result.textContent = 'Calibrating - this can take a moment...';
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april/finish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag_size }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Calibration failed');
+    const res = j.result;
+    const fx = res.camera_matrix[0][0].toFixed(1);
+    const fy = res.camera_matrix[1][1].toFixed(1);
+    result.className = 'calib-status ok';
+    result.innerHTML = `Done! Reprojection error <strong>${res.rms.toFixed(3)} px</strong> (lower is better), focal <strong>${fx} x ${fy} px</strong> at ${res.resolution[0]}x${res.resolution[1]}. Restart vision to apply.`;
+    refreshCalibrationFields(j.calibration);
+  } catch (e) {
+    result.className = 'calib-status err';
+    result.textContent = e.message || 'Calibration failed';
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -1858,6 +2265,7 @@ async function resetCalibration() {
     showToast('Calibration reset.', 'success');
     refreshCalibrationFields(j.calibration);
     if (calibrationState.mode === 'charuco') clearCharucoSession();
+    else if (calibrationState.mode === 'april') clearAprilSession();
     else if (calibrationState.mode === 'chessboard') clearChessboardSession();
     if (calibrationState.mode === 'focal') {
       unfreezeCalibrationFrame();

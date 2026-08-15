@@ -194,7 +194,7 @@ class PluginStatusModule(WebModule):
             try:
                 text = path.read_text(errors="ignore")
                 if f'"{plugin_name}"' in text or f"'{plugin_name}'" in text:
-                    return str(path.relative_to(d))
+                    return path.relative_to(d).as_posix()
             except Exception:
                 continue
         return None
