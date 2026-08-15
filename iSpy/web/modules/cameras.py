@@ -994,8 +994,6 @@ class CamerasModule(WebModule):
     def _charuco_capture(self, cam_name):
         data = request.get_json(force=True) or {}
         image_b64 = data.get("image")
-        if not image_b64:
-            return jsonify(error="No image provided"), 400
         cols = int(_to_float(data.get("cols"), cam_calibration.DEFAULT_CHARUCO_PATTERN[0]))
         rows = int(_to_float(data.get("rows"), cam_calibration.DEFAULT_CHARUCO_PATTERN[1]))
         if cols < 2 or rows < 2 or cols > 30 or rows > 30:
@@ -1003,9 +1001,20 @@ class CamerasModule(WebModule):
         cams, key, entry = self._find_camera_entry(cam_name)
         if entry is None:
             return jsonify(error="Camera not found"), 404
-        frame = _decode_base64_frame(image_b64)
-        if frame is None:
-            return jsonify(error="Could not decode image"), 400
+        if image_b64:
+            frame = _decode_base64_frame(image_b64)
+            if frame is None:
+                return jsonify(error="Could not decode image"), 400
+        else:
+            # no image posted - detect on the live camera's raw frame so the
+            # board detection runs on a clean frame instead of the overlaid
+            # one shown in the wizard feed
+            cam = self.live_cameras.get(cam_name)
+            if cam is None or not hasattr(cam, "get_raw_frame"):
+                return jsonify(error="Camera not live - start vision first"), 400
+            frame = cam.get_raw_frame()
+            if frame is None:
+                return jsonify(error="Camera has no frame yet"), 400
         session_pattern, session_dict = self._charuco_session_layout(cam_name)
         matched_dict = session_dict
         kwargs = {}

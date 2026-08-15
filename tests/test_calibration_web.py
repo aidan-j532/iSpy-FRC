@@ -298,6 +298,18 @@ class CalibrationWebTests(unittest.TestCase):
         self.assertEqual(len(j["color"]), 3)
         self.assertTrue(all(isinstance(v, int) for v in j["color"]))
 
+    def test_charuco_capture_uses_server_raw_frame(self):
+        # the wizard no longer posts the overlaid feed image - the server
+        # detects on the live camera's raw frame so the overlay can't break it
+        cfg, cam, mod, client = self._setup()
+        cam._frame = c.make_charuco_board(7, 5).generateImage((640, 480), marginSize=20)
+        r = client.post("/api/cameras/calibration/cam_0/charuco/capture", json={"cols": 7, "rows": 5})
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["board_found"])
+        self.assertEqual(j["captured"], 1)
+        self.assertEqual(len(j["color"]), 3)
+
     def test_charuco_captured_overlay_drawn_in_its_color(self):
         cfg, cam, mod, client = self._setup()
         cam._frame = c.make_charuco_board(7, 5).generateImage((640, 480), marginSize=20)
