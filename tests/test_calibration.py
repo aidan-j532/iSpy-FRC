@@ -215,5 +215,57 @@ class ChessboardCalibrationTests(unittest.TestCase):
         self.assertIsNone(c.calibrate_chessboard(captures, pattern))
 
 
+class OverlayColorTests(unittest.TestCase):
+    def _flat_frame(self, color=(30, 30, 30)):
+        return np.full((120, 160, 3), color, dtype=np.uint8)
+
+    def test_random_overlay_color_is_bright_bgr(self):
+        color = c.random_overlay_color()
+        self.assertEqual(len(color), 3)
+        self.assertTrue(all(0 <= v <= 255 for v in color))
+        self.assertGreater(max(color), 150, "color should be bright enough to show on any scene")
+
+    def test_draw_corners_paints_given_color(self):
+        frame = self._flat_frame()
+        corners = np.array([[[40.0, 60.0]], [[120.0, 60.0]]], dtype=np.float32)
+        out = c.draw_corners(frame, corners, (10, 200, 250))
+        b, g, r = out[:, :, 0].astype(int), out[:, :, 1].astype(int), out[:, :, 2].astype(int)
+        painted = (r > 200) & (g > 150) & (b < 50)
+        self.assertTrue(bool(painted.any()), "expected the given color to be drawn")
+
+    def test_draw_chessboard_color_uses_given_color(self):
+        frame = self._flat_frame()
+        found, corners, _ = c.detect_chessboard(_make_board((9, 6)), * (9, 6))
+        self.assertTrue(found)
+        out = c.draw_chessboard(frame, corners, 9, 6, color=(10, 200, 250))
+        b, g, r = out[:, :, 0].astype(int), out[:, :, 1].astype(int), out[:, :, 2].astype(int)
+        painted = (r > 200) & (g > 150) & (b < 50)
+        self.assertTrue(bool(painted.any()), "expected colored chessboard corners on the copy")
+
+    def test_draw_charuco_color_uses_given_color(self):
+        frame = self._flat_frame()
+        board_img = c.make_charuco_board(7, 5).generateImage((640, 480), marginSize=20)
+        found, corners, ids, mc, mi, _ = c.detect_charuco(board_img, 7, 5)
+        self.assertTrue(found)
+        out = c.draw_charuco(frame, corners, ids, mc, mi, color=(10, 200, 250))
+        b, g, r = out[:, :, 0].astype(int), out[:, :, 1].astype(int), out[:, :, 2].astype(int)
+        painted = (r > 200) & (g > 150) & (b < 50)
+        self.assertTrue(bool(painted.any()), "expected colored charuco corners on the copy")
+
+    def test_draw_april_color_uses_given_color(self):
+        tag = np.stack(
+            [cv2.aruco.generateImageMarker(
+                cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11), 0, 200)] * 3,
+            axis=-1,
+        )
+        frame = _render_april_pose(tag, 0, 0, 500)
+        found, corners, ids, _, _, _ = c.detect_april(frame)
+        self.assertTrue(found)
+        out = c.draw_april(frame, corners, ids, color=(10, 200, 250))
+        b, g, r = out[:, :, 0].astype(int), out[:, :, 1].astype(int), out[:, :, 2].astype(int)
+        painted = (r > 200) & (g > 150) & (b < 50)
+        self.assertTrue(bool(painted.any()), "expected colored april box on the copy")
+
+
 if __name__ == "__main__":
     unittest.main()

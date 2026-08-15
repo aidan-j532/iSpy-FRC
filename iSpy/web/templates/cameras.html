@@ -1746,13 +1746,13 @@ function renderChessboardCalibration(body) {
   body.innerHTML = `
     <div class="form-row"><span class="form-label">Live view</span>
       <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="${calibrationFeedUrl()}" alt="live feed" onerror="calibrationFeedError()">
+        <img id="calib-feed" src="${calibrationFeedUrl('chessboard', [9, 6])}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
-    <div class="calib-status" id="chess-note">Hold a printed chessboard in view and fill the frame with it, then click Capture. Move it around - 10+ varied frames give the best result.</div>
+    <div class="calib-status" id="chess-note">Hold a printed chessboard in view and fill the frame with it, then click Capture. The detected corners are drawn live on the feed, and every capture stays drawn on the live view in a fresh random color. Move the board around - 10+ varied frames give the best result.</div>
     <div class="form-row">
       <span class="form-label">Board pattern</span>
-      <select id="chess-pattern" class="form-input">
+      <select id="chess-pattern" class="form-input" onchange="onChessboardPatternChange()">
         <option value="9,6" selected>9 x 6 inner corners (10 x 7 board)</option>
         <option value="8,6">8 x 6 inner corners</option>
         <option value="7,6">7 x 6 inner corners</option>
@@ -1767,13 +1767,16 @@ function renderChessboardCalibration(body) {
       </div>
     </div>
     <div class="calib-status" id="chess-status">Captured frames: 0</div>
-    <img id="chess-preview" class="calib-preview" style="display:none;" alt="detected board preview">
     <div class="form-row" style="margin-top:10px;">
       <span class="form-label"></span>
       <button type="button" class="btn-ok" onclick="finishChessboardCalibration()" id="chess-finish-btn">Calibrate intrinsics</button>
     </div>
     <div class="calib-status" id="chess-result"></div>
   `;
+}
+
+function onChessboardPatternChange() {
+  reconnectCalibrationFeed();
 }
 
 function renderCharucoCalibration(body) {
@@ -1785,7 +1788,7 @@ function renderCharucoCalibration(body) {
       </div>
     </div>
     <div class="calib-status" id="charuco-live">Waiting for camera feed...</div>
-    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners = board detected. The board layout and marker dictionary are auto-detected - watch the status line to confirm it found yours. Click Capture, move the board to a different angle, and repeat - 10+ varied frames give the best result. Detections are paused while this is open.</div>
+    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners = board detected. The board layout and marker dictionary are auto-detected - watch the status line to confirm it found yours. Click Capture, move the board to a different angle, and repeat - every capture stays drawn on the live view in a fresh random color. 10+ varied frames give the best result. Detections are paused while this is open.</div>
     <div class="form-row">
       <span class="form-label">Board pattern</span>
       <select id="charuco-pattern" class="form-input" onchange="onCharucoPatternChange()">
@@ -1804,8 +1807,6 @@ function renderCharucoCalibration(body) {
       </div>
     </div>
     <div class="calib-status" id="charuco-status">Captured frames: 0</div>
-    <div id="charuco-thumbs"></div>
-    <img id="charuco-preview" class="calib-preview" style="display:none;" alt="detected board preview">
     <div class="form-row" style="margin-top:10px;">
       <span class="form-label"></span>
       <button type="button" class="btn-ok" onclick="finishCharucoCalibration()" id="charuco-finish-btn">Calibrate intrinsics</button>
@@ -1831,7 +1832,9 @@ function reconnectCalibrationFeed() {
     ? calibrationFeedUrl('charuco', calibrationState.overlayPattern)
     : calibrationState.mode === 'april'
       ? calibrationFeedUrl('april')
-      : calibrationFeedUrl();
+      : calibrationState.mode === 'chessboard'
+        ? calibrationFeedUrl('chessboard', ($id('chess-pattern').value || '9,6').split(',').map(Number))
+        : calibrationFeedUrl();
   img.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
 }
 
@@ -1875,7 +1878,7 @@ function renderAprilCalibration(body) {
       </div>
     </div>
     <div class="calib-status" id="april-live">Waiting for camera feed...</div>
-    <div class="calib-status" id="april-note">Hold your printed AprilTag in front of the camera. A green box + ID means it is detected. Enter the tag's real size and the distance from the camera to it, then save focal length. To also calibrate intrinsics, capture the tag from 6+ different angles/ranges and hit Calibrate intrinsics. Detections are paused while this is open.</div>
+    <div class="calib-status" id="april-note">Hold your printed AprilTag in front of the camera. A green box + ID means it is detected. Enter the tag's real size and the distance from the camera to it, then save focal length. To also calibrate intrinsics, capture the tag from 6+ different angles/ranges - every capture stays drawn on the live view in a fresh random color - and hit Calibrate intrinsics. Detections are paused while this is open.</div>
     <div class="form-row">
       <span class="form-label">Tag size (in)</span>
       <input type="number" id="april-tag-size" class="form-input" value="6.5" step="0.1" min="0.1">
@@ -1899,7 +1902,6 @@ function renderAprilCalibration(body) {
       </div>
     </div>
     <div class="calib-status" id="april-status">Captured frames: 0</div>
-    <div id="april-thumbs"></div>
     <div class="form-row" style="margin-top:10px;">
       <span class="form-label"></span>
       <button type="button" class="btn-ok" onclick="finishAprilCalibration()" id="april-finish-btn">Calibrate intrinsics</button>
@@ -2007,15 +2009,7 @@ async function captureAprilFrame() {
       status.textContent = j.message || 'Tag not found in that frame.';
     } else {
       status.className = 'calib-status ok';
-      status.textContent = `Captured frames: ${j.captured} (move the tag to a different angle/range)`;
-      const thumbs = $id('april-thumbs');
-      if (thumbs && j.preview) {
-        const thumb = document.createElement('img');
-        thumb.src = j.preview;
-        thumb.className = 'calib-thumb';
-        thumb.alt = 'captured frame';
-        thumbs.appendChild(thumb);
-      }
+      status.textContent = `Captured frames: ${j.captured} - detection drawn on the live view in a new color. Move the tag for a different angle/range.`;
     }
   } catch (e) {
     status.className = 'calib-status err';
@@ -2032,8 +2026,6 @@ async function clearAprilSession() {
   } catch (e) {}
   const status = $id('april-status');
   if (status) { status.className = 'calib-status'; status.textContent = 'Captured frames: 0'; }
-  const thumbs = $id('april-thumbs');
-  if (thumbs) thumbs.innerHTML = '';
   const result = $id('april-result');
   if (result) result.textContent = '';
 }
@@ -2103,12 +2095,7 @@ async function captureChessboardFrame() {
     } else {
       calibrationState.captured = j.captured;
       status.className = 'calib-status ok';
-      status.textContent = `Captured frames: ${j.captured} (move the board for a different view)`;
-      const preview = $id('chess-preview');
-      if (j.preview) {
-        preview.src = j.preview;
-        preview.style.display = 'block';
-      }
+      status.textContent = `Captured frames: ${j.captured} - detection drawn on the live view in a new color. Move the board for a different view.`;
     }
   } catch (e) {
     status.className = 'calib-status err';
@@ -2125,8 +2112,6 @@ async function clearChessboardSession() {
   } catch (e) {}
   const status = $id('chess-status');
   if (status) { status.className = 'calib-status'; status.textContent = 'Captured frames: 0'; }
-  const preview = $id('chess-preview');
-  if (preview) preview.style.display = 'none';
   const result = $id('chess-result');
   if (result) result.textContent = '';
 }
@@ -2189,20 +2174,7 @@ async function captureCharucoFrame() {
     } else {
       calibrationState.captured = j.captured;
       status.className = 'calib-status ok';
-      status.textContent = `Captured frames: ${j.captured} (move the board for a different view)`;
-      const preview = $id('charuco-preview');
-      if (j.preview) {
-        preview.src = j.preview;
-        preview.style.display = 'block';
-        const thumbs = $id('charuco-thumbs');
-        if (thumbs) {
-          const thumb = document.createElement('img');
-          thumb.src = j.preview;
-          thumb.className = 'calib-thumb';
-          thumb.alt = 'captured frame';
-          thumbs.appendChild(thumb);
-        }
-      }
+      status.textContent = `Captured frames: ${j.captured} - detection drawn on the live view in a new color. Move the board for a different view.`;
     }
   } catch (e) {
     status.className = 'calib-status err';
@@ -2219,10 +2191,6 @@ async function clearCharucoSession() {
   } catch (e) {}
   const status = $id('charuco-status');
   if (status) { status.className = 'calib-status'; status.textContent = 'Captured frames: 0'; }
-  const preview = $id('charuco-preview');
-  if (preview) preview.style.display = 'none';
-  const thumbs = $id('charuco-thumbs');
-  if (thumbs) thumbs.innerHTML = '';
   const result = $id('charuco-result');
   if (result) result.textContent = '';
 }

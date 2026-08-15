@@ -643,20 +643,14 @@ class CamerasModule(WebModule):
                 board_found=False,
                 message="Chessboard not detected in that frame. Show the whole board, use even lighting, or try another pattern.",
             )
+        color = cam_calibration.random_overlay_color()
         with self.calib_lock:
             session = self.calib_sessions.setdefault(key, {})
             session["pattern"] = [cols, rows]
             session.setdefault("captures", []).append((gray, corners))
+            session.setdefault("chess_overlays", []).append((corners, color))
             count = len(session["captures"])
-        preview = None
-        try:
-            drawn = cam_calibration.draw_chessboard(frame, corners, cols, rows)
-            ok, buf = cv2.imencode(".jpg", drawn, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ok:
-                preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
-        except Exception:
-            preview = None
-        return jsonify(success=True, board_found=True, captured=count, preview=preview)
+        return jsonify(success=True, board_found=True, captured=count, color=list(color))
 
     def _chessboard_clear(self, cam_name):
         cams, key, entry = self._find_camera_entry(cam_name)
@@ -705,8 +699,9 @@ class CamerasModule(WebModule):
     def _calibration_feed(self, cam_name):
         """MJPEG feed for the calibration wizard - frames straight from the
         capture thread (never run through the pipeline's detectors). Pass
-        ?overlay=charuco or ?overlay=april to draw the detected board on top
-        so the user can see what the detector sees while they move it."""
+        ?overlay=charuco, ?overlay=chessboard or ?overlay=april to draw the
+        detected board on top so the user can see what the detector sees while
+        they move it. Captured frames are drawn on top in their own random color."""
         overlay = request.args.get("overlay", "")
         pattern_arg = request.args.get("pattern")
         pattern = None
@@ -729,10 +724,42 @@ class CamerasModule(WebModule):
             d = session.get("charuco_dict")
         return tuple(p) if p else None, d
 
+    def _chessboard_session_pattern(self, cam_name):
+        with self.calib_lock:
+            session = self.calib_sessions.get(cam_name) or {}
+            p = session.get("pattern")
+        return tuple(p) if p else None
+
+    def _draw_captured_overlays(self, frame, cam_name, overlay):
+        """draw every captured frame's detection on the live feed in its own
+        random color, so each capture is confirmed on the live view
+        (PhotonVision style) instead of a thumbnail strip under the wizard."""
+        with self.calib_lock:
+            session = self.calib_sessions.get(cam_name) or {}
+            layers = {
+                "charuco": session.get("charuco_overlays", []),
+                "chessboard": session.get("chess_overlays", []),
+                "april": session.get("april_overlays", []),
+            }.get(overlay, [])
+            layers = list(layers)
+        out = frame
+        for layer in layers:
+            if overlay == "charuco":
+                corners, ids, mc, mi, color = layer
+                out = cam_calibration.draw_charuco(out, corners, ids, mc, mi, color=color)
+            elif overlay == "chessboard":
+                corners, color = layer
+                out = cam_calibration.draw_corners(out, corners, color)
+            elif overlay == "april":
+                corners, color = layer
+                out = cam_calibration.draw_april(out, corners, None, color=color)
+        return out
+
     def _generate_calibration(self, cam_name, overlay="", pattern=None):
         last_frame_time = time.monotonic()
         last_detect = 0.0
         corners, ids, marker_corners, marker_ids = None, None, None, None
+        chess_pattern = None
         try:
             while True:
                 cam = self.live_cameras.get(cam_name)
@@ -770,6 +797,25 @@ class CamerasModule(WebModule):
                         to_serve = cam_calibration.draw_charuco(
                             frame, corners, ids, marker_corners, marker_ids
                         )
+                    to_serve = self._draw_captured_overlays(to_serve, cam_name, "charuco")
+                elif overlay == "chessboard":
+                    now = time.monotonic()
+                    if now - last_detect >= 0.1:
+                        last_detect = now
+                        if pattern is None:
+                            pattern = self._chessboard_session_pattern(cam_name)
+                        if pattern is not None and len(pattern) == 2:
+                            chess_pattern = tuple(pattern[:2])
+                            found, corners, _ = cam_calibration.detect_chessboard(
+                                frame, chess_pattern[0], chess_pattern[1]
+                            )
+                            if not found:
+                                corners = None
+                    if corners is not None and chess_pattern is not None:
+                        to_serve = cam_calibration.draw_chessboard(
+                            frame, corners, chess_pattern[0], chess_pattern[1]
+                        )
+                    to_serve = self._draw_captured_overlays(to_serve, cam_name, "chessboard")
                 elif overlay == "april":
                     now = time.monotonic()
                     if now - last_detect >= 0.1:
@@ -783,6 +829,7 @@ class CamerasModule(WebModule):
                         to_serve = cam_calibration.draw_april(
                             frame, corners, ids, marker_corners, marker_ids
                         )
+                    to_serve = self._draw_captured_overlays(to_serve, cam_name, "april")
                 ok, buf = cv2.imencode(".jpg", to_serve, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 if not ok:
                     continue
@@ -877,22 +924,16 @@ class CamerasModule(WebModule):
                 board_found=False,
                 message="ChArUco board not detected in that frame. Show the whole board, use even lighting, or try another pattern.",
             )
+        color = cam_calibration.random_overlay_color()
         with self.calib_lock:
             session = self.calib_sessions.setdefault(key, {})
             session["charuco_pattern"] = [cols, rows]
             if matched_dict is not None:
                 session["charuco_dict"] = matched_dict
             session.setdefault("charuco_captures", []).append((gray, corners, ids))
+            session.setdefault("charuco_overlays", []).append((corners, ids, marker_corners, marker_ids, color))
             count = len(session["charuco_captures"])
-        preview = None
-        try:
-            drawn = cam_calibration.draw_charuco(frame, corners, ids, marker_corners, marker_ids)
-            ok, buf = cv2.imencode(".jpg", drawn, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ok:
-                preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
-        except Exception:
-            preview = None
-        return jsonify(success=True, board_found=True, captured=count, preview=preview)
+        return jsonify(success=True, board_found=True, captured=count, color=list(color))
 
     def _charuco_clear(self, cam_name):
         cams, key, entry = self._find_camera_entry(cam_name)
@@ -902,6 +943,7 @@ class CamerasModule(WebModule):
             session = self.calib_sessions.get(key)
             if session:
                 session.pop("charuco_captures", None)
+                session.pop("charuco_overlays", None)
                 session.pop("charuco_pattern", None)
                 session.pop("charuco_dict", None)
         return jsonify(success=True)
@@ -984,24 +1026,18 @@ class CamerasModule(WebModule):
                 board_found=False,
                 message="No AprilTag detected in that frame. Show a tag, use even lighting, and try again.",
             )
+        color = cam_calibration.random_overlay_color()
         with self.calib_lock:
             session = self.calib_sessions.setdefault(key, {})
             session.setdefault("april_captures", []).append((gray, corners, ids))
+            session.setdefault("april_overlays", []).append((corners, color))
             count = len(session["april_captures"])
-        preview = None
-        try:
-            drawn = cam_calibration.draw_april(frame, corners, ids)
-            ok, buf = cv2.imencode(".jpg", drawn, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ok:
-                preview = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
-        except Exception:
-            preview = None
         return jsonify(
             success=True,
             board_found=True,
             captured=count,
             tag_ids=[int(i[0]) for i in ids],
-            preview=preview,
+            color=list(color),
         )
 
     def _april_clear(self, cam_name):
@@ -1012,6 +1048,7 @@ class CamerasModule(WebModule):
             session = self.calib_sessions.get(key)
             if session:
                 session.pop("april_captures", None)
+                session.pop("april_overlays", None)
         return jsonify(success=True)
 
     def _april_finish(self, cam_name):

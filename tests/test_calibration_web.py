@@ -53,6 +53,21 @@ def _charuco_b64(pattern=(7, 5), size=(640, 480), rotate=False):
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _chessboard_image(pattern=(9, 6), img_size=(480, 640), square=60):
+    cols, rows = pattern
+    board = np.full((img_size[0], img_size[1], 3), 255, np.uint8)
+    sq = int(square)
+    ox = (img_size[1] - (cols + 1) * sq) // 2
+    oy = (img_size[0] - (rows + 1) * sq) // 2
+    for y in range(rows + 1):
+        for x in range(cols + 1):
+            if (x + y) % 2 == 0:
+                cv2.rectangle(board, (ox + x * sq, oy + y * sq),
+                              (ox + (x + 1) * sq, oy + (y + 1) * sq), (0, 0, 0), -1)
+    ok, buf = cv2.imencode(".jpg", board, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+
+
 def _april_tag_image():
     tag = cv2.aruco.generateImageMarker(
         cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11), 0, 200
@@ -192,7 +207,9 @@ class CalibrationWebTests(unittest.TestCase):
             chunk = next(gen)
         finally:
             gen.close()
-        body = chunk.split(b"\r\n\r\n", 1)[1].split(b"\r\n")[0]
+        body = chunk.split(b"\r\n\r\n", 1)[1]
+        if body.endswith(b"\r\n"):
+            body = body[:-2]
         return cv2.imdecode(np.frombuffer(body, dtype=np.uint8), cv2.IMREAD_COLOR)
 
     def test_charuco_overlay_feed_draws_detected_board(self):
@@ -211,6 +228,69 @@ class CalibrationWebTests(unittest.TestCase):
         b, g, r = served[:, :, 0].astype(int), served[:, :, 1].astype(int), served[:, :, 2].astype(int)
         green = (g > r + 20) & (g > b + 20)
         self.assertFalse(bool(green.any()), "no board should mean no overlay")
+
+    def test_chessboard_overlay_feed_draws_detected_board(self):
+        cfg, cam, mod, client = self._setup()
+        cam._frame = cv2.imdecode(
+            np.frombuffer(base64.b64decode(_chessboard_image().split(",", 1)[1]), np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+        served = self._first_jpeg(mod._generate_calibration("cam_0", overlay="chessboard", pattern=(9, 6)))
+        b, g, r = served[:, :, 0].astype(int), served[:, :, 1].astype(int), served[:, :, 2].astype(int)
+        green = (g > r + 20) & (g > b + 20)
+        self.assertTrue(bool(green.any()), "expected green detection overlay on the served frame")
+
+    def test_chessboard_capture_reports_color(self):
+        cfg, cam, mod, client = self._setup()
+        r = client.post("/api/cameras/calibration/cam_0/chessboard/capture", json={
+            "image": _chessboard_image(), "cols": 9, "rows": 6,
+        })
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["board_found"])
+        self.assertEqual(j["captured"], 1)
+        self.assertEqual(len(j["color"]), 3)
+        self.assertTrue(all(isinstance(v, int) for v in j["color"]))
+
+    def test_charuco_capture_reports_color(self):
+        cfg, cam, mod, client = self._setup()
+        r = client.post("/api/cameras/calibration/cam_0/charuco/capture", json={
+            "image": _charuco_b64(), "cols": 7, "rows": 5,
+        })
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["board_found"])
+        self.assertEqual(len(j["color"]), 3)
+        self.assertTrue(all(isinstance(v, int) for v in j["color"]))
+
+    def test_charuco_captured_overlay_drawn_in_its_color(self):
+        cfg, cam, mod, client = self._setup()
+        cam._frame = c.make_charuco_board(7, 5).generateImage((640, 480), marginSize=20)
+        ok, buf = cv2.imencode(".jpg", cam._frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        b64 = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+        r = client.post("/api/cameras/calibration/cam_0/charuco/capture", json={
+            "image": b64, "cols": 7, "rows": 5,
+        })
+        self.assertEqual(r.status_code, 200)
+        color = r.get_json()["color"]
+        # blank live frame so only the captured overlay is drawn - look for its color
+        cam._frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        served = self._first_jpeg(mod._generate_calibration("cam_0", overlay="charuco", pattern=(7, 5)))
+        b, g, r = served[:, :, 0].astype(int), served[:, :, 1].astype(int), served[:, :, 2].astype(int)
+        painted = (r > color[2] - 60) & (g > color[1] - 60) & (b > color[0] - 60)
+        self.assertTrue(bool(painted.any()), f"expected captured overlay in color {color} on the feed")
+
+    def test_april_capture_reports_color(self):
+        cfg, cam, mod, client = self._setup()
+        cam._frame = _april_pose(0, 0, 500)
+        ok, buf = cv2.imencode(".jpg", cam._frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        b64 = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+        r = client.post("/api/cameras/calibration/cam_0/april/capture", json={"image": b64})
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["board_found"])
+        self.assertEqual(len(j["color"]), 3)
+        self.assertTrue(all(isinstance(v, int) for v in j["color"]))
 
     def test_charuco_status_reports_detection(self):
         cfg, cam, mod, client = self._setup()

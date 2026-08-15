@@ -28,6 +28,81 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# OpenCV 4.9+ moved several aruco helpers out of the cv2.aruco namespace into
+# the main cv2 namespace (the old aliases were deleted there). Resolve each
+# from whichever namespace the installed build exposes so the same code runs
+# on both old (<=4.8) and new (>=4.9) wheels.
+def _pick_aruco(*names: tuple) -> callable:
+    for obj, name in names:
+        fn = getattr(obj, name, None)
+        if fn is not None:
+            return fn
+    raise AttributeError(f"no cv2 binding found for any of {[n for _, n in names]}")
+
+
+_draw_detected_markers = _pick_aruco(
+    (cv2, "drawDetectedMarkers"), (cv2.aruco, "drawDetectedMarkers")
+)
+_draw_detected_corners_charuco = _pick_aruco(
+    (cv2, "drawDetectedCornersCharuco"), (cv2.aruco, "drawDetectedCornersCharuco")
+)
+
+
+def _calibrate_charuco_via_calibrate_camera(
+    all_corners: list, all_ids: list, board, img_size
+):
+    """manual ChArUco intrinsics solve for builds that dropped
+    calibrateCameraCharuco (some aruco wheels ship the detector but not the
+    calibrator): build 3D object points from the board's chessboard corners
+    and run plain calibrateCamera. Returns (rms, cam_mat, dist) or None."""
+    try:
+        # detectBoard ids index straight into getChessboardCorners() (row-major
+        # grid layout), so map each corner index to its 3D object point.
+        obj_by_id = {}
+        for idx, oc in enumerate(
+            np.asarray(board.getChessboardCorners(), dtype=np.float32).reshape(-1, 3)
+        ):
+            obj_by_id[idx] = oc
+    except (AttributeError, TypeError, ValueError):
+        return None
+    obj_pts = []
+    img_pts = []
+    for corners, ids in zip(all_corners, all_ids):
+        objs = []
+        imgs = []
+        for c, i in zip(corners.reshape(-1, 2), ids.reshape(-1)):
+            oc = obj_by_id.get(int(i))
+            if oc is None:
+                return None
+            objs.append(oc)
+            imgs.append(c)
+        obj_pts.append(np.asarray(objs, dtype=np.float32).reshape(-1, 1, 3))
+        img_pts.append(np.asarray(imgs, dtype=np.float32).reshape(-1, 1, 2))
+    try:
+        rms, cam_mat, dist, _, _ = cv2.calibrateCamera(
+            obj_pts, img_pts, img_size, None, None, flags=cv2.CALIB_FIX_K3
+        )
+    except cv2.error:
+        return None
+    # match calibrateCameraCharuco's 5-tuple shape
+    return rms, cam_mat, dist, None, None
+
+
+def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
+    """run calibrateCameraCharuco when the build has it, else fall back to a
+    manual object-point solve through plain calibrateCamera."""
+    for obj, name in (
+        (cv2, "calibrateCameraCharuco"),
+        (cv2.aruco, "calibrateCameraCharuco"),
+    ):
+        fn = getattr(obj, name, None)
+        if fn is not None:
+            return fn(all_corners, all_ids, board, img_size, *extra)
+    result = _calibrate_charuco_via_calibrate_camera(all_corners, all_ids, board, img_size)
+    if result is None:
+        raise cv2.error("ChArUco calibration unavailable in this OpenCV build")
+    return result
+
 DEFAULT_CHESSBOARD_PATTERN = (9, 6)
 
 DEFAULT_CHARUCO_PATTERN = (7, 5)  # squares wide x squares tall
@@ -86,11 +161,48 @@ def detect_chessboard(frame, cols: int, rows: int):
     return bool(found), (corners if found else None), gray
 
 
-def draw_chessboard(frame, corners, cols: int, rows: int):
-    """copy of the frame with detected chessboard corners overlaid (for preview)."""
+def random_overlay_color():
+    """bright random BGR color so a captured detection stands out on any scene."""
+    hue = int(np.random.randint(0, 180))
+    sat = int(np.random.randint(180, 256))
+    val = int(np.random.randint(180, 256))
+    bgr = cv2.cvtColor(np.array([[[hue, sat, val]]], dtype=np.uint8), cv2.COLOR_HSV2BGR)
+    return tuple(int(x) for x in bgr[0, 0])
+
+
+def draw_corners(frame, corners, color):
+    """copy of the frame with a filled circle at every corner point in the
+    given color - used to overlay a captured detection on the live feed."""
+    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if corners is None:
+        return out
+    for corner in corners:
+        pts = np.asarray(corner, dtype=np.float64).reshape(-1, 2)
+        for x, y in pts:
+            cv2.circle(out, (int(round(float(x))), int(round(float(y)))), 5, color, -1)
+    return out
+
+
+def draw_markers(frame, corners, color):
+    """copy of the frame with each marker's outline drawn in the given color."""
+    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if corners is None:
+        return out
+    for corner in corners:
+        pts = np.asarray(corner, dtype=np.int32).reshape(-1, 2)
+        cv2.polylines(out, [pts], True, color, 2)
+    return out
+
+
+def draw_chessboard(frame, corners, cols: int, rows: int, color=None):
+    """copy of the frame with detected chessboard corners overlaid (for preview).
+    Pass a color to draw the corners in that color instead of OpenCV's defaults."""
     out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     if corners is not None:
-        cv2.drawChessboardCorners(out, (cols, rows), corners, True)
+        if color is None:
+            cv2.drawChessboardCorners(out, (cols, rows), corners, True)
+        else:
+            out = draw_corners(out, corners, color)
     return out
 
 
@@ -192,18 +304,33 @@ def detect_charuco(
         corners, ids, marker_corners, marker_ids = detector.detectBoard(gray)
     except cv2.error:
         return False, None, None, None, None, gray
-    found = corners is not None and ids is not None and len(corners) >= 4
+    if corners is None or ids is None:
+        return False, None, None, None, None, gray
+    # cv2 >= 5 returns flat (N, 2) / (N,) arrays - normalize to the classic
+    # (N, 1, 2) / (N, 1) shapes the draw + calibrate helpers expect.
+    corners = _to_corners(corners)
+    ids = _to_ids(ids)
+    marker_corners = _to_marker_corners(marker_corners)
+    marker_ids = _to_ids(marker_ids)
+    found = len(corners) >= 4
     return found, corners, ids, marker_corners, marker_ids, gray
 
 
-def draw_charuco(frame, corners, ids, marker_corners, marker_ids):
+def draw_charuco(frame, corners, ids, marker_corners, marker_ids, color=None):
     """copy of the frame with detected ChArUco markers + board corners
-    overlaid (for preview)."""
+    overlaid (for preview). Pass a color to draw the detection in that color
+    instead of OpenCV's defaults (used for captured-frame overlays)."""
     out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    if marker_corners is not None and marker_ids is not None:
-        cv2.aruco.drawDetectedMarkers(out, marker_corners, marker_ids)
-    if corners is not None and ids is not None:
-        cv2.aruco.drawDetectedCornersCharuco(out, corners, ids)
+    if color is None:
+        if marker_corners is not None and marker_ids is not None:
+            _draw_detected_markers(out, marker_corners, marker_ids)
+        if corners is not None and ids is not None:
+            _draw_detected_corners_charuco(out, corners, ids)
+    else:
+        if marker_corners is not None:
+            out = draw_markers(out, marker_corners, color)
+        if corners is not None:
+            out = draw_corners(out, corners, color)
     return out
 
 
@@ -242,7 +369,7 @@ def calibrate_charuco(
         )
         return None
     try:
-        rms, cam_mat, dist, _, _ = cv2.aruco.calibrateCameraCharuco(
+        rms, cam_mat, dist, _, _ = _calibrate_camera_charuco(
             all_corners,
             all_ids,
             board,
@@ -314,6 +441,31 @@ def detect_charuco_auto(
     return False, None, None, None, None, gray, None, None
 
 
+def _to_corners(corners):
+    """normalize a corners array to (N, 1, 2) regardless of the cv2 build."""
+    a = np.asarray(corners, dtype=np.float32)
+    if a.ndim == 2:
+        return a.reshape(-1, 1, 2)
+    return a
+
+
+def _to_ids(ids):
+    """normalize an ids array to (N, 1) regardless of the cv2 build."""
+    a = np.asarray(ids, dtype=np.int32)
+    if a.ndim == 1:
+        return a.reshape(-1, 1)
+    return a
+
+
+def _to_marker_corners(marker_corners):
+    """normalize a marker corners list to [4x1x2, ...] regardless of cv2 build."""
+    out = []
+    for marker in marker_corners:
+        a = np.asarray(marker, dtype=np.float32).reshape(-1, 2)
+        out.append(a.reshape(4, 1, 2))
+    return out
+
+
 def _april_detector(dictionary_id: int = DEFAULT_APRIL_DICT):
     params = cv2.aruco.DetectorParameters()
     params.useAruco3Detection = True
@@ -332,23 +484,28 @@ def detect_april(frame, dictionary_id: int = DEFAULT_APRIL_DICT):
         corners, ids, _ = _april_detector(dictionary_id).detectMarkers(gray)
     except cv2.error:
         return False, None, None, None, None, gray
-    found = corners is not None and ids is not None and len(ids) > 0
-    if not found:
+    if corners is None or ids is None or len(ids) == 0:
         return False, None, None, None, None, gray
+    corners = _to_marker_corners(corners)
+    ids = _to_ids(ids)
     return True, corners, ids, corners, ids, gray
 
 
-def draw_april(frame, corners, ids, marker_corners=None, marker_ids=None):
-    """copy of the frame with detected AprilTags boxed + id-labelled."""
+def draw_april(frame, corners, ids, marker_corners=None, marker_ids=None, color=None):
+    """copy of the frame with detected AprilTags boxed + id-labelled.
+    Pass a color to draw the detection in that color (used for captured-frame
+    overlays) instead of green."""
     out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     tags = marker_corners if marker_corners is not None else corners
     tag_ids = marker_ids if marker_ids is not None else ids
-    if tags is not None and tag_ids is not None:
-        for corner, tag_id in zip(tags, tag_ids):
+    line_color = color if color is not None else (0, 255, 0)
+    if tags is not None:
+        for i, corner in enumerate(tags):
             pts = np.asarray(corner, dtype=np.int32).reshape(-1, 2)
-            cv2.polylines(out, [pts], True, (0, 255, 0), 2)
-            cv2.putText(out, f"ID: {int(tag_id[0])}", tuple(pts[0].astype(int)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.polylines(out, [pts], True, line_color, 2)
+            if tag_ids is not None and i < len(tag_ids):
+                cv2.putText(out, f"ID: {int(tag_ids[i][0])}", tuple(pts[0].astype(int)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, line_color, 2)
     return out
 
 
