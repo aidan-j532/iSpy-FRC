@@ -1342,6 +1342,8 @@ const TUNING_FIELDS = {
   brightness: { label: 'Brightness', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Additive brightness offset.' },
   contrast: { label: 'Contrast', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Multiplicative contrast.' },
   saturation: { label: 'Saturation', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Color saturation boost / drain.' },
+  white_balance: { label: 'White balance', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Fix a warm/yellow cast by sliding positive (adds blue, removes red). Negative warms the image.' },
+  tint: { label: 'Tint', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Green/magenta balance. Positive adds magenta, negative adds green.' },
   gamma: { label: 'Gamma', type: 'slider', min: 0.3, max: 3.0, step: 0.05, default: 1.0, help: 'Gamma curve. 1.0 is neutral, lower brightens shadows, higher deepens them.' },
   auto_exposure: { label: 'Auto exposure', type: 'boolean', default: true, help: 'Let the camera driver pick exposure. Disable to set a fixed exposure time.' },
   exposure_time: { label: 'Exposure', type: 'slider', min: 1, max: 100000, step: 1, default: 100, unit: '\u00b5s', help: 'Fixed exposure in microseconds (used when auto exposure is off).' },
@@ -1504,7 +1506,6 @@ const calibrationState = {
 };
 
 let calibrationHeartbeatTimer = null;
-let charucoStatusTimer = null;
 
 function calibrationModeFor(pipeline) {
   if (pipeline === 'object_detection') return 'focal';
@@ -1694,7 +1695,6 @@ function closeCalibrationWizard() {
   calibrationState.frame = null;
   calibrationState.overlayPattern = null;
   calibrationState.intrinsicsActive = false;
-  stopCharucoStatusPoll();
   endCalibrationMode(camera);
 }
 
@@ -1740,8 +1740,7 @@ function renderFocalCalibration(body) {
       <button type="button" class="btn-sm" id="focal-intrinsics-btn" onclick="toggleIntrinsicsSection()">Run precision intrinsics calibration</button>
     </div>
     <div id="focal-intrinsics" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
-      <div class="calib-status" id="charuco-live">Waiting for camera feed...</div>
-      <div class="calib-status">Optional: calibrate a real camera matrix + distortion with a ChArUco board. The live view switches to board detection, and every capture stays drawn on it in a fresh random color. You can skip this step - the known-object measurement above is enough for depth-from-size.</div>
+      <div class="calib-status">Optional: calibrate a real camera matrix + distortion with a ChArUco board. The live view switches to board detection - hold the board up and green corners + marker outlines appear the moment it locks on. Every capture stays drawn on it in a fresh random color. You can skip this step - the known-object measurement above is enough for depth-from-size.</div>
       ${charucoCaptureSectionHtml()}
     </div>
   `;
@@ -1758,10 +1757,8 @@ function toggleIntrinsicsSection() {
     calibrationState.overlayPattern = [7, 5];
     calibrationState.intrinsicsActive = true;
     reconnectCalibrationFeed();
-    startCharucoStatusPoll();
   } else {
     calibrationState.intrinsicsActive = false;
-    stopCharucoStatusPoll();
     reconnectCalibrationFeed();
   }
 }
@@ -2032,11 +2029,9 @@ function renderCharucoCalibration(body) {
         <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
-    <div class="calib-status" id="charuco-live">Waiting for camera feed...</div>
-    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners = board detected. The board layout and marker dictionary are auto-detected - watch the status line to confirm it found yours. Click Capture, move the board to a different angle, and repeat - every capture stays drawn on the live view in a fresh random color. 10+ varied frames give the best result. Detections are paused while this is open.</div>
+    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners + marker outlines = board detected on the live view. The board layout and marker dictionary are auto-detected - the moment it locks onto your board the overlay appears. Click Capture, move the board to a different angle, and repeat - every capture stays drawn on the live view in a fresh random color. 10+ varied frames give the best result. Detections are paused while this is open.</div>
     ${charucoCaptureSectionHtml()}
   `;
-  startCharucoStatusPoll();
 }
 
 function onCharucoPatternChange() {
@@ -2044,7 +2039,6 @@ function onCharucoPatternChange() {
   if (!sel) return;
   calibrationState.overlayPattern = sel.value.split(',').map(Number);
   reconnectCalibrationFeed();
-  startCharucoStatusPoll();
 }
 
 function reconnectCalibrationFeed() {
@@ -2062,38 +2056,6 @@ function reconnectCalibrationFeed() {
     base = calibrationFeedUrl();
   }
   img.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
-}
-
-async function pollCharucoStatus() {
-  const live = $id('charuco-live');
-  if (!live || !calibrationState.camera) return;
-  try {
-    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/charuco/status`);
-    const j = await r.json();
-    if (j.found) {
-      live.className = 'calib-status ok';
-      live.textContent = j.message || `Board detected: ${j.corners} corners from ${j.markers} markers - move the board around and capture.`;
-    } else {
-      live.className = 'calib-status err';
-      live.textContent = j.message || 'Board not visible in the live feed.';
-    }
-  } catch (e) {
-    live.className = 'calib-status err';
-    live.textContent = 'Board detection status unavailable.';
-  }
-}
-
-function startCharucoStatusPoll() {
-  stopCharucoStatusPoll();
-  pollCharucoStatus();
-  charucoStatusTimer = setInterval(pollCharucoStatus, 1000);
-}
-
-function stopCharucoStatusPoll() {
-  if (charucoStatusTimer) {
-    clearInterval(charucoStatusTimer);
-    charucoStatusTimer = null;
-  }
 }
 
 async function captureChessboardFrame() {

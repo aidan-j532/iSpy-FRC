@@ -244,6 +244,18 @@ class CalibrationWebTests(unittest.TestCase):
         green = (g > r + 20) & (g > b + 20)
         self.assertTrue(bool(green.any()), "expected green detection overlay on the served frame")
 
+    def test_charuco_overlay_feed_auto_detects_non_default_layout(self):
+        # a differently-printed board (5x7 while the dropdown still says 7x5)
+        # must still show live detections - the feed scans the common layouts
+        # and caches the match so captures/calibration stay consistent
+        cfg, cam, mod, client = self._setup()
+        cam._frame = c.make_charuco_board(5, 7).generateImage((640, 480), marginSize=20)
+        served = self._first_jpeg(mod._generate_calibration("cam_0", overlay="charuco", pattern=(7, 5)))
+        b, g, r = served[:, :, 0].astype(int), served[:, :, 1].astype(int), served[:, :, 2].astype(int)
+        green = (g > r + 20) & (g > b + 20)
+        self.assertTrue(bool(green.any()), "expected auto-detected overlay for a 5x7 board")
+        self.assertEqual(mod._charuco_session_layout("cam_0")[0], (5, 7))
+
     def test_charuco_overlay_feed_leaves_non_board_plain(self):
         cfg, cam, mod, client = self._setup()
         cam._frame = np.full((100, 160, 3), 30, dtype=np.uint8)

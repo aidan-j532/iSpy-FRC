@@ -100,6 +100,9 @@ class Camera:
         self._contrast = float(camera_config.get("contrast", 0) or 0)
         self._saturation = float(camera_config.get("saturation", 0) or 0)
         self._gamma = float(camera_config.get("gamma", 1.0) or 1.0)
+        # color balance - fixes a warm/yellow or green cast in software. 0 = neutral.
+        self._white_balance = float(camera_config.get("white_balance", 0) or 0)
+        self._tint = float(camera_config.get("tint", 0) or 0)
 
         # toggled by the reader after repeated failures so re-opens alternate away
         # from a backend whose stream keeps dying (MSMF -> DirectShow)
@@ -570,8 +573,31 @@ class Camera:
         hsv[..., 1] = np.clip(hsv[..., 1] * factor, 0, 255)
         return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
+    def _apply_color_balance(self, frame: np.ndarray, white_balance: float, tint: float) -> np.ndarray:
+        """software white balance + tint on the BGR frame. wb slides the
+        blue/red balance (positive = cooler, fixes warm/yellow casts), tint
+        slides the green/magenta balance. Implemented with per-channel LUTs so
+        it stays uint8/fast and works on any backend."""
+        if frame.ndim < 3 or (not white_balance and not tint):
+            return frame
+        wb = self._clamp_num(white_balance, -100, 100, 0) / 100.0
+        tt = self._clamp_num(tint, -100, 100, 0) / 100.0
+        blue_scale = (1.0 + wb * 0.5) * (1.0 + tt * 0.2)
+        green_scale = 1.0 - tt * 0.4
+        red_scale = (1.0 - wb * 0.5) * (1.0 + tt * 0.2)
+        scales = np.clip(np.array([blue_scale, green_scale, red_scale]), 0.25, 4.0)
+        if np.all(np.abs(scales - 1.0) < 1e-6):
+            return frame
+        luts = [
+            np.clip(np.arange(256, dtype=np.float32) * s, 0, 255).astype(np.uint8)
+            for s in scales
+        ]
+        return cv2.merge(
+            [cv2.LUT(frame[:, :, i], luts[i]) for i in range(3)]
+        )
+
     def _apply_image_adjustments(self, frame: np.ndarray) -> np.ndarray:
-        """software brightness/contrast/saturation/gamma in dependency-safe
+        """software brightness/contrast/color/saturation/gamma in dependency-safe
         order; neutral values skip work entirely (frames pass through fast)"""
         contrast = self._contrast
         brightness = self._brightness
@@ -579,6 +605,8 @@ class Camera:
             alpha = 1.0 + contrast / 100.0
             beta = brightness * 2.55
             frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=beta)
+        if self._white_balance or self._tint:
+            frame = self._apply_color_balance(frame, self._white_balance, self._tint)
         if self._saturation:
             frame = self._apply_saturation(frame, self._saturation)
         if self._gamma != 1.0:
@@ -601,6 +629,10 @@ class Camera:
             self._contrast = self._clamp_num(adjustments["contrast"], -100, 100, 0)
         if "saturation" in adjustments:
             self._saturation = self._clamp_num(adjustments["saturation"], -100, 100, 0)
+        if "white_balance" in adjustments:
+            self._white_balance = self._clamp_num(adjustments["white_balance"], -100, 100, 0)
+        if "tint" in adjustments:
+            self._tint = self._clamp_num(adjustments["tint"], -100, 100, 0)
         if "gamma" in adjustments:
             self._gamma = self._clamp_num(adjustments["gamma"], 0.3, 3.0, 1.0)
         if "auto_exposure" in adjustments:
@@ -620,6 +652,8 @@ class Camera:
             "brightness": self._brightness,
             "contrast": self._contrast,
             "saturation": self._saturation,
+            "white_balance": self._white_balance,
+            "tint": self._tint,
             "gamma": self._gamma,
             "auto_exposure": bool(self._auto_exposure),
             "exposure_time": self._exposure_time,

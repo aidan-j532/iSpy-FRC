@@ -14,6 +14,7 @@ _CAMERA_CORE_KEYS = {
     "x", "y", "z", "height", "yaw", "pitch", "calibration",
     "auto_brightness", "auto_exposure", "exposure_time", "gain", "fps_cap",
     "brightness", "contrast", "saturation", "gamma",
+    "white_balance", "tint",
     "csi", "path",
 }
 
@@ -651,6 +652,8 @@ class iSpyCameraConfig:
         "brightness": 0,
         "contrast": 0,
         "saturation": 0,
+        "white_balance": 0,
+        "tint": 0,
         "gamma": 1.0,
         "calibration": {"size": 0, "distance": 0, "game_piece_size": 0, "fov": 0},
         "source": "/dev/video0",

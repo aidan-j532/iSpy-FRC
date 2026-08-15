@@ -35,7 +35,8 @@ _SETTING_ALIASES = {"quantized": "quantize", "auto_opt": "optimize"}
 # entry like the other capture keys; the live Camera applies them immediately
 _TUNING_KEYS = (
     "auto_brightness", "auto_exposure", "brightness", "contrast",
-    "saturation", "gamma", "exposure_time", "gain",
+    "saturation", "white_balance", "tint", "gamma",
+    "exposure_time", "gain",
 )
 _TUNING_DEFAULTS = {
     "auto_brightness": True,
@@ -43,6 +44,8 @@ _TUNING_DEFAULTS = {
     "brightness": 0,
     "contrast": 0,
     "saturation": 0,
+    "white_balance": 0,
+    "tint": 0,
     "gamma": 1.0,
     "exposure_time": 100,
     "gain": 200,
@@ -844,6 +847,7 @@ class CamerasModule(WebModule):
     def _generate_calibration(self, cam_name, overlay="", pattern=None):
         last_frame_time = time.monotonic()
         last_detect = 0.0
+        last_auto_scan = 0.0
         corners, ids, marker_corners, marker_ids = None, None, None, None
         chess_pattern = None
         try:
@@ -866,19 +870,50 @@ class CamerasModule(WebModule):
                     if now - last_detect >= 0.1:
                         last_detect = now
                         session_pattern, session_dict = self._charuco_session_layout(cam_name)
-                        if pattern is None:
-                            pattern = session_pattern
-                        if pattern is not None and len(pattern) == 2:
+                        # layouts to try this tick: the layout the wizard
+                        # auto-detected/cached first, then the one picked in
+                        # the UI dropdown
+                        candidates = []
+                        if session_pattern is not None:
+                            candidates.append(tuple(session_pattern))
+                        if pattern is not None and len(pattern) == 2 and tuple(pattern) not in candidates:
+                            candidates.append(tuple(pattern))
+                        found = False
+                        for cand in candidates:
                             kwargs = {}
                             if session_dict is not None:
                                 kwargs["dictionary_id"] = session_dict
                             found, corners, ids, marker_corners, marker_ids, _ = (
                                 cam_calibration.detect_charuco(
-                                    frame, pattern[0], pattern[1], **kwargs
+                                    frame, cand[0], cand[1], **kwargs
                                 )
                             )
-                            if not found:
-                                corners, ids, marker_corners, marker_ids = None, None, None, None
+                            if found:
+                                break
+                        if not found:
+                            # nothing matched a known layout - throttled scan
+                            # of the common printed boards so any ChArUco board
+                            # shows live. The match is cached so captures and
+                            # calibration stay on the board's real layout.
+                            if now - last_auto_scan >= 1.0:
+                                last_auto_scan = now
+                                found, corners, ids, marker_corners, marker_ids, _, fp, fd = (
+                                    cam_calibration.detect_charuco_auto(
+                                        frame,
+                                        preferred_pattern=candidates[0] if candidates else None,
+                                        preferred_dict=session_dict,
+                                    )
+                                )
+                                if found:
+                                    _, key, _ = self._find_camera_entry(cam_name)
+                                    key = key or cam_name
+                                    with self.calib_lock:
+                                        session = self.calib_sessions.setdefault(key, {})
+                                        session["charuco_pattern"] = list(fp)
+                                        if fd is not None:
+                                            session["charuco_dict"] = fd
+                        if not found:
+                            corners, ids, marker_corners, marker_ids = None, None, None, None
                     if corners is not None and ids is not None:
                         to_serve = cam_calibration.draw_charuco(
                             frame, corners, ids, marker_corners, marker_ids
@@ -934,8 +969,10 @@ class CamerasModule(WebModule):
             found_pattern != (tuple(session_pattern) if session_pattern else None)
             or found_dict != session_dict
         ):
+            _, key, _ = self._find_camera_entry(cam_name)
+            key = key or cam_name
             with self.calib_lock:
-                session = self.calib_sessions.setdefault(cam_name, {})
+                session = self.calib_sessions.setdefault(key, {})
                 session["charuco_pattern"] = list(found_pattern)
                 session["charuco_dict"] = found_dict
         payload = {
