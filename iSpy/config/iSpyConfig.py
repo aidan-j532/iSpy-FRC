@@ -12,7 +12,8 @@ _MODEL_BACKED_PIPELINES = ("object_detection",)
 _CAMERA_CORE_KEYS = {
     "name", "source", "device_id", "subsystem", "grayscale",
     "x", "y", "z", "height", "yaw", "pitch", "calibration",
-    "auto_brightness", "exposure_time", "gain", "fps_cap",
+    "auto_brightness", "auto_exposure", "exposure_time", "gain", "fps_cap",
+    "brightness", "contrast", "saturation", "gamma",
     "csi", "path",
 }
 
@@ -646,6 +647,11 @@ class iSpyCameraConfig:
         "yaw": 0,
         "grayscale": False,
         "auto_brightness": True,
+        "auto_exposure": True,
+        "brightness": 0,
+        "contrast": 0,
+        "saturation": 0,
+        "gamma": 1.0,
         "calibration": {"size": 0, "distance": 0, "game_piece_size": 0, "fov": 0},
         "source": "/dev/video0",
         "device_id": None,

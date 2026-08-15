@@ -127,61 +127,6 @@ class CharucoCalibrationTests(unittest.TestCase):
         self.assertIsNone(c.calibrate_charuco(captures, pattern))
 
 
-def _render_april_pose(tag, rx, ry, t):
-    """warp a tag into a frame via a projective homography so each capture is
-    a genuinely different pose (focal 300 px)."""
-    h, w = tag.shape[:2]
-    R, _ = cv2.Rodrigues(np.array([rx, ry, 0.0], dtype=np.float64))
-    K = np.array([[300.0, 0, 320.0], [0, 300.0, 240.0], [0, 0, 1.0]], dtype=np.float64)
-    H = K @ np.hstack([R[:, :2], np.array([[0.0], [0.0], [t]])])
-    canvas = np.full((480, 640, 3), 255, np.uint8)
-    return cv2.warpPerspective(tag, H, (640, 480), canvas, borderValue=(255, 255, 255))
-
-
-class AprilTagCalibrationTests(unittest.TestCase):
-    def _tag_image(self):
-        tag = cv2.aruco.generateImageMarker(
-            cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11), 0, 200
-        )
-        return np.stack([tag] * 3, axis=-1)
-
-    def test_detects_synthetic_tag(self):
-        frame = _render_april_pose(self._tag_image(), 0, 0, 500)
-        found, corners, ids, mc, mi, gray = c.detect_april(frame)
-        self.assertTrue(found)
-        self.assertEqual(int(ids[0][0]), 0)
-        self.assertEqual(len(corners), 1)
-        drawn = c.draw_april(frame, corners, ids)
-        self.assertEqual(drawn.shape, frame.shape)
-
-    def test_returns_none_on_blank(self):
-        found, corners, ids, _, _, _ = c.detect_april(np.full((480, 640, 3), 255, np.uint8))
-        self.assertFalse(found)
-        self.assertIsNone(corners)
-        self.assertIsNone(ids)
-
-    def test_calibrates_varied_frames(self):
-        tag = self._tag_image()
-        captures = []
-        for rx, ry, t in [(0, 0, 500), (0.5, 0, 460), (-0.4, 0.6, 520),
-                          (0.6, -0.5, 470), (-0.3, -0.4, 540), (0.2, 0.8, 500)]:
-            found, corners, ids, _, _, gray = c.detect_april(_render_april_pose(tag, rx, ry, t))
-            if found:
-                captures.append((gray, corners, ids))
-        self.assertGreaterEqual(len(captures), 3)
-        res = c.calibrate_april(captures, tag_size_inches=6.5)
-        self.assertIsNotNone(res)
-        self.assertEqual(len(res["camera_matrix"]), 3)
-        self.assertEqual(len(res["dist_coeffs"]), 5)
-        self.assertAlmostEqual(res["camera_matrix"][0][0], 300.0, delta=40)
-
-    def test_rejects_degenerate_frames(self):
-        tag = self._tag_image()
-        found, corners, ids, _, _, gray = c.detect_april(_render_april_pose(tag, 0, 0, 500))
-        self.assertTrue(found)
-        self.assertIsNone(c.calibrate_april([(gray, corners, ids)] * 5, tag_size_inches=6.5))
-
-
 class ChessboardCalibrationTests(unittest.TestCase):
     def test_detects_synthetic_board(self):
         pattern = (9, 6)
@@ -251,20 +196,6 @@ class OverlayColorTests(unittest.TestCase):
         b, g, r = out[:, :, 0].astype(int), out[:, :, 1].astype(int), out[:, :, 2].astype(int)
         painted = (r > 200) & (g > 150) & (b < 50)
         self.assertTrue(bool(painted.any()), "expected colored charuco corners on the copy")
-
-    def test_draw_april_color_uses_given_color(self):
-        tag = np.stack(
-            [cv2.aruco.generateImageMarker(
-                cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11), 0, 200)] * 3,
-            axis=-1,
-        )
-        frame = _render_april_pose(tag, 0, 0, 500)
-        found, corners, ids, _, _, _ = c.detect_april(frame)
-        self.assertTrue(found)
-        out = c.draw_april(frame, corners, ids, color=(10, 200, 250))
-        b, g, r = out[:, :, 0].astype(int), out[:, :, 1].astype(int), out[:, :, 2].astype(int)
-        painted = (r > 200) & (g > 150) & (b < 50)
-        self.assertTrue(bool(painted.any()), "expected colored april box on the copy")
 
 
 if __name__ == "__main__":

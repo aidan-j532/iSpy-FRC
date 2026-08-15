@@ -21,9 +21,22 @@
   <div class="camera-lightbox-inner">
     <div class="camera-lightbox-header">
       <strong id="lightbox-title"></strong>
+      <span id="lightbox-tune-status" class="tune-status"></span>
       <button onclick="closeCameraLightbox()">Close</button>
     </div>
-    <img id="lightbox-feed" src="" alt="">
+    <div class="camera-lightbox-body">
+      <div class="camera-lightbox-feed">
+        <img id="lightbox-feed" src="" alt="">
+      </div>
+      <div class="camera-lightbox-tuning">
+        <div class="tune-header">
+          <strong>Image tuning</strong>
+          <button type="button" class="btn-sm" onclick="resetTuning()">Reset</button>
+        </div>
+        <div class="form-help">Sliders update the live feed and are saved to the camera config automatically. They are applied to the frame before detection, so tuning also affects vision results. Exposure/gain are hardware controls - support depends on the driver.</div>
+        <div id="tune-sliders"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -171,9 +184,6 @@
   .calib-stage { position: relative; margin: 8px 0; border-radius: 6px; overflow: hidden; }
   .calib-stage img { width: 100%; display: block; background: #000; }
   .calib-stage canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; cursor: crosshair; touch-action: none; }
-  .calib-preview { max-width: 100%; border-radius: 6px; margin: 8px 0; }
-  .calib-thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
-  .calib-thumb { width: 72px; height: 54px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); }
   .calib-status { margin: 8px 0; font-size: 0.85rem; color: var(--text-dim); line-height: 1.5; }
   .calib-status.ok { color: #2c7; }
   .calib-status.err { color: #f66; }
@@ -213,6 +223,35 @@
   .form-unit { color: var(--text-dim); opacity: 0.75; font-weight: 400; }
   .camera-hidden { display: none !important; }
   @media (max-width: 768px) { .form-help { margin-left: 0; } }
+
+  .camera-lightbox-inner { max-width: 1440px; }
+  .camera-lightbox-body { display: flex; min-height: 0; }
+  .camera-lightbox-feed { flex: 1; min-width: 0; background: #000; }
+  #lightbox-feed { display: block; max-height: calc(90vh - 56px); }
+  .camera-lightbox-tuning {
+    width: 280px; flex-shrink: 0; overflow-y: auto;
+    max-height: calc(90vh - 56px);
+    border-left: 1px solid var(--border);
+    padding: 14px 16px;
+    background: var(--bg-elevated);
+  }
+  .tune-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .tune-slider-row { margin-bottom: 12px; }
+  .tune-slider-label {
+    display: flex; justify-content: space-between; gap: 8px;
+    font-size: 0.85rem; margin-bottom: 4px; color: var(--text);
+  }
+  .tune-slider-value { color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tune-slider-row input[type="range"] { width: 100%; }
+  .tune-slider-row input[type="checkbox"] { width: auto; margin-left: auto; }
+  .tune-status { color: var(--text-dim); font-size: 0.8rem; }
+  .tune-status.ok { color: #2c7; }
+  .tune-status.err { color: #f66; }
+  @media (max-width: 900px) {
+    .camera-lightbox-body { flex-direction: column; }
+    .camera-lightbox-feed { order: 1; }
+    .camera-lightbox-tuning { order: 2; width: 100%; border-left: none; border-top: 1px solid var(--border); max-height: 40vh; }
+  }
 </style>
 
 <script>
@@ -1282,11 +1321,161 @@ function openCameraLightbox(name) {
   $id('lightbox-title').textContent = name;
   $id('lightbox-feed').src = `/video/${encodeURIComponent(name)}`;
   $id('camera-lightbox').style.display = 'flex';
+  loadTuning(name);
 }
 
 function closeCameraLightbox() {
+  if (tuningTimer) { clearTimeout(tuningTimer); tuningTimer = null; }
+  if (tuningState.dirty) saveTuning();
   $id('camera-lightbox').style.display = 'none';
   $id('lightbox-feed').src = '';
+  tuningState.camera = null;
+}
+
+/* ------------------------------------------------------------------
+ * Camera image tuning - sliders in the lightbox. Changes apply to the
+ * live feed immediately and are saved to the camera config automatically.
+ * ------------------------------------------------------------------ */
+
+const TUNING_FIELDS = {
+  auto_brightness: { label: 'Auto brightness', type: 'boolean', default: true, help: 'Software auto-exposure: gamma-adjusts each frame toward a target brightness.' },
+  brightness: { label: 'Brightness', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Additive brightness offset.' },
+  contrast: { label: 'Contrast', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Multiplicative contrast.' },
+  saturation: { label: 'Saturation', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Color saturation boost / drain.' },
+  gamma: { label: 'Gamma', type: 'slider', min: 0.3, max: 3.0, step: 0.05, default: 1.0, help: 'Gamma curve. 1.0 is neutral, lower brightens shadows, higher deepens them.' },
+  auto_exposure: { label: 'Auto exposure', type: 'boolean', default: true, help: 'Let the camera driver pick exposure. Disable to set a fixed exposure time.' },
+  exposure_time: { label: 'Exposure', type: 'slider', min: 1, max: 100000, step: 1, default: 100, unit: '\u00b5s', help: 'Fixed exposure in microseconds (used when auto exposure is off).' },
+  gain: { label: 'Gain', type: 'slider', min: 0, max: 1024, step: 1, default: 200, help: 'Sensor gain. Higher brightens but adds noise.' },
+};
+
+let tuningState = { camera: null, values: {}, dirty: false };
+let tuningTimer = null;
+
+function tuningDefaults() {
+  const out = {};
+  Object.entries(TUNING_FIELDS).forEach(([k, d]) => { out[k] = d.default; });
+  return out;
+}
+
+function tuningValueLabel(key, v) {
+  const d = TUNING_FIELDS[key];
+  return String(v) + (d.unit ? ' ' + d.unit : '');
+}
+
+function renderTuning() {
+  const wrap = $id('tune-sliders');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  Object.entries(TUNING_FIELDS).forEach(([key, def]) => {
+    const row = document.createElement('div');
+    row.className = 'tune-slider-row';
+    const val = tuningState.values[key];
+    if (def.type === 'boolean') {
+      const line = document.createElement('div');
+      line.className = 'form-row';
+      const label = document.createElement('span');
+      label.className = 'form-label';
+      label.textContent = def.label;
+      const toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.className = 'toggle-input';
+      toggle.checked = !!val;
+      toggle.onchange = () => { tuningState.values[key] = toggle.checked; scheduleTuningSave(); };
+      line.appendChild(label);
+      line.appendChild(toggle);
+      row.appendChild(line);
+    } else {
+      const label = document.createElement('div');
+      label.className = 'tune-slider-label';
+      const name = document.createElement('span');
+      name.textContent = def.label;
+      const value = document.createElement('span');
+      value.className = 'tune-slider-value';
+      value.id = 'tune-val-' + key;
+      value.textContent = tuningValueLabel(key, val);
+      label.appendChild(name);
+      label.appendChild(value);
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = def.min;
+      slider.max = def.max;
+      slider.step = def.step;
+      slider.value = val;
+      slider.oninput = () => {
+        tuningState.values[key] = def.step < 1 ? Number(slider.value) : Math.round(Number(slider.value));
+        const readout = $id('tune-val-' + key);
+        if (readout) readout.textContent = tuningValueLabel(key, tuningState.values[key]);
+        scheduleTuningSave();
+      };
+      row.appendChild(label);
+      row.appendChild(slider);
+    }
+    if (def.help) {
+      const help = document.createElement('div');
+      help.className = 'form-help';
+      help.style.marginLeft = '0';
+      help.textContent = def.help;
+      row.appendChild(help);
+    }
+    wrap.appendChild(row);
+  });
+}
+
+function scheduleTuningSave() {
+  tuningState.dirty = true;
+  const status = $id('lightbox-tune-status');
+  if (status) { status.className = 'tune-status'; status.textContent = 'Applying...'; }
+  if (tuningTimer) clearTimeout(tuningTimer);
+  tuningTimer = setTimeout(saveTuning, 250);
+}
+
+async function saveTuning() {
+  if (!tuningState.camera) return;
+  const status = $id('lightbox-tune-status');
+  try {
+    const r = await fetch(`/api/cameras/tuning/${encodeURIComponent(tuningState.camera)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(tuningState.values),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Save failed');
+    tuningState.dirty = false;
+    if (status) { status.className = 'tune-status ok'; status.textContent = 'Saved'; }
+    if (j.applied) Object.assign(tuningState.values, j.applied);
+  } catch (e) {
+    if (status) { status.className = 'tune-status err'; status.textContent = e.message || 'Save failed'; }
+  }
+}
+
+async function loadTuning(camera) {
+  tuningState.camera = camera;
+  tuningState.dirty = false;
+  if (tuningTimer) { clearTimeout(tuningTimer); tuningTimer = null; }
+  const status = $id('lightbox-tune-status');
+  if (status) { status.className = 'tune-status'; status.textContent = 'Loading...'; }
+  try {
+    const r = await fetch(`/api/cameras/tuning/${encodeURIComponent(camera)}`);
+    const j = await r.json();
+    if (!r.ok || !j.values) throw new Error(j.error || 'Failed to load tuning');
+    // prefer the running camera's live values when present so the sliders
+    // show what is actually applied right now
+    tuningState.values = Object.assign(tuningDefaults(), j.live || j.values);
+    renderTuning();
+    if (status) { status.className = 'tune-status'; status.textContent = ''; }
+  } catch (e) {
+    if (status) { status.className = 'tune-status err'; status.textContent = e.message || 'Failed to load tuning'; }
+    const wrap = $id('tune-sliders');
+    if (wrap) wrap.innerHTML = `<div class="empty-state">${escapeHtml(e.message || 'Failed to load tuning')}</div>`;
+  }
+}
+
+function resetTuning() {
+  if (!tuningState.camera) return;
+  if (!confirm(`Reset image tuning for "${tuningState.camera}" to defaults?`)) return;
+  tuningState.values = tuningDefaults();
+  renderTuning();
+  scheduleTuningSave();
 }
 
 function setRefreshRate() {
@@ -1310,12 +1499,12 @@ const calibrationState = {
   start: null,
   end: null,
   captured: 0,
-  overlayPattern: null, // [cols, rows] used by the live charuco overlay feed
+  overlayPattern: null,    // [cols, rows] used by the live charuco overlay feed
+  intrinsicsActive: false, // focal wizard: optional ChArUco intrinsics section is open
 };
 
 let calibrationHeartbeatTimer = null;
 let charucoStatusTimer = null;
-let aprilStatusTimer = null;
 
 function calibrationModeFor(pipeline) {
   if (pipeline === 'object_detection') return 'focal';
@@ -1483,8 +1672,6 @@ async function openCalibrationWizard() {
     renderPnpSectionIfApplicable(body);
   } else if (calibrationState.mode === 'charuco') {
     renderCharucoCalibration(body);
-  } else if (calibrationState.mode === 'april') {
-    renderAprilCalibration(body);
   } else if (calibrationState.mode === 'chessboard') {
     renderChessboardCalibration(body);
   } else if (calibrationState.mode === 'beta') {
@@ -1506,8 +1693,8 @@ function closeCalibrationWizard() {
   calibrationState.ctx = null;
   calibrationState.frame = null;
   calibrationState.overlayPattern = null;
+  calibrationState.intrinsicsActive = false;
   stopCharucoStatusPoll();
-  stopAprilStatusPoll();
   endCalibrationMode(camera);
 }
 
@@ -1548,7 +1735,35 @@ function renderFocalCalibration(body) {
       <button type="button" class="btn-sm btn-ok" onclick="computeFocalCalibration()">Compute &amp; save</button>
     </div>
     <div class="calib-status" id="focal-result"></div>
+    <div class="form-row" style="margin-top:10px;">
+      <span class="form-label"></span>
+      <button type="button" class="btn-sm" id="focal-intrinsics-btn" onclick="toggleIntrinsicsSection()">Run precision intrinsics calibration</button>
+    </div>
+    <div id="focal-intrinsics" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
+      <div class="calib-status" id="charuco-live">Waiting for camera feed...</div>
+      <div class="calib-status">Optional: calibrate a real camera matrix + distortion with a ChArUco board. The live view switches to board detection, and every capture stays drawn on it in a fresh random color. You can skip this step - the known-object measurement above is enough for depth-from-size.</div>
+      ${charucoCaptureSectionHtml()}
+    </div>
   `;
+}
+
+function toggleIntrinsicsSection() {
+  const section = $id('focal-intrinsics');
+  if (!section) return;
+  const open = section.style.display === 'none';
+  section.style.display = open ? 'block' : 'none';
+  const btn = $id('focal-intrinsics-btn');
+  if (btn) btn.textContent = open ? 'Hide precision intrinsics calibration' : 'Run precision intrinsics calibration';
+  if (open) {
+    calibrationState.overlayPattern = [7, 5];
+    calibrationState.intrinsicsActive = true;
+    reconnectCalibrationFeed();
+    startCharucoStatusPoll();
+  } else {
+    calibrationState.intrinsicsActive = false;
+    stopCharucoStatusPoll();
+    reconnectCalibrationFeed();
+  }
 }
 
 function calibrationFeedReady() {
@@ -1779,16 +1994,10 @@ function onChessboardPatternChange() {
   reconnectCalibrationFeed();
 }
 
-function renderCharucoCalibration(body) {
-  calibrationState.overlayPattern = [7, 5];
-  body.innerHTML = `
-    <div class="form-row"><span class="form-label">Live view</span>
-      <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
-      </div>
-    </div>
-    <div class="calib-status" id="charuco-live">Waiting for camera feed...</div>
-    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners = board detected. The board layout and marker dictionary are auto-detected - watch the status line to confirm it found yours. Click Capture, move the board to a different angle, and repeat - every capture stays drawn on the live view in a fresh random color. 10+ varied frames give the best result. Detections are paused while this is open.</div>
+function charucoCaptureSectionHtml() {
+  // shared ChArUco capture UI used by the dedicated 'charuco' wizard and the
+  // focal wizard's optional "precision intrinsics" step
+  return `
     <div class="form-row">
       <span class="form-label">Board pattern</span>
       <select id="charuco-pattern" class="form-input" onchange="onCharucoPatternChange()">
@@ -1811,7 +2020,21 @@ function renderCharucoCalibration(body) {
       <span class="form-label"></span>
       <button type="button" class="btn-ok" onclick="finishCharucoCalibration()" id="charuco-finish-btn">Calibrate intrinsics</button>
     </div>
-    <div class="calib-status" id="charuco-result"></div>
+    <div class="calib-status" id="charuco-result"></div>`;
+}
+
+function renderCharucoCalibration(body) {
+  calibrationState.overlayPattern = [7, 5];
+  calibrationState.intrinsicsActive = false;
+  body.innerHTML = `
+    <div class="form-row"><span class="form-label">Live view</span>
+      <div class="calib-stage" style="width:100%;">
+        <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
+      </div>
+    </div>
+    <div class="calib-status" id="charuco-live">Waiting for camera feed...</div>
+    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners = board detected. The board layout and marker dictionary are auto-detected - watch the status line to confirm it found yours. Click Capture, move the board to a different angle, and repeat - every capture stays drawn on the live view in a fresh random color. 10+ varied frames give the best result. Detections are paused while this is open.</div>
+    ${charucoCaptureSectionHtml()}
   `;
   startCharucoStatusPoll();
 }
@@ -1828,13 +2051,16 @@ function reconnectCalibrationFeed() {
   const img = $id('calib-feed');
   if (!img || calibrationState.frozen) return;
   // MJPEG streams don't reconnect on an identical src - re-open with a cache-bust
-  const base = calibrationState.mode === 'charuco'
-    ? calibrationFeedUrl('charuco', calibrationState.overlayPattern)
-    : calibrationState.mode === 'april'
-      ? calibrationFeedUrl('april')
-      : calibrationState.mode === 'chessboard'
-        ? calibrationFeedUrl('chessboard', ($id('chess-pattern').value || '9,6').split(',').map(Number))
-        : calibrationFeedUrl();
+  let base;
+  if (calibrationState.intrinsicsActive) {
+    base = calibrationFeedUrl('charuco', calibrationState.overlayPattern);
+  } else if (calibrationState.mode === 'charuco') {
+    base = calibrationFeedUrl('charuco', calibrationState.overlayPattern);
+  } else if (calibrationState.mode === 'chessboard') {
+    base = calibrationFeedUrl('chessboard', ($id('chess-pattern').value || '9,6').split(',').map(Number));
+  } else {
+    base = calibrationFeedUrl();
+  }
   img.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
 }
 
@@ -1867,201 +2093,6 @@ function stopCharucoStatusPoll() {
   if (charucoStatusTimer) {
     clearInterval(charucoStatusTimer);
     charucoStatusTimer = null;
-  }
-}
-
-function renderAprilCalibration(body) {
-  body.innerHTML = `
-    <div class="form-row"><span class="form-label">Live view</span>
-      <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="${calibrationFeedUrl('april')}" alt="live feed" onerror="calibrationFeedError()">
-      </div>
-    </div>
-    <div class="calib-status" id="april-live">Waiting for camera feed...</div>
-    <div class="calib-status" id="april-note">Hold your printed AprilTag in front of the camera. A green box + ID means it is detected. Enter the tag's real size and the distance from the camera to it, then save focal length. To also calibrate intrinsics, capture the tag from 6+ different angles/ranges - every capture stays drawn on the live view in a fresh random color - and hit Calibrate intrinsics. Detections are paused while this is open.</div>
-    <div class="form-row">
-      <span class="form-label">Tag size (in)</span>
-      <input type="number" id="april-tag-size" class="form-input" value="6.5" step="0.1" min="0.1">
-    </div>
-    <div class="form-row">
-      <span class="form-label">Distance (in)</span>
-      <input type="number" id="april-distance" class="form-input" value="24" step="1" min="1">
-    </div>
-    <div class="form-row">
-      <span class="form-label">Focal length</span>
-      <div style="display:flex;gap:8px;flex:1;">
-        <button type="button" class="btn-sm btn-ok" onclick="saveAprilFocal()" id="april-focal-btn">Save focal length from tag</button>
-      </div>
-    </div>
-    <div class="calib-status" id="april-focal-result"></div>
-    <div class="form-row" style="margin-top:8px;">
-      <span class="form-label">Intrinsics</span>
-      <div style="display:flex;gap:8px;flex:1;">
-        <button type="button" class="btn-sm btn-ok" onclick="captureAprilFrame()" id="april-capture-btn">Capture frame</button>
-        <button type="button" class="btn-sm" onclick="clearAprilSession()">Clear</button>
-      </div>
-    </div>
-    <div class="calib-status" id="april-status">Captured frames: 0</div>
-    <div class="form-row" style="margin-top:10px;">
-      <span class="form-label"></span>
-      <button type="button" class="btn-ok" onclick="finishAprilCalibration()" id="april-finish-btn">Calibrate intrinsics</button>
-    </div>
-    <div class="calib-status" id="april-result"></div>
-  `;
-  startAprilStatusPoll();
-}
-
-async function pollAprilStatus() {
-  const live = $id('april-live');
-  if (!live || !calibrationState.camera) return;
-  try {
-    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april/status`);
-    const j = await r.json();
-    if (j.found) {
-      live.className = 'calib-status ok';
-      live.textContent = j.message || `Tag${j.tag_ids.length !== 1 ? 's' : ''} detected: ${j.tag_ids.join(', ')} (${j.pixel_height} px).`;
-    } else {
-      live.className = 'calib-status err';
-      live.textContent = j.message || 'No AprilTag visible in the live feed.';
-    }
-  } catch (e) {
-    live.className = 'calib-status err';
-    live.textContent = 'Tag detection status unavailable.';
-  }
-}
-
-function startAprilStatusPoll() {
-  stopAprilStatusPoll();
-  pollAprilStatus();
-  aprilStatusTimer = setInterval(pollAprilStatus, 1000);
-}
-
-function stopAprilStatusPoll() {
-  if (aprilStatusTimer) {
-    clearInterval(aprilStatusTimer);
-    aprilStatusTimer = null;
-  }
-}
-
-async function saveAprilFocal() {
-  const img = $id('calib-feed');
-  const result = $id('april-focal-result');
-  if (!result) return;
-  const real_size = Number(($id('april-tag-size') || {}).value || 0);
-  const distance = Number(($id('april-distance') || {}).value || 0);
-  if (real_size <= 0 || distance <= 0) {
-    result.className = 'calib-status err';
-    result.textContent = 'Enter a tag size and distance first.';
-    return;
-  }
-  result.className = 'calib-status';
-  result.textContent = 'Measuring tag in the live feed...';
-  try {
-    const status = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april/status`).then(r => r.json());
-    const pixel_height = status.pixel_height || 0;
-    if (pixel_height <= 0) {
-      result.className = 'calib-status err';
-      result.textContent = 'Hold the tag in front of the camera so it is detected first.';
-      return;
-    }
-    const frame_width = (img && img.naturalWidth) || 640;
-    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/focal`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ real_size, distance, pixel_height, frame_width }),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Calibration failed');
-    result.className = 'calib-status ok';
-    result.innerHTML = `Focal length <strong>${j.focal_length_px} px</strong> &middot; horizontal FOV <strong>${j.fov_deg}&deg;</strong> from tag ${pixel_height} px tall - saved. Restart vision to apply.`;
-    refreshCalibrationFields(j.calibration);
-  } catch (e) {
-    result.className = 'calib-status err';
-    result.textContent = e.message || 'Failed to compute focal length';
-  }
-}
-
-async function captureAprilFrame() {
-  const img = $id('calib-feed');
-  if (!img || !img.complete || !img.naturalWidth) {
-    showToast('Wait for the live feed to load first.', 'error');
-    return;
-  }
-  const btn = $id('april-capture-btn');
-  const status = $id('april-status');
-  btn.disabled = true;
-  status.className = 'calib-status';
-  status.textContent = 'Detecting tag...';
-  try {
-    const c = document.createElement('canvas');
-    c.width = img.naturalWidth;
-    c.height = img.naturalHeight;
-    c.getContext('2d').drawImage(img, 0, 0);
-    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april/capture`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: c.toDataURL('image/jpeg', 0.92) }),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Capture failed');
-    if (!j.board_found) {
-      status.className = 'calib-status err';
-      status.textContent = j.message || 'Tag not found in that frame.';
-    } else {
-      status.className = 'calib-status ok';
-      status.textContent = `Captured frames: ${j.captured} - detection drawn on the live view in a new color. Move the tag for a different angle/range.`;
-    }
-  } catch (e) {
-    status.className = 'calib-status err';
-    status.textContent = e.message || 'Failed to capture frame';
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function clearAprilSession() {
-  calibrationState.captured = 0;
-  try {
-    await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april`, { method: 'DELETE' });
-  } catch (e) {}
-  const status = $id('april-status');
-  if (status) { status.className = 'calib-status'; status.textContent = 'Captured frames: 0'; }
-  const result = $id('april-result');
-  if (result) result.textContent = '';
-}
-
-async function finishAprilCalibration() {
-  const btn = $id('april-finish-btn');
-  const result = $id('april-result');
-  if (!result) return;
-  const tag_size = Number(($id('april-tag-size') || {}).value || 0);
-  if (tag_size <= 0) {
-    result.className = 'calib-status err';
-    result.textContent = 'Enter the tag size first.';
-    return;
-  }
-  btn.disabled = true;
-  result.className = 'calib-status';
-  result.textContent = 'Calibrating - this can take a moment...';
-  try {
-    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/april/finish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tag_size }),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Calibration failed');
-    const res = j.result;
-    const fx = res.camera_matrix[0][0].toFixed(1);
-    const fy = res.camera_matrix[1][1].toFixed(1);
-    result.className = 'calib-status ok';
-    result.innerHTML = `Done! Reprojection error <strong>${res.rms.toFixed(3)} px</strong> (lower is better), focal <strong>${fx} x ${fy} px</strong> at ${res.resolution[0]}x${res.resolution[1]}. Restart vision to apply.`;
-    refreshCalibrationFields(j.calibration);
-  } catch (e) {
-    result.className = 'calib-status err';
-    result.textContent = e.message || 'Calibration failed';
-  } finally {
-    btn.disabled = false;
   }
 }
 
@@ -2233,12 +2264,12 @@ async function resetCalibration() {
     showToast('Calibration reset.', 'success');
     refreshCalibrationFields(j.calibration);
     if (calibrationState.mode === 'charuco') clearCharucoSession();
-    else if (calibrationState.mode === 'april') clearAprilSession();
     else if (calibrationState.mode === 'chessboard') clearChessboardSession();
     if (calibrationState.mode === 'focal') {
       unfreezeCalibrationFrame();
       const el = $id('focal-result');
       if (el) el.textContent = '';
+      if (calibrationState.intrinsicsActive) clearCharucoSession();
     }
   } catch (e) {
     showToast(e.message || 'Reset failed', 'error');

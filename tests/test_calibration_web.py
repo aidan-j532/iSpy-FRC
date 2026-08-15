@@ -68,23 +68,6 @@ def _chessboard_image(pattern=(9, 6), img_size=(480, 640), square=60):
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
 
 
-def _april_tag_image():
-    tag = cv2.aruco.generateImageMarker(
-        cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11), 0, 200
-    )
-    return np.stack([tag] * 3, axis=-1)
-
-
-def _april_pose(rx, ry, t):
-    """tag rendered at a genuinely different pose each call (focal 300 px)."""
-    tag = _april_tag_image()
-    R, _ = cv2.Rodrigues(np.array([rx, ry, 0.0], dtype=np.float64))
-    K = np.array([[300.0, 0, 320.0], [0, 300.0, 240.0], [0, 0, 1.0]], dtype=np.float64)
-    H = K @ np.hstack([R[:, :2], np.array([[0.0], [0.0], [t]])])
-    canvas = np.full((480, 640, 3), 255, np.uint8)
-    return cv2.warpPerspective(tag, H, (640, 480), canvas, borderValue=(255, 255, 255))
-
-
 def _pose_camera_setup(num_kpts=17, intrinsics=False):
     """config with a pose-model camera (fake .pt + YAML sidecar) and a live cam."""
     tmpdir = Path(tempfile.mkdtemp())
@@ -178,6 +161,46 @@ class CalibrationWebTests(unittest.TestCase):
         self.assertEqual(len(j["result"]["camera_matrix"]), 3)
         self.assertIn("camera_matrix", j["calibration"])
         self.assertEqual(cfg.config["camera_configs"]["cam_0"]["calibration"]["rms"], j["result"]["rms"])
+
+    def test_charuco_intrinsics_flow_for_object_detection(self):
+        # the focal wizard's optional precision-intrinsics step reuses the
+        # charuco endpoints - camera_matrix/dist_coeffs land in the same
+        # calibration dict an object_detection camera reads at runtime
+        tmp = Path(tempfile.mkdtemp()) / "config.json"
+        cfg = iSpyConfig(file_path=str(tmp))
+        cfg.config["app_mode"] = False
+        cfg.config["camera_configs"] = {
+            "cam_0": {
+                "name": "cam_0",
+                "source": 0,
+                "pipeline": "object_detection",
+                "calibration": {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
+            }
+        }
+        cam = _FakeCamera("cam_0")
+        mod = CamerasModule({"config": cfg, "vision_instance": _FakeVision()})
+        mod.live_cameras = {"cam_0": cam}
+        app = flask.Flask(__name__)
+        mod.register_routes(app)
+        client = app.test_client()
+
+        for i in range(4):
+            r = client.post("/api/cameras/calibration/cam_0/charuco/capture", json={
+                "image": _charuco_b64(rotate=(i % 2 == 1)),
+                "cols": 7, "rows": 5,
+            })
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(r.get_json()["board_found"])
+        r = client.post("/api/cameras/calibration/cam_0/charuco/finish", json={})
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["success"])
+        cal = cfg.config["camera_configs"]["cam_0"]["calibration"]
+        self.assertIn("camera_matrix", cal)
+        self.assertEqual(cal["camera_matrix"], j["result"]["camera_matrix"])
+        self.assertIn("dist_coeffs", cal)
+        # known-object values survive the intrinsics write
+        self.assertEqual(cal["fov"], 0)
 
     def test_charuco_capture_clear(self):
         cfg, cam, mod, client = self._setup()
@@ -280,18 +303,6 @@ class CalibrationWebTests(unittest.TestCase):
         painted = (r > color[2] - 60) & (g > color[1] - 60) & (b > color[0] - 60)
         self.assertTrue(bool(painted.any()), f"expected captured overlay in color {color} on the feed")
 
-    def test_april_capture_reports_color(self):
-        cfg, cam, mod, client = self._setup()
-        cam._frame = _april_pose(0, 0, 500)
-        ok, buf = cv2.imencode(".jpg", cam._frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        b64 = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
-        r = client.post("/api/cameras/calibration/cam_0/april/capture", json={"image": b64})
-        self.assertEqual(r.status_code, 200)
-        j = r.get_json()
-        self.assertTrue(j["board_found"])
-        self.assertEqual(len(j["color"]), 3)
-        self.assertTrue(all(isinstance(v, int) for v in j["color"]))
-
     def test_charuco_status_reports_detection(self):
         cfg, cam, mod, client = self._setup()
         cam._frame = c.make_charuco_board(7, 5).generateImage((640, 480), marginSize=20)
@@ -319,47 +330,6 @@ class CalibrationWebTests(unittest.TestCase):
         self.assertTrue(j["found"])
         self.assertEqual(j["pattern"], [8, 6])
         self.assertEqual(j["dictionary"], cv2.aruco.DICT_5X5_250)
-
-    def test_april_status_reports_detection(self):
-        cfg, cam, mod, client = self._setup()
-        cam._frame = _april_pose(0, 0, 500)
-        r = client.get("/api/cameras/calibration/cam_0/april/status")
-        self.assertEqual(r.status_code, 200)
-        j = r.get_json()
-        self.assertTrue(j["found"])
-        self.assertEqual(j["tag_ids"], [0])
-        self.assertGreater(j["pixel_height"], 0)
-
-    def test_april_capture_finish_flow(self):
-        cfg, cam, mod, client = self._setup()
-        for rx, ry, t in [(0, 0, 500), (0.5, 0, 460), (-0.4, 0.6, 520),
-                          (0.6, -0.5, 470), (-0.3, -0.4, 540), (0.2, 0.8, 500)]:
-            cam._frame = _april_pose(rx, ry, t)
-            ok, buf = cv2.imencode(".jpg", cam._frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-            b64 = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
-            r = client.post("/api/cameras/calibration/cam_0/april/capture", json={"image": b64})
-            self.assertEqual(r.status_code, 200)
-            self.assertTrue(r.get_json()["board_found"])
-        self.assertEqual(r.get_json()["captured"], 6)
-
-        r = client.post("/api/cameras/calibration/cam_0/april/finish", json={"tag_size": 6.5})
-        self.assertEqual(r.status_code, 200)
-        j = r.get_json()
-        self.assertTrue(j["success"])
-        self.assertIn("camera_matrix", j["result"])
-        self.assertAlmostEqual(j["result"]["camera_matrix"][0][0], 300.0, delta=60)
-        self.assertIn("camera_matrix", j["calibration"])
-
-    def test_april_capture_clear(self):
-        cfg, cam, mod, client = self._setup()
-        cam._frame = _april_pose(0, 0, 500)
-        ok, buf = cv2.imencode(".jpg", cam._frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        b64 = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
-        client.post("/api/cameras/calibration/cam_0/april/capture", json={"image": b64})
-        r = client.delete("/api/cameras/calibration/cam_0/april")
-        self.assertEqual(r.status_code, 200)
-        get = client.get("/api/cameras/calibration/cam_0")
-        self.assertEqual(get.get_json()["april_captures"], 0)
 
     def test_pnp_get_reports_pose_model(self):
         cfg, model, client = _pose_camera_setup(num_kpts=17, intrinsics=False)

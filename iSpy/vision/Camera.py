@@ -93,6 +93,14 @@ class Camera:
         self._brightness_lut: np.ndarray | None = None
         self._brightness_frame_count = 0
 
+        # manual image tuning - software adjustments applied in the reader
+        # thread so they work on every backend (MSMF/V4L2 often ignore the
+        # equivalent cv2 props silently). 0/1.0 = neutral, no change.
+        self._brightness = float(camera_config.get("brightness", 0) or 0)
+        self._contrast = float(camera_config.get("contrast", 0) or 0)
+        self._saturation = float(camera_config.get("saturation", 0) or 0)
+        self._gamma = float(camera_config.get("gamma", 1.0) or 1.0)
+
         # toggled by the reader after repeated failures so re-opens alternate away
         # from a backend whose stream keeps dying (MSMF -> DirectShow)
         self._prefer_alternate_backend = False
@@ -100,6 +108,9 @@ class Camera:
         # UVC exposure/gain; short exposure keeps the camera able to hit the requested fps in low light
         self._exposure_time = camera_config.get("exposure_time", 100)   # 10 ms
         self._gain = camera_config.get("gain", 200)
+        # auto_exposure=True (default) leaves the driver's auto-exposure alone;
+        # False forces exposure_time. separate from auto_brightness (software).
+        self._auto_exposure = bool(camera_config.get("auto_exposure", True))
 
         # optional per-camera fps cap (0 = uncapped); the reader thread sleeps to hold the avg capture rate at/below this
         try:
@@ -321,6 +332,8 @@ class Camera:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             cap.set(cv2.CAP_PROP_FPS, 30)
 
+        self._apply_capture_controls(cap)
+
     def _open_camera(self):
         sys_platform = platform.system()
         is_linux = sys_platform == "Linux"
@@ -492,12 +505,126 @@ class Camera:
                 if self._brightness_lut is not None:
                     frame = cv2.LUT(frame, self._brightness_lut)
 
+            frame = self._apply_image_adjustments(frame)
+
             with self.frame_lock:
                 self.frame = frame
                 self.frame_timestamp = time.perf_counter()
             self._frame_event.set()
             if frame_interval > 0:
                 next_frame_time = time.perf_counter() + frame_interval
+
+    # ------------------------------------------------------------------
+    # Image tuning (web sliders)
+    #
+    # exposure/gain are pushed to the capture hardware (best effort - some
+    # drivers ignore them), brightness/contrast/saturation/gamma are applied
+    # in software in the reader thread so they always visibly work and update
+    # live without a vision restart.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clamp_num(value, lo: float, hi: float, default: float) -> float:
+        try:
+            return min(hi, max(lo, float(value)))
+        except (TypeError, ValueError):
+            return default
+
+    def _apply_capture_controls(self, cap=None):
+        """best-effort push of hardware-only controls (exposure, gain) to the
+        open capture. Many backends/drivers reject these silently, so they are
+        a bonus on top of the software adjustments, never the thing the UI
+        depends on. auto_exposure=False forces a fixed exposure_time; True
+        leaves the driver's auto-exposure alone (gain is still applied)."""
+        cap = cap if cap is not None else getattr(self, "cap", None)
+        if cap is None or self._is_url_source or self.is_image:
+            return
+        if platform.system() == "Linux":
+            try:
+                device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
+                args = ["v4l2-ctl", "-d", device]
+                if self._auto_exposure:
+                    args.append("--set-ctrl=auto_exposure=3")
+                else:
+                    args.append("--set-ctrl=auto_exposure=1")
+                    args.append(f"--set-ctrl=exposure_time_absolute={int(self._exposure_time)}")
+                args.append(f"--set-ctrl=gain={int(self._gain)}")
+                subprocess.run(args, capture_output=True, text=True, timeout=5)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+            return
+        try:
+            if not self._auto_exposure:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+                cap.set(cv2.CAP_PROP_EXPOSURE, self._exposure_time)
+            cap.set(cv2.CAP_PROP_GAIN, self._gain)
+        except Exception:
+            pass
+
+    def _apply_saturation(self, frame, saturation: float) -> np.ndarray:
+        factor = 1.0 + saturation / 100.0
+        try:
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        except cv2.error:
+            return frame
+        hsv[..., 1] = np.clip(hsv[..., 1] * factor, 0, 255)
+        return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    def _apply_image_adjustments(self, frame: np.ndarray) -> np.ndarray:
+        """software brightness/contrast/saturation/gamma in dependency-safe
+        order; neutral values skip work entirely (frames pass through fast)"""
+        contrast = self._contrast
+        brightness = self._brightness
+        if contrast or brightness:
+            alpha = 1.0 + contrast / 100.0
+            beta = brightness * 2.55
+            frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=beta)
+        if self._saturation:
+            frame = self._apply_saturation(frame, self._saturation)
+        if self._gamma != 1.0:
+            gamma = np.clip(self._gamma, 0.1, 5.0)
+            lut = (
+                np.clip((np.arange(256, dtype=np.float32) / 255.0) ** gamma, 0.0, 1.0)
+                * 255.0
+            ).astype(np.uint8)
+            frame = cv2.LUT(frame, lut)
+        return frame
+
+    def set_image_adjustments(self, adjustments: dict) -> dict:
+        """live image tuning from the web UI - applies from the next captured
+        frame, no restart needed. Returns the values now in effect."""
+        if "auto_brightness" in adjustments:
+            self.auto_brightness = bool(adjustments["auto_brightness"])
+        if "brightness" in adjustments:
+            self._brightness = self._clamp_num(adjustments["brightness"], -100, 100, 0)
+        if "contrast" in adjustments:
+            self._contrast = self._clamp_num(adjustments["contrast"], -100, 100, 0)
+        if "saturation" in adjustments:
+            self._saturation = self._clamp_num(adjustments["saturation"], -100, 100, 0)
+        if "gamma" in adjustments:
+            self._gamma = self._clamp_num(adjustments["gamma"], 0.3, 3.0, 1.0)
+        if "auto_exposure" in adjustments:
+            self._auto_exposure = bool(adjustments["auto_exposure"])
+        if "exposure_time" in adjustments:
+            self._exposure_time = int(
+                self._clamp_num(adjustments["exposure_time"], 0, 1_000_000, 100)
+            )
+        if "gain" in adjustments:
+            self._gain = int(self._clamp_num(adjustments["gain"], 0, 4096, 200))
+        self._apply_capture_controls()
+        return self.get_image_adjustments()
+
+    def get_image_adjustments(self) -> dict:
+        return {
+            "auto_brightness": bool(self.auto_brightness),
+            "brightness": self._brightness,
+            "contrast": self._contrast,
+            "saturation": self._saturation,
+            "gamma": self._gamma,
+            "auto_exposure": bool(self._auto_exposure),
+            "exposure_time": self._exposure_time,
+            "gain": self._gain,
+        }
 
     def set_calibration(self, active: bool):
         """temporarily pause detections so the calibration wizard can feed on

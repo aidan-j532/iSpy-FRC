@@ -82,7 +82,8 @@ def _calibrate_charuco_via_calibrate_camera(
         rms, cam_mat, dist, _, _ = cv2.calibrateCamera(
             obj_pts, img_pts, img_size, None, None, flags=cv2.CALIB_FIX_K3
         )
-    except cv2.error:
+    except cv2.error as exc:
+        logger.exception("cv2.calibrateCamera failed: %s", exc)
         return None
     # match calibrateCameraCharuco's 5-tuple shape
     return rms, cam_mat, dist, None, None
@@ -111,9 +112,6 @@ DEFAULT_CHARUCO_DICT = cv2.aruco.DICT_6X6_250
 # invariant) - marker must be smaller than the square it sits in
 DEFAULT_CHARUCO_SQUARE = 1.0
 DEFAULT_CHARUCO_MARKER = 0.8
-
-DEFAULT_APRIL_DICT = cv2.aruco.DICT_APRILTAG_36h11
-DEFAULT_APRIL_SIZE = 6.5  # inches
 
 # boards people actually print - the wizard auto-detects across these so
 # any common layout/dictionary shows up without matching the default by hand
@@ -464,120 +462,6 @@ def _to_marker_corners(marker_corners):
         a = np.asarray(marker, dtype=np.float32).reshape(-1, 2)
         out.append(a.reshape(4, 1, 2))
     return out
-
-
-def _april_detector(dictionary_id: int = DEFAULT_APRIL_DICT):
-    params = cv2.aruco.DetectorParameters()
-    params.useAruco3Detection = True
-    return cv2.aruco.ArucoDetector(
-        cv2.aruco.getPredefinedDictionary(dictionary_id), params
-    )
-
-
-def detect_april(frame, dictionary_id: int = DEFAULT_APRIL_DICT):
-    """find AprilTags in the frame; returns (found, corners, ids,
-    marker_corners, marker_ids, gray). corners is the list of 4-corner tag
-    detections (same layout as the charuco marker arrays) so the draw +
-    calibrate helpers share one shape."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
-    try:
-        corners, ids, _ = _april_detector(dictionary_id).detectMarkers(gray)
-    except cv2.error:
-        return False, None, None, None, None, gray
-    if corners is None or ids is None or len(ids) == 0:
-        return False, None, None, None, None, gray
-    corners = _to_marker_corners(corners)
-    ids = _to_ids(ids)
-    return True, corners, ids, corners, ids, gray
-
-
-def draw_april(frame, corners, ids, marker_corners=None, marker_ids=None, color=None):
-    """copy of the frame with detected AprilTags boxed + id-labelled.
-    Pass a color to draw the detection in that color (used for captured-frame
-    overlays) instead of green."""
-    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    tags = marker_corners if marker_corners is not None else corners
-    tag_ids = marker_ids if marker_ids is not None else ids
-    line_color = color if color is not None else (0, 255, 0)
-    if tags is not None:
-        for i, corner in enumerate(tags):
-            pts = np.asarray(corner, dtype=np.int32).reshape(-1, 2)
-            cv2.polylines(out, [pts], True, line_color, 2)
-            if tag_ids is not None and i < len(tag_ids):
-                cv2.putText(out, f"ID: {int(tag_ids[i][0])}", tuple(pts[0].astype(int)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, line_color, 2)
-    return out
-
-
-def _april_object_points(tag_size_inches: float) -> np.ndarray:
-    """object points for the 4 corners of a square tag centered at the origin."""
-    half = tag_size_inches / 2.0
-    return np.array([
-        [-half, half, 0.0],
-        [half, half, 0.0],
-        [half, -half, 0.0],
-        [-half, -half, 0.0],
-    ], dtype=np.float32)
-
-
-def calibrate_april(
-    captures,
-    tag_size_inches: float = DEFAULT_APRIL_SIZE,
-    dictionary_id: int = DEFAULT_APRIL_DICT,
-):
-    """run calibrateCamera over [(gray_frame, tag_corners, tag_ids), ...]
-    using each tag as a known-size square; returns an intrinsics dict or None
-    when it cannot calibrate. Vary the tag's pose between captures - a static
-    tag solves to garbage."""
-    if len(captures) < 3 or tag_size_inches <= 0:
-        return None
-    obj_pts = []
-    img_pts = []
-    centers = []
-    img_size = None
-    for gray, corners, ids in captures:
-        if corners is None or len(corners) == 0:
-            continue
-        h, w = gray.shape[:2]
-        img_size = (w, h)
-        for corner in corners:
-            c = np.asarray(corner, dtype=np.float32).reshape(-1, 2)
-            obj_pts.append(_april_object_points(tag_size_inches).reshape(-1, 1, 3))
-            img_pts.append(c.reshape(-1, 1, 2))
-            centers.append(c.mean(axis=0))
-    if len(obj_pts) < 3:
-        return None
-    # degenerate captures (the tag at the same spot every frame) solve to
-    # garbage - refuse it so the UI asks for variety
-    spread = np.asarray(centers).max(axis=0) - np.asarray(centers).min(axis=0)
-    if float(np.linalg.norm(spread)) < 1.0:
-        logger.warning("AprilTag calibration frames were all the same tag pose - move the tag between captures")
-        return None
-    try:
-        rms, cam_mat, dist, _, _ = cv2.calibrateCamera(
-            obj_pts,
-            img_pts,
-            img_size,
-            None,
-            None,
-            flags=cv2.CALIB_FIX_K3,
-        )
-    except cv2.error as exc:
-        logger.warning("AprilTag calibration failed: %s", exc)
-        return None
-    if not np.isfinite(rms) or rms > 100.0:
-        logger.warning(
-            "AprilTag calibration gave an implausible RMS %.3f - frames were probably too similar",
-            rms,
-        )
-        return None
-    return {
-        "rms": float(rms),
-        "camera_matrix": cam_mat.tolist(),
-        "dist_coeffs": dist.flatten().tolist(),
-        "resolution": list(img_size),
-        "count": len(captures),
-    }
 
 
 def intrinsics_for_frame(calib: dict, frame_w: int, frame_h: int):
