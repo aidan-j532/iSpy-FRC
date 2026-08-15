@@ -1655,6 +1655,106 @@ async function clearPnpConfig() {
   } catch (e) {}
 }
 
+/* ------------------------------------------------------------------
+ * Auto capture: the wizard's live feed stores diverse board frames by
+ * itself, runs a rolling solve for a live RMS readout, and saves when it
+ * has enough. The user just moves the board around - no clicking.
+ * ------------------------------------------------------------------ */
+
+const autoCaptureState = {
+  kind: null,      // 'charuco' | 'chessboard'
+  enabled: true,
+  target: 12,
+  captured: 0,
+  state: 'idle',
+  rms: null,
+  saved: false,
+  message: '',
+  pollTimer: null,
+};
+
+async function startAutoCapture(kind) {
+  autoCaptureState.kind = kind;
+  autoCaptureState.enabled = true;
+  autoCaptureState.target = 12;
+  autoCaptureState.captured = 0;
+  autoCaptureState.state = 'capturing';
+  autoCaptureState.rms = null;
+  autoCaptureState.saved = false;
+  autoCaptureState.message = '';
+  updateAutoCaptureUi();
+  try {
+    await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/auto`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true, target: autoCaptureState.target }),
+    });
+  } catch (e) {}
+  stopAutoPolling();
+  autoCaptureState.pollTimer = setInterval(pollAutoCapture, 1000);
+}
+
+function stopAutoPolling() {
+  if (autoCaptureState.pollTimer) {
+    clearInterval(autoCaptureState.pollTimer);
+    autoCaptureState.pollTimer = null;
+  }
+}
+
+async function pollAutoCapture() {
+  if (!calibrationState.camera) return;
+  try {
+    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/auto/status`);
+    const j = await r.json();
+    autoCaptureState.enabled = j.enabled;
+    autoCaptureState.target = j.target;
+    autoCaptureState.state = j.state;
+    autoCaptureState.rms = j.rms;
+    autoCaptureState.saved = j.saved;
+    autoCaptureState.message = j.message || '';
+    autoCaptureState.captured = (j.captured && j.captured[autoCaptureState.kind]) || 0;
+    updateAutoCaptureUi();
+    if (j.state === 'solved') stopAutoPolling();
+  } catch (e) {}
+}
+
+async function toggleAutoCapture() {
+  if (autoCaptureState.state === 'solved') {
+    // "Restart" - kick off a fresh auto session against the same board
+    await startAutoCapture(autoCaptureState.kind);
+    return;
+  }
+  autoCaptureState.enabled = !autoCaptureState.enabled;
+  updateAutoCaptureUi();
+  try {
+    await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/auto`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: autoCaptureState.enabled }),
+    });
+  } catch (e) {}
+}
+
+function updateAutoCaptureUi() {
+  const status = $id(autoCaptureState.kind + '-auto-status');
+  const toggle = $id(autoCaptureState.kind + '-auto-toggle');
+  if (!status) return;
+  if (autoCaptureState.state === 'solved') {
+    status.innerHTML = '<span class="ok">' + (autoCaptureState.message || 'Calibrated & saved automatically.') + '</span>';
+    if (toggle) toggle.textContent = 'Restart';
+    return;
+  }
+  if (!autoCaptureState.enabled) {
+    status.textContent = 'Auto capture paused - move the board and press Resume.';
+    if (toggle) toggle.textContent = 'Resume';
+    return;
+  }
+  const rmsTxt = autoCaptureState.rms != null
+    ? ' &middot; live RMS <strong>' + Number(autoCaptureState.rms).toFixed(2) + 'px</strong>'
+    : '';
+  status.innerHTML = 'Auto: <strong>' + autoCaptureState.captured + '/' + autoCaptureState.target +
+    '</strong> frames' + rmsTxt + '. ' + (autoCaptureState.message || '');
+  if (toggle) toggle.textContent = 'Pause';
+}
+
 async function openCalibrationWizard() {
   if (camModal.mode === 'add') {
     showToast('Save the camera first, then open the calibration wizard.', 'error');
@@ -1673,10 +1773,13 @@ async function openCalibrationWizard() {
   if (calibrationState.mode === 'focal') {
     renderFocalCalibration(body);
     renderPnpSectionIfApplicable(body);
+    startAutoCapture('charuco');
   } else if (calibrationState.mode === 'charuco') {
     renderCharucoCalibration(body);
+    startAutoCapture('charuco');
   } else if (calibrationState.mode === 'chessboard') {
     renderChessboardCalibration(body);
+    startAutoCapture('chessboard');
   } else if (calibrationState.mode === 'beta') {
     body.innerHTML = '<div class="card empty-state">The optical_flow pipeline is in beta - its motion estimation reads the camera FOV, so it is excluded from the calibration wizard for now.</div>';
   } else {
@@ -1699,6 +1802,7 @@ function closeCalibrationWizard() {
   calibrationState.intrinsicsActive = false;
   calibrationState.focalActive = false;
   calibrationState.focalTab = null;
+  stopAutoPolling();
   endCalibrationMode(camera);
 }
 
@@ -1739,7 +1843,7 @@ function focalIntrinsicsBody() {
         <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
-    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view - the live feed draws the detection the moment it locks on, and every capture stays drawn on it in a fresh random color. Capture varied angles, then hit Calibrate. The board layout/dictionary are auto-detected. Detections are paused while this is open.</div>
+    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view. Auto capture is ON: just keep moving the board around - it stores varied frames itself, watches the live RMS, and calibrates + saves when it has enough. Every capture stays drawn on the live view in its own color. The board layout/dictionary are auto-detected. Detections are paused while this is open.</div>
     ${charucoCaptureSectionHtml()}
   `;
 }
@@ -1982,7 +2086,14 @@ function renderChessboardCalibration(body) {
         <img id="calib-feed" src="${calibrationFeedUrl('chessboard', [9, 6])}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
-    <div class="calib-status" id="chess-note">Hold a printed chessboard in view and fill the frame with it, then click Capture. The detected corners are drawn live on the feed, and every capture stays drawn on the live view in a fresh random color. Move the board around - 10+ varied frames give the best result.</div>
+    <div class="calib-status" id="chess-note">Hold a printed chessboard in view and fill the frame with it. Auto capture is ON: just keep moving the board - it stores varied frames itself, watches the live RMS, and calibrates + saves when it has enough. Detections are paused while this is open.</div>
+    <div class="form-row">
+      <span class="form-label">Auto capture</span>
+      <div style="display:flex;gap:8px;flex:1;align-items:center;flex-wrap:wrap;">
+        <button type="button" class="btn-sm btn-ok" id="chess-auto-toggle" onclick="toggleAutoCapture()">Pause</button>
+        <span id="chess-auto-status" class="form-help" style="margin:0;">Starting...</span>
+      </div>
+    </div>
     <div class="form-row">
       <span class="form-label">Board pattern</span>
       <select id="chess-pattern" class="form-input" onchange="onChessboardPatternChange()">
@@ -2017,6 +2128,13 @@ function charucoCaptureSectionHtml() {
   // focal wizard's optional "precision intrinsics" step
   return `
     <div class="form-row">
+      <span class="form-label">Auto capture</span>
+      <div style="display:flex;gap:8px;flex:1;align-items:center;flex-wrap:wrap;">
+        <button type="button" class="btn-sm btn-ok" id="charuco-auto-toggle" onclick="toggleAutoCapture()">Pause</button>
+        <span id="charuco-auto-status" class="form-help" style="margin:0;">Starting...</span>
+      </div>
+    </div>
+    <div class="form-row">
       <span class="form-label">Board pattern</span>
       <select id="charuco-pattern" class="form-input" onchange="onCharucoPatternChange()">
         <option value="7,5" selected>7 x 5 squares (6 x 4 ArUco markers)</option>
@@ -2050,7 +2168,7 @@ function renderCharucoCalibration(body) {
         <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
-    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners + marker outlines = board detected on the live view. The board layout and marker dictionary are auto-detected - the moment it locks onto your board the overlay appears. Click Capture, move the board to a different angle, and repeat - every capture stays drawn on the live view in a fresh random color. 10+ varied frames give the best result. Detections are paused while this is open.</div>
+    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners + marker outlines = board detected on the live view. The board layout and marker dictionary are auto-detected - the moment it locks onto your board the overlay appears. Auto capture is ON: just keep moving the board around - varied angles, and it calibrates + saves itself when it has enough. Every capture stays drawn on the live view in a fresh random color. Detections are paused while this is open.</div>
     ${charucoCaptureSectionHtml()}
   `;
 }
@@ -2240,8 +2358,13 @@ async function resetCalibration() {
     if (!r.ok) throw new Error(j.error || 'Reset failed');
     showToast('Calibration reset.', 'success');
     refreshCalibrationFields(j.calibration);
-    if (calibrationState.mode === 'charuco' || calibrationState.mode === 'focal') clearCharucoSession();
-    else if (calibrationState.mode === 'chessboard') clearChessboardSession();
+    if (calibrationState.mode === 'charuco' || calibrationState.mode === 'focal') {
+      clearCharucoSession();
+      startAutoCapture('charuco');
+    } else if (calibrationState.mode === 'chessboard') {
+      clearChessboardSession();
+      startAutoCapture('chessboard');
+    }
     if (calibrationState.mode === 'focal') {
       unfreezeCalibrationFrame();
       const el = $id('focal-result');

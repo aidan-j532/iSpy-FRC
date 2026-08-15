@@ -5,6 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}iSpy{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/design.css">
+  <style>
+    /* ---- first-run tutorial ---- */
+    .ispy-welcome {
+      display:flex; align-items:center; gap:14px;
+      background:var(--bg-surface); border:1px solid var(--border-light);
+      border-radius:var(--radius); padding:14px 18px; margin-bottom:16px;
+      box-shadow:var(--shadow);
+    }
+    .ispy-welcome-mark {
+      flex:none; width:36px; height:36px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      background:var(--accent-dim); color:var(--accent);
+    }
+    .ispy-welcome h3 { margin:0; font-size:1rem; }
+    .ispy-welcome p { margin:2px 0 0; color:var(--text-dim); font-size:0.9rem; }
+    .ispy-welcome-actions { margin-left:auto; display:flex; gap:8px; flex:none; }
+    .ispy-tour-highlight {
+      position:fixed; z-index:9990; display:none;
+      border:2px solid var(--accent); border-radius:var(--radius);
+      box-shadow:0 0 0 9999px rgba(0,0,0,0.55);
+      pointer-events:none; transition:all .18s ease;
+    }
+    .ispy-tour-card {
+      position:fixed; z-index:9991; left:50%; bottom:24px;
+      transform:translateX(-50%); width:min(480px, calc(100vw - 32px));
+      display:none; flex-direction:column; gap:8px;
+      background:var(--bg-surface); border:1px solid var(--border-light);
+      border-radius:var(--radius); box-shadow:var(--shadow-lg);
+      padding:18px 20px;
+    }
+    .ispy-tour-card .t-title { font-size:1.05rem; font-weight:600; }
+    .ispy-tour-card .t-text { color:var(--text-dim); font-size:.9rem; line-height:1.5; }
+    .ispy-tour-bar { height:4px; border-radius:2px; background:var(--border); overflow:hidden; margin:4px 0 8px; }
+    .ispy-tour-bar i { display:block; height:100%; background:var(--accent); transition:width .2s ease; }
+    .ispy-tour-actions { display:flex; align-items:center; gap:8px; }
+    .ispy-tour-actions .t-count { color:var(--text-muted); font-size:.78rem; margin-right:auto; }
+  </style>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -49,6 +86,269 @@
         setTimeout(() => toast.remove(), 300);
       }, 3000);
     }
+  </script>
+  <script>
+    // ---- first-run tutorial walkthrough ----
+    (function () {
+      const KEY = 'ispy_tour_index';
+      const path = () => location.pathname === '/' ? '/dashboard' : location.pathname;
+
+      const TOUR = [
+        // Dashboard
+        {
+          page: '/dashboard',
+          title: 'Welcome to iSpy',
+          text: 'iSpy is your robot vision copilot - cameras running plug-and-play pipelines (object detection, AprilTags, QR codes, optical flow, depth estimation), a live 3D field viewer, model workflows, and calibration, all from this web UI.'
+        },
+        {
+          page: '/dashboard',
+          target: '.sidebar',
+          title: 'Everything lives in the sidebar',
+          text: 'Each page handles one job: Cameras, Health, Metrics, Models, Datasets, 3D Viewer, Logs, Add-ons and Settings. You can jump to any of them any time - this tour walks you through them all.'
+        },
+        {
+          page: '/dashboard',
+          target: '#stats',
+          title: 'Live telemetry',
+          text: 'FPS, vision latency, loop time, detection count and camera lag stream in here in real time while vision runs.'
+        },
+        {
+          page: '/dashboard',
+          target: '#camera-list',
+          title: 'Cameras at a glance',
+          text: 'This panel summarizes every configured camera. Head to the Cameras page next to see them in detail.'
+        },
+        // Cameras
+        {
+          page: '/cameras',
+          title: 'Cameras',
+          text: 'Each camera runs its own pipeline. Cards show a live preview, pipeline state, and quick actions.'
+        },
+        {
+          page: '/cameras',
+          target: '#camera-grid',
+          title: 'Camera cards',
+          text: 'Click a card\'s preview to open big mode - a full-screen live view with a tuning panel beside it.'
+        },
+        {
+          page: '/cameras',
+          target: '#camera-controls .btn-ok',
+          title: 'Add a camera',
+          text: 'Add a new camera here: pick a detected device or index, name it, and choose its pipeline.'
+        },
+        {
+          page: '/cameras',
+          target: '.camera-card .btn-ok',
+          title: 'Edit settings',
+          text: 'Each card has an Edit button that opens the setup flow: identity, mount & location, capture and image tuning, pipeline, and calibration.'
+        },
+        {
+          page: '/cameras',
+          title: 'Calibration wizard',
+          text: 'Inside Edit, the Calibration section has an "Open calibration wizard" button. It measures a known object or a ChArUco board live and fills in focal length / FOV for you.'
+        },
+        // Remaining pages: short intros, tour keeps navigating across them
+        { page: '/health-page', title: 'Health', text: 'System health, service state, and camera readiness in one place.' },
+        { page: '/metrics', title: 'Metrics', text: 'Performance charts - FPS, latency, and loop timing over time.' },
+        { page: '/models', title: 'Models', text: 'Browse, upload and switch vision models, and manage their metadata.' },
+        { page: '/datasets', title: 'Datasets', text: 'Capture and manage quantization datasets used when optimizing models.' },
+        { page: '/viewer3d', title: '3D Viewer', text: 'Every detection plotted in robot space in real time - pose skeletons for keypoint models, flat AprilTags and QR codes, and depth point clouds.' },
+        { page: '/logs', title: 'Logs', text: 'Live and stored logs for debugging.' },
+        { page: '/addons', title: 'Add-ons', text: 'Enable extra plugins - NetworkTables, trackers, frame processors - to push data to your robot code.' },
+        {
+          page: '/settings',
+          title: 'Settings',
+          text: 'Global configuration: units, hardware acceleration, optimization, and app behavior. You can re-run this tour any time from here.'
+        },
+        {
+          page: '/settings',
+          title: 'You\'re all set',
+          text: 'That covers the basics. Skipping or finishing this tour switches it off until the next fresh boot - use the button in Settings to bring it back any time.'
+        }
+      ];
+
+      let card = null, hl = null, posTimer = null;
+
+      function activeIndex() {
+        const v = sessionStorage.getItem(KEY);
+        return v == null ? null : parseInt(v, 10);
+      }
+      function setIndex(i) { sessionStorage.setItem(KEY, String(i)); }
+      function clearIndex() { sessionStorage.removeItem(KEY); }
+
+      function toast(msg, type) { try { showToast(msg, type); } catch (e) {} }
+
+      function apiDismiss() {
+        fetch('/api/onboarding', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ completed: true }),
+        }).catch(() => {});
+      }
+
+      function hide() {
+        if (card) { card.remove(); card = null; }
+        if (hl) { hl.remove(); hl = null; }
+        if (posTimer) { clearInterval(posTimer); posTimer = null; }
+      }
+
+      function position() {
+        if (!card) return;
+        const idx = activeIndex();
+        if (idx == null) return;
+        const step = TOUR[idx];
+        if (!step) return;
+        if (step.target) {
+          const el = document.querySelector(step.target);
+          if (el) {
+            const r = el.getBoundingClientRect();
+            hl.style.display = 'block';
+            hl.style.left = r.left + 'px';
+            hl.style.top = r.top + 'px';
+            hl.style.width = r.width + 'px';
+            hl.style.height = r.height + 'px';
+          } else {
+            hl.style.display = 'none';
+          }
+        } else {
+          hl.style.display = 'none';
+        }
+      }
+
+      function show(idx) {
+        const step = TOUR[idx];
+        if (!step) { clearIndex(); hide(); return; }
+        hide();
+        hl = document.createElement('div');
+        hl.className = 'ispy-tour-highlight';
+        document.body.appendChild(hl);
+
+        card = document.createElement('div');
+        card.className = 'ispy-tour-card';
+        const total = TOUR.length;
+        card.innerHTML =
+          '<div class="t-title"></div>' +
+          '<div class="t-text"></div>' +
+          '<div class="ispy-tour-bar"><i></i></div>' +
+          '<div class="ispy-tour-actions">' +
+            '<span class="t-count"></span>' +
+            '<button class="btn btn-sm" data-a="prev">Back</button>' +
+            '<button class="btn btn-sm btn-ok" data-a="next">Next</button>' +
+          '</div>';
+        card.querySelector('.t-title').textContent = step.title;
+        card.querySelector('.t-text').textContent = step.text;
+        card.querySelector('.t-count').textContent = 'Step ' + (idx + 1) + ' of ' + total;
+        card.querySelector('.ispy-tour-bar i').style.width = Math.round(((idx + 1) / total) * 100) + '%';
+        card.querySelector('[data-a="prev"]').addEventListener('click', prev);
+        card.querySelector('[data-a="next"]').addEventListener('click', next);
+        if (idx === 0) {
+          card.querySelector('[data-a="prev"]').style.display = 'none';
+        }
+        document.body.appendChild(card);
+        card.style.display = 'flex';
+        position();
+        posTimer = setInterval(position, 600);
+      }
+
+      function render() {
+        const idx = activeIndex();
+        if (idx == null) return;
+        const step = TOUR[idx];
+        if (!step) { clearIndex(); hide(); return; }
+        if (step.page !== path()) { location.href = step.page; return; }
+        show(idx);
+      }
+
+      function next() {
+        const idx = activeIndex();
+        if (idx == null) return;
+        if (idx + 1 >= TOUR.length) { finish(); return; }
+        const nxt = TOUR[idx + 1];
+        if (nxt.page !== path()) { setIndex(idx + 1); location.href = nxt.page; return; }
+        setIndex(idx + 1);
+        show(idx + 1);
+      }
+
+      function prev() {
+        const idx = activeIndex();
+        if (idx == null || idx === 0) return;
+        const prv = TOUR[idx - 1];
+        if (prv.page !== path()) { setIndex(idx - 1); location.href = prv.page; return; }
+        setIndex(idx - 1);
+        show(idx - 1);
+      }
+
+      function removeBanner() {
+        const b = document.getElementById('ispy-welcome');
+        if (b) b.remove();
+      }
+
+      function finish() {
+        clearIndex(); hide(); apiDismiss();
+        removeBanner();
+        toast('Tutorial complete', 'success');
+      }
+
+      function skip() {
+        clearIndex(); hide(); apiDismiss();
+        removeBanner();
+      }
+
+      function showBanner() {
+        if (document.getElementById('ispy-welcome')) return;
+        const b = document.createElement('div');
+        b.id = 'ispy-welcome';
+        b.className = 'ispy-welcome';
+        const mark = document.createElement('div');
+        mark.className = 'ispy-welcome-mark';
+        mark.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>';
+        const txt = document.createElement('div');
+        const h = document.createElement('h3'); h.textContent = 'New to iSpy?';
+        const p = document.createElement('p'); p.textContent = 'Take a guided tour of the dashboard, cameras, and tools.';
+        txt.appendChild(h); txt.appendChild(p);
+        const acts = document.createElement('div');
+        acts.className = 'ispy-welcome-actions';
+        const skipBtn = document.createElement('button');
+        skipBtn.className = 'btn btn-sm btn-secondary';
+        skipBtn.textContent = 'Skip';
+        skipBtn.addEventListener('click', skip);
+        const startBtn = document.createElement('button');
+        startBtn.className = 'btn btn-sm btn-ok';
+        startBtn.textContent = 'Start the tour';
+        startBtn.addEventListener('click', start);
+        acts.appendChild(skipBtn); acts.appendChild(startBtn);
+        b.appendChild(mark); b.appendChild(txt); b.appendChild(acts);
+        const content = document.querySelector('main.content');
+        (content || document.body).prepend(b);
+      }
+
+      function start() {
+        removeBanner();
+        setIndex(0);
+        render();
+      }
+
+      function init() {
+        if (activeIndex() != null) { render(); return; }
+        fetch('/api/onboarding')
+          .then(r => r.json())
+          .then(j => { if (j.show_tour && path() === '/dashboard') showBanner(); })
+          .catch(() => {});
+      }
+
+      document.addEventListener('DOMContentLoaded', init);
+      window.addEventListener('resize', position);
+      window.addEventListener('scroll', position, true);
+      document.addEventListener('keydown', function (e) {
+        if (!card) return;
+        if (e.key === 'Escape') skip();
+        else if (e.key === 'ArrowRight') next();
+        else if (e.key === 'ArrowLeft') prev();
+      });
+
+      window.ispyTour = { start: start, next: next, prev: prev, skip: skip, finish: finish };
+      window.startTutorial = start;
+    })();
   </script>
 </body>
 </html>

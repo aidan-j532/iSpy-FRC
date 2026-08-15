@@ -9,8 +9,8 @@ lateral/forward velocity in configured units per second - best treated as
 a soft dead-reckoning signal between vision updates, not an odometry source.
 
 The visualization renders a direction-coded HSV flow field over the ground
-region, a ground-region boundary, the aggregated velocity vector, a
-heading compass and a HUD panel with speed / flow coverage / fps.
+region with a ground-region boundary line, and a compact HUD panel with
+speed / heading / coverage / fps / confidence.
 """
 
 import cv2
@@ -143,13 +143,6 @@ class OpticalFlowCamera(VisionPipeline):
             "foot": "ft/s", "feet": "ft/s",
             "centimeter": "cm/s", "centimeters": "cm/s",
         }.get(self.unit, self.unit + "/s")
-
-    def _flow_color(self, dx, dy, sat_px=24.0) -> tuple:
-        """BGR color for a flow vector (hue = direction, value = magnitude)."""
-        ang = (math.degrees(math.atan2(dy, dx)) % 360.0) / 2.0
-        val = max(110, min(255, int(255 * math.hypot(dx, dy) / sat_px)))
-        pix = cv2.cvtColor(np.uint8([[[ang, 255, val]]]), cv2.COLOR_HSV2BGR)
-        return (int(pix[0, 0, 0]), int(pix[0, 0, 1]), int(pix[0, 0, 2]))
 
     def _flow_measure(self, frame):
         """returns (dx_px, dy_px, coverage, viz). dx/dy are the aggregate
@@ -326,7 +319,6 @@ class OpticalFlowCamera(VisionPipeline):
             sat_px = max(1.0, float(self._setting("flow_saturation", 24)))
 
             viz = self._last_viz
-            color = None
             if viz is not None and viz.get("kind") == "farneback":
                 flow_small = viz["flow_small"]
                 mask_small = viz["mask_small"]
@@ -343,76 +335,25 @@ class OpticalFlowCamera(VisionPipeline):
                     mask_small.astype(np.uint8) * 255, (img_w, img_h),
                     interpolation=cv2.INTER_NEAREST,
                 ) > 0
-                ground_mask = np.zeros((img_h, img_w), dtype=bool)
-                ground_mask[start_row_full:, :] = True
-                live = ground_mask & mask_full
+                live = np.zeros((img_h, img_w), dtype=bool)
+                live[start_row_full:, :] = True
+                live &= mask_full
                 if color is not None and live.any():
                     blend = cv2.addWeighted(out, 0.55, color, 0.45, 0)
                     out[live] = blend[live]
-
-                # dim the area above the ground region to emphasize the ROI
-                sky = ~ground_mask
-                out[sky] = (out[sky] * 0.5).astype(np.uint8)
                 cv2.line(out, (0, start_row_full), (img_w, start_row_full),
                          (0, 255, 255), 1, cv2.LINE_AA)
 
-            # direction-coded flow vectors
-            if viz is not None:
-                arrows = viz.get("arrows") or []
-                if len(arrows) > 200:
-                    arrows = arrows[:: int(math.ceil(len(arrows) / 200.0))]
-                for ax, ay, adx, ady in arrows:
-                    sx, sy = int(ax), int(ay)
-                    ex, ey = int(ax + adx), int(ay + ady)
-                    col = self._flow_color(adx, ady, sat_px)
-                    cv2.arrowedLine(out, (sx, sy), (ex, ey), col, 1,
-                                    tipLength=0.25, line_type=cv2.LINE_AA)
-                if viz.get("kind") == "lk":
-                    for px, py in (viz.get("points") or []):
-                        cv2.circle(out, (int(px), int(py)), 2, (180, 180, 255), -1)
-
             motion = self._last_motion or {}
-            self._draw_velocity_vector(out, motion, sat_px)
             self._draw_hud(out, motion)
-            self._draw_compass(out, motion)
             return out
         except Exception:
             return frame
 
-    def _draw_velocity_vector(self, out, motion: dict, sat_px: float):
-        """big arrow at the bottom-center showing aggregate robot velocity."""
-        img_h, img_w = out.shape[:2]
-        vx, vy = motion.get("vx", 0.0), motion.get("vy", 0.0)
-        dx_px, dy_px = motion.get("vx_px", 0.0), motion.get("vy_px", 0.0)
-        cx, cy = img_w // 2, img_h - 90
-
-        # robot velocity in image terms: forward is down-screen
-        length = math.hypot(dx_px, dy_px)
-        if length < 1e-6:
-            cv2.circle(out, (cx, cy), 6, (100, 100, 110), -1)
-            cv2.circle(out, (cx, cy), 6, (40, 40, 45), 1)
-            return
-        target_len = min(150.0, max(24.0, length * 4.0))
-        ux = (-dx_px / length) * target_len
-        uy = (dy_px / length) * target_len
-        ex, ey = int(cx + ux), int(cy + uy)
-        col = self._flow_color(-dx_px, dy_px, sat_px)
-
-        # radar base
-        cv2.circle(out, (cx, cy), 14, (25, 25, 30), -1)
-        cv2.circle(out, (cx, cy), 14, (70, 70, 80), 1)
-        cv2.line(out, (cx, cy), (ex, ey), (0, 0, 0), 7, cv2.LINE_AA)   # outline
-        cv2.arrowedLine(out, (cx, cy), (ex, ey), col, 4, tipLength=0.25, line_type=cv2.LINE_AA)
-        cv2.circle(out, (cx, cy), 4, (255, 255, 255), -1)
-
-        unit = self._unit_label()
-        cv2.putText(out, f"{math.hypot(vx, vy):.2f} {unit}", (cx - 44, cy + 38),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 2, cv2.LINE_AA)
-
     def _draw_hud(self, out, motion: dict):
         panel_w, line_h = 250, 20
         x0, y0 = 12, 12
-        rows = 6
+        rows = 5
         ph = y0 + rows * line_h + 12
         sub = out[y0:y0 + ph, x0:x0 + panel_w]
         if sub.size:
@@ -428,49 +369,22 @@ class OpticalFlowCamera(VisionPipeline):
              (88, 166, 255), 0.55, 2)
         speed = motion.get("speed", 0.0)
         text(1, f"SPEED   {speed:.2f} {unit}", (120, 255, 120), 0.6, 2)
-        text(2, f"FWD {motion.get('forward', 0.0):+.2f}  LAT {motion.get('lateral', 0.0):+.2f}",
+        heading = float(motion.get("heading_deg", 0.0))
+        text(2, f"HEADING {heading:+.0f} deg   FWD {motion.get('forward', 0.0):+.2f}",
              (230, 230, 230))
         cov = motion.get("coverage", 0.0)
-        text(3, f"FLOW {motion.get('flow_magnitude_px', 0.0):.1f}px   COV {cov * 100:.0f}%",
-             (230, 230, 230))
-        text(4, f"RANGE {motion.get('range_inches', 0.0):.0f}in   {motion.get('fps', 0.0):.0f} FPS",
+        text(3, f"COVERAGE {cov * 100:.0f}%   {motion.get('fps', 0.0):.0f} FPS",
              (230, 230, 230))
 
         # confidence bar
         conf = float(np.clip(motion.get("confidence", 0.0), 0.0, 1.0))
         bw = int((panel_w - 24) * conf)
-        cv2.rectangle(out, (x0 + 10, y0 + 5 * line_h + 4),
-                      (x0 + panel_w - 14, y0 + 5 * line_h + 10), (60, 60, 70), -1)
+        cv2.rectangle(out, (x0 + 10, y0 + 4 * line_h + 4),
+                      (x0 + panel_w - 14, y0 + 4 * line_h + 10), (60, 60, 70), -1)
         bar_col = (60, 170, 255) if conf < 0.4 else ((90, 230, 140) if conf < 0.75 else (80, 255, 120))
-        cv2.rectangle(out, (x0 + 10, y0 + 5 * line_h + 4),
-                      (x0 + 10 + bw, y0 + 5 * line_h + 10), bar_col, -1)
-        text(5, f"CONF {conf * 100:.0f}%", (230, 230, 230))
-
-    def _draw_compass(self, out, motion: dict):
-        img_h, img_w = out.shape[:2]
-        cx, cy, r = img_w - 70, 70, 44
-        heading = float(motion.get("heading_deg", 0.0))
-
-        cv2.circle(out, (cx, cy), r, (25, 25, 30), -1)
-        cv2.circle(out, (cx, cy), r, (90, 90, 100), 1)
-        for deg, label in ((0, "N"), (90, "E"), (180, "S"), (-90, "W")):
-            rad = math.radians(deg)
-            tx = int(cx + (r - 10) * math.sin(rad))
-            ty = int(cy - (r - 10) * math.cos(rad))
-            cv2.putText(out, label, (tx - 5, ty + 5), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.4, (140, 140, 150), 1, cv2.LINE_AA)
-
-        rad = math.radians(heading)
-        ex = int(cx + (r - 12) * math.sin(rad))
-        ey = int(cy - (r - 12) * math.cos(rad))
-        cv2.line(out, (cx, cy), (ex, ey), (0, 0, 0), 5, cv2.LINE_AA)
-        cv2.line(out, (cx, cy), (ex, ey), (255, 120, 60), 2, cv2.LINE_AA)
-        cv2.circle(out, (cx, cy), 3, (255, 255, 255), -1)
-
-        side = "R" if heading > 2 else ("L" if heading < -2 else "")
-        cv2.putText(out, f"{abs(heading):.0f}{side}".strip(),
-                    (cx - 24, cy + r + 18), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5, (235, 235, 235), 1, cv2.LINE_AA)
+        cv2.rectangle(out, (x0 + 10, y0 + 4 * line_h + 4),
+                      (x0 + 10 + bw, y0 + 4 * line_h + 10), bar_col, -1)
+        text(4, f"CONF {conf * 100:.0f}%", (230, 230, 230))
 
     # ------------------------------------------------------------------
 

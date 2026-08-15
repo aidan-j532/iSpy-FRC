@@ -34,6 +34,8 @@ class Viewer3DModule(WebModule):
         num_kpts = self._cached_num_keypoints
         self._latest_objects = []
         for idx, obj in enumerate(fuel_list):
+            if getattr(obj, "depth_source", "") == "optical_flow":
+                continue  # velocity signal, not a 3D position - don't render it
             obj_entry = {
                 "id": idx,
                 "x": getattr(obj, "x", 0),

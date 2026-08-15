@@ -210,6 +210,78 @@ def _object_points(cols: int, rows: int) -> np.ndarray:
     return pts
 
 
+def expected_charuco_corners(pattern) -> int:
+    """inner chessboard corners a (cols x rows) ChArUco board has - the auto
+    capture coverage gate compares detected corners against this."""
+    try:
+        cols, rows = int(pattern[0]), int(pattern[1])
+    except (TypeError, ValueError, IndexError):
+        return 0
+    return max(0, (cols - 1) * (rows - 1))
+
+
+def expected_chessboard_corners(pattern) -> int:
+    """inner corners a (cols x rows) chessboard pattern has."""
+    try:
+        cols, rows = int(pattern[0]), int(pattern[1])
+    except (TypeError, ValueError, IndexError):
+        return 0
+    return max(0, cols * rows)
+
+
+def capture_coverage(corners, expected: int) -> float:
+    """fraction (0..1) of the board's corners visible in a detection - auto
+    capture skips frames where too little of the board is in view."""
+    if corners is None or expected <= 0:
+        return 0.0
+    n = len(np.asarray(corners).reshape(-1, 2))
+    return float(min(1.0, n / expected))
+
+
+def frame_diverse(corners, existing_captures, min_shift_px: float = 12.0) -> bool:
+    """True when the newly detected corners moved more than min_shift_px from
+    every already-captured frame (mean nearest-corner displacement). Same-pose
+    frames add no information to an intrinsics solve, so auto capture skips
+    them. existing_captures are the stored capture tuples - the corners live at
+    index 1 for both the chessboard (gray, corners) and ChArUco
+    (gray, corners, ids) capture formats."""
+    new = np.asarray(corners, dtype=np.float64).reshape(-1, 2)
+    if len(new) == 0:
+        return False
+    for stored in existing_captures:
+        try:
+            old = np.asarray(stored[1], dtype=np.float64).reshape(-1, 2)
+        except (TypeError, ValueError, IndexError):
+            continue
+        if len(old) == 0:
+            continue
+        diffs = new[:, None, :] - old[None, :, :]
+        mean_min = float(np.sqrt((diffs**2).sum(-1)).min(axis=1).mean())
+        if mean_min < min_shift_px:
+            return False
+    return True
+
+
+def derive_fov_from_intrinsics(result: dict) -> dict:
+    """from a calibration solve result dict, derive the known-object values the
+    depth pipelines read (horizontal fov + focal length in px) straight from the
+    solved camera matrix - so a board-based intrinsic calibration also covers
+    the focal/FOV path and object_detection never needs the manual known-object
+    measurement. Returns a dict of derived values (empty when the solve lacks
+    usable intrinsics)."""
+    try:
+        fx = float(result["camera_matrix"][0][0])
+        width = float(result["resolution"][0])
+    except (KeyError, TypeError, ValueError, IndexError):
+        return {}
+    if fx <= 0 or width <= 0:
+        return {}
+    return {
+        "fov": round(fov_from_focal(fx, width), 3),
+        "focal_length_pixels": round(fx, 2),
+    }
+
+
 def calibrate_chessboard(captures, pattern=DEFAULT_CHESSBOARD_PATTERN):
     """run calibrateCamera over [(gray_frame, corners), ...]; returns a dict
     with rms + intrinsics, or None when it cannot calibrate. pattern is the

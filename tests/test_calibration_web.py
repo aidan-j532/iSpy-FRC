@@ -199,8 +199,13 @@ class CalibrationWebTests(unittest.TestCase):
         self.assertIn("camera_matrix", cal)
         self.assertEqual(cal["camera_matrix"], j["result"]["camera_matrix"])
         self.assertIn("dist_coeffs", cal)
-        # known-object values survive the intrinsics write
-        self.assertEqual(cal["fov"], 0)
+        # intrinsics finish now also derives the known-object focal/FOV values
+        # object_detection reads - the manual "known object" step is optional
+        self.assertGreater(cal["fov"], 0)
+        self.assertGreater(cal["focal_length_pixels"], 0)
+        self.assertAlmostEqual(
+            cal["fov"], j["fov"], places=2,
+        )
 
     def test_charuco_capture_clear(self):
         cfg, cam, mod, client = self._setup()

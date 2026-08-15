@@ -191,6 +191,11 @@ class iSpyConfig:
             "metrics": True,
             "app_mode": True,
             "max_fps": 0,
+            # reset to False by every `boot -f` (fresh install) so the web UI
+            # shows its first-run tutorial once until the user dismisses it.
+            "onboarding": {
+                "completed": False,
+            },
             "camera_configs": {
                 "default_cam": {
                     "name": "default_cam",

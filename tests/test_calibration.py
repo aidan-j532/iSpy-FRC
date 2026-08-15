@@ -160,6 +160,53 @@ class ChessboardCalibrationTests(unittest.TestCase):
         self.assertIsNone(c.calibrate_chessboard(captures, pattern))
 
 
+class AutoCaptureScoringTests(unittest.TestCase):
+    def test_expected_corners(self):
+        self.assertEqual(c.expected_charuco_corners((7, 5)), 24)
+        self.assertEqual(c.expected_charuco_corners((8, 6)), 35)
+        self.assertEqual(c.expected_chessboard_corners((9, 6)), 54)
+        self.assertEqual(c.expected_charuco_corners("garbage"), 0)
+
+    def test_capture_coverage_counts_corners(self):
+        pattern = (7, 5)
+        board = c.make_charuco_board(*pattern)
+        img = board.generateImage((640, 480), marginSize=20)
+        found, corners, _, _, _, _ = c.detect_charuco(img, *pattern)
+        self.assertTrue(found)
+        expected = c.expected_charuco_corners(pattern)
+        self.assertAlmostEqual(c.capture_coverage(corners, expected), 1.0, places=2)
+        self.assertEqual(c.capture_coverage(None, expected), 0.0)
+        half = corners[: expected // 2]
+        self.assertAlmostEqual(c.capture_coverage(half, expected), 0.5, places=2)
+
+    def test_frame_diverse_rejects_same_pose(self):
+        pattern = (7, 5)
+        board = c.make_charuco_board(*pattern)
+        img = board.generateImage((640, 480), marginSize=20)
+        _, corners, ids, _, _, gray = c.detect_charuco(img, *pattern)
+        captures = [(gray, corners, ids)]
+        self.assertFalse(c.frame_diverse(corners, captures, min_shift_px=12.0))
+        shifted = np.asarray(corners, dtype=np.float64).copy() + 40.0
+        self.assertTrue(c.frame_diverse(shifted, captures, min_shift_px=12.0))
+
+    def test_frame_diverse_empty_captures_is_diverse(self):
+        board = c.make_charuco_board(7, 5)
+        img = board.generateImage((640, 480), marginSize=20)
+        _, corners, _, _, _, _ = c.detect_charuco(img, 7, 5)
+        self.assertTrue(c.frame_diverse(corners, []))
+
+    def test_derive_fov_from_intrinsics(self):
+        result = {
+            "camera_matrix": [[500, 0, 320], [0, 500, 240], [0, 0, 1]],
+            "dist_coeffs": [0.0] * 5,
+            "resolution": [640, 480],
+        }
+        derived = c.derive_fov_from_intrinsics(result)
+        self.assertAlmostEqual(derived["focal_length_pixels"], 500.0, places=2)
+        self.assertAlmostEqual(derived["fov"], c.fov_from_focal(500, 640), places=3)
+        self.assertEqual(c.derive_fov_from_intrinsics({}), {})
+
+
 class OverlayColorTests(unittest.TestCase):
     def _flat_frame(self, color=(30, 30, 30)):
         return np.full((120, 160, 3), color, dtype=np.uint8)
