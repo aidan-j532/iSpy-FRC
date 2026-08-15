@@ -1502,7 +1502,8 @@ const calibrationState = {
   end: null,
   captured: 0,
   overlayPattern: null,    // [cols, rows] used by the live charuco overlay feed
-  intrinsicsActive: false, // focal wizard: optional ChArUco intrinsics section is open
+  intrinsicsActive: false, // focal wizard: feed shows the ChArUco board overlay
+  focalActive: false,      // focal wizard: freeze & measure section is open
 };
 
 let calibrationHeartbeatTimer = null;
@@ -1695,72 +1696,71 @@ function closeCalibrationWizard() {
   calibrationState.frame = null;
   calibrationState.overlayPattern = null;
   calibrationState.intrinsicsActive = false;
+  calibrationState.focalActive = false;
   endCalibrationMode(camera);
 }
 
 function renderFocalCalibration(body) {
+  calibrationState.overlayPattern = [7, 5];
+  calibrationState.intrinsicsActive = true;
+  calibrationState.focalActive = false;
   body.innerHTML = `
     <div class="form-row"><span class="form-label">Live view</span>
       <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="${calibrationFeedUrl()}" alt="live feed"
+        <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed"
              onload="calibrationFeedReady()" onerror="calibrationFeedError()">
         <canvas id="calib-canvas"></canvas>
       </div>
     </div>
-    <div class="calib-status" id="focal-feed-note">Point the camera at an object of known size, then click "Freeze &amp; measure".</div>
-    <div class="form-row">
-      <span class="form-label">Measure</span>
-      <div style="display:flex;gap:8px;flex:1;">
-        <button type="button" class="btn-sm btn-ok" id="calib-freeze-btn" onclick="toggleCalibrationFreeze()">Freeze &amp; measure</button>
-      </div>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Pixel height <span class="form-unit">px</span></span>
-      <input type="number" step="0.5" class="form-input" id="focal-pixel-height" placeholder="drag on the frozen frame, or type it">
-    </div>
-    <div class="form-row">
-      <span class="form-label">Object size <span class="form-unit">in</span></span>
-      <input type="number" step="0.1" class="form-input" id="focal-real-size" placeholder="e.g. 6.5">
-    </div>
-    <div class="form-row">
-      <span class="form-label">Distance <span class="form-unit">in</span></span>
-      <input type="number" step="0.1" class="form-input" id="focal-distance" placeholder="camera to object">
-    </div>
-    <div class="form-row">
-      <span class="form-label">Frame width <span class="form-unit">px</span></span>
-      <span id="focal-frame-width" class="form-input" style="border:none;padding-top:8px;background:transparent;">from the live frame</span>
-    </div>
-    <div class="form-row">
-      <span class="form-label"></span>
-      <button type="button" class="btn-sm btn-ok" onclick="computeFocalCalibration()">Compute &amp; save</button>
-    </div>
-    <div class="calib-status" id="focal-result"></div>
+    <div class="calib-status" id="charuco-note">Precision intrinsics are shown first: hold a printed ChArUco board in view and the live feed draws the detection - green corners + marker outlines the moment it locks on. Capture varied angles, then hit Calibrate. The board layout/dictionary are auto-detected. If you only need depth-from-size, open the known-object measurement below.</div>
+    ${charucoCaptureSectionHtml()}
     <div class="form-row" style="margin-top:10px;">
       <span class="form-label"></span>
-      <button type="button" class="btn-sm" id="focal-intrinsics-btn" onclick="toggleIntrinsicsSection()">Run precision intrinsics calibration</button>
+      <button type="button" class="btn-sm" id="focal-toggle-btn" onclick="toggleFocalSection()">Known-object measurement (freeze &amp; measure)</button>
     </div>
-    <div id="focal-intrinsics" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
-      <div class="calib-status">Optional: calibrate a real camera matrix + distortion with a ChArUco board. The live view switches to board detection - hold the board up and green corners + marker outlines appear the moment it locks on. Every capture stays drawn on it in a fresh random color. You can skip this step - the known-object measurement above is enough for depth-from-size.</div>
-      ${charucoCaptureSectionHtml()}
+    <div id="focal-known" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
+      <div class="calib-status" id="focal-feed-note">Point the camera at an object of known size, then click "Freeze &amp; measure".</div>
+      <div class="form-row">
+        <span class="form-label">Measure</span>
+        <div style="display:flex;gap:8px;flex:1;">
+          <button type="button" class="btn-sm btn-ok" id="calib-freeze-btn" onclick="toggleCalibrationFreeze()">Freeze &amp; measure</button>
+        </div>
+      </div>
+      <div class="form-row">
+        <span class="form-label">Pixel height <span class="form-unit">px</span></span>
+        <input type="number" step="0.5" class="form-input" id="focal-pixel-height" placeholder="drag on the frozen frame, or type it">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Object size <span class="form-unit">in</span></span>
+        <input type="number" step="0.1" class="form-input" id="focal-real-size" placeholder="e.g. 6.5">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Distance <span class="form-unit">in</span></span>
+        <input type="number" step="0.1" class="form-input" id="focal-distance" placeholder="camera to object">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Frame width <span class="form-unit">px</span></span>
+        <span id="focal-frame-width" class="form-input" style="border:none;padding-top:8px;background:transparent;">from the live frame</span>
+      </div>
+      <div class="form-row">
+        <span class="form-label"></span>
+        <button type="button" class="btn-sm btn-ok" onclick="computeFocalCalibration()">Compute &amp; save</button>
+      </div>
+      <div class="calib-status" id="focal-result"></div>
     </div>
   `;
 }
 
-function toggleIntrinsicsSection() {
-  const section = $id('focal-intrinsics');
+function toggleFocalSection() {
+  const section = $id('focal-known');
   if (!section) return;
   const open = section.style.display === 'none';
   section.style.display = open ? 'block' : 'none';
-  const btn = $id('focal-intrinsics-btn');
-  if (btn) btn.textContent = open ? 'Hide precision intrinsics calibration' : 'Run precision intrinsics calibration';
-  if (open) {
-    calibrationState.overlayPattern = [7, 5];
-    calibrationState.intrinsicsActive = true;
-    reconnectCalibrationFeed();
-  } else {
-    calibrationState.intrinsicsActive = false;
-    reconnectCalibrationFeed();
-  }
+  const btn = $id('focal-toggle-btn');
+  if (btn) btn.textContent = open ? 'Hide known-object measurement' : 'Known-object measurement (freeze &amp; measure)';
+  calibrationState.focalActive = open;
+  calibrationState.intrinsicsActive = !open;
+  reconnectCalibrationFeed();
 }
 
 function calibrationFeedReady() {
@@ -2046,7 +2046,7 @@ function reconnectCalibrationFeed() {
   if (!img || calibrationState.frozen) return;
   // MJPEG streams don't reconnect on an identical src - re-open with a cache-bust
   let base;
-  if (calibrationState.intrinsicsActive) {
+  if (calibrationState.mode === 'focal' && calibrationState.intrinsicsActive) {
     base = calibrationFeedUrl('charuco', calibrationState.overlayPattern);
   } else if (calibrationState.mode === 'charuco') {
     base = calibrationFeedUrl('charuco', calibrationState.overlayPattern);
