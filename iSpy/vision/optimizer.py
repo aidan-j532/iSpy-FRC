@@ -712,24 +712,60 @@ def _format_output_dir(target_format: str) -> Path:
     return _yolo_models_dir() / target_format
 
 
-def _desired_output_path(pt_path: Path, target_format: str) -> Path:
+def _artifact_name(pt_path: Path, target_format: str) -> str:
+    """artifact filename/dir for a source .pt, without creating anything"""
     stem = pt_path.stem
+    if target_format == "rknn":
+        return f"{stem}.rknn"
+    if target_format == "onnx":
+        return f"{stem}.onnx"
+    if target_format == "openvino":
+        return f"{stem}_openvino_model"
+    if target_format == "coreml":
+        return f"{stem}.mlpackage"
+    if target_format == "engine":
+        return f"{stem}.engine"
+    if target_format == "tflite":
+        return f"{stem}.tflite"
+    return f"{stem}.{target_format}"
+
+
+def _desired_output_path(pt_path: Path, target_format: str) -> Path:
     out_dir = _format_output_dir(target_format)
     out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir / _artifact_name(pt_path, target_format)
 
-    if target_format == "rknn":
-        return out_dir / f"{stem}.rknn"
-    if target_format == "onnx":
-        return out_dir / f"{stem}.onnx"
-    if target_format == "openvino":
-        return out_dir / f"{stem}_openvino_model"
-    if target_format == "coreml":
-        return out_dir / f"{stem}.mlpackage"
-    if target_format == "engine":
-        return out_dir / f"{stem}.engine"
-    if target_format == "tflite":
-        return out_dir / f"{stem}.tflite"
-    return out_dir / f"{stem}.{target_format}"
+
+# optimized artifacts can be built for any of these - a camera runs whichever
+# backend is active, so "already built" means any of them
+_ARTIFACT_FORMATS = ("onnx", "rknn", "tflite", "openvino", "engine", "coreml")
+
+
+def existing_artifact_for(
+    source_pt: Path | str | None, target_format: str | None = None
+) -> str | None:
+    """config-relative path (YoloModels/<fmt>/<name>) of an already-built
+    optimized artifact for source_pt, or None when nothing has been converted
+    yet. target_format is checked first when given, then every supported
+    format - a camera can run whatever artifact is already on disk, so model
+    selection should reuse it instead of pointing file_path at a stale build
+    for an older model."""
+    if not source_pt:
+        return None
+    source_pt = Path(source_pt)
+    if source_pt.suffix.lower() != ".pt":
+        return None
+    requested = str(target_format or "").strip().lower()
+    formats = [requested] if requested and requested != "auto" else []
+    formats += [f for f in _ARTIFACT_FORMATS if f not in formats]
+    for fmt in formats:
+        out = _format_output_dir(fmt) / _artifact_name(source_pt, fmt)
+        if out.exists():
+            try:
+                return out.resolve().relative_to(_PROJECT_ROOT).as_posix()
+            except ValueError:
+                return str(out)
+    return None
 
 
 def _remove_path_for_cleanup(path: Path) -> None:

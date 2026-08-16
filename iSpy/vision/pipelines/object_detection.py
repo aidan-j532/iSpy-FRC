@@ -137,6 +137,23 @@ class ObjectDetectionCamera(VisionPipeline):
 
         super().__init__(camera_config, self.input_size, self.grayscale)
 
+        # file_path can drift from source_pt when the model was re-picked in
+        # the UI: it may point at a stale artifact built for an older model,
+        # which would silently keep that old model running. Trust the source -
+        # load its already-built artifact when one exists, else the .pt itself
+        # (the background optimizer swaps file_path to the fresh artifact once
+        # its build lands).
+        if self._optimization_requested():
+            source = self._source_model_path()
+            current = str(self.yolo_model_file or "")
+            if source is not None and current and self._path_format(current) != "pytorch":
+                from iSpy.vision.optimizer import existing_artifact_for
+                artifact = existing_artifact_for(source, self._target_format_cached())
+                preferred = artifact or str(self._resolve_model_path(source) or source)
+                if self._resolve_model_path(current) != self._resolve_model_path(preferred):
+                    vm_filled["file_path"] = preferred
+                    self.yolo_model_file = preferred
+
         try:
             self.model = GenericYolo(vm_filled, self.core_mask, iSpy_config=config)
         except ModelFileError as e:
@@ -368,9 +385,16 @@ class ObjectDetectionCamera(VisionPipeline):
         if not path or self._path_format(path) != self._target_format_cached():
             return False
         expected = self._optimized_artifact_path()
-        if expected is None:
-            return True
-        return self._resolve_model_path(path) == expected
+        if expected is not None:
+            return self._resolve_model_path(path) == expected
+        # artifact for this source not built yet (or built under a name that
+        # no longer matches). A leftover artifact from an older model must be
+        # rejected, not trusted, or an old model silently keeps running.
+        src = self._source_model_path()
+        if src is not None:
+            from iSpy.vision.optimizer import _artifact_name
+            return Path(path).name == _artifact_name(src, self._target_format_cached())
+        return True
 
     def is_ready(self) -> tuple[bool, str]:
         # pure status report - never triggers/blocks on optimization

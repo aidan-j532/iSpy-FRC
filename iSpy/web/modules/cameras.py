@@ -71,6 +71,18 @@ def _to_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _camera_calibrated(entry: dict) -> bool:
+    """True when a camera config has real calibration data the depth/PnP paths
+    can use - known-object focal/FOV values or board intrinsics. A fresh camera
+    (all-zero known-object values, no intrinsics) is uncalibrated."""
+    if not isinstance(entry, dict):
+        return False
+    calib = entry.get("calibration") or {}
+    return bool(
+        calib.get("camera_matrix") and calib.get("dist_coeffs") is not None
+    ) or bool(calib.get("focal_length_pixels")) or _to_float(calib.get("fov")) > 0
+
+
 def _decode_base64_frame(image_b64):
     if isinstance(image_b64, str) and image_b64.startswith("data:"):
         image_b64 = image_b64.split(",", 1)[-1]
@@ -125,6 +137,53 @@ def _prune_stale_pipeline_settings(entry: dict) -> None:
     for alias, canonical in _SETTING_ALIASES.items():
         if alias in settings and canonical in settings:
             del settings[alias]
+
+
+def _vision_model_target_format(settings: dict) -> str:
+    """the artifact format the camera would build: its explicit target_format,
+    else the pipeline's recommended backend for this device."""
+    fmt = str(settings.get("target_format") or "auto").strip().lower()
+    if fmt and fmt != "auto":
+        return fmt
+    try:
+        from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
+        return ObjectDetectionCamera.recommended_format()
+    except Exception:
+        return "onnx"
+
+
+def _vision_model_rel_path(path) -> str:
+    """config-relative (YoloModels/...) path for a model file - keeps configs
+    portable instead of storing absolute windows/linux paths"""
+    p = Path(str(path or ""))
+    if p.is_absolute():
+        try:
+            return p.resolve().relative_to(Path.cwd().resolve()).as_posix()
+        except ValueError:
+            return str(p)
+    return p.as_posix()
+
+
+def _resolve_vision_model_files(settings: dict) -> None:
+    """keep vision_model.file_path in sync with source_pt after a model pick:
+    point it at the source's already-built optimized artifact when one exists,
+    otherwise back at the .pt so the camera boots on the right model right
+    away (the background optimizer swaps file_path to the fresh artifact once
+    its build lands)."""
+    vm = settings.get("vision_model")
+    if not isinstance(vm, dict):
+        return
+    src = str(vm.get("source_pt") or vm.get("file_path") or "")
+    if not src.lower().endswith(".pt"):
+        return
+    try:
+        from iSpy.vision.optimizer import existing_artifact_for
+    except Exception:
+        return
+    pt_rel = _vision_model_rel_path(src)
+    artifact = existing_artifact_for(Path(src), _vision_model_target_format(settings))
+    vm["source_pt"] = pt_rel
+    vm["file_path"] = artifact or pt_rel
 
 
 def _windows_cameras_from_registry():
@@ -1384,6 +1443,15 @@ class CamerasModule(WebModule):
             pipeline_name = str(raw_pipeline or "object_detection")
             pipeline_settings = {}
 
+        # calibration is edited through the dedicated wizard, not the add/edit
+        # form anymore - when re-adding a device that was removed before,
+        # carry its last saved calibration over from the profile
+        calibration = data.get("calibration")
+        if not calibration and device_id:
+            profile = (read("camera_profiles", {}) or {}).get(device_id)
+            if isinstance(profile, dict) and isinstance(profile.get("calibration"), dict):
+                calibration = profile["calibration"]
+
         cam_entry = {
             "name": name, "source": source, "device_id": device_id,
             "yaw": data.get("yaw", 0), "pitch": data.get("pitch", 0),
@@ -1391,7 +1459,7 @@ class CamerasModule(WebModule):
             "y": data.get("y", 0), "z": data.get("z", 0),
             "grayscale": data.get("grayscale", False),
             "subsystem": data.get("subsystem", "field"),
-            "calibration": data.get("calibration", {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0}),
+            "calibration": calibration or {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
             "pipeline": {"name": pipeline_name, "settings": pipeline_settings},
         }
 
@@ -1407,6 +1475,11 @@ class CamerasModule(WebModule):
         for k, v in data.items():
             if k not in handled:
                 pipeline_settings[k] = v
+
+        if is_model_backed_pipeline(pipeline_name) and isinstance(
+            pipeline_settings.get("vision_model"), dict
+        ):
+            _resolve_vision_model_files(pipeline_settings)
 
         ensure_camera_entries_ready({name: cam_entry})
         _prune_stale_pipeline_settings(cam_entry)
@@ -1445,6 +1518,7 @@ class CamerasModule(WebModule):
             return jsonify(error="Camera not found"), 404
 
         new_entry = copy.deepcopy(entry)
+        model_picked = False
         pipeline_entry = new_entry.get("pipeline")
         if not isinstance(pipeline_entry, dict):
             pipeline_entry = {
@@ -1467,6 +1541,8 @@ class CamerasModule(WebModule):
                     if value.get("name"):
                         pipeline_entry["name"] = value["name"]
                     if isinstance(value.get("settings"), dict):
+                        if "vision_model" in value["settings"]:
+                            model_picked = True
                         pipeline_entry.setdefault("settings", {}).update(value["settings"])
                 continue
             if key == "name":
@@ -1506,6 +1582,11 @@ class CamerasModule(WebModule):
             pipeline_entry.get("settings", {}).get("vision_model"), dict
         ):
             pipeline_entry.setdefault("settings", {})["vision_model"] = default_vision_model()
+
+        # a model pick must move both source_pt and file_path together, or the
+        # camera keeps running the old model (stale artifact from a previous pick)
+        if model_picked and is_model_backed_pipeline(pipeline_name):
+            _resolve_vision_model_files(pipeline_entry.setdefault("settings", {}))
 
         ensure_camera_entries_ready({new_name: new_entry})
         _prune_stale_pipeline_settings(new_entry)
@@ -1563,6 +1644,11 @@ class CamerasModule(WebModule):
                     "age_ms": round((now - self.last_seen.get(n, now)) * 1000, 1),
                     "source": self.sources.get(n),
                 }
+                _, _, entry = self._find_camera_entry(n)
+                payload["calibrated"] = _camera_calibrated(entry)
+                payload["pipeline"] = (
+                    get_pipeline_name(entry) if isinstance(entry, dict) else "object_detection"
+                )
                 inst = self.live_cameras.get(n)
                 if inst is not None and hasattr(inst, "is_ready"):
                     try:

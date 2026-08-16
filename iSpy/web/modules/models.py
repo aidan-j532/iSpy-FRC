@@ -28,6 +28,27 @@ def _is_safe_path(base: Path, target: Path) -> bool:
         return False
 
 
+def _model_rel_path(path: Path) -> str:
+    """config-relative (YoloModels/...) path for a model file"""
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _target_format(settings: dict) -> str:
+    """the artifact format the camera would build: its explicit target_format,
+    else the pipeline's recommended backend for this device"""
+    fmt = str(settings.get("target_format") or "auto").strip().lower()
+    if fmt and fmt != "auto":
+        return fmt
+    try:
+        from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
+        return ObjectDetectionCamera.recommended_format()
+    except Exception:
+        return "onnx"
+
+
 class ModelsModule(WebModule):
     plugin_name = "models"
 
@@ -138,7 +159,12 @@ class ModelsModule(WebModule):
         config = self.context.get("config")
         if not config:
             return jsonify(error="No config available"), 500
-        # model selection = the per-camera vision_model block of every model-backed cam
+        # model selection = the per-camera vision_model block of every model-backed cam.
+        # source_pt always points at the .pt; file_path points at an already-built
+        # optimized artifact for it so the camera keeps running the picked model
+        # (a stale artifact from a previous pick must not win).
+        from iSpy.vision.optimizer import existing_artifact_for
+
         updated = []
         cams = config.get_nested("camera_configs", default={})
         for cam_name, cam in cams.items():
@@ -146,7 +172,11 @@ class ModelsModule(WebModule):
             model_cfg = settings.get("vision_model")
             if not isinstance(model_cfg, dict):
                 continue
-            settings["vision_model"] = {**model_cfg, "source_pt": str(p), "file_path": str(p)}
+            src = _model_rel_path(p)
+            artifact = existing_artifact_for(p, _target_format(settings))
+            settings["vision_model"] = {
+                **model_cfg, "source_pt": src, "file_path": artifact or src,
+            }
             updated.append(cam_name)
         if not updated:
             return jsonify(error="No camera uses a user-selectable model"), 400

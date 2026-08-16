@@ -33,7 +33,6 @@
           <strong>Image tuning</strong>
           <button type="button" class="btn-sm" onclick="resetTuning()">Reset</button>
         </div>
-        <div class="form-help">Sliders update the live feed and are saved to the camera config automatically. They are applied to the frame before detection, so tuning also affects vision results. Exposure/gain are hardware controls - support depends on the driver.</div>
         <div id="tune-sliders"></div>
       </div>
     </div>
@@ -275,7 +274,6 @@ const camModal = {
 const COMMON_SECTIONS = [
   { title: 'Mount & Location', fields: ['x', 'y', 'height', 'yaw', 'pitch'] },
   { title: 'Capture', fields: ['subsystem', 'grayscale', 'auto_brightness', 'exposure_time', 'gain', 'fps_cap'] },
-  { title: 'Calibration', fields: ['calibration.distance', 'calibration.game_piece_size', 'calibration.size', 'calibration.fov'] },
 ];
 
 const COMMON_FIELDS = {
@@ -294,10 +292,6 @@ const COMMON_FIELDS = {
   exposure_time: { label: 'Exposure', type: 'number', step: 1, unit: '\u00b5s', nullable: true, help: 'Fixed exposure in microseconds. Leave empty for the camera default.' },
   gain: { label: 'Gain', type: 'number', step: 1, nullable: true, help: 'Fixed sensor gain. Leave empty for the camera default.' },
   fps_cap: { label: 'FPS cap', type: 'number', step: 1, nullable: true, help: 'Hard cap on capture framerate. Leave empty for uncapped.' },
-  'calibration.distance': { label: 'Known distance', type: 'number', step: 0.1, unit: 'in', default: 0, help: 'Distance from the camera to the object at which the size below was measured.' },
-  'calibration.game_piece_size': { label: 'Game piece size', type: 'number', step: 0.1, unit: 'in', default: 0, help: 'Real-world height of the tracked game piece. Calibration values are inches internally.' },
-  'calibration.size': { label: 'Object height in frame', type: 'number', step: 0.5, unit: 'px', default: 0, help: 'Vertical pixel size the object appears at the known distance.' },
-  'calibration.fov': { label: 'Horizontal FOV', type: 'number', step: 0.1, unit: 'deg', default: 0, help: 'Horizontal field of view used for ray/depth estimation.' },
 };
 
 /* Small helpers */
@@ -614,11 +608,6 @@ async function onDeviceChanged() {
     setFieldValue('pitch', profile.pitch ?? 0);
     setFieldValue('subsystem', profile.subsystem || 'field');
     setFieldValue('grayscale', !!profile.grayscale);
-    const cal = profile.calibration || {};
-    setFieldValue('calibration.distance', cal.distance ?? 0);
-    setFieldValue('calibration.game_piece_size', cal.game_piece_size ?? 0);
-    setFieldValue('calibration.size', cal.size ?? 0);
-    setFieldValue('calibration.fov', cal.fov ?? 0);
   } catch (e) { /* no profile saved for this device yet */ }
 }
 
@@ -654,27 +643,10 @@ async function openCameraModal(mode, arg) {
   // Common collapsible groups.
   const pipeline = pipelineSchemas[camModal.pipeline] || {};
   const showMount = pipeline.show_common_fields !== false;
-  const showCalibration = pipeline.show_calibration !== false;
   COMMON_SECTIONS.forEach(group => {
     if (group.title === 'Mount & Location' && !showMount) return;
-    if (group.title === 'Calibration' && !showCalibration) return;
     const sec = renderSection(group.title, { collapsible: true });
     renderSectionBody(sec.body, group.fields.map(k => [k, COMMON_FIELDS[k]]), 'common');
-    if (group.title === 'Calibration') {
-      const row = document.createElement('div');
-      row.className = 'form-row';
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'btn-sm btn-ok';
-      btn.textContent = 'Open calibration wizard';
-      btn.onclick = openCalibrationWizard;
-      row.appendChild(btn);
-      sec.body.appendChild(row);
-      const help = document.createElement('div');
-      help.className = 'form-help';
-      help.textContent = 'The wizard measures a known object (object_detection) or a ChArUco board (AprilTag / QR) and fills these values in. It uses a raw camera feed while open, so detections are paused.';
-      sec.body.appendChild(help);
-    }
     body.appendChild(sec.holder);
   });
 
@@ -849,11 +821,6 @@ function fillCommonValues() {
   setFieldValue('exposure_time', src.exposure_time);
   setFieldValue('gain', src.gain);
   setFieldValue('fps_cap', src.fps_cap);
-  const cal = src.calibration || {};
-  setFieldValue('calibration.distance', cal.distance ?? 0);
-  setFieldValue('calibration.game_piece_size', cal.game_piece_size ?? 0);
-  setFieldValue('calibration.size', cal.size ?? 0);
-  setFieldValue('calibration.fov', cal.fov ?? 0);
   if (camModal.mode === 'edit') {
     setFieldValue('source', src.source ?? '');
     setFieldValue('name', src.name ?? '');
@@ -892,12 +859,6 @@ async function submitCameraModal() {
     const v = readField(k);
     payload[k] = (v === '' || v == null) ? null : Number(v);
   });
-  payload.calibration = {
-    distance: readField('calibration.distance') ?? 0,
-    game_piece_size: readField('calibration.game_piece_size') ?? 0,
-    size: readField('calibration.size') ?? 0,
-    fov: readField('calibration.fov') ?? 0,
-  };
 
   collectSchemaFields(payload);
 
@@ -1199,6 +1160,23 @@ function statusDotClass(cam) {
   return 'status-bad';
 }
 
+/* the dot next to a camera's name: green when streaming + calibrated, yellow
+   when streaming but not calibrated yet (or not streaming). Calibration is a
+   per-camera setup step - a fresh camera works but reports no depth until the
+   user runs the wizard, so its dot stays yellow until that's done. */
+function cameraHeaderDotClass(isStreaming, cam) {
+  if (!isStreaming) return 'status-warn';
+  if (!cam) return 'status-ok';
+  const mode = calibrationModeFor(cam.pipeline || '');
+  if ((mode === 'focal' || mode === 'charuco') && !cam.calibrated) return 'status-warn';
+  return 'status-ok';
+}
+
+function updateCameraHeader(card, cam) {
+  const dot = card.querySelector('.camera-header > .status-dot');
+  if (dot) dot.className = 'status-dot ' + cameraHeaderDotClass(true, cam);
+}
+
 function updateCameraFooter(card, cam) {
   let footer = card.querySelector('.camera-footer');
   if (cam.ready == null) {
@@ -1223,10 +1201,11 @@ function buildCameraCard(name, isStreaming, ageText, cam) {
   card.dataset.camera = name;
   card.innerHTML = `
     <div class="camera-header">
-      <span class="status-dot ${isStreaming ? 'status-ok' : 'status-warn'}"></span>
+      <span class="status-dot ${cameraHeaderDotClass(isStreaming, cam)}"></span>
       <strong>${escapeHtml(name)}</strong>
       <span class="cam-meta">${escapeHtml(ageText)}</span>
       <button class="btn-sm btn-ok" onclick="openCameraModal('edit', this.closest('.camera-card').dataset.camera)" style="margin-left:auto;">Edit</button>
+      <button class="btn-sm" onclick="openCalibrationWizardFor(this.closest('.camera-card').dataset.camera)">Calibrate</button>
       <button class="btn-sm btn-bad" onclick="confirmRemoveCamera(this.closest('.camera-card').dataset.camera)">Remove</button>
     </div>
     ${isStreaming
@@ -1291,6 +1270,7 @@ async function refreshCameras() {
         const card = grid.querySelector(`[data-camera="${name}"]`);
         const meta = card.querySelector('.cam-meta');
         if (meta) meta.textContent = age;
+        updateCameraHeader(card, cam);
         updateCameraFooter(card, cam);
       }
     });
@@ -1492,6 +1472,7 @@ function setRefreshRate() {
 
 const calibrationState = {
   camera: null,      // camera key (name) used for the API and the raw feed
+  pipeline: null,    // camera's pipeline name - decides which wizard mode to run
   mode: null,        // 'focal' | 'charuco' | 'chessboard' | 'beta' | 'none'
   frozen: false,
   frame: null,       // ImageData of the frozen frame (focal mode)
@@ -1755,14 +1736,24 @@ function updateAutoCaptureUi() {
   if (toggle) toggle.textContent = 'Pause';
 }
 
-async function openCalibrationWizard() {
-  if (camModal.mode === 'add') {
-    showToast('Save the camera first, then open the calibration wizard.', 'error');
-    return;
+async function openCalibrationWizardFor(name) {
+  try {
+    const r = await fetch(`/api/cameras/config/${encodeURIComponent(name)}`).then(r => r.json());
+    if (!r.camera) { showToast(r.error || 'Camera not found', 'error'); return; }
+    const entry = r.camera;
+    let pipeline = entry.pipeline;
+    if (pipeline && typeof pipeline === 'object') pipeline = pipeline.name;
+    calibrationState.camera = name;
+    calibrationState.pipeline = pipeline || 'object_detection';
+    calibrationState.mode = calibrationModeFor(calibrationState.pipeline);
+    openCalibrationWizard();
+  } catch (e) {
+    showToast('Failed to load the camera', 'error');
   }
-  calibrationState.camera = (camModal.data && camModal.data.name) || '';
+}
+
+function openCalibrationWizard() {
   if (!calibrationState.camera) { showToast('Camera not loaded', 'error'); return; }
-  calibrationState.mode = calibrationModeFor(camModal.pipeline);
   calibrationState.frozen = false;
   calibrationState.captured = 0;
 
@@ -1795,6 +1786,7 @@ function closeCalibrationWizard() {
   $id('calibration-modal').style.display = 'none';
   $id('calibration-body').innerHTML = '';
   calibrationState.camera = null;
+  calibrationState.pipeline = null;
   calibrationState.canvas = null;
   calibrationState.ctx = null;
   calibrationState.frame = null;
@@ -2073,10 +2065,7 @@ async function computeFocalCalibration() {
 
 function refreshCalibrationFields(cal) {
   if (!cal) return;
-  setFieldValue('calibration.distance', cal.distance ?? 0);
-  setFieldValue('calibration.game_piece_size', cal.game_piece_size ?? 0);
-  setFieldValue('calibration.size', cal.size ?? 0);
-  setFieldValue('calibration.fov', cal.fov ?? 0);
+  refreshCameras();
 }
 
 function renderChessboardCalibration(body) {
