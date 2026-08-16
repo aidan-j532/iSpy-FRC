@@ -1722,25 +1722,24 @@ function updateAutoCaptureUi() {
 function pauseCameraGridFeeds() {
   // stop every camera card's live /video stream while calibrating - the
   // server-side generators only encode while a client is connected, so this
-  // frees real CPU for the calibration feed. Restored on wizard close.
+  // frees real CPU for the calibration feed. The grid is rebuilt fresh on
+  // wizard close (resumeCameraGridFeeds).
   document.querySelectorAll('.camera-feed').forEach(img => {
-    if (img.src && !img.dataset.pausedSrc) {
-      img.dataset.pausedSrc = img.src;
-      img.removeAttribute('src');
-    }
+    img.removeAttribute('src');
   });
 }
 
 function resumeCameraGridFeeds() {
+  // drop the pause markers, then rebuild the grid from scratch - fresh <img>
+  // elements with clean /video URLs always re-establish their MJPEG stream,
+  // whereas re-setting src on an existing <img> does not reliably reconnect
+  // (the thumbnails otherwise stay black after the wizard closes).
   document.querySelectorAll('.camera-feed').forEach(img => {
-    if (img.dataset.pausedSrc) {
-      // MJPEG streams don't reconnect on an identical src - re-open with a
-      // cache-busting query so the browser establishes a fresh connection
-      const base = img.dataset.pausedSrc;
-      delete img.dataset.pausedSrc;
-      img.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
-    }
+    delete img.dataset.pausedSrc;
   });
+  knownCameras.clear();
+  document.querySelectorAll('#camera-grid .camera-card[data-camera]').forEach(c => c.remove());
+  refreshCameras();
 }
 
 async function openCalibrationWizardFor(name) {
