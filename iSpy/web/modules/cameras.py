@@ -51,6 +51,9 @@ _AUTO_SCAN_INTERVAL_S = 2.5
 # bound the number of frames the live RMS preview is computed over.
 _AUTO_SOLVE_INTERVAL_S = 1.5
 _AUTO_SOLVE_MAX_CAPTURES = 10
+# how many captured-frame overlays to draw on each streamed frame (see
+# _draw_captured_overlays - captures never stop accumulating under auto capture)
+_MAX_OVERLAYS_DRAWN = 20
 
 logger = logging.getLogger(__name__)
 
@@ -1121,7 +1124,10 @@ class CamerasModule(WebModule):
                 "charuco": session.get("charuco_overlays", []),
                 "chessboard": session.get("chess_overlays", []),
             }.get(overlay, [])
-            layers = list(layers)
+            # captures accumulate for as long as auto capture is enabled, so
+            # cap what gets drawn per streamed frame - drawing every capture
+            # ever made would eventually starve the feed thread
+            layers = list(layers[-_MAX_OVERLAYS_DRAWN:])
         if not layers:
             return frame
         out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
@@ -1157,11 +1163,169 @@ class CamerasModule(WebModule):
         return (np.asarray(corners, dtype=np.float32) * factor).astype(np.float32)
 
     def _generate_calibration(self, cam_name, overlay="", pattern=None):
+        """MJPEG generator for the calibration wizard. Board detection, the
+        throttled layout scan and auto capture are the expensive parts (a full
+        no-board scan is ~0.4s of CPU, a rolling solve ~0.1s), so they run on a
+        background worker thread that publishes the latest detection; the
+        stream thread only copies the raw frame, draws the cached overlay and
+        encodes. That keeps the feed smooth at ~20fps even while a scan or
+        solve is running instead of stuttering in fixed intervals."""
         last_frame_time = time.monotonic()
-        last_detect = 0.0
-        last_auto_scan = 0.0
-        corners, ids, marker_corners, marker_ids = None, None, None, None
-        chess_pattern = None
+        result_lock = threading.Lock()
+        latest = {"detect": None}
+        stop_evt = threading.Event()
+
+        def detection_worker():
+            last_detect = 0.0
+            last_auto_scan = 0.0
+            corners, ids, marker_corners, marker_ids = None, None, None, None
+            chess_pattern = None
+            while not stop_evt.is_set():
+                cam = self.live_cameras.get(cam_name)
+                frame = None
+                if cam is not None and hasattr(cam, "get_raw_frame"):
+                    frame = cam.get_raw_frame()
+                if frame is None:
+                    stop_evt.wait(0.05)
+                    continue
+                now = time.monotonic()
+                result = None
+                if overlay == "charuco" and now - last_detect >= 0.1:
+                    last_detect = now
+                    work, scale = self._detect_workframe(frame)
+                    session_pattern, session_dict = self._charuco_session_layout(cam_name)
+                    # layouts to try this tick: the layout the wizard
+                    # auto-detected/cached first, then the one picked in
+                    # the UI dropdown
+                    candidates = []
+                    if session_pattern is not None:
+                        candidates.append(tuple(session_pattern))
+                    if pattern is not None and len(pattern) == 2 and tuple(pattern) not in candidates:
+                        candidates.append(tuple(pattern))
+                    found = False
+                    matched_pattern = None
+                    matched_dict = session_dict
+                    for cand in candidates:
+                        kwargs = {}
+                        if session_dict is not None:
+                            kwargs["dictionary_id"] = session_dict
+                        found, corners, ids, marker_corners, marker_ids, _ = (
+                            cam_calibration.detect_charuco(
+                                work, cand[0], cand[1], **kwargs
+                            )
+                        )
+                        if found:
+                            matched_pattern = cand
+                            break
+                    if not found:
+                        # nothing matched a known layout - throttled scan
+                        # of the common printed boards so any ChArUco board
+                        # shows live. The match is cached so captures and
+                        # calibration stay on the board's real layout.
+                        if now - last_auto_scan >= _AUTO_SCAN_INTERVAL_S:
+                            last_auto_scan = now
+                            found, corners, ids, marker_corners, marker_ids, _, fp, fd = (
+                                cam_calibration.detect_charuco_auto(
+                                    work,
+                                    preferred_pattern=candidates[0] if candidates else None,
+                                    preferred_dict=session_dict,
+                                )
+                            )
+                            if found:
+                                matched_pattern = fp
+                                matched_dict = fd
+                                _, key, _ = self._find_camera_entry(cam_name)
+                                key = key or cam_name
+                                with self.calib_lock:
+                                    session = self.calib_sessions.setdefault(key, {})
+                                    session["charuco_pattern"] = list(fp)
+                                    if fd is not None:
+                                        session["charuco_dict"] = fd
+                    if scale != 1.0:
+                        corners = self._rescale_corners(corners, 1.0 / scale)
+                        marker_corners = self._rescale_corners(marker_corners, 1.0 / scale)
+                    if found and matched_pattern is not None:
+                        # auto capture piggybacks on this detection - store
+                        # the frame when it is complete + diverse and run a
+                        # rolling solve. The solve runs on its own worker
+                        # thread so the live view keeps streaming; captures
+                        # store the full-res gray their corners were scaled
+                        # back to (auto capture never saves on its own - the
+                        # wizard's "Calibrate intrinsics" button does).
+                        gray_full = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        _, key, _ = self._find_camera_entry(cam_name)
+                        key = key or cam_name
+                        self._auto_consider(
+                            key, "charuco", gray_full, corners, ids,
+                            pattern=matched_pattern, dict_id=matched_dict,
+                            _synchronous=False,
+                        )
+                    if not found:
+                        corners, ids, marker_corners, marker_ids = None, None, None, None
+                        self._auto_hint(
+                            cam_name,
+                            "Move the ChArUco board into view - auto capture waits for a detection",
+                        )
+                    result = {
+                        "found": found and matched_pattern is not None,
+                        "corners": corners,
+                        "ids": ids,
+                        "marker_corners": marker_corners,
+                        "marker_ids": marker_ids,
+                    }
+                elif overlay == "chessboard" and now - last_detect >= 0.1:
+                    last_detect = now
+                    effective_pattern = pattern
+                    if effective_pattern is None:
+                        effective_pattern = self._chessboard_session_pattern(cam_name)
+                    if effective_pattern is not None and len(effective_pattern) == 2:
+                        chess_pattern = tuple(effective_pattern[:2])
+                        work, scale = self._detect_workframe(frame)
+                        found, corners, _ = cam_calibration.detect_chessboard(
+                            work, chess_pattern[0], chess_pattern[1]
+                        )
+                        if scale != 1.0:
+                            corners = self._rescale_corners(corners, 1.0 / scale)
+                        if found:
+                            gray_full = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                            _, key, _ = self._find_camera_entry(cam_name)
+                            key = key or cam_name
+                            self._auto_consider(
+                                key, "chessboard", gray_full, corners,
+                                pattern=chess_pattern, _synchronous=False,
+                            )
+                        if not found:
+                            corners = None
+                            self._auto_hint(
+                                cam_name,
+                                "Move the chessboard into view - auto capture waits for a detection",
+                            )
+                        result = {
+                            "found": found,
+                            "corners": corners,
+                            "chess_pattern": chess_pattern if found else None,
+                        }
+                if result is not None:
+                    result["ts"] = time.monotonic()
+                    with result_lock:
+                        latest["detect"] = result
+                else:
+                    stop_evt.wait(0.02)
+
+        worker = None
+        if overlay in ("charuco", "chessboard"):
+            worker = threading.Thread(target=detection_worker, daemon=True)
+            worker.start()
+            # don't stream a frame until the worker has published its first
+            # detection - the overlay feed's very first frame should already
+            # show what the detector sees
+            deadline = time.monotonic() + 3.0
+            while True:
+                with result_lock:
+                    ready = latest["detect"] is not None
+                if ready or time.monotonic() > deadline:
+                    break
+                time.sleep(0.02)
         try:
             while True:
                 cam = self.live_cameras.get(cam_name)
@@ -1176,123 +1340,25 @@ class CamerasModule(WebModule):
                 last_frame_time = time.monotonic()
                 to_serve = frame
                 if overlay == "charuco":
-                    now = time.monotonic()
-                    # board detection is the expensive bit - refresh the
-                    # overlay ~10x/s on a downscaled copy and reuse the last
-                    # result in between
-                    if now - last_detect >= 0.1:
-                        last_detect = now
-                        work, scale = self._detect_workframe(frame)
-                        session_pattern, session_dict = self._charuco_session_layout(cam_name)
-                        # layouts to try this tick: the layout the wizard
-                        # auto-detected/cached first, then the one picked in
-                        # the UI dropdown
-                        candidates = []
-                        if session_pattern is not None:
-                            candidates.append(tuple(session_pattern))
-                        if pattern is not None and len(pattern) == 2 and tuple(pattern) not in candidates:
-                            candidates.append(tuple(pattern))
-                        found = False
-                        matched_pattern = None
-                        matched_dict = session_dict
-                        for cand in candidates:
-                            kwargs = {}
-                            if session_dict is not None:
-                                kwargs["dictionary_id"] = session_dict
-                            found, corners, ids, marker_corners, marker_ids, _ = (
-                                cam_calibration.detect_charuco(
-                                    work, cand[0], cand[1], **kwargs
-                                )
+                    with result_lock:
+                        res = latest.get("detect")
+                    if res is not None and time.monotonic() - res.get("ts", 0.0) < 0.5:
+                        if res.get("found"):
+                            to_serve = cam_calibration.draw_charuco(
+                                to_serve,
+                                res["corners"], res["ids"],
+                                res["marker_corners"], res["marker_ids"],
                             )
-                            if found:
-                                matched_pattern = cand
-                                break
-                        if not found:
-                            # nothing matched a known layout - throttled scan
-                            # of the common printed boards so any ChArUco board
-                            # shows live. The match is cached so captures and
-                            # calibration stay on the board's real layout.
-                            if now - last_auto_scan >= _AUTO_SCAN_INTERVAL_S:
-                                last_auto_scan = now
-                                found, corners, ids, marker_corners, marker_ids, _, fp, fd = (
-                                    cam_calibration.detect_charuco_auto(
-                                        work,
-                                        preferred_pattern=candidates[0] if candidates else None,
-                                        preferred_dict=session_dict,
-                                    )
-                                )
-                                if found:
-                                    matched_pattern = fp
-                                    matched_dict = fd
-                                    _, key, _ = self._find_camera_entry(cam_name)
-                                    key = key or cam_name
-                                    with self.calib_lock:
-                                        session = self.calib_sessions.setdefault(key, {})
-                                        session["charuco_pattern"] = list(fp)
-                                        if fd is not None:
-                                            session["charuco_dict"] = fd
-                        if scale != 1.0:
-                            corners = self._rescale_corners(corners, 1.0 / scale)
-                            marker_corners = self._rescale_corners(marker_corners, 1.0 / scale)
-                        if found and matched_pattern is not None:
-                            # auto capture piggybacks on this detection - store
-                            # the frame when it is complete + diverse and run a
-                            # rolling solve. The solve runs on a worker thread
-                            # so the live view keeps streaming; captures store
-                            # the full-res gray their corners were scaled back
-                            # to (auto capture never saves on its own - the
-                            # wizard's "Calibrate intrinsics" button does).
-                            gray_full = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                            _, key, _ = self._find_camera_entry(cam_name)
-                            key = key or cam_name
-                            self._auto_consider(
-                                key, "charuco", gray_full, corners, ids,
-                                pattern=matched_pattern, dict_id=matched_dict,
-                                _synchronous=False,
-                            )
-                        if not found:
-                            corners, ids, marker_corners, marker_ids = None, None, None, None
-                            self._auto_hint(
-                                cam_name,
-                                "Move the ChArUco board into view - auto capture waits for a detection",
-                            )
-                    if corners is not None and ids is not None:
-                        to_serve = cam_calibration.draw_charuco(
-                            frame, corners, ids, marker_corners, marker_ids
-                        )
                     to_serve = self._draw_captured_overlays(to_serve, cam_name, "charuco")
                 elif overlay == "chessboard":
-                    now = time.monotonic()
-                    if now - last_detect >= 0.1:
-                        last_detect = now
-                        if pattern is None:
-                            pattern = self._chessboard_session_pattern(cam_name)
-                        if pattern is not None and len(pattern) == 2:
-                            chess_pattern = tuple(pattern[:2])
-                            work, scale = self._detect_workframe(frame)
-                            found, corners, _ = cam_calibration.detect_chessboard(
-                                work, chess_pattern[0], chess_pattern[1]
+                    with result_lock:
+                        res = latest.get("detect")
+                    if res is not None and time.monotonic() - res.get("ts", 0.0) < 0.5:
+                        cp = res.get("chess_pattern")
+                        if res.get("found") and cp is not None:
+                            to_serve = cam_calibration.draw_chessboard(
+                                to_serve, res["corners"], cp[0], cp[1]
                             )
-                            if scale != 1.0:
-                                corners = self._rescale_corners(corners, 1.0 / scale)
-                            if found:
-                                gray_full = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                                _, key, _ = self._find_camera_entry(cam_name)
-                                key = key or cam_name
-                                self._auto_consider(
-                                    key, "chessboard", gray_full, corners,
-                                    pattern=chess_pattern, _synchronous=False,
-                                )
-                            if not found:
-                                corners = None
-                                self._auto_hint(
-                                    cam_name,
-                                    "Move the chessboard into view - auto capture waits for a detection",
-                                )
-                    if corners is not None and chess_pattern is not None:
-                        to_serve = cam_calibration.draw_chessboard(
-                            frame, corners, chess_pattern[0], chess_pattern[1]
-                        )
                     to_serve = self._draw_captured_overlays(to_serve, cam_name, "chessboard")
                 # overlay feeds are diagnostic - serve them capped in width so
                 # JPEG encode stays cheap. The plain feed (focal measurement)
@@ -1313,6 +1379,8 @@ class CamerasModule(WebModule):
                 time.sleep(1.0 / 20)
         except GeneratorExit:
             pass
+        finally:
+            stop_evt.set()
 
     def _charuco_status(self, cam_name):
         """one-shot board detection on the latest raw frame - the wizard polls
