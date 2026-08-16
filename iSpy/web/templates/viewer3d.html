@@ -62,7 +62,7 @@ scene.background = new THREE.Color(0x0a0a0f);
 scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
 
 const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 200);
-camera.position.set(0, 5, 8);
+camera.position.set(0, 8, 14);
 camera.lookAt(0, 0, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -88,7 +88,7 @@ scene.add(hemiLight);
 
 const gridHelper = new THREE.GridHelper(20, 20, 0x2a2e38, 0x1a1d24);
 scene.add(gridHelper);
-const axesHelper = new THREE.AxesHelper(3);
+const axesHelper = new THREE.AxesHelper(8);
 scene.add(axesHelper);
 
 window.toggleGrid = function() {
@@ -116,10 +116,10 @@ window.toggleLightBg = function() {
 };
 
 const PRESETS = {
-  default: { pos: [0, 5, 8], target: [0, 0, 0] },
-  top: { pos: [0, 15, 0.01], target: [0, 0, 0] },
-  front: { pos: [0, 2, 12], target: [0, 0, 0] },
-  side: { pos: [12, 2, 0], target: [0, 0, 0] },
+  default: { pos: [0, 8, 14], target: [0, 0, 0] },
+  top: { pos: [0, 22, 0.01], target: [0, 0, 0] },
+  front: { pos: [0, 2, 18], target: [0, 0, 0] },
+  side: { pos: [18, 2, 0], target: [0, 0, 0] },
 };
 window.setViewPreset = function() {
   const p = PRESETS[document.getElementById('view-preset').value] || PRESETS.default;
@@ -130,8 +130,12 @@ window.setViewPreset = function() {
 
 const boxes = {};
 const BOX_COLOR = 0x4c8bf5;
-// markers size off scene scale so dots + cubes stay visible in any unit/resolution
-let sceneScale = 2;
+// every detection is normalized into a 20x20x20 scene (centered, scaled to its
+// bounding box), so everything renders at a consistent size no matter whether
+// the raw coordinates span 0.01 or 10000 units
+const SCENE_UNITS = 20;
+let viewScale = 1;
+const viewCenter = new THREE.Vector3(0, 0, 0);
 
 // helpers
 
@@ -146,26 +150,48 @@ function disposeMesh(obj) {
   }
 }
 
-function skeletonExtent(pts) {
-  let max = 0;
-  for (let i = 0; i < pts.length; i++) {
-    for (let j = i + 1; j < pts.length; j++) {
-      const d = pts[i].distanceTo(pts[j]);
-      if (d > max) max = d;
+// map a raw [x, y, z] position into the normalized 20x20x20 scene (Z-up viewer)
+function toViewer(px, py, pz) {
+  return new THREE.Vector3(
+    (px - viewCenter.x) * viewScale,
+    (pz - viewCenter.z) * viewScale,
+    (py - viewCenter.y) * viewScale,
+  );
+}
+
+// compute the frame's center + scale so the full content spans <= SCENE_UNITS
+function computeViewTransform(objects) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  const add = (px, py, pz) => {
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+    if (pz < minZ) minZ = pz;
+    if (px > maxX) maxX = px;
+    if (py > maxY) maxY = py;
+    if (pz > maxZ) maxZ = pz;
+  };
+  for (const o of objects) {
+    add(o.x || 0, o.y || 0, o.z || 0);
+    if (Array.isArray(o.keypoints_3d)) {
+      for (const k of o.keypoints_3d) {
+        if (Array.isArray(k) && k.length >= 3) add(k[0], k[1], k[2]);
+      }
     }
   }
-  return max;
+  if (!isFinite(minX)) return;
+  const extent = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+  viewScale = extent > 1e-9 ? SCENE_UNITS / extent : 1;
+  viewCenter.set((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
 }
 
 // vis renderer registry - register a {create, update} pair keyed by vis_type, nothing else changes
 
 function makeCubeMarker() {
-  const base = Math.max(0.25, Math.min(2.5, sceneScale * 0.12));
-  const geo = new THREE.BoxGeometry(base, base, base);
+  const geo = new THREE.BoxGeometry(1.1, 1.1, 1.1);
   const mat = new THREE.MeshStandardMaterial({ color: BOX_COLOR, transparent: true, opacity: 0.85 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
-  mesh.userData.cubeBase = base;
   const wireGeo = new THREE.EdgesGeometry(geo);
   const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
   mesh.add(new THREE.LineSegments(wireGeo, wireMat));
@@ -173,17 +199,14 @@ function makeCubeMarker() {
 }
 
 function updateCubeMarker(mesh, o) {
-  mesh.position.set(o.x, o.z, o.y);
+  mesh.position.copy(toViewer(o.x, o.y, o.z));
   mesh.rotation.set(o.roll, o.yaw, o.pitch);
-  const target = Math.max(0.25, Math.min(2.5, sceneScale * 0.12));
-  const base = mesh.userData.cubeBase || target;
-  mesh.scale.setScalar(target / base);
 }
 
 // flat rect + axes gizmo for planar fiducials (apriltags etc); vis_meta.size sets edge length
 function makePlanarMarker(o) {
   const g = new THREE.Group();
-  const size = Math.max(0.05, (o.vis_meta && o.vis_meta.size) || Math.max(0.3, sceneScale * 0.08));
+  const size = Math.max(0.1, (Math.max(0.05, (o.vis_meta && o.vis_meta.size) || 0.2) * viewScale));
 
   const planeGeo = new THREE.PlaneGeometry(size, size);
   const planeMat = new THREE.MeshStandardMaterial({
@@ -206,21 +229,21 @@ function makePlanarMarker(o) {
 }
 
 function updatePlanarMarker(g, o) {
-  g.position.set(o.x, o.z, o.y);
+  g.position.copy(toViewer(o.x, o.y, o.z));
   g.rotation.set(o.roll, o.yaw, o.pitch);
-  const size = Math.max(0.05, (o.vis_meta && o.vis_meta.size) || Math.max(0.3, sceneScale * 0.08));
+  const size = Math.max(0.1, Math.min(3, Math.max(0.05, (o.vis_meta && o.vis_meta.size) || 0.2) * viewScale));
   const base = g.userData.planarSize || size;
   g.scale.setScalar(size / base);
 }
+
+const DOT_RADIUS = 0.15;
 
 // just plot the points, no bones - count can vary frame to frame
 function buildPointCloud(kpts3d) {
   const g = new THREE.Group();
 
-  const pts = kpts3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
-  const extent = skeletonExtent(pts) || 1;
-  const dotRadius = Math.max(0.025, Math.min(0.15, extent * 0.04));
-  const dotGeo = new THREE.SphereGeometry(dotRadius, 12, 12);
+  const pts = kpts3d.map(k => toViewer(k[0], k[1], k[2]));
+  const dotGeo = new THREE.SphereGeometry(DOT_RADIUS, 12, 12);
   const dotMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
 
   for (const p of pts) {
@@ -228,15 +251,15 @@ function buildPointCloud(kpts3d) {
     m.position.copy(p);
     g.add(m);
   }
-  g.userData.dotRadius = dotRadius;
+  g.userData.dotRadius = DOT_RADIUS;
   return g;
 }
 
 function updatePointCloud(g, kpts3d) {
-  const pts = kpts3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
+  const pts = kpts3d.map(k => toViewer(k[0], k[1], k[2]));
 
   while (g.children.length < pts.length) {
-    const dotGeo = new THREE.SphereGeometry(g.userData.dotRadius || 0.05, 12, 12);
+    const dotGeo = new THREE.SphereGeometry(g.userData.dotRadius || DOT_RADIUS, 12, 12);
     const dotMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
     g.add(new THREE.Mesh(dotGeo, dotMat));
   }
@@ -301,15 +324,7 @@ function sync(objects) {
   const tbody = document.getElementById('obj-tbody');
   let rows = '';
 
-  let maxScale = 0;
-  for (const o of objects) {
-    maxScale = Math.max(maxScale, Math.hypot(o.x || 0, o.y || 0, o.z || 0));
-    if (Array.isArray(o.keypoints_3d) && o.keypoints_3d.length >= 2) {
-      const kpts = o.keypoints_3d.map(k => new THREE.Vector3(k[0], k[2], k[1]));
-      maxScale = Math.max(maxScale, skeletonExtent(kpts));
-    }
-  }
-  if (maxScale > 0) sceneScale = Math.max(0.5, maxScale);
+  computeViewTransform(objects);
 
   for (const o of objects) {
     seen.add(o.id);
