@@ -423,5 +423,67 @@ class CalibrationWebTests(unittest.TestCase):
         self.assertIn("pose model", j["model_error"])
 
 
+    def test_auto_set_and_status(self):
+        cfg, cam, mod, client = self._setup()
+        r = client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True, "target": 8})
+        self.assertEqual(r.status_code, 200)
+        j = client.get("/api/cameras/calibration/cam_0/auto/status").get_json()
+        self.assertTrue(j["enabled"])
+        self.assertEqual(j["target"], 8)
+        self.assertEqual(j["state"], "capturing")
+        self.assertEqual(j["captured"]["charuco"], 0)
+
+    def test_auto_capture_solves_and_saves(self):
+        cfg, cam, mod, client = self._setup()
+        client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True, "target": 12})
+        board = c.make_charuco_board(7, 5)
+        pattern = (7, 5)
+        # scale the board via the render margin (pixel scale -> solvable
+        # intrinsics) and give each frame a unique in-plane rotation so every
+        # frame passes the diversity gate without clipping the board out of view
+        margins = [20, 40, 60, 80, 100, 120, 20, 40, 60, 80, 100, 120]
+        for i in range(12):
+            img = board.generateImage((640, 480), marginSize=margins[i])
+            h, w = img.shape[:2]
+            m = cv2.getRotationMatrix2D((w / 2, h / 2), i * 3, 1.0)
+            img = cv2.warpAffine(img, m, (w, h))
+            found, corners, ids, _, _, gray = c.detect_charuco(img, *pattern)
+            self.assertTrue(found, f"frame {i} should detect")
+            mod._auto_consider("cam_0", "charuco", gray, corners, ids, pattern=pattern)
+        j = client.get("/api/cameras/calibration/cam_0/auto/status").get_json()
+        self.assertEqual(j["state"], "solved")
+        self.assertEqual(j["captured"]["charuco"], 12)
+        cal = cfg.config["camera_configs"]["cam_0"]["calibration"]
+        self.assertIn("camera_matrix", cal)
+        self.assertGreater(cal["fov"], 0)
+        self.assertIn("focal_length_pixels", cal)
+
+    def test_auto_capture_skips_same_pose(self):
+        cfg, cam, mod, client = self._setup()
+        client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True, "target": 12})
+        board = c.make_charuco_board(7, 5)
+        img = board.generateImage((640, 480), marginSize=20)
+        found, corners, ids, _, _, gray = c.detect_charuco(img, 7, 5)
+        self.assertTrue(found)
+        for _ in range(5):
+            mod._auto_consider("cam_0", "charuco", gray, corners, ids, pattern=(7, 5))
+        j = client.get("/api/cameras/calibration/cam_0/auto/status").get_json()
+        self.assertEqual(j["captured"]["charuco"], 1)
+        self.assertNotEqual(j["state"], "solved")
+
+    def test_auto_capture_can_be_paused(self):
+        cfg, cam, mod, client = self._setup()
+        client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True})
+        client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": False})
+        board = c.make_charuco_board(7, 5)
+        img = board.generateImage((640, 480), marginSize=20)
+        found, corners, ids, _, _, gray = c.detect_charuco(img, 7, 5)
+        self.assertTrue(found)
+        mod._auto_consider("cam_0", "charuco", gray, corners, ids, pattern=(7, 5))
+        j = client.get("/api/cameras/calibration/cam_0/auto/status").get_json()
+        self.assertFalse(j["enabled"])
+        self.assertEqual(j["captured"]["charuco"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -905,9 +905,9 @@ class CamerasModule(WebModule):
                     "Board too small or partly out of frame - fill more of the view"
                 )
                 return
-            captures = session.get(
-                "charuco_captures" if kind == "charuco" else "captures"
-            ) or []
+            captures = session.setdefault(
+                "charuco_captures" if kind == "charuco" else "captures", []
+            )
             if not cam_calibration.frame_diverse(corners, captures, _AUTO_DIVERSITY_PX):
                 session["auto_msg"] = (
                     f"Same pose as a captured frame - keep moving the board ({len(captures)}/{target})"
