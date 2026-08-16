@@ -45,6 +45,12 @@ _AUTO_DIVERSITY_PX = 12.0
 _DETECT_MAX_DIM = 720
 _FEED_MAX_DIM = 960
 _AUTO_SCAN_INTERVAL_S = 2.5
+# the rolling solve is the other big periodic CPU spike - left unchecked it
+# re-runs a full bundle solve on every captured frame (every ~0.25-0.5s while
+# the board is being moved), which stutters the live feed. Throttle it and
+# bound the number of frames the live RMS preview is computed over.
+_AUTO_SOLVE_INTERVAL_S = 1.5
+_AUTO_SOLVE_MAX_CAPTURES = 10
 
 logger = logging.getLogger(__name__)
 
@@ -939,11 +945,10 @@ class CamerasModule(WebModule):
         Direct callers (tests, scripted captures) keep the blocking behavior
         so the result is guaranteed present on return."""
         need_solve = False
+        now = time.monotonic()
         with self.calib_lock:
             session = self.calib_sessions.get(key)
             if not session or not session.get("auto_enabled"):
-                return
-            if session.get("auto_solving"):
                 return
             if pattern is None:
                 default = list(
@@ -995,8 +1000,12 @@ class CamerasModule(WebModule):
                 f"Auto-captured {len(captures)} frames - keep moving the board"
             )
             if len(captures) >= _AUTO_CAPTURE_MIN_SOLVE:
-                session["auto_solving"] = True
-                need_solve = True
+                if not session.get("auto_solving") and (
+                    now - session.get("last_solve_at", 0.0) >= _AUTO_SOLVE_INTERVAL_S
+                ):
+                    session["auto_solving"] = True
+                    session["last_solve_at"] = now
+                    need_solve = True
         if not need_solve:
             return
         if _synchronous:
@@ -1043,6 +1052,7 @@ class CamerasModule(WebModule):
                 kwargs = {}
         if len(captures) < 3:
             return None
+        captures = captures[-_AUTO_SOLVE_MAX_CAPTURES:]
         try:
             if kind == "charuco":
                 result = cam_calibration.calibrate_charuco(captures, pattern, **kwargs)
