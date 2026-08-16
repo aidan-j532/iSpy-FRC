@@ -39,11 +39,14 @@ _AUTO_DIVERSITY_PX = 12.0
 # live calibration feed tuning: board detection is by far the most expensive
 # step, so it runs on a downscaled work copy (corners are mapped back to the
 # full-res pixel space the solve expects) and the served overlay feed is
-# capped in width so JPEG encode stays cheap. The layout auto-scan (every
-# common ChArUco pattern x dictionary) is throttled hard - it only runs while
-# the board is not yet matched, and a full-res scan can take seconds.
-_DETECT_MAX_DIM = 720
-_FEED_MAX_DIM = 960
+# capped in width so JPEG encode stays cheap. Detection runs at a higher res
+# than before (subpixel corner accuracy scales with detection resolution), and
+# the layout auto-scan (every common ChArUco pattern x dictionary) - which only
+# runs while the board is not yet matched - stays on a small copy since it just
+# needs to identify the layout; the match is confirmed on the next detect tick.
+_DETECT_MAX_DIM = 1280
+_FEED_MAX_DIM = 1280
+_SCAN_MAX_DIM = 720
 _AUTO_SCAN_INTERVAL_S = 2.5
 # the rolling solve is the other big periodic CPU spike - left unchecked it
 # re-runs a full bundle solve on every captured frame (every ~0.25-0.5s while
@@ -1217,21 +1220,31 @@ class CamerasModule(WebModule):
                         if found:
                             matched_pattern = cand
                             break
+                    scan_rescaled = False
                     if not found:
                         # nothing matched a known layout - throttled scan
                         # of the common printed boards so any ChArUco board
                         # shows live. The match is cached so captures and
-                        # calibration stay on the board's real layout.
+                        # calibration stay on the board's real layout. It only
+                        # needs to identify the layout, so it runs on a small
+                        # copy (a full-res scan can take over a second).
                         if now - last_auto_scan >= _AUTO_SCAN_INTERVAL_S:
                             last_auto_scan = now
+                            scan_work, scan_rel = self._detect_workframe(
+                                work, _SCAN_MAX_DIM
+                            )
                             found, corners, ids, marker_corners, marker_ids, _, fp, fd = (
                                 cam_calibration.detect_charuco_auto(
-                                    work,
+                                    scan_work,
                                     preferred_pattern=candidates[0] if candidates else None,
                                     preferred_dict=session_dict,
                                 )
                             )
                             if found:
+                                factor = 1.0 / (scale * scan_rel)
+                                corners = self._rescale_corners(corners, factor)
+                                marker_corners = self._rescale_corners(marker_corners, factor)
+                                scan_rescaled = True
                                 matched_pattern = fp
                                 matched_dict = fd
                                 _, key, _ = self._find_camera_entry(cam_name)
@@ -1241,7 +1254,7 @@ class CamerasModule(WebModule):
                                     session["charuco_pattern"] = list(fp)
                                     if fd is not None:
                                         session["charuco_dict"] = fd
-                    if scale != 1.0:
+                    if scale != 1.0 and not scan_rescaled:
                         corners = self._rescale_corners(corners, 1.0 / scale)
                         marker_corners = self._rescale_corners(marker_corners, 1.0 / scale)
                     if found and matched_pattern is not None:
@@ -1376,7 +1389,7 @@ class CamerasModule(WebModule):
                 if not ok:
                     continue
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
-                time.sleep(1.0 / 20)
+                time.sleep(1.0 / 30)
         except GeneratorExit:
             pass
         finally:

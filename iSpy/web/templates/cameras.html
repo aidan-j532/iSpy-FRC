@@ -1719,6 +1719,27 @@ function updateAutoCaptureUi() {
   if (toggle) toggle.textContent = 'Pause';
 }
 
+function pauseCameraGridFeeds() {
+  // stop every camera card's live /video stream while calibrating - the
+  // server-side generators only encode while a client is connected, so this
+  // frees real CPU for the calibration feed. Restored on wizard close.
+  document.querySelectorAll('.camera-feed').forEach(img => {
+    if (img.src && !img.dataset.pausedSrc) {
+      img.dataset.pausedSrc = img.src;
+      img.src = '';
+    }
+  });
+}
+
+function resumeCameraGridFeeds() {
+  document.querySelectorAll('.camera-feed').forEach(img => {
+    if (img.dataset.pausedSrc) {
+      img.src = img.dataset.pausedSrc;
+      delete img.dataset.pausedSrc;
+    }
+  });
+}
+
 async function openCalibrationWizardFor(name) {
   try {
     const r = await fetch(`/api/cameras/config/${encodeURIComponent(name)}`).then(r => r.json());
@@ -1740,11 +1761,13 @@ function openCalibrationWizard() {
   calibrationState.frozen = false;
 
   // keep the CPU on the calibration feed - pause the background camera grid
-  // polling while the wizard is open (saves refresh on save/reset)
+  // polling AND the other cameras' live thumbnails while the wizard is open
+  // (everything resumes on close)
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
+  pauseCameraGridFeeds();
 
   $id('calibration-title').textContent = 'Calibrate ' + calibrationState.camera;
   const body = $id('calibration-body');
@@ -1785,6 +1808,7 @@ function closeCalibrationWizard() {
   calibrationState.focalTab = null;
   stopAutoPolling();
   endCalibrationMode(camera);
+  resumeCameraGridFeeds();
   if (!refreshTimer) refreshTimer = setInterval(refreshCameras, currentRate);
 }
 
