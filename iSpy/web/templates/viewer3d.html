@@ -86,7 +86,8 @@ scene.add(dirLight);
 const hemiLight = new THREE.HemisphereLight(0x4c8bf5, 0x111318, 0.3);
 scene.add(hemiLight);
 
-const gridHelper = new THREE.GridHelper(20, 20, 0x2a2e38, 0x1a1d24);
+// grid spans 20 real units (meters etc) with 0.25-unit cells so it reads as a ruler
+const gridHelper = new THREE.GridHelper(20, 80, 0x2a2e38, 0x1a1d24);
 scene.add(gridHelper);
 const axesHelper = new THREE.AxesHelper(8);
 scene.add(axesHelper);
@@ -130,12 +131,12 @@ window.setViewPreset = function() {
 
 const boxes = {};
 const BOX_COLOR = 0x4c8bf5;
-// every detection is normalized into a 20x20x20 scene (centered, scaled to its
-// bounding box), so everything renders at a consistent size no matter whether
-// the raw coordinates span 0.01 or 10000 units
-const SCENE_UNITS = 20;
-let viewScale = 1;
-const viewCenter = new THREE.Vector3(0, 0, 0);
+// the viewer is real physical units (same as the config "unit" - meters etc),
+// so a 0.165m AprilTag renders as a 0.165-unit square and the grid reads as a
+// ruler. no auto-normalization - that made huge/small scenes look identical.
+const GRID_UNIT = 0.25;
+const CUBE_SIZE = 0.25;      // generic object center marker (~one grid cell)
+const DOT_RADIUS = 0.05;     // pose keypoint dot
 
 // helpers
 
@@ -150,45 +151,15 @@ function disposeMesh(obj) {
   }
 }
 
-// map a raw [x, y, z] position into the normalized 20x20x20 scene (Z-up viewer)
+// map a raw [x, y, z] position into viewer axes (Z-up, no scaling)
 function toViewer(px, py, pz) {
-  return new THREE.Vector3(
-    (px - viewCenter.x) * viewScale,
-    (pz - viewCenter.z) * viewScale,
-    (py - viewCenter.y) * viewScale,
-  );
-}
-
-// compute the frame's center + scale so the full content spans <= SCENE_UNITS
-function computeViewTransform(objects) {
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  const add = (px, py, pz) => {
-    if (px < minX) minX = px;
-    if (py < minY) minY = py;
-    if (pz < minZ) minZ = pz;
-    if (px > maxX) maxX = px;
-    if (py > maxY) maxY = py;
-    if (pz > maxZ) maxZ = pz;
-  };
-  for (const o of objects) {
-    add(o.x || 0, o.y || 0, o.z || 0);
-    if (Array.isArray(o.keypoints_3d)) {
-      for (const k of o.keypoints_3d) {
-        if (Array.isArray(k) && k.length >= 3) add(k[0], k[1], k[2]);
-      }
-    }
-  }
-  if (!isFinite(minX)) return;
-  const extent = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-  viewScale = extent > 1e-9 ? SCENE_UNITS / extent : 1;
-  viewCenter.set((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
+  return new THREE.Vector3(px, pz, py);
 }
 
 // vis renderer registry - register a {create, update} pair keyed by vis_type, nothing else changes
 
 function makeCubeMarker() {
-  const geo = new THREE.BoxGeometry(1.1, 1.1, 1.1);
+  const geo = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
   const mat = new THREE.MeshStandardMaterial({ color: BOX_COLOR, transparent: true, opacity: 0.85 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
@@ -203,10 +174,11 @@ function updateCubeMarker(mesh, o) {
   mesh.rotation.set(o.roll, o.yaw, o.pitch);
 }
 
-// flat rect + axes gizmo for planar fiducials (apriltags etc); vis_meta.size sets edge length
+// flat rect + axes gizmo for planar fiducials (apriltags etc); vis_meta.size is the
+// real edge length in scene units
 function makePlanarMarker(o) {
   const g = new THREE.Group();
-  const size = Math.max(0.1, (Math.max(0.05, (o.vis_meta && o.vis_meta.size) || 0.2) * viewScale));
+  const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
 
   const planeGeo = new THREE.PlaneGeometry(size, size);
   const planeMat = new THREE.MeshStandardMaterial({
@@ -231,12 +203,10 @@ function makePlanarMarker(o) {
 function updatePlanarMarker(g, o) {
   g.position.copy(toViewer(o.x, o.y, o.z));
   g.rotation.set(o.roll, o.yaw, o.pitch);
-  const size = Math.max(0.1, Math.min(3, Math.max(0.05, (o.vis_meta && o.vis_meta.size) || 0.2) * viewScale));
+  const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
   const base = g.userData.planarSize || size;
   g.scale.setScalar(size / base);
 }
-
-const DOT_RADIUS = 0.15;
 
 // just plot the points, no bones - count can vary frame to frame
 function buildPointCloud(kpts3d) {
@@ -323,8 +293,6 @@ function sync(objects) {
   const seen = new Set();
   const tbody = document.getElementById('obj-tbody');
   let rows = '';
-
-  computeViewTransform(objects);
 
   for (const o of objects) {
     seen.add(o.id);
