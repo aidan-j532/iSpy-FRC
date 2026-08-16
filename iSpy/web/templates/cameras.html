@@ -1726,7 +1726,7 @@ function pauseCameraGridFeeds() {
   document.querySelectorAll('.camera-feed').forEach(img => {
     if (img.src && !img.dataset.pausedSrc) {
       img.dataset.pausedSrc = img.src;
-      img.src = '';
+      img.removeAttribute('src');
     }
   });
 }
@@ -1734,8 +1734,11 @@ function pauseCameraGridFeeds() {
 function resumeCameraGridFeeds() {
   document.querySelectorAll('.camera-feed').forEach(img => {
     if (img.dataset.pausedSrc) {
-      img.src = img.dataset.pausedSrc;
+      // MJPEG streams don't reconnect on an identical src - re-open with a
+      // cache-busting query so the browser establishes a fresh connection
+      const base = img.dataset.pausedSrc;
       delete img.dataset.pausedSrc;
+      img.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
     }
   });
 }
