@@ -29,13 +29,22 @@ _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
 
 # auto-capture loop: the wizard's live feed stores a board frame by itself once
-# it is complete enough and moved from every prior capture, runs a rolling
-# solve for a live RMS readout, and saves automatically when the target is hit -
-# the user just keeps moving the board around in front of the camera
-_AUTO_CAPTURE_TARGET = 12
+# it is complete enough and moved from every prior capture, and runs a rolling
+# solve for a live RMS readout - the user just keeps moving the board around in
+# front of the camera until they pause and calibrate intrinsics
 _AUTO_CAPTURE_MIN_SOLVE = 6
 _AUTO_COVERAGE_MIN = 0.6
 _AUTO_DIVERSITY_PX = 12.0
+
+# live calibration feed tuning: board detection is by far the most expensive
+# step, so it runs on a downscaled work copy (corners are mapped back to the
+# full-res pixel space the solve expects) and the served overlay feed is
+# capped in width so JPEG encode stays cheap. The layout auto-scan (every
+# common ChArUco pattern x dictionary) is throttled hard - it only runs while
+# the board is not yet matched, and a full-res scan can take seconds.
+_DETECT_MAX_DIM = 720
+_FEED_MAX_DIM = 960
+_AUTO_SCAN_INTERVAL_S = 2.5
 
 logger = logging.getLogger(__name__)
 
@@ -733,7 +742,6 @@ class CamerasModule(WebModule):
             charuco_pattern=session.get("charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)),
             charuco_dict=session.get("charuco_dict"),
             auto_enabled=bool(session.get("auto_enabled", True)),
-            auto_target=session.get("auto_target", _AUTO_CAPTURE_TARGET),
         )
 
     def _calibration_reset(self, cam_name):
@@ -824,7 +832,6 @@ class CamerasModule(WebModule):
                 session.pop("captures", None)
                 session.pop("chess_overlays", None)
                 session.pop("pattern", None)
-                session.pop("auto_saved", None)
                 session.pop("auto_rms", None)
                 session.pop("auto_state", None)
         return jsonify(success=True)
@@ -869,9 +876,10 @@ class CamerasModule(WebModule):
         return jsonify(success=True)
 
     # ------------------------------------------------------------------
-    # Auto capture: the live feed stores diverse board frames by itself, runs a
-    # rolling solve for a live RMS readout and saves when it has enough - the
-    # user just waves the board around in front of the camera.
+    # Auto capture: the live feed stores diverse board frames by itself and
+    # runs a rolling solve for a live RMS readout. It never stops or saves on
+    # its own - it keeps going until the user pauses, then the wizard's
+    # "Calibrate intrinsics" button saves over the captured frames.
     # ------------------------------------------------------------------
 
     def _auto_set(self, cam_name):
@@ -881,21 +889,14 @@ class CamerasModule(WebModule):
             return jsonify(error="Camera not found"), 404
         key = key or cam_name
         enabled = bool(data.get("enabled", True))
-        try:
-            target = int(data.get("target", _AUTO_CAPTURE_TARGET))
-        except (TypeError, ValueError):
-            target = _AUTO_CAPTURE_TARGET
-        target = min(max(target, 4), 40)
         with self.calib_lock:
             session = self.calib_sessions.setdefault(key, {})
             session["auto_enabled"] = enabled
-            session["auto_target"] = target
             if enabled:
                 session["auto_state"] = "capturing"
                 session["auto_msg"] = ""
                 session["auto_rms"] = None
-                session["auto_saved"] = False
-        return jsonify(success=True, enabled=enabled, target=target)
+        return jsonify(success=True, enabled=enabled)
 
     def _auto_status(self, cam_name):
         _, key, _ = self._find_camera_entry(cam_name)
@@ -904,10 +905,8 @@ class CamerasModule(WebModule):
             session = self.calib_sessions.get(key) or {}
             payload = {
                 "enabled": bool(session.get("auto_enabled", False)),
-                "target": int(session.get("auto_target", _AUTO_CAPTURE_TARGET)),
                 "state": session.get("auto_state", "idle"),
                 "rms": session.get("auto_rms"),
-                "saved": bool(session.get("auto_saved", False)),
                 "message": session.get("auto_msg", ""),
                 "captured": {
                     "charuco": len(session.get("charuco_captures") or []),
@@ -923,24 +922,29 @@ class CamerasModule(WebModule):
         key = key or cam_name
         with self.calib_lock:
             session = self.calib_sessions.get(key)
-            if session and session.get("auto_enabled") and session.get("auto_state") != "solved":
+            if session and session.get("auto_enabled"):
                 session["auto_msg"] = msg
 
-    def _auto_consider(self, key, kind, gray, corners, ids=None, pattern=None, dict_id=None):
-        """auto-capture + auto-solve step driven by the live calibration feed.
-        kind is 'charuco' or 'chessboard'. The frame is stored only when the
-        board is complete enough and moved from every prior capture; a rolling
-        solve refreshes the live RMS, and hitting the target auto-saves - the
-        user just keeps moving the board around in front of the camera."""
+    def _auto_consider(self, key, kind, gray, corners, ids=None, pattern=None, dict_id=None, _synchronous=True):
+        """auto-capture + rolling solve step driven by the live calibration
+        feed. kind is 'charuco' or 'chessboard'. The frame is stored only when
+        the board is complete enough and moved from every prior capture; a
+        rolling solve refreshes the live RMS. Auto capture never stops or saves
+        on its own - it keeps going until the user pauses, then the wizard's
+        "Calibrate intrinsics" button saves over the captured frames.
+
+        The capture decision is fast and runs inline. The rolling solve is the
+        slow part, so when _synchronous is False (the feed path) it is handed
+        to a daemon thread - the live view keeps streaming while it runs.
+        Direct callers (tests, scripted captures) keep the blocking behavior
+        so the result is guaranteed present on return."""
         need_solve = False
-        need_save = False
         with self.calib_lock:
             session = self.calib_sessions.get(key)
             if not session or not session.get("auto_enabled"):
                 return
-            if session.get("auto_state") == "solved" or session.get("auto_solving"):
+            if session.get("auto_solving"):
                 return
-            target = int(session.get("auto_target") or _AUTO_CAPTURE_TARGET)
             if pattern is None:
                 default = list(
                     cam_calibration.DEFAULT_CHARUCO_PATTERN
@@ -969,7 +973,7 @@ class CamerasModule(WebModule):
             )
             if not cam_calibration.frame_diverse(corners, captures, _AUTO_DIVERSITY_PX):
                 session["auto_msg"] = (
-                    f"Same pose as a captured frame - keep moving the board ({len(captures)}/{target})"
+                    f"Same pose as a captured frame - keep moving the board ({len(captures)} frames)"
                 )
                 return
             if kind == "charuco":
@@ -988,16 +992,25 @@ class CamerasModule(WebModule):
             session["auto_rms"] = None
             session["auto_state"] = "capturing"
             session["auto_msg"] = (
-                f"Auto-captured {len(captures)}/{target} - keep moving the board"
+                f"Auto-captured {len(captures)} frames - keep moving the board"
             )
             if len(captures) >= _AUTO_CAPTURE_MIN_SOLVE:
                 session["auto_solving"] = True
                 need_solve = True
-                need_save = len(captures) >= target
-                if need_save:
-                    session["auto_state"] = "solving"
         if not need_solve:
             return
+        if _synchronous:
+            self._auto_solve_and_finalize(key, kind, pattern, dict_id)
+        else:
+            threading.Thread(
+                target=self._auto_solve_and_finalize,
+                args=(key, kind, pattern, dict_id),
+                daemon=True,
+            ).start()
+
+    def _auto_solve_and_finalize(self, key, kind, pattern, dict_id):
+        """run the rolling solve and refresh the live RMS. Runs on a daemon
+        thread when the live feed triggers it so the stream never stalls."""
         try:
             result = self._auto_solve(key, kind, pattern, dict_id)
         except Exception as exc:
@@ -1016,15 +1029,6 @@ class CamerasModule(WebModule):
                     session["auto_msg"] = (
                         "Captured frames solve poorly - keep moving the board through more angles"
                     )
-            return
-        if not need_save:
-            return
-        with self.calib_lock:
-            session = self.calib_sessions.get(key)
-            if session is None or session.get("auto_saved"):
-                return
-            session["auto_saved"] = True
-        self._save_auto_result(key, result)
 
     def _auto_solve(self, key, kind, pattern, dict_id):
         with self.calib_lock:
@@ -1054,18 +1058,6 @@ class CamerasModule(WebModule):
             if session:
                 session["auto_rms"] = result.get("rms")
         return result
-
-    def _save_auto_result(self, key, result):
-        derived = cam_calibration.derive_fov_from_intrinsics(result)
-        self._save_calibration(key, {**result, **derived})
-        fov_txt = f", FOV {derived['fov']}° derived from intrinsics" if derived else ""
-        with self.calib_lock:
-            session = self.calib_sessions.get(key)
-            if session:
-                session["auto_state"] = "solved"
-                session["auto_msg"] = (
-                    f"Auto-calibrated & saved! RMS {result.get('rms', 0.0):.3f}px{fov_txt}."
-                )
 
     def _calibration_feed(self, cam_name):
         """MJPEG feed for the calibration wizard - frames straight from the
@@ -1108,7 +1100,9 @@ class CamerasModule(WebModule):
     def _draw_captured_overlays(self, frame, cam_name, overlay):
         """draw every captured frame's detection on the live feed in its own
         random color, so each capture is confirmed on the live view
-        (PhotonVision style) instead of a thumbnail strip under the wizard."""
+        (PhotonVision style) instead of a thumbnail strip under the wizard.
+        All layers go onto one shared copy - the copying draw helpers would
+        otherwise cost N full-frame copies per streamed frame."""
         _, key, _ = self._find_camera_entry(cam_name)
         key = key or cam_name
         with self.calib_lock:
@@ -1118,15 +1112,39 @@ class CamerasModule(WebModule):
                 "chessboard": session.get("chess_overlays", []),
             }.get(overlay, [])
             layers = list(layers)
-        out = frame
+        if not layers:
+            return frame
+        out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         for layer in layers:
             if overlay == "charuco":
                 corners, ids, mc, mi, color = layer
-                out = cam_calibration.draw_charuco(out, corners, ids, mc, mi, color=color)
+                cam_calibration.draw_charuco_into(out, corners, ids, mc, mi, color=color)
             elif overlay == "chessboard":
                 corners, color = layer
-                out = cam_calibration.draw_corners(out, corners, color)
+                cam_calibration.draw_corners_into(out, corners, color)
         return out
+
+    def _detect_workframe(self, frame, max_dim=_DETECT_MAX_DIM):
+        """downscaled copy of the frame for board detection plus the scale
+        factor corners must be multiplied by to get back to full-res pixels.
+        Board detection dominates the calibration feed's per-frame cost, so it
+        runs at reduced resolution; captured corners stay in the full-res space
+        the intrinsics solve expects."""
+        h, w = frame.shape[:2]
+        largest = max(w, h)
+        if largest <= max_dim:
+            return frame, 1.0
+        scale = max_dim / float(largest)
+        work = cv2.resize(
+            frame,
+            (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+        )
+        return work, scale
+
+    def _rescale_corners(self, corners, factor):
+        if corners is None:
+            return None
+        return (np.asarray(corners, dtype=np.float32) * factor).astype(np.float32)
 
     def _generate_calibration(self, cam_name, overlay="", pattern=None):
         last_frame_time = time.monotonic()
@@ -1150,9 +1168,11 @@ class CamerasModule(WebModule):
                 if overlay == "charuco":
                     now = time.monotonic()
                     # board detection is the expensive bit - refresh the
-                    # overlay ~10x/s and reuse the last result in between
+                    # overlay ~10x/s on a downscaled copy and reuse the last
+                    # result in between
                     if now - last_detect >= 0.1:
                         last_detect = now
+                        work, scale = self._detect_workframe(frame)
                         session_pattern, session_dict = self._charuco_session_layout(cam_name)
                         # layouts to try this tick: the layout the wizard
                         # auto-detected/cached first, then the one picked in
@@ -1165,14 +1185,13 @@ class CamerasModule(WebModule):
                         found = False
                         matched_pattern = None
                         matched_dict = session_dict
-                        gray = None
                         for cand in candidates:
                             kwargs = {}
                             if session_dict is not None:
                                 kwargs["dictionary_id"] = session_dict
-                            found, corners, ids, marker_corners, marker_ids, gray = (
+                            found, corners, ids, marker_corners, marker_ids, _ = (
                                 cam_calibration.detect_charuco(
-                                    frame, cand[0], cand[1], **kwargs
+                                    work, cand[0], cand[1], **kwargs
                                 )
                             )
                             if found:
@@ -1183,11 +1202,11 @@ class CamerasModule(WebModule):
                             # of the common printed boards so any ChArUco board
                             # shows live. The match is cached so captures and
                             # calibration stay on the board's real layout.
-                            if now - last_auto_scan >= 1.0:
+                            if now - last_auto_scan >= _AUTO_SCAN_INTERVAL_S:
                                 last_auto_scan = now
-                                found, corners, ids, marker_corners, marker_ids, gray, fp, fd = (
+                                found, corners, ids, marker_corners, marker_ids, _, fp, fd = (
                                     cam_calibration.detect_charuco_auto(
-                                        frame,
+                                        work,
                                         preferred_pattern=candidates[0] if candidates else None,
                                         preferred_dict=session_dict,
                                     )
@@ -1202,15 +1221,24 @@ class CamerasModule(WebModule):
                                         session["charuco_pattern"] = list(fp)
                                         if fd is not None:
                                             session["charuco_dict"] = fd
+                        if scale != 1.0:
+                            corners = self._rescale_corners(corners, 1.0 / scale)
+                            marker_corners = self._rescale_corners(marker_corners, 1.0 / scale)
                         if found and matched_pattern is not None:
                             # auto capture piggybacks on this detection - store
-                            # the frame when it is complete + diverse, run a
-                            # rolling solve and auto-save at the target count
+                            # the frame when it is complete + diverse and run a
+                            # rolling solve. The solve runs on a worker thread
+                            # so the live view keeps streaming; captures store
+                            # the full-res gray their corners were scaled back
+                            # to (auto capture never saves on its own - the
+                            # wizard's "Calibrate intrinsics" button does).
+                            gray_full = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                             _, key, _ = self._find_camera_entry(cam_name)
                             key = key or cam_name
                             self._auto_consider(
-                                key, "charuco", gray, corners, ids,
+                                key, "charuco", gray_full, corners, ids,
                                 pattern=matched_pattern, dict_id=matched_dict,
+                                _synchronous=False,
                             )
                         if not found:
                             corners, ids, marker_corners, marker_ids = None, None, None, None
@@ -1231,14 +1259,19 @@ class CamerasModule(WebModule):
                             pattern = self._chessboard_session_pattern(cam_name)
                         if pattern is not None and len(pattern) == 2:
                             chess_pattern = tuple(pattern[:2])
-                            found, corners, gray = cam_calibration.detect_chessboard(
-                                frame, chess_pattern[0], chess_pattern[1]
+                            work, scale = self._detect_workframe(frame)
+                            found, corners, _ = cam_calibration.detect_chessboard(
+                                work, chess_pattern[0], chess_pattern[1]
                             )
+                            if scale != 1.0:
+                                corners = self._rescale_corners(corners, 1.0 / scale)
                             if found:
+                                gray_full = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                                 _, key, _ = self._find_camera_entry(cam_name)
                                 key = key or cam_name
                                 self._auto_consider(
-                                    key, "chessboard", gray, corners, pattern=chess_pattern
+                                    key, "chessboard", gray_full, corners,
+                                    pattern=chess_pattern, _synchronous=False,
                                 )
                             if not found:
                                 corners = None
@@ -1251,7 +1284,19 @@ class CamerasModule(WebModule):
                             frame, corners, chess_pattern[0], chess_pattern[1]
                         )
                     to_serve = self._draw_captured_overlays(to_serve, cam_name, "chessboard")
-                ok, buf = cv2.imencode(".jpg", to_serve, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                # overlay feeds are diagnostic - serve them capped in width so
+                # JPEG encode stays cheap. The plain feed (focal measurement)
+                # keeps full resolution: the UI reads the frame width from it.
+                serve_frame = to_serve
+                if overlay and _FEED_MAX_DIM:
+                    w = to_serve.shape[1]
+                    if w > _FEED_MAX_DIM:
+                        f = _FEED_MAX_DIM / float(w)
+                        serve_frame = cv2.resize(
+                            to_serve,
+                            (int(round(w * f)), int(round(to_serve.shape[0] * f))),
+                        )
+                ok, buf = cv2.imencode(".jpg", serve_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 if not ok:
                     continue
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
@@ -1378,7 +1423,6 @@ class CamerasModule(WebModule):
                 session.pop("charuco_overlays", None)
                 session.pop("charuco_pattern", None)
                 session.pop("charuco_dict", None)
-                session.pop("auto_saved", None)
                 session.pop("auto_rms", None)
                 session.pop("auto_state", None)
         return jsonify(success=True)
@@ -1409,7 +1453,6 @@ class CamerasModule(WebModule):
             if session:
                 session.pop("charuco_captures", None)
                 session.pop("charuco_pattern", None)
-                session.pop("auto_saved", None)
                 session.pop("auto_rms", None)
                 session.pop("auto_state", None)
         return jsonify(success=True, result=result, fov=saved.get("fov"),

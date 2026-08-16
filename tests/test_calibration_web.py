@@ -425,17 +425,18 @@ class CalibrationWebTests(unittest.TestCase):
 
     def test_auto_set_and_status(self):
         cfg, cam, mod, client = self._setup()
-        r = client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True, "target": 8})
+        r = client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True})
         self.assertEqual(r.status_code, 200)
         j = client.get("/api/cameras/calibration/cam_0/auto/status").get_json()
         self.assertTrue(j["enabled"])
-        self.assertEqual(j["target"], 8)
+        self.assertNotIn("target", j)
+        self.assertNotIn("saved", j)
         self.assertEqual(j["state"], "capturing")
         self.assertEqual(j["captured"]["charuco"], 0)
 
-    def test_auto_capture_solves_and_saves(self):
+    def test_auto_capture_stores_frames_then_finish_saves(self):
         cfg, cam, mod, client = self._setup()
-        client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True, "target": 12})
+        client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True})
         board = c.make_charuco_board(7, 5)
         pattern = (7, 5)
         # scale the board via the render margin (pixel scale -> solvable
@@ -451,8 +452,14 @@ class CalibrationWebTests(unittest.TestCase):
             self.assertTrue(found, f"frame {i} should detect")
             mod._auto_consider("cam_0", "charuco", gray, corners, ids, pattern=pattern)
         j = client.get("/api/cameras/calibration/cam_0/auto/status").get_json()
-        self.assertEqual(j["state"], "solved")
+        # auto capture never stops or saves on its own - it keeps capturing
+        # until the user pauses, then "Calibrate intrinsics" saves
+        self.assertEqual(j["state"], "capturing")
         self.assertEqual(j["captured"]["charuco"], 12)
+        cal = cfg.config["camera_configs"]["cam_0"]["calibration"]
+        self.assertNotIn("camera_matrix", cal)
+        r = client.post("/api/cameras/calibration/cam_0/charuco/finish", json={})
+        self.assertEqual(r.status_code, 200)
         cal = cfg.config["camera_configs"]["cam_0"]["calibration"]
         self.assertIn("camera_matrix", cal)
         self.assertGreater(cal["fov"], 0)
@@ -460,7 +467,7 @@ class CalibrationWebTests(unittest.TestCase):
 
     def test_auto_capture_skips_same_pose(self):
         cfg, cam, mod, client = self._setup()
-        client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True, "target": 12})
+        client.post("/api/cameras/calibration/cam_0/auto", json={"enabled": True})
         board = c.make_charuco_board(7, 5)
         img = board.generateImage((640, 480), marginSize=20)
         found, corners, ids, _, _, gray = c.detect_charuco(img, 7, 5)
@@ -469,7 +476,7 @@ class CalibrationWebTests(unittest.TestCase):
             mod._auto_consider("cam_0", "charuco", gray, corners, ids, pattern=(7, 5))
         j = client.get("/api/cameras/calibration/cam_0/auto/status").get_json()
         self.assertEqual(j["captured"]["charuco"], 1)
-        self.assertNotEqual(j["state"], "solved")
+        self.assertEqual(j["state"], "capturing")
 
     def test_auto_capture_can_be_paused(self):
         cfg, cam, mod, client = self._setup()

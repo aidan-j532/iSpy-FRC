@@ -168,10 +168,10 @@ def random_overlay_color():
     return tuple(int(x) for x in bgr[0, 0])
 
 
-def draw_corners(frame, corners, color):
-    """copy of the frame with a filled circle at every corner point in the
-    given color - used to overlay a captured detection on the live feed."""
-    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+def draw_corners_into(out, corners, color):
+    """draw every corner point on `out` in place (no frame copy). The feed
+    redraws all captured detections every frame, so drawing into one shared
+    copy instead of N copies keeps the live view smooth as captures pile up."""
     if corners is None:
         return out
     for corner in corners:
@@ -181,15 +181,50 @@ def draw_corners(frame, corners, color):
     return out
 
 
-def draw_markers(frame, corners, color):
-    """copy of the frame with each marker's outline drawn in the given color."""
+def draw_corners(frame, corners, color):
+    """copy of the frame with a filled circle at every corner point in the
+    given color - used to overlay a captured detection on the live feed."""
     out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    return draw_corners_into(out, corners, color)
+
+
+def draw_markers_into(out, corners, color):
+    """draw each marker's outline on `out` in place (no frame copy)."""
     if corners is None:
         return out
     for corner in corners:
         pts = np.asarray(corner, dtype=np.int32).reshape(-1, 2)
         cv2.polylines(out, [pts], True, color, 2)
     return out
+
+
+def draw_markers(frame, corners, color):
+    """copy of the frame with each marker's outline drawn in the given color."""
+    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    return draw_markers_into(out, corners, color)
+
+
+def draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=None):
+    """draw the ChArUco detection onto `out` in place (no frame copy)."""
+    if color is None:
+        if marker_corners is not None and marker_ids is not None:
+            _draw_detected_markers(out, marker_corners, marker_ids)
+        if corners is not None and ids is not None:
+            _draw_detected_corners_charuco(out, corners, ids)
+    else:
+        if marker_corners is not None:
+            draw_markers_into(out, marker_corners, color)
+        if corners is not None:
+            draw_corners_into(out, corners, color)
+    return out
+
+
+def draw_charuco(frame, corners, ids, marker_corners, marker_ids, color=None):
+    """copy of the frame with detected ChArUco markers + board corners
+    overlaid (for preview). Pass a color to draw the detection in that color
+    instead of OpenCV's defaults (used for captured-frame overlays)."""
+    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    return draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=color)
 
 
 def draw_chessboard(frame, corners, cols: int, rows: int, color=None):
@@ -200,7 +235,7 @@ def draw_chessboard(frame, corners, cols: int, rows: int, color=None):
         if color is None:
             cv2.drawChessboardCorners(out, (cols, rows), corners, True)
         else:
-            out = draw_corners(out, corners, color)
+            draw_corners_into(out, corners, color)
     return out
 
 
@@ -391,17 +426,7 @@ def draw_charuco(frame, corners, ids, marker_corners, marker_ids, color=None):
     overlaid (for preview). Pass a color to draw the detection in that color
     instead of OpenCV's defaults (used for captured-frame overlays)."""
     out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    if color is None:
-        if marker_corners is not None and marker_ids is not None:
-            _draw_detected_markers(out, marker_corners, marker_ids)
-        if corners is not None and ids is not None:
-            _draw_detected_corners_charuco(out, corners, ids)
-    else:
-        if marker_corners is not None:
-            out = draw_markers(out, marker_corners, color)
-        if corners is not None:
-            out = draw_corners(out, corners, color)
-    return out
+    return draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=color)
 
 
 def calibrate_charuco(
