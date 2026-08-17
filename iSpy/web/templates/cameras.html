@@ -54,7 +54,7 @@
   </div>
 </div>
 
-<!-- camera calibration wizard: known-object (focal/FOV) + chessboard intrinsics -->
+<!-- camera calibration wizard: known-object (focal/FOV) + ChArUco intrinsics -->
 <div id="calibration-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeCalibrationWizard()">
   <div class="modal calibration-modal">
     <div id="calibration-header">
@@ -1473,7 +1473,7 @@ function setRefreshRate() {
 const calibrationState = {
   camera: null,      // camera key (name) used for the API and the raw feed
   pipeline: null,    // camera's pipeline name - decides which wizard mode to run
-  mode: null,        // 'focal' | 'charuco' | 'chessboard' | 'beta' | 'none'
+  mode: null,        // 'focal' | 'charuco' | 'beta' | 'none'
   frozen: false,
   frame: null,       // ImageData of the frozen frame (focal mode)
   canvas: null,
@@ -1559,7 +1559,7 @@ async function renderPnpSectionIfApplicable(body) {
 
 function pnpSectionHtml(info) {
   const note = info.has_intrinsics ? '' :
-    '<div class="calib-status err">Run chessboard/ChArUco intrinsics on this camera first - PnP needs camera_matrix + dist_coeffs.</div>';
+    '<div class="calib-status err">Run ChArUco intrinsics on this camera first - PnP needs camera_matrix + dist_coeffs.</div>';
   return `
     <h3>Pose PnP (${info.num_keypoints} keypoints)</h3>
     ${note}
@@ -1660,7 +1660,7 @@ async function clearPnpConfig() {
  * ------------------------------------------------------------------ */
 
 const autoCaptureState = {
-  kind: null,      // 'charuco' | 'chessboard'
+  kind: null,      // 'charuco'
   enabled: true,
   captured: 0,
   state: 'idle',
@@ -1799,9 +1799,6 @@ function openCalibrationWizard() {
   } else if (calibrationState.mode === 'charuco') {
     renderCharucoCalibration(body);
     startAutoCapture('charuco');
-  } else if (calibrationState.mode === 'chessboard') {
-    renderChessboardCalibration(body);
-    startAutoCapture('chessboard');
   } else if (calibrationState.mode === 'beta') {
     body.innerHTML = '<div class="card empty-state">The optical_flow pipeline is in beta - its motion estimation reads the camera FOV, so it is excluded from the calibration wizard for now.</div>';
   } else {
@@ -1868,7 +1865,7 @@ function focalIntrinsicsBody() {
         <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
-    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view. Auto capture is ON: just keep moving the board around through varied angles - it stores the frames itself. Press Pause when you have enough, then calibrate intrinsics. Every capture stays drawn on the live view in its own color. The board layout/dictionary are auto-detected. Detections are paused while this is open.</div>
+    <div class="calib-status" id="charuco-note">Select your ChArUco board layout and dictionary above, then hold the printed board in view. Auto capture is ON: just keep moving the board around through varied angles - it stores the frames itself. Press Pause when you have enough, then calibrate intrinsics. Every capture stays drawn on the live view in its own color. Detections are paused while this is open.</div>
     ${charucoCaptureSectionHtml()}
   `;
 }
@@ -2101,41 +2098,6 @@ function refreshCalibrationFields(cal) {
   refreshCameras();
 }
 
-function renderChessboardCalibration(body) {
-  body.innerHTML = `
-    <div class="form-row"><span class="form-label">Live view</span>
-      <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="${calibrationFeedUrl('chessboard', [9, 6])}" alt="live feed" onerror="calibrationFeedError()">
-      </div>
-    </div>
-    <div class="calib-status" id="chess-note">Hold a printed chessboard in view and fill the frame with it. Auto capture is ON: just keep moving the board - it stores varied frames itself and watches the live RMS. Press Pause when you have enough, then calibrate intrinsics. Detections are paused while this is open.</div>
-    <div class="form-row">
-      <span class="form-label">Auto capture</span>
-      <div style="display:flex;gap:8px;flex:1;align-items:center;flex-wrap:wrap;">
-        <button type="button" class="btn-sm btn-ok" id="chess-auto-toggle" onclick="toggleAutoCapture()">Pause</button>
-        <span id="chess-auto-status" class="form-help" style="margin:0;">Starting...</span>
-      </div>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Board pattern</span>
-      <select id="chess-pattern" class="form-input" onchange="onChessboardPatternChange()">
-        <option value="9,6" selected>9 x 6 inner corners (10 x 7 board)</option>
-        <option value="8,6">8 x 6 inner corners</option>
-        <option value="7,6">7 x 6 inner corners</option>
-        <option value="7,5">7 x 5 inner corners</option>
-      </select>
-    </div>
-    <div class="form-row" style="margin-top:10px;">
-      <span class="form-label"></span>
-      <button type="button" class="btn-ok" onclick="finishChessboardCalibration()" id="chess-finish-btn">Calibrate intrinsics</button>
-    </div>
-    <div class="calib-status" id="chess-result"></div>
-  `;
-}
-
-function onChessboardPatternChange() {
-  reconnectCalibrationFeed();
-}
 
 function charucoCaptureSectionHtml() {
   // shared ChArUco capture UI used by the dedicated 'charuco' wizard and the
@@ -2174,7 +2136,7 @@ function renderCharucoCalibration(body) {
         <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
-    <div class="calib-status" id="charuco-note">Hold a printed ChArUco board in view and fill the frame with it. Green corners + marker outlines = board detected on the live view. The board layout and marker dictionary are auto-detected - the moment it locks onto your board the overlay appears. Auto capture is ON: just keep moving the board around through varied angles - it stores the frames itself. Press Pause when you have enough, then calibrate intrinsics. Every capture stays drawn on the live view in a fresh random color. Detections are paused while this is open.</div>
+    <div class="calib-status" id="charuco-note">Select your ChArUco board layout and dictionary above, then hold the printed board in view and fill the frame with it. Green corners + marker outlines = board detected on the live view. Auto capture is ON: just keep moving the board around through varied angles - it stores the frames itself. Press Pause when you have enough, then calibrate intrinsics. Every capture stays drawn on the live view in a fresh random color. Detections are paused while this is open.</div>
     ${charucoCaptureSectionHtml()}
   `;
 }
@@ -2195,41 +2157,12 @@ function reconnectCalibrationFeed() {
     base = calibrationFeedUrl('charuco', calibrationState.overlayPattern);
   } else if (calibrationState.mode === 'charuco') {
     base = calibrationFeedUrl('charuco', calibrationState.overlayPattern);
-  } else if (calibrationState.mode === 'chessboard') {
-    base = calibrationFeedUrl('chessboard', ($id('chess-pattern').value || '9,6').split(',').map(Number));
   } else {
     base = calibrationFeedUrl();
   }
   img.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
 }
 
-async function finishChessboardCalibration() {
-  const btn = $id('chess-finish-btn');
-  const result = $id('chess-result');
-  btn.disabled = true;
-  result.className = 'calib-status';
-  result.textContent = 'Calibrating - this can take a moment...';
-  try {
-    const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/chessboard/finish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Calibration failed');
-    const res = j.result;
-    const fx = res.camera_matrix[0][0].toFixed(1);
-    const fy = res.camera_matrix[1][1].toFixed(1);
-    result.className = 'calib-status ok';
-    result.innerHTML = `Done! Reprojection error <strong>${res.rms.toFixed(3)} px</strong> (lower is better), focal <strong>${fx} x ${fy} px</strong> at ${res.resolution[0]}x${res.resolution[1]}. Restart vision to apply.`;
-    refreshCalibrationFields(j.calibration);
-  } catch (e) {
-    result.className = 'calib-status err';
-    result.textContent = e.message || 'Calibration failed';
-  } finally {
-    btn.disabled = false;
-  }
-}
 
 async function finishCharucoCalibration() {
   const btn = $id('charuco-finish-btn');
@@ -2260,7 +2193,7 @@ async function finishCharucoCalibration() {
 }
 
 async function clearCalibrationSession(kind) {
-  const path = kind === 'charuco' ? 'charuco' : 'chessboard';
+  const path = 'charuco';
   try {
     await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/${path}`, { method: 'DELETE' });
   } catch (e) {}
@@ -2279,9 +2212,6 @@ async function resetCalibration() {
     if (calibrationState.mode === 'charuco' || calibrationState.mode === 'focal') {
       clearCalibrationSession('charuco');
       startAutoCapture('charuco');
-    } else if (calibrationState.mode === 'chessboard') {
-      clearCalibrationSession('chessboard');
-      startAutoCapture('chessboard');
     }
     if (calibrationState.mode === 'focal') {
       unfreezeCalibrationFrame();
