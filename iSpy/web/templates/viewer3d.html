@@ -38,7 +38,7 @@
   <h3>Detections</h3>
   <div id="object-list">
     <table>
-      <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th><th>Yaw</th><th>Vis</th></tr></thead>
+      <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th><th>Pitch</th><th>Yaw</th><th>Roll</th><th>Vis</th></tr></thead>
       <tbody id="obj-tbody"></tbody>
     </table>
   </div>
@@ -311,7 +311,7 @@ function sync(objects) {
     const label = visType === 'points' ? `${nk} pts`
                 : visType === 'planar' ? (o.vis_meta && o.vis_meta.tag_id != null ? `tag ${o.vis_meta.tag_id}` : 'planar')
                 : '-';
-    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
+    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.pitch * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.roll * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
   }
 
   for (const k in boxes) {
@@ -321,7 +321,7 @@ function sync(objects) {
     }
   }
 
-  tbody.innerHTML = rows || '<tr><td colspan="6" class="empty-state">No detections</td></tr>';
+  tbody.innerHTML = rows || '<tr><td colspan="8" class="empty-state">No detections</td></tr>';
 }
 
 // poll & animate

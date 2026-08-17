@@ -23,13 +23,13 @@ def _best_codec():
         return ("MJPG", ".avi")
 
 
-class VideoRecorder(UtilityBase):
-    plugin_name = "video_recorder"
+class RollBack(UtilityBase):
+    plugin_name = "rollback"
 
     @classmethod
     def config_schema(cls) -> dict:
         return {
-            "record_dir": {
+            "data_dir": {
                 "type": "text",
                 "label": "Output Directory",
                 "hint": "Where recording files are written.",
@@ -60,7 +60,7 @@ class VideoRecorder(UtilityBase):
         self.logger = logging.getLogger(__name__)
         # no enabled flag - being present in the config IS the switch.
         # record_mode/record_dir used to be top-level config, live here now
-        self._output_dir = self.config.get("record_dir", "VideoRecordings")
+        self._video_output_dir = self.config.get("data_dir", "RollbackSave")
         self._fps = float(self.config.get("fps", 30.0))
         self._forced_codec = None
         self._forced_ext = None
@@ -76,12 +76,27 @@ class VideoRecorder(UtilityBase):
         self._dropped = 0
         self._size = None
 
-        os.makedirs(self._output_dir, exist_ok=True)
+        os.makedirs(self._video_output_dir, exist_ok=True)
 
     def start(self):
         pass
 
     def update(self, frame_data: dict):
+        # This is what frame data looks like :)
+        # frame_data = {
+        #     "fuel_list": fuel_list,
+        #     "frame": frame,
+        #     "fps": 1 / loop_s if loop_s > 0 else 0,
+        #     "loop_s": loop_s,
+        #     "vision_s": vision_s,
+        #     "camera_lag_s": camera_lag_s,
+        #     "detections": len(fuel_list),
+        #     "cameras": self.cameras,
+        #     "camera_frames": handler.get_camera_frames(),
+        #     "code_times": code_times,
+        #     "debug_data": {},
+        #     "objects": fuel_list,
+        # }
         frame = frame_data.get("frame")
         if frame is None:
             return
@@ -93,6 +108,8 @@ class VideoRecorder(UtilityBase):
                 return
 
         self._write(frame)
+        
+        
 
     def stop(self):
         self._stop_recorder()
@@ -129,7 +146,7 @@ class VideoRecorder(UtilityBase):
             codec, ext = _best_codec()
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = os.path.join(self._output_dir, f"recording_{timestamp}{ext}")
+        filename = os.path.join(self._video_output_dir, f"recording_{timestamp}{ext}")
 
         fourcc = cv2.VideoWriter_fourcc(*codec)
 
@@ -142,7 +159,7 @@ class VideoRecorder(UtilityBase):
 
             codec, ext = ("MJPG", ".avi")
             filename = os.path.join(
-                self._output_dir, f"recording_{timestamp}{ext}"
+                self._video_output_dir, f"recording_{timestamp}{ext}"
             )
             fourcc = cv2.VideoWriter_fourcc(*codec)
 

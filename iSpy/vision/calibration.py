@@ -1,18 +1,16 @@
 """Camera calibration helpers.
 
-Three complementary workflows, all fed from the web UI:
+Two complementary workflows, all fed from the web UI:
 
 1. Known-object calibration - measure an object of known real size at a
    known distance and derive the camera's focal length (px) + horizontal
    FOV. This feeds every pipeline's depth estimation (object_detection etc).
 
-2. Chessboard intrinsics - run OpenCV's calibrateCamera over a handful of
-   chessboard frames to get a real camera matrix + distortion coefficients.
+2. ChArUco intrinsics - run OpenCV's calibrateCameraCharuco over a handful
+   of ChArUco board frames to get a real camera matrix + distortion
+   coefficients. The user selects the correct ChArUco board layout and
+   dictionary, then capture + calibration is fully automatic.
    AprilTag / QR PnP use these for accurate pose.
-
-3. ChArUco intrinsics - same idea as the chessboard but the board is an
-   ArUco marker grid (fully visible at any angle, no untextured corner
-   ambiguity). AprilTag / QR PnP use these for accurate pose.
 
 Results are stored on the camera's ``calibration`` config dict. The
 known-object values follow iSpy's internal convention: calibration inputs
@@ -104,26 +102,12 @@ def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
         raise cv2.error("ChArUco calibration unavailable in this OpenCV build")
     return result
 
-DEFAULT_CHESSBOARD_PATTERN = (9, 6)
-
-DEFAULT_CHARUCO_PATTERN = (7, 5)  # squares wide x squares tall
+DEFAULT_CHARUCO_PATTERN = (8, 8)  # squares wide x squares tall
 DEFAULT_CHARUCO_DICT = cv2.aruco.DICT_6X6_250
 # square/marker lengths only need to be consistent (intrinsics are scale
 # invariant) - marker must be smaller than the square it sits in
-DEFAULT_CHARUCO_SQUARE = 1.0
-DEFAULT_CHARUCO_MARKER = 0.8
-
-# boards people actually print - the wizard auto-detects across these so
-# any common layout/dictionary shows up without matching the default by hand
-CHARUCO_PATTERNS = ((7, 5), (5, 7), (8, 6), (6, 4), (5, 4), (7, 6), (6, 5), (10, 8))
-CHARUCO_DICTIONARY_IDS = (
-    cv2.aruco.DICT_6X6_250,
-    cv2.aruco.DICT_5X5_250,
-    cv2.aruco.DICT_4X4_50,
-    cv2.aruco.DICT_6X6_50,
-    cv2.aruco.DICT_5X5_50,
-    cv2.aruco.DICT_4X4_250,
-)
+DEFAULT_CHARUCO_SQUARE = 25.0
+DEFAULT_CHARUCO_MARKER = 18
 
 
 def focal_from_object(real_size: float, distance: float, pixel_height: float) -> float:
@@ -146,17 +130,6 @@ def focal_from_fov(fov_deg: float, width_px: float) -> float:
     if fov_deg <= 0 or width_px <= 0:
         return 0.0
     return (width_px / 2.0) / np.tan(np.radians(fov_deg / 2.0))
-
-
-def detect_chessboard(frame, cols: int, rows: int):
-    """find a chessboard's inner corners; returns (found, corners, gray).
-    corners is refined with cornerSubPix when found, else None."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
-    found, corners = cv2.findChessboardCorners(gray, (cols, rows), None)
-    if found and corners is not None:
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 40, 1e-3)
-        corners = cv2.cornerSubPix(gray, corners, (5, 5), (-1, -1), criteria)
-    return bool(found), (corners if found else None), gray
 
 
 def random_overlay_color():
@@ -227,41 +200,14 @@ def draw_charuco(frame, corners, ids, marker_corners, marker_ids, color=None):
     return draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=color)
 
 
-def draw_chessboard(frame, corners, cols: int, rows: int, color=None):
-    """copy of the frame with detected chessboard corners overlaid (for preview).
-    Pass a color to draw the corners in that color instead of OpenCV's defaults."""
-    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    if corners is not None:
-        if color is None:
-            cv2.drawChessboardCorners(out, (cols, rows), corners, True)
-        else:
-            draw_corners_into(out, corners, color)
-    return out
-
-
-def _object_points(cols: int, rows: int) -> np.ndarray:
-    pts = np.zeros((cols * rows, 3), np.float32)
-    pts[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2)
-    return pts
-
-
 def expected_charuco_corners(pattern) -> int:
-    """inner chessboard corners a (cols x rows) ChArUco board has - the auto
+    """inner corners a (cols x rows) ChArUco board has - the auto
     capture coverage gate compares detected corners against this."""
     try:
         cols, rows = int(pattern[0]), int(pattern[1])
     except (TypeError, ValueError, IndexError):
         return 0
     return max(0, (cols - 1) * (rows - 1))
-
-
-def expected_chessboard_corners(pattern) -> int:
-    """inner corners a (cols x rows) chessboard pattern has."""
-    try:
-        cols, rows = int(pattern[0]), int(pattern[1])
-    except (TypeError, ValueError, IndexError):
-        return 0
-    return max(0, cols * rows)
 
 
 def capture_coverage(corners, expected: int) -> float:
@@ -278,8 +224,7 @@ def frame_diverse(corners, existing_captures, min_shift_px: float = 12.0) -> boo
     every already-captured frame (mean nearest-corner displacement). Same-pose
     frames add no information to an intrinsics solve, so auto capture skips
     them. existing_captures are the stored capture tuples - the corners live at
-    index 1 for both the chessboard (gray, corners) and ChArUco
-    (gray, corners, ids) capture formats."""
+    index 1 as (gray, corners, ids) capture format."""
     new = np.asarray(corners, dtype=np.float64).reshape(-1, 2)
     if len(new) == 0:
         return False
@@ -314,50 +259,6 @@ def derive_fov_from_intrinsics(result: dict) -> dict:
     return {
         "fov": round(fov_from_focal(fx, width), 3),
         "focal_length_pixels": round(fx, 2),
-    }
-
-
-def calibrate_chessboard(captures, pattern=DEFAULT_CHESSBOARD_PATTERN):
-    """run calibrateCamera over [(gray_frame, corners), ...]; returns a dict
-    with rms + intrinsics, or None when it cannot calibrate. pattern is the
-    (cols, rows) inner-corner size the frames were detected with."""
-    if len(captures) < 3:
-        return None
-    cols, rows = pattern
-    obj_pts = []
-    img_pts = []
-    img_size = None
-    for gray, corners in captures:
-        h, w = gray.shape[:2]
-        img_size = (w, h)
-        obj_pts.append(_object_points(cols, rows))
-        img_pts.append(corners.reshape(-1, 1, 2).astype(np.float32))
-    try:
-        rms, cam_mat, dist, _, _ = cv2.calibrateCamera(
-            obj_pts,
-            img_pts,
-            img_size,
-            None,
-            None,
-            flags=cv2.CALIB_FIX_K3,
-        )
-    except cv2.error as exc:
-        logger.warning("Chessboard calibration failed: %s", exc)
-        return None
-    # degenerate captures (e.g. every frame the same board pose) produce a
-    # garbage-but-successful solve - refuse it so the UI asks for variety
-    if not np.isfinite(rms) or rms > 100.0:
-        logger.warning(
-            "Chessboard calibration gave an implausible RMS %.3f - frames were probably too similar",
-            rms,
-        )
-        return None
-    return {
-        "rms": float(rms),
-        "camera_matrix": cam_mat.tolist(),
-        "dist_coeffs": dist.flatten().tolist(),
-        "resolution": list(img_size),
-        "count": len(captures),
     }
 
 
@@ -421,14 +322,6 @@ def detect_charuco(
     return found, corners, ids, marker_corners, marker_ids, gray
 
 
-def draw_charuco(frame, corners, ids, marker_corners, marker_ids, color=None):
-    """copy of the frame with detected ChArUco markers + board corners
-    overlaid (for preview). Pass a color to draw the detection in that color
-    instead of OpenCV's defaults (used for captured-frame overlays)."""
-    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    return draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=color)
-
-
 def calibrate_charuco(
     captures,
     pattern=DEFAULT_CHARUCO_PATTERN,
@@ -488,52 +381,6 @@ def calibrate_charuco(
         "resolution": list(img_size),
         "count": len(captures),
     }
-
-
-def detect_charuco_auto(
-    frame,
-    preferred_pattern: tuple | list | None = None,
-    preferred_dict: int | None = None,
-):
-    """scan the common ChArUco layouts/dictionaries for a board in the frame,
-    so a printed board of any typical size is found without matching the
-    default by hand. Returns (found, corners, ids, marker_corners, marker_ids,
-    gray, pattern, dictionary_id); pattern/dictionary_id are None when not
-    found. The preferred layout/dict are tried first."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
-    patterns: list[tuple] = []
-    if preferred_pattern is not None:
-        try:
-            pp = tuple(int(x) for x in preferred_pattern[:2])
-            if len(pp) == 2 and pp not in patterns:
-                patterns.append(pp)
-        except (TypeError, ValueError):
-            pass
-    for p in CHARUCO_PATTERNS:
-        if p not in patterns:
-            patterns.append(p)
-    dicts: list[int] = []
-    if preferred_dict is not None:
-        try:
-            pd = int(preferred_dict)
-            if pd not in dicts:
-                dicts.append(pd)
-        except (TypeError, ValueError):
-            pass
-    for d in CHARUCO_DICTIONARY_IDS:
-        if d not in dicts:
-            dicts.append(d)
-    for p in patterns:
-        for d in dicts:
-            try:
-                found, corners, ids, mc, mi, _ = detect_charuco(
-                    frame, p[0], p[1], dictionary_id=d
-                )
-            except Exception:
-                continue
-            if found:
-                return True, corners, ids, mc, mi, gray, p, d
-    return False, None, None, None, None, gray, None, None
 
 
 def _to_corners(corners):

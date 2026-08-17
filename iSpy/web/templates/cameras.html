@@ -1574,6 +1574,7 @@ function pnpSectionHtml(info) {
       </select></div>
     <div class="form-row"><span class="form-label"></span>
       <div style="display:flex;gap:8px;">
+        ${info.default_object_points ? '<button type="button" class="btn-sm" onclick="loadCocoDefaults()">Load COCO Defaults</button>' : ''}
         <button type="button" class="btn-sm btn-ok" onclick="savePnpConfig()" ${info.has_intrinsics ? '' : 'disabled'}>Save PnP Config</button>
         <button type="button" class="btn-sm btn-bad" onclick="clearPnpConfig()">Clear</button>
       </div></div>
@@ -1584,9 +1585,10 @@ function fillPnpKeypointTable(info) {
   const wrap = document.getElementById('pnp-kpt-table');
   if (!wrap) return;
   const existing = (info.pnp && info.pnp.object_points) || [];
+  const defaults = info.default_object_points || [];
   let rows = '';
   for (let i = 0; i < info.num_keypoints; i++) {
-    const pt = existing[i] || [0, 0, 0];
+    const pt = existing[i] || defaults[i] || [0, 0, 0];
     rows += `<div class="form-row" style="gap:6px;">
       <span class="form-label" style="min-width:70px;">kp ${i}</span>
       <input type="number" step="0.001" class="form-input pnp-kpt-x" data-idx="${i}" value="${pt[0]}">
@@ -1597,6 +1599,21 @@ function fillPnpKeypointTable(info) {
   if (info.pnp) {
     document.getElementById('pnp-min-conf').value = info.pnp.min_keypoint_conf ?? 0.5;
     document.getElementById('pnp-mode').value = info.pnp.mode || 'flexible';
+  }
+  wrap._cocoDefaults = defaults;
+}
+
+function loadCocoDefaults() {
+  const wrap = document.getElementById('pnp-kpt-table');
+  if (!wrap || !wrap._cocoDefaults) return;
+  const defaults = wrap._cocoDefaults;
+  for (let i = 0; i < defaults.length; i++) {
+    const xEl = document.querySelector(`.pnp-kpt-x[data-idx="${i}"]`);
+    const yEl = document.querySelector(`.pnp-kpt-y[data-idx="${i}"]`);
+    const zEl = document.querySelector(`.pnp-kpt-z[data-idx="${i}"]`);
+    if (xEl) xEl.value = defaults[i][0];
+    if (yEl) yEl.value = defaults[i][1];
+    if (zEl) zEl.value = defaults[i][2];
   }
 }
 
