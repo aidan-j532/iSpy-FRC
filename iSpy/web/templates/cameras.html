@@ -1483,6 +1483,7 @@ const calibrationState = {
   end: null,
   captured: 0,
   overlayPattern: null,    // [cols, rows] used by the live charuco overlay feed
+  overlayDict: null,      // aruco dictionary id for the live charuco overlay feed
   intrinsicsActive: false, // focal wizard: feed shows the ChArUco board overlay
   focalActive: false,      // focal wizard: freeze & measure tab is open
   focalTab: null,          // focal wizard: 'intrinsics' | 'known' page
@@ -1497,11 +1498,12 @@ function calibrationModeFor(pipeline) {
   return 'none';
 }
 
-function calibrationFeedUrl(overlay, pattern) {
+function calibrationFeedUrl(overlay, pattern, dict) {
   let url = `/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/feed`;
   const params = [];
   if (overlay) params.push('overlay=' + encodeURIComponent(overlay));
   if (pattern) params.push('pattern=' + encodeURIComponent(pattern.join(',')));
+  if (dict != null) params.push('dict=' + encodeURIComponent(dict));
   if (params.length) url += '?' + params.join('&');
   return url;
 }
@@ -1831,6 +1833,7 @@ function closeCalibrationWizard() {
 function renderFocalCalibration(body) {
   if (!calibrationState.focalTab) calibrationState.focalTab = 'intrinsics';
   calibrationState.overlayPattern = [7, 5];
+  calibrationState.overlayDict = 10;
   const isIntrinsics = calibrationState.focalTab === 'intrinsics';
   calibrationState.intrinsicsActive = isIntrinsics;
   calibrationState.focalActive = !isIntrinsics;
@@ -1862,7 +1865,7 @@ function focalIntrinsicsBody() {
   return `
     <div class="form-row"><span class="form-label">Live view</span>
       <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
+        <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
     <div class="calib-status" id="charuco-note">Select your ChArUco board layout and dictionary above, then hold the printed board in view. Auto capture is ON: just keep moving the board around through varied angles - it stores the frames itself. Press Pause when you have enough, then calibrate intrinsics. Every capture stays drawn on the live view in its own color. Detections are paused while this is open.</div>
@@ -2104,21 +2107,32 @@ function charucoCaptureSectionHtml() {
   // focal wizard's optional "precision intrinsics" step
   return `
     <div class="form-row">
+      <span class="form-label">Board size</span>
+      <select id="charuco-pattern" class="form-input" onchange="onCharucoPatternChange()">
+        <option value="5,7">5 x 7 - PhotonVision default (4 x 6 markers)</option>
+        <option value="7,5">7 x 5 (6 x 4 markers)</option>
+        <option value="5,4">5 x 4 (4 x 3 markers)</option>
+        <option value="6,4">6 x 4 (5 x 3 markers)</option>
+        <option value="8,6">8 x 6 (7 x 5 markers)</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Dictionary</span>
+      <select id="charuco-dict" class="form-input" onchange="onCharucoDictChange()">
+        <option value="10" selected>6x6 - 250 (PhotonVision default)</option>
+        <option value="6">5x5 - 250</option>
+        <option value="2">4x4 - 250</option>
+        <option value="8">6x6 - 50</option>
+        <option value="4">5x5 - 50</option>
+        <option value="0">4x4 - 50</option>
+      </select>
+    </div>
+    <div class="form-row">
       <span class="form-label">Auto capture</span>
       <div style="display:flex;gap:8px;flex:1;align-items:center;flex-wrap:wrap;">
         <button type="button" class="btn-sm btn-ok" id="charuco-auto-toggle" onclick="toggleAutoCapture()">Pause</button>
         <span id="charuco-auto-status" class="form-help" style="margin:0;">Starting...</span>
       </div>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Board pattern</span>
-      <select id="charuco-pattern" class="form-input" onchange="onCharucoPatternChange()">
-        <option value="7,5" selected>7 x 5 squares (6 x 4 ArUco markers)</option>
-        <option value="5,7">5 x 7 squares</option>
-        <option value="6,4">6 x 4 squares</option>
-        <option value="8,6">8 x 6 squares</option>
-        <option value="5,4">5 x 4 squares</option>
-      </select>
     </div>
     <div class="form-row" style="margin-top:10px;">
       <span class="form-label"></span>
@@ -2129,11 +2143,12 @@ function charucoCaptureSectionHtml() {
 
 function renderCharucoCalibration(body) {
   calibrationState.overlayPattern = [7, 5];
+  calibrationState.overlayDict = 10;
   calibrationState.intrinsicsActive = false;
   body.innerHTML = `
     <div class="form-row"><span class="form-label">Live view</span>
       <div class="calib-stage" style="width:100%;">
-        <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern)}" alt="live feed" onerror="calibrationFeedError()">
+        <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
     </div>
     <div class="calib-status" id="charuco-note">Select your ChArUco board layout and dictionary above, then hold the printed board in view and fill the frame with it. Green corners + marker outlines = board detected on the live view. Auto capture is ON: just keep moving the board around through varied angles - it stores the frames itself. Press Pause when you have enough, then calibrate intrinsics. Every capture stays drawn on the live view in a fresh random color. Detections are paused while this is open.</div>
@@ -2148,15 +2163,22 @@ function onCharucoPatternChange() {
   reconnectCalibrationFeed();
 }
 
+function onCharucoDictChange() {
+  const sel = $id('charuco-dict');
+  if (!sel) return;
+  calibrationState.overlayDict = Number(sel.value);
+  reconnectCalibrationFeed();
+}
+
 function reconnectCalibrationFeed() {
   const img = $id('calib-feed');
   if (!img || calibrationState.frozen) return;
   // MJPEG streams don't reconnect on an identical src - re-open with a cache-bust
   let base;
   if (calibrationState.mode === 'focal' && calibrationState.intrinsicsActive) {
-    base = calibrationFeedUrl('charuco', calibrationState.overlayPattern);
+    base = calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict);
   } else if (calibrationState.mode === 'charuco') {
-    base = calibrationFeedUrl('charuco', calibrationState.overlayPattern);
+    base = calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict);
   } else {
     base = calibrationFeedUrl();
   }

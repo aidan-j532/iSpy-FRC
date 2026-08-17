@@ -1012,14 +1012,21 @@ class CamerasModule(WebModule):
         top in their own random color."""
         overlay = request.args.get("overlay", "")
         pattern_arg = request.args.get("pattern")
+        dict_arg = request.args.get("dict")
         pattern = None
         if pattern_arg:
             try:
                 pattern = tuple(int(p) for p in pattern_arg.split(",")[:2])
             except ValueError:
                 pattern = None
+        dict_id = None
+        if dict_arg:
+            try:
+                dict_id = int(dict_arg)
+            except (TypeError, ValueError):
+                dict_id = None
         return Response(
-            self._generate_calibration(cam_name, overlay=overlay, pattern=pattern),
+            self._generate_calibration(cam_name, overlay=overlay, pattern=pattern, dict_id=dict_id),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
 
@@ -1080,7 +1087,7 @@ class CamerasModule(WebModule):
             return None
         return (np.asarray(corners, dtype=np.float32) * factor).astype(np.float32)
 
-    def _generate_calibration(self, cam_name, overlay="", pattern=None):
+    def _generate_calibration(self, cam_name, overlay="", pattern=None, dict_id=None):
         """MJPEG generator for the calibration wizard. Board detection and
         auto capture are the expensive parts (a rolling solve ~0.1s), so they
         run on a background worker thread that publishes the latest detection;
@@ -1109,6 +1116,7 @@ class CamerasModule(WebModule):
                     last_detect = now
                     work, scale = self._detect_workframe(frame)
                     session_pattern, session_dict = self._charuco_session_layout(cam_name)
+                    effective_dict = dict_id if dict_id is not None else session_dict
                     candidates = []
                     if session_pattern is not None:
                         candidates.append(tuple(session_pattern))
@@ -1116,11 +1124,11 @@ class CamerasModule(WebModule):
                         candidates.append(tuple(pattern))
                     found = False
                     matched_pattern = None
-                    matched_dict = session_dict
+                    matched_dict = effective_dict
                     for cand in candidates:
                         kwargs = {}
-                        if session_dict is not None:
-                            kwargs["dictionary_id"] = session_dict
+                        if effective_dict is not None:
+                            kwargs["dictionary_id"] = effective_dict
                         found, corners, ids, marker_corners, marker_ids, _ = (
                             cam_calibration.detect_charuco(
                                 work, cand[0], cand[1], **kwargs

@@ -102,8 +102,9 @@ def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
         raise cv2.error("ChArUco calibration unavailable in this OpenCV build")
     return result
 
-DEFAULT_CHARUCO_PATTERN = (8, 8)  # squares wide x squares tall
-DEFAULT_CHARUCO_DICT = cv2.aruco.DICT_6X6_250
+DEFAULT_CHARUCO_PATTERN = (3, 5)  # squares wide x squares tall
+# DEFAULT_CHARUCO_DICT = cv2.aruco.DICT_6X6_250
+DEFAULT_CHARUCO_DICT = cv2.aruco.DICT
 # square/marker lengths only need to be consistent (intrinsics are scale
 # invariant) - marker must be smaller than the square it sits in
 DEFAULT_CHARUCO_SQUARE = 25.0
