@@ -146,14 +146,21 @@ class ObjectDetectionCamera(VisionPipeline):
         if self._optimization_requested():
             source = self._source_model_path()
             current = str(self.yolo_model_file or "")
-            if source is not None and current and self._path_format(current) != "pytorch":
+            current_stem = Path(current).stem if current else None
+            source_stem = source.stem if source is not None else None
+            if source is not None and current and current_stem != source_stem:
                 from iSpy.vision.optimizer import existing_artifact_for
                 artifact = existing_artifact_for(source, self._target_format_cached())
                 preferred = artifact or str(self._resolve_model_path(source) or source)
                 if self._resolve_model_path(current) != self._resolve_model_path(preferred):
+                    self.logger.warning(
+                        "Camera '%s': vision_model.file_path (%s) doesn't match "
+                        "source_pt (%s) - correcting to %s and persisting.",
+                        self._cam_name, current, source, preferred,
+                    )
                     vm_filled["file_path"] = preferred
                     self.yolo_model_file = preferred
-
+                    self._persist_file_path(preferred, config)
         try:
             self.model = GenericYolo(vm_filled, self.core_mask, iSpy_config=config)
         except ModelFileError as e:
@@ -203,6 +210,28 @@ class ObjectDetectionCamera(VisionPipeline):
                 daemon=True,
                 name=f"Optimize-{self._cam_name}",
             ).start()
+
+    def _persist_file_path(self, file_path: str, config: iSpyConfig | None):
+        """write a corrected vision_model.file_path back to config.json so a
+        stale artifact from a previous model pick doesn't keep reappearing
+        on every boot."""
+        vm_out = self.config.get_pipeline_setting("vision_model")
+        if isinstance(vm_out, dict):
+            vm_out["file_path"] = file_path
+        if config is None:
+            return
+        try:
+            cams = config.config.get("camera_configs", {})
+            for key, entry in cams.items():
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("name") == self._cam_name or key == self._cam_name:
+                    entry_vm = get_pipeline_settings(entry).get("vision_model")
+                    if isinstance(entry_vm, dict):
+                        entry_vm["file_path"] = file_path
+            config.save(quiet=True)
+        except Exception:
+            self.logger.exception("Failed to persist corrected vision_model.file_path")
 
     @classmethod
     def config_schema(cls) -> dict:
