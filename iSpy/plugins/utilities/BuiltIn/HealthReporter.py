@@ -151,7 +151,7 @@ class HealthReporter(UtilityBase):
         with self._lock:
             self._fps = round(frame_data.get("fps", 0), 1)
             self._vision_s = round(frame_data.get("vision_s", 0) * 1000, 2)
-            self._detections = frame_data.get("detections", 0)
+            self._detections = frame_data.get("detection_count", 0)
             self._last_tick = time.perf_counter()
             self._loop_count += 1
 

@@ -20,6 +20,6 @@ class YourTracker(TrackerBase):
         # self.config = YOUR settings view (defaults already merged in); presence == enabled, no flag
         self.count = int(self.config.get("count_start", 0))
 
-    def update(self, fuel_list, robot_x, robot_y, robot_yaw, robot_z: float = 0.0):
+    def update(self, detections, robot_x, robot_y, robot_yaw, robot_z: float = 0.0):
         self.count += 1
-        return fuel_list  # or modify and return
+        return detections  # or modify and return

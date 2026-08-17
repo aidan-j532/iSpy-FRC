@@ -298,9 +298,9 @@ class MyTracker(TrackerBase):
         # give access to the rest of iSpy.
         self.merge_radius = self.config.get("merge_radius", 0.5)
 
-    def update(self, fuel_list, robot_x, robot_y, robot_yaw):
+    def update(self, detections, robot_x, robot_y, robot_yaw):
         # filter, smooth, or modify detections here
-        return fuel_list
+        return detections
 ```
 
 Then add `"my_tracker": {}` (or with your settings) to `plugins.trackers` in
@@ -321,7 +321,7 @@ class MyUtility(UtilityBase):
             flask_app.add_url_rule("/my-route", "my_route", self._route)
 
     def update(self, frame_data: dict):
-        # called every loop with fps, detections, frame, fuel_list, etc.
+        # called every loop with fps, detection_count, frame, detections, etc.
         pass
 
     def _route(self):

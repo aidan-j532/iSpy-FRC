@@ -173,9 +173,9 @@ class ObjectTrackerTests(unittest.TestCase):
     def test_stop_clears_tracked_list(self):
         tracker = self._make()
         tracker.update([Object(0.0, 0.0)], 0, 0, 0)
-        self.assertTrue(tracker.fuel_list)
+        self.assertTrue(tracker.tracked_objects)
         tracker.stop()
-        self.assertEqual(tracker.fuel_list, [])
+        self.assertEqual(tracker.tracked_objects, [])
 
 
 class PathPlannerTests(unittest.TestCase):
@@ -195,12 +195,12 @@ class PathPlannerTests(unittest.TestCase):
 
     def test_clusters_and_noise_are_separated(self):
         planner = self._make({"epsilon": 0.3, "min_samples": 3})
-        fuels = [
+        detections = [
             Object(0.0, 0.0), Object(0.1, 0.0), Object(0.2, 0.0),  # cluster
             Object(9.0, 9.0),  # noise
         ]
-        cleaned = planner.update(fuels, 0, 0, 0)
-        self.assertIs(cleaned, planner.fuel_positions)
+        cleaned = planner.update(detections, 0, 0, 0)
+        self.assertIs(cleaned, planner.cluster_positions)
         self.assertEqual(len(cleaned), 3)
         self.assertEqual(len(planner.get_noise_positions()), 1)
 
@@ -324,7 +324,7 @@ class NetworkTableHandlerTests(unittest.TestCase):
     def test_update_publishes_vision_data_when_connected(self):
         handler = self._handler({})
         handler.update({
-            "fuel_list": [], "fps": 30.5, "detections": 2,
+            "detections": [], "fps": 30.5, "detection_count": 2,
             "camera_lag_s": 0.04, "cameras": [],
         })
         self.assertGreaterEqual(self._fake_inst.flush.call_count, 2)
@@ -333,13 +333,13 @@ class NetworkTableHandlerTests(unittest.TestCase):
     def test_update_with_connected_false_is_noop(self):
         mod = self._fresh_module(is_connected=False)
         handler = mod.NetworkTableHandler(addon_context(mod.NetworkTableHandler))
-        handler.update({"fuel_list": []})
+        handler.update({"detections": []})
         self.assertEqual(self._fake_inst.flush.call_count, 0)
 
-    def test_update_with_fuel_objects_publishes_structs(self):
+    def test_update_with_detection_objects_publishes_structs(self):
         handler = self._handler({})
-        fuel = Object(1.0, 2.0, 3.0)
-        handler.update({"fuel_list": [fuel], "fps": 10, "detections": 1,
+        det = Object(1.0, 2.0, 3.0)
+        handler.update({"detections": [det], "fps": 10, "detection_count": 1,
                         "camera_lag_s": 0.0, "cameras": []})
         self._fake_inst.getStructArrayTopic.assert_called()
 
@@ -352,7 +352,7 @@ class NetworkTableHandlerTests(unittest.TestCase):
     def test_stop_is_safe(self):
         handler = self._handler({})
         handler.stop()
-        handler.update({"fuel_list": []})
+        handler.update({"detections": []})
 
 
 class HealthReporterTests(unittest.TestCase):
@@ -382,7 +382,7 @@ class HealthReporterTests(unittest.TestCase):
 
     def test_payload_reflects_updates(self):
         reporter = self._make()
-        reporter.update({"fps": 25.0, "vision_s": 0.02, "detections": 7})
+        reporter.update({"fps": 25.0, "vision_s": 0.02, "detection_count": 7})
         payload, healthy = reporter._build_payload()
         self.assertEqual(payload["fps"], 25.0)
         self.assertEqual(payload["vision_ms"], 20.0)

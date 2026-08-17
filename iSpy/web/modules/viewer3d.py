@@ -15,7 +15,7 @@ class Viewer3DModule(WebModule):
         flask_app.add_url_rule("/api/detections/latest", "api_detections_latest", self._latest)
 
     def update(self, frame_data: dict):
-        fuel_list = frame_data.get("fuel_list", [])
+        detections = frame_data.get("detections", [])
         if self._cached_num_keypoints is None:
             config = self.context.get("config", None)
             # models are per-camera; fall back to the first model-backed cam
@@ -33,7 +33,7 @@ class Viewer3DModule(WebModule):
             self._cached_num_keypoints = self._get_num_keypoints(vm)
         num_kpts = self._cached_num_keypoints
         self._latest_objects = []
-        for idx, obj in enumerate(fuel_list):
+        for idx, obj in enumerate(detections):
             if getattr(obj, "depth_source", "") == "optical_flow":
                 continue  # velocity signal, not a 3D position - don't render it
             obj_entry = {

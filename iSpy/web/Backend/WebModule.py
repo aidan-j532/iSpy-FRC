@@ -13,7 +13,7 @@ class WebModule(ABC):
 
     def update(self, frame_data: dict):
         """called once per loop tick with the same frame_data dict every
-        plugin utility already gets (fuel_list, frame, fps, cameras, ...)"""
+        plugin utility already gets (detections, frame, fps, cameras, ...)"""
         pass
 
     def stop(self):

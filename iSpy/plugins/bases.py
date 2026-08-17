@@ -72,8 +72,8 @@ class TrackerBase(AddonBase):
     def start(self):
         pass
 
-    def update(self, fuel_list, robot_x, robot_y, robot_yaw, robot_z: float = 0.0):
-        return fuel_list
+    def update(self, detections, robot_x, robot_y, robot_yaw, robot_z: float = 0.0):
+        return detections
 
     def stop(self):
         pass

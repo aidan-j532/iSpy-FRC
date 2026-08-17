@@ -34,7 +34,7 @@ class ObjectTracker(TrackerBase):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
 
-        self.fuel_list: list[Object] = []
+        self.tracked_objects: list[Object] = []
 
         raw_threshold = self.config.get("distance_threshold", 0.5)
         if raw_threshold is None or raw_threshold < 0:
@@ -49,7 +49,7 @@ class ObjectTracker(TrackerBase):
 
     def update(
         self,
-        new_fuel_list: list[Object],
+        new_detections: list[Object],
         robot_x: float,
         robot_y: float,
         robot_yaw: float,
@@ -57,33 +57,33 @@ class ObjectTracker(TrackerBase):
     ) -> list[Object]:
 
         # age + cleanup
-        for fuel in self.fuel_list:
-            fuel.update()
+        for obj in self.tracked_objects:
+            obj.update()
 
-        self.fuel_list = [f for f in self.fuel_list if not f.destroyed]
+        self.tracked_objects = [o for o in self.tracked_objects if not o.destroyed]
 
         # convert detections into robot frame
-        for fuel in new_fuel_list:
-            fuel.relative_to(robot_x, robot_y, robot_z, robot_yaw=robot_yaw)
+        for det in new_detections:
+            det.relative_to(robot_x, robot_y, robot_z, robot_yaw=robot_yaw)
 
         # merge
-        self._merge(new_fuel_list)
+        self._merge(new_detections)
 
-        return self.fuel_list
+        return self.tracked_objects
     
-    def _merge(self, fuels: list[Object]):
-        for fuel in fuels:
-            if not self._exists_and_update(fuel):
-                fuel.alive_time = self.stale_threshold
-                self.fuel_list.append(fuel)
+    def _merge(self, detections: list[Object]):
+        for det in detections:
+            if not self._exists_and_update(det):
+                det.alive_time = self.stale_threshold
+                self.tracked_objects.append(det)
 
-    def _exists_and_update(self, new_fuel: Object) -> bool:
-        if not self.fuel_list:
+    def _exists_and_update(self, new_det: Object) -> bool:
+        if not self.tracked_objects:
             return False
 
-        new_pos = np.array(new_fuel.get_position())
+        new_pos = np.array(new_det.get_position())
 
-        for existing in self.fuel_list:
+        for existing in self.tracked_objects:
             existing_pos = np.array(existing.get_position())
 
             if np.linalg.norm(new_pos - existing_pos) < self.distance_threshold:
@@ -92,29 +92,29 @@ class ObjectTracker(TrackerBase):
                 existing.reset_time()
 
                 # EMA smoothing on position
-                existing.x += _EMA_ALPHA * (new_fuel.x - existing.x)
-                existing.y += _EMA_ALPHA * (new_fuel.y - existing.y)
-                existing.z += _EMA_ALPHA * (new_fuel.z - existing.z)
+                existing.x += _EMA_ALPHA * (new_det.x - existing.x)
+                existing.y += _EMA_ALPHA * (new_det.y - existing.y)
+                existing.z += _EMA_ALPHA * (new_det.z - existing.z)
 
                 # EMA smoothing on angles (shortest-path wrapping)
-                d_roll = (new_fuel.roll - existing.roll + math.pi) % (2 * math.pi) - math.pi
+                d_roll = (new_det.roll - existing.roll + math.pi) % (2 * math.pi) - math.pi
                 existing.roll = (existing.roll + _EMA_ALPHA * d_roll) % (2 * math.pi)
 
-                d_pitch = (new_fuel.pitch - existing.pitch + math.pi) % (2 * math.pi) - math.pi
+                d_pitch = (new_det.pitch - existing.pitch + math.pi) % (2 * math.pi) - math.pi
                 existing.pitch = (existing.pitch + _EMA_ALPHA * d_pitch) % (2 * math.pi)
 
-                d_yaw = (new_fuel.yaw - existing.yaw + math.pi) % (2 * math.pi) - math.pi
+                d_yaw = (new_det.yaw - existing.yaw + math.pi) % (2 * math.pi) - math.pi
                 existing.yaw = (existing.yaw + _EMA_ALPHA * d_yaw) % (2 * math.pi)
 
                 return True
 
         return False
 
-    def get_fuel_list(self) -> list[Object]:
-        return self.fuel_list
+    def get_tracked_objects(self) -> list[Object]:
+        return self.tracked_objects
 
     def run(self):
-        return self.fuel_list
+        return self.tracked_objects
 
     def stop(self):
-        self.fuel_list.clear()
+        self.tracked_objects.clear()

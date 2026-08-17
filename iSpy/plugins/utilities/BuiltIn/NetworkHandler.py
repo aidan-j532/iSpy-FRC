@@ -79,15 +79,15 @@ class NetworkTableHandler(UtilityBase):
     def update(self, frame_data: dict):
         if not self.isConnected():
             return
-        fuel_list = frame_data.get("fuel_list", [])
+        detections = frame_data.get("detections", [])
         fps = frame_data.get("fps", 0)
-        detections = frame_data.get("detections", 0)
+        detection_count = frame_data.get("detection_count", 0)
         lag = frame_data.get("camera_lag_s", 0)
         cameras = frame_data.get("cameras", [])
 
-        self._send_fuel_list(fuel_list)
+        self._send_detections(detections)
         self._send_data(fps, "fps", "VisionData")
-        self._send_data(detections, "num_detections", "VisionData")
+        self._send_data(detection_count, "num_detections", "VisionData")
         self._send_data(lag, "camera_lag", "VisionData")
 
         for cam in cameras:
@@ -100,20 +100,20 @@ class NetworkTableHandler(UtilityBase):
             self._tables[table_name] = self.inst.getTable(table_name)
         return self._tables[table_name]
 
-    def _send_fuel_list(self, fuels: list):
+    def _send_detections(self, detections: list):
         try:
             table = self._get_table("VisionData")
             pub_key = "pub/VisionData/vision_data"
             structs = [
                 FuelStruct(
-                    x=float(f.get_position_normally()[0]),
-                    y=float(f.get_position_normally()[1]),
-                    z=float(f.get_position_normally()[2]),
-                    roll=f.roll,
-                    pitch=f.pitch,
-                    yaw=f.yaw,
+                    x=float(d.get_position_normally()[0]),
+                    y=float(d.get_position_normally()[1]),
+                    z=float(d.get_position_normally()[2]),
+                    roll=d.roll,
+                    pitch=d.pitch,
+                    yaw=d.yaw,
                 )
-                for f in fuels
+                for d in detections
             ]
             if pub_key not in self._subscribers:
                 self._subscribers[pub_key] = table.getStructArrayTopic(
@@ -123,7 +123,7 @@ class NetworkTableHandler(UtilityBase):
             table.putNumber("timestamp_ms", time.time() * 1000)
             self.inst.flush()
         except Exception as e:
-            self.logger.error("Failed to send fuel list: %s", e)
+            self.logger.error("Failed to send detections: %s", e)
 
     def _send_data(self, value, data_name: str, table_name: str):
         try:

@@ -43,15 +43,15 @@ class DashboardModule(WebModule):
             "fps": round(frame_data.get("fps", 0), 1),
             "vision_ms": round(frame_data.get("vision_s", 0) * 1000, 1),
             "camera_lag_ms": round(frame_data.get("camera_lag_s", 0) * 1000, 1),
-            "detections": frame_data.get("detections", 0),
+            "detections": frame_data.get("detection_count", 0),
             "loop_s": round(frame_data.get("loop_s", 0) * 1000, 1),
             "uptime_s": round(time.perf_counter() - self._start_time, 1),
         }
         self._vision_last_tick = time.perf_counter()
 
-        fuel_list = frame_data.get("fuel_list", [])
+        detections = frame_data.get("detections", [])
         self._detection_classes = {}
-        for obj in fuel_list:
+        for obj in detections:
             cls_name = getattr(obj, "name", None) or "unknown"
             self._detection_classes[cls_name] = self._detection_classes.get(cls_name, 0) + 1
 

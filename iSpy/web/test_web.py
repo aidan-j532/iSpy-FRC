@@ -83,19 +83,19 @@ def main():
             for cam in cameras:
                 cam.touch()
 
-            fuel_list = [FakeObject(i) for i in range(random.randint(0, 5))]
+            detections = [FakeObject(i) for i in range(random.randint(0, 5))]
             camera_frames = {n: _make_frame(n) for n in CAM_NAMES}
             loop_s = random.uniform(0.012, 0.03)
 
             frame_data = {
-                "fuel_list": fuel_list,
+                "detections": detections,
+                "detection_count": len(detections),
                 "frame": camera_frames[CAM_NAMES[0]],
                 "camera_frames": camera_frames,
                 "fps": 1 / loop_s,
                 "loop_s": loop_s,
                 "vision_s": random.uniform(0.005, 0.02),
                 "camera_lag_s": random.uniform(0, 0.05),
-                "detections": len(fuel_list),
                 "cameras": cameras,
                 "code_times": {
                     "vision": random.uniform(0.005, 0.02),

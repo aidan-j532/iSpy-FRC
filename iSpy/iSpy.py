@@ -251,7 +251,7 @@ class iSpy:
         camera_lag_s = camera.get_frame_age()
 
         t_vis = time.perf_counter()
-        fuel_list, frame = self.run_solo_vision(camera)
+        detections, frame = self.run_solo_vision(camera)
         vision_s = time.perf_counter() - t_vis
         code_times["vision"] = vision_s
 
@@ -262,20 +262,36 @@ class iSpy:
         t_track = time.perf_counter()
         for tracker in self.trackers.values():
             # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
-            fuel_list = tracker.update(
-                fuel_list, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
+            detections = tracker.update(
+                detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
         code_times["trackers"] = time.perf_counter() - t_track
 
         loop_s = time.perf_counter() - t0
+
+        # pipeline context for rollback / replay utilities
+        pipeline_name = getattr(camera, "plugin_name", "unknown")
+        pipeline_settings = {}
+        camera_config_dict = {}
+        try:
+            from iSpy.config.iSpyConfig import get_pipeline_settings
+            camera_config_dict = dict(getattr(camera, "_camera_config", {}) or {})
+            pipeline_settings = dict(get_pipeline_settings(camera_config_dict) or {})
+        except Exception:
+            pass
+
         frame_data = {
-            "fuel_list": fuel_list, "frame": frame,
+            "detections": detections,
+            "detection_count": len(detections),
+            "frame": frame,
             "fps": 1 / loop_s if loop_s > 0 else 0,
             "loop_s": loop_s, "vision_s": vision_s, "camera_lag_s": camera_lag_s,
-            "detections": len(fuel_list), "cameras": self.cameras,
+            "cameras": self.cameras,
             "code_times": code_times,
             "debug_data": {},
-            "objects": fuel_list,
+            "pipeline_name": pipeline_name,
+            "pipeline_settings": pipeline_settings,
+            "camera_config": camera_config_dict,
         }
         if hasattr(camera, "get_debug_data"):
             frame_data["debug_data"] = camera.get_debug_data() or {}
@@ -298,7 +314,7 @@ class iSpy:
         camera_lag_s = sum(ages) / len(ages) if ages else 0.0
 
         t_vis = time.perf_counter()
-        fuel_list, frame = self.run_multi_vision(handler)
+        detections, frame = self.run_multi_vision(handler)
         vision_s = time.perf_counter() - t_vis
         code_times["vision"] = vision_s
 
@@ -309,26 +325,33 @@ class iSpy:
         t_track = time.perf_counter()
         for tracker in self.trackers.values():
             # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
-            fuel_list = tracker.update(
-                fuel_list, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
+            detections = tracker.update(
+                detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
         code_times["trackers"] = time.perf_counter() - t_track
 
         loop_s = time.perf_counter() - t0
 
+        # pipeline context for multi-camera: aggregate unique pipeline names
+        pipeline_names = set()
+        for cam in handler.cameras:
+            pipeline_names.add(getattr(cam, "plugin_name", "unknown"))
+
         frame_data = {
-            "fuel_list": fuel_list,
+            "detections": detections,
+            "detection_count": len(detections),
             "frame": frame,
             "fps": 1 / loop_s if loop_s > 0 else 0,
             "loop_s": loop_s,
             "vision_s": vision_s,
             "camera_lag_s": camera_lag_s,
-            "detections": len(fuel_list),
             "cameras": self.cameras,
             "camera_frames": handler.get_camera_frames(),
             "code_times": code_times,
             "debug_data": {},
-            "objects": fuel_list,
+            "pipeline_name": ",".join(sorted(pipeline_names)),
+            "pipeline_settings": {},
+            "camera_config": {},
         }
         if hasattr(handler, "get_camera_debug_data"):
             frame_data["debug_data"] = handler.get_camera_debug_data() or {}
