@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 import cv2
 import time
-from flask import Response, jsonify, render_template, request
+from flask import Response, jsonify, render_template, request, send_file
 import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.save_store import read, write
@@ -488,6 +488,7 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_get", self._pnp_get, methods=["GET"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_save", self._pnp_save, methods=["POST"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_clear", self._pnp_clear, methods=["DELETE"])
+        flask_app.add_url_rule("/api/cameras/calibration/board", "api_calibration_board_pdf", self._calibration_board_pdf)
 
     def _camera_display_name(self, cam, fallback: str = "camera") -> str:
         if hasattr(cam, "config") and cam.config is not None:
@@ -797,6 +798,17 @@ class CamerasModule(WebModule):
         config.set("camera_configs", cams)
         config.save()
         return jsonify(success=True, calibration=saved)
+
+    def _calibration_board_pdf(self):
+        """serve the ChArUco calibration board PDF for printing"""
+        assets = Path(__file__).resolve().parent.parent.parent / "assets"
+        pdf_path = assets / "calibration_board.pdf"
+        if not pdf_path.exists():
+            cam_calibration.generate_calibration_board_pdf(str(pdf_path))
+        if not pdf_path.exists():
+            return jsonify(error="Calibration board PDF not available"), 404
+        return send_file(str(pdf_path), mimetype="application/pdf",
+                         as_attachment=True, download_name="calibration_board.pdf")
 
     def _calibration_focal(self, cam_name):
         data = request.get_json(force=True) or {}

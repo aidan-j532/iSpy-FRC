@@ -1832,8 +1832,8 @@ function closeCalibrationWizard() {
 
 function renderFocalCalibration(body) {
   if (!calibrationState.focalTab) calibrationState.focalTab = 'intrinsics';
-  calibrationState.overlayPattern = [7, 5];
-  calibrationState.overlayDict = 10;
+  calibrationState.overlayPattern = [7, 9];
+  calibrationState.overlayDict = 0;
   const isIntrinsics = calibrationState.focalTab === 'intrinsics';
   calibrationState.intrinsicsActive = isIntrinsics;
   calibrationState.focalActive = !isIntrinsics;
@@ -2107,25 +2107,11 @@ function charucoCaptureSectionHtml() {
   // focal wizard's optional "precision intrinsics" step
   return `
     <div class="form-row">
-      <span class="form-label">Board size</span>
-      <select id="charuco-pattern" class="form-input" onchange="onCharucoPatternChange()">
-        <option value="5,7">5 x 7 - PhotonVision default (4 x 6 markers)</option>
-        <option value="7,5">7 x 5 (6 x 4 markers)</option>
-        <option value="5,4">5 x 4 (4 x 3 markers)</option>
-        <option value="6,4">6 x 4 (5 x 3 markers)</option>
-        <option value="8,6">8 x 6 (7 x 5 markers)</option>
-      </select>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Dictionary</span>
-      <select id="charuco-dict" class="form-input" onchange="onCharucoDictChange()">
-        <option value="10" selected>6x6 - 250 (PhotonVision default)</option>
-        <option value="6">5x5 - 250</option>
-        <option value="2">4x4 - 250</option>
-        <option value="8">6x6 - 50</option>
-        <option value="4">5x5 - 50</option>
-        <option value="0">4x4 - 50</option>
-      </select>
+      <span class="form-label">Board</span>
+      <div style="flex:1;display:flex;flex-direction:column;gap:4px;">
+        <span style="color:#ccc;">ChArUco 7x9 (DICT_4X4_50) &middot; 25 mm squares &middot; 18 mm markers</span>
+        <a href="/api/cameras/calibration/board" target="_blank" class="btn-sm" style="display:inline-block;width:fit-content;text-decoration:none;">Download board PDF</a>
+      </div>
     </div>
     <div class="form-row">
       <span class="form-label">Auto capture</span>
@@ -2142,8 +2128,8 @@ function charucoCaptureSectionHtml() {
 }
 
 function renderCharucoCalibration(body) {
-  calibrationState.overlayPattern = [7, 5];
-  calibrationState.overlayDict = 10;
+  calibrationState.overlayPattern = [7, 9];
+  calibrationState.overlayDict = 0;
   calibrationState.intrinsicsActive = false;
   body.innerHTML = `
     <div class="form-row"><span class="form-label">Live view</span>
@@ -2157,17 +2143,11 @@ function renderCharucoCalibration(body) {
 }
 
 function onCharucoPatternChange() {
-  const sel = $id('charuco-pattern');
-  if (!sel) return;
-  calibrationState.overlayPattern = sel.value.split(',').map(Number);
-  reconnectCalibrationFeed();
+  // no-op: board layout is fixed
 }
 
 function onCharucoDictChange() {
-  const sel = $id('charuco-dict');
-  if (!sel) return;
-  calibrationState.overlayDict = Number(sel.value);
-  reconnectCalibrationFeed();
+  // no-op: dictionary is fixed
 }
 
 function reconnectCalibrationFeed() {

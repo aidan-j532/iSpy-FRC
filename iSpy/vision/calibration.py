@@ -102,8 +102,8 @@ def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
         raise cv2.error("ChArUco calibration unavailable in this OpenCV build")
     return result
 
-DEFAULT_CHARUCO_PATTERN = (3, 5)  # squares wide x squares tall
-DEFAULT_CHARUCO_DICT = cv2.aruco.DICT_6X6_250
+DEFAULT_CHARUCO_PATTERN = (7, 9)  # squares wide x squares tall
+DEFAULT_CHARUCO_DICT = cv2.aruco.DICT_4X4_50
 # square/marker lengths only need to be consistent (intrinsics are scale
 # invariant) - marker must be smaller than the square it sits in
 DEFAULT_CHARUCO_SQUARE = 25.0
@@ -434,3 +434,37 @@ def intrinsics_for_frame(calib: dict, frame_w: int, frame_h: int):
         return None
     cam_mat = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float64)
     return cam_mat, np.asarray(d, dtype=np.float64).ravel()
+
+
+def generate_calibration_board_pdf(path):
+    """Generate a print-ready PDF of the default ChArUco calibration board.
+
+    The board is drawn at 300 DPI so it prints at the correct physical size
+    (25 mm squares, 18 mm markers, 4x5 layout).  *path* should end in .pdf.
+    Returns True on success, False if PIL is not available."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return False
+    board = make_charuco_board(
+        *DEFAULT_CHARUCO_PATTERN,
+        square_length=DEFAULT_CHARUCO_SQUARE,
+        marker_length=DEFAULT_CHARUCO_MARKER,
+        dictionary_id=DEFAULT_CHARUCO_DICT,
+    )
+    dpi = 300
+    sq_px = round(DEFAULT_CHARUCO_SQUARE / 25.4 * dpi)
+    cols, rows = DEFAULT_CHARUCO_PATTERN
+    board_w = cols * sq_px
+    board_h = rows * sq_px
+    # generateImage with marginSize is buggy in some OpenCV builds, so draw
+    # the board at exact board-pixel size and composite onto a white canvas
+    # that includes a half-inch print margin.
+    # generateImage is picky about exact sizes in some OpenCV builds; add 1px
+    # and let the white canvas margin absorb the difference.
+    img = board.generateImage((board_w + 1, board_h + 1))
+    margin = round(0.5 * dpi)  # 0.5 inch margin
+    canvas = Image.new("L", (board_w + 2 * margin, board_h + 2 * margin), 255)
+    canvas.paste(Image.fromarray(img), (margin, margin))
+    canvas.save(path, "PDF", resolution=dpi)
+    return True
