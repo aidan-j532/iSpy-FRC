@@ -38,6 +38,7 @@ dependencies = [
     "plotly>=5.0",
     "onnxruntime>=1.16.0",  # CPU ONNX fallback - works everywhere, used until boot picks a better backend
     "transformers",
+    "scipy>=1.10.0",
 ]
 
 [project.optional-dependencies]
@@ -49,7 +50,6 @@ dev = [
     "tensorflow>=2.13.0",
     "onnx>=1.16.0,<1.17",
     "onnxslim>=0.1.87",
-    "scipy>=1.10.0",
     "matplotlib>=3.8.0",
     "polars>=1.39.0",
     "snakeviz",

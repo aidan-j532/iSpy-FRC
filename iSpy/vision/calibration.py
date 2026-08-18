@@ -2,6 +2,7 @@ import logging
 
 import cv2
 import numpy as np
+import scipy.optimize
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,148 @@ def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
     if result is None:
         raise cv2.error("ChArUco calibration unavailable in this OpenCV build")
     return result
+
+
+def _build_obj_img_pairs(all_corners, all_ids, board):
+    """Map detected charuco corners to 3D board coordinates for each image."""
+    try:
+        board_corners = np.asarray(
+            board.getChessboardCorners(), dtype=np.float64
+        ).reshape(-1, 3)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    all_obj = []
+    all_img = []
+    for corners, ids in zip(all_corners, all_ids):
+        obj = []
+        img = []
+        for c, i in zip(corners.reshape(-1, 2), ids.reshape(-1)):
+            pt = board_corners[int(i)]
+            if pt is not None:
+                obj.append(pt)
+                img.append(c)
+        if len(obj) < 4:
+            return None
+        all_obj.append(np.asarray(obj, dtype=np.float64))
+        all_img.append(np.asarray(img, dtype=np.float64))
+    return all_obj, all_img
+
+
+def _estimate_initial_intrinsics(all_obj, all_img, img_size):
+    """Rough intrinsics from per-image homographies, averaged."""
+    w, h = img_size
+    Ks = []
+    for obj, img in zip(all_obj, all_img):
+        try:
+            H, _ = cv2.findHomography(obj[:, :2], img)
+            if H is None:
+                continue
+            fx = abs(H[0, 0])
+            fy = abs(H[1, 1])
+            cx = abs(H[0, 2])
+            cy = abs(H[1, 2])
+            if 0 < fx < w * 4 and 0 < fy < h * 4 and 0 < cx < w * 2 and 0 < cy < h * 2:
+                Ks.append((fx, fy, cx, cy))
+        except cv2.error:
+            continue
+    if Ks:
+        arr = np.array(Ks)
+        fx, fy, cx, cy = arr.mean(axis=0)
+        return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+    return np.array(
+        [[max(w, h), 0, w / 2.0], [0, max(w, h), h / 2.0], [0, 0, 1]],
+        dtype=np.float64,
+    )
+
+
+def _estimate_initial_extrinsics(all_obj, all_img, K):
+    """Per-image solvePnP to seed rotation/translation vectors."""
+    rvecs = []
+    tvecs = []
+    for obj, img in zip(all_obj, all_img):
+        obj3 = obj.astype(np.float64)
+        img2 = img.astype(np.float64).reshape(-1, 1, 2)
+        ok, rvec, tvec = cv2.solvePnP(obj3, img2, K, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+        if ok:
+            rvecs.append(rvec.flatten())
+            tvecs.append(tvec.flatten())
+        else:
+            rvecs.append(np.zeros(3))
+            tvecs.append(np.zeros(3))
+    return np.array(rvecs), np.array(tvecs)
+
+
+def _pack_params(K, dist, rvecs, tvecs):
+    """Flatten intrinsics + distortion + all extrinsics into a 1-D vector."""
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+    k1, k2 = dist[0], dist[1]
+    p1, p2 = dist[2], dist[3]
+    k3 = dist[4] if len(dist) > 4 else 0.0
+    header = np.array([fx, fy, cx, cy, k1, k2, p1, p2, k3], dtype=np.float64)
+    extr = np.column_stack([rvecs, tvecs]).ravel()
+    return np.concatenate([header, extr])
+
+
+def _unpack_params(params, n_images):
+    """Unpack a flat parameter vector back into K, dist, rvecs, tvecs."""
+    fx, fy, cx, cy, k1, k2, p1, p2, k3 = params[:9]
+    K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+    dist = np.array([k1, k2, p1, p2, k3], dtype=np.float64)
+    extr = params[9:].reshape(n_images, 6)
+    rvecs = extr[:, :3]
+    tvecs = extr[:, 3:]
+    return K, dist, rvecs, tvecs
+
+
+def _calibrate_scipy_residuals(params, all_obj, all_img, n_images):
+    """Reprojection error vector for scipy.optimize.least_squares."""
+    K, dist, rvecs, tvecs = _unpack_params(params, n_images)
+    residuals = []
+    for i in range(n_images):
+        proj, _ = cv2.projectPoints(
+            all_obj[i], rvecs[i], tvecs[i], K, dist
+        )
+        err = proj.reshape(-1, 2) - all_img[i]
+        residuals.append(err.ravel())
+    return np.concatenate(residuals)
+
+
+def _calibrate_scipy(all_corners, all_ids, board, img_size):
+    """Joint intrinsic + extrinsic calibration via scipy Levenberg-Marquardt."""
+    pairs = _build_obj_img_pairs(all_corners, all_ids, board)
+    if pairs is None:
+        return None
+    all_obj, all_img = pairs
+    n_images = len(all_obj)
+    if n_images < 2:
+        return None
+
+    K0 = _estimate_initial_intrinsics(all_obj, all_img, img_size)
+    rvecs0, tvecs0 = _estimate_initial_extrinsics(all_obj, all_img, K0)
+    x0 = _pack_params(K0, np.zeros(5), rvecs0, tvecs0)
+
+    result = scipy.optimize.least_squares(
+        _calibrate_scipy_residuals,
+        x0,
+        args=(all_obj, all_img, n_images),
+        method="lm",
+        max_nfev=200,
+    )
+    if not result.success and result.cost > 1e6:
+        return None
+
+    K, dist, rvecs, tvecs = _unpack_params(result.x, n_images)
+
+    total_err = 0.0
+    total_pts = 0
+    for i in range(n_images):
+        proj, _ = cv2.projectPoints(all_obj[i], rvecs[i], tvecs[i], K, dist)
+        err = np.linalg.norm(proj.reshape(-1, 2) - all_img[i], axis=1)
+        total_err += float((err ** 2).sum())
+        total_pts += len(err)
+    rms = float(np.sqrt(total_err / max(total_pts, 1)))
+    return rms, K, dist, None, None
 
 DEFAULT_CHARUCO_PATTERN = (7, 9)  # squares wide x squares tall
 DEFAULT_CHARUCO_DICT = cv2.aruco.DICT_4X4_50
@@ -288,17 +431,25 @@ def calibrate_charuco(
         )
         return None
     try:
-        rms, cam_mat, dist, _, _ = _calibrate_camera_charuco(
-            all_corners,
-            all_ids,
-            board,
-            img_size,
-            None,
-            None,
-        )
-    except cv2.error as exc:
-        logger.warning("ChArUco calibration failed: %s", exc)
-        return None
+        result = _calibrate_scipy(all_corners, all_ids, board, img_size)
+    except Exception as exc:
+        logger.debug("scipy calibration failed, falling back to OpenCV: %s", exc)
+        result = None
+    if result is not None:
+        rms, cam_mat, dist, _, _ = result
+    else:
+        try:
+            rms, cam_mat, dist, _, _ = _calibrate_camera_charuco(
+                all_corners,
+                all_ids,
+                board,
+                img_size,
+                None,
+                None,
+            )
+        except cv2.error as exc:
+            logger.warning("ChArUco calibration failed: %s", exc)
+            return None
     if not np.isfinite(rms) or rms > 100.0:
         logger.warning(
             "ChArUco calibration gave an implausible RMS %.3f - frames were probably too similar",

@@ -2,7 +2,6 @@ from pathlib import Path
 import logging
 import sys
 import os
-import threading
 
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
@@ -46,88 +45,18 @@ _configure_quiet_logging()
 
 from iSpy.iSpy import iSpy
 from iSpy.config.iSpyConfig import iSpyConfig
-from iSpy.validations.ez import unit_tests
-from iSpy.validations.model_validator import enforce_model_organization
-from iSpy.vision.pipelines import get_pipeline_classes
 
 logger = logging.getLogger(__name__)
 
-_pause_event = threading.Event()
-_shutdown_event = threading.Event()
-
-
-def _stdin_reader(pause_event: threading.Event, shutdown_event: threading.Event):
-    try:
-        for line in sys.stdin:
-            cmd = line.strip().upper()
-            if cmd == "PAUSE":
-                pause_event.set()
-                logger.info("Vision paused by service")
-            elif cmd == "RESUME":
-                pause_event.clear()
-                logger.info("Vision resumed by service")
-            elif cmd == "SHUTDOWN":
-                shutdown_event.set()
-                logger.info("Shutdown command received from service")
-                break
-    except Exception:
-        pass
 
 def main():
-    repo_root = Path.cwd()
-
-    config_path = repo_root / "Config" / "config.json"
+    config_path = Path.cwd() / "Config" / "config.json"
     logger.info(f"Using config file: {config_path}")
 
     config = iSpyConfig(str(config_path))
-
-    prebuilt_web = None
-    if config.config.get("app_mode", False):
-        from iSpy.web.Backend.WebApp import create_app
-        prebuilt_web = create_app(cameras=[], config=config)
-        threading.Thread(
-            target=prebuilt_web.run, daemon=True, name="web-app"
-        ).start()
-        logger.info("Web dashboard started - vision is still booting.")
-
-    is_valid, corrected_model_path = enforce_model_organization(repo_root, config.config)
-    if corrected_model_path:
-        from iSpy.config.iSpyConfig import get_pipeline_settings
-        for cam_cfg in config.config["camera_configs"].values():
-            if not isinstance(cam_cfg, dict):
-                continue
-            vm = get_pipeline_settings(cam_cfg).get("vision_model")
-            if isinstance(vm, dict):
-                vm["file_path"] = corrected_model_path
-
-    pipeline_classes = get_pipeline_classes()
-    cameras = []
-    for cam_name in config.camera_configs:
-        cam_config = config.camera_config(cam_name)
-        pipeline = cam_config.pipeline_name()
-        cls = pipeline_classes.get(pipeline)
-        if cls is None:
-            logger.warning("Unknown pipeline '%s' for camera '%s'", pipeline, cam_name)
-            continue
-        cameras.append(cls(cam_config, config))
-
-    if not cameras:
-        logger.error("No cameras configured or detected. Cannot run iSpy.")
-        sys.exit(1)
-
-    vision = iSpy(cameras, config, web_app=prebuilt_web)
-
-    reader_thread = threading.Thread(
-        target=_stdin_reader,
-        args=(vision.pause_event, vision.shutdown_event),
-        daemon=True,
-        name="stdin-reader",
-    )
-    reader_thread.start()
-
+    vision = iSpy(config)
     vision.run()
 
+
 if __name__ == "__main__":
-    if not unit_tests():
-        raise SystemExit("Unit tests failed")
     main()

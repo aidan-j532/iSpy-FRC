@@ -4,6 +4,7 @@ import time
 import threading
 import logging
 import os
+import sys
 from iSpy.config.iSpyConfig import iSpyConfig
 import signal
 from iSpy.vision.pipelines.base import VisionPipeline
@@ -27,9 +28,12 @@ while not (PROJECT_ROOT / "plugins").exists():
 _PLUGIN_ROOT = PROJECT_ROOT / "plugins"
 
 class iSpy:
-    def __init__(self, cameras: list[VisionPipeline], config: iSpyConfig, web_app=None):
-        self.cameras = cameras
+    def __init__(self, config: iSpyConfig, cameras: list[VisionPipeline] | None = None, web_app=None):
         self.config = config
+
+        if cameras is None:
+            cameras = self._build_cameras_from_config(config)
+        self.cameras = cameras
 
         self.shutdown_event = threading.Event()
         self.pause_event = threading.Event()
@@ -49,10 +53,10 @@ class iSpy:
             self.logger.info("%d cameras - multi mode.", len(cameras))
             self.camera_handler = MultipleCameraHandler(cameras, config)
         self.web_app = web_app
-        if self.web_app is None and config["app_mode"]:
-            self.web_app = create_app(cameras=cameras, config=config)
+        if self.web_app is None and config.config.get("app_mode", False):
+            self.web_app = create_app(cameras=self.cameras, config=config)
         if self.web_app is not None:
-            self.web_app.set_cameras(cameras)
+            self.web_app.set_cameras(self.cameras)
 
         # shared context for every add-on; each one gets its OWN settings view
         self._base_context = {
@@ -127,6 +131,39 @@ class iSpy:
         # I think has to be at very bottom
         if self.web_app:
             self.web_app.set_vision_instance(self)
+
+    @staticmethod
+    def _build_cameras_from_config(config: iSpyConfig) -> list[VisionPipeline]:
+        repo_root = Path.cwd()
+        from iSpy.validations.model_validator import enforce_model_organization
+        from iSpy.vision.pipelines import get_pipeline_classes
+        from iSpy.config.iSpyConfig import get_pipeline_settings
+
+        is_valid, corrected_model_path = enforce_model_organization(repo_root, config.config)
+        if corrected_model_path:
+            for cam_cfg in config.config["camera_configs"].values():
+                if not isinstance(cam_cfg, dict):
+                    continue
+                vm = get_pipeline_settings(cam_cfg).get("vision_model")
+                if isinstance(vm, dict):
+                    vm["file_path"] = corrected_model_path
+
+        pipeline_classes = get_pipeline_classes()
+        cameras = []
+        for cam_name in config.camera_configs:
+            cam_config = config.camera_config(cam_name)
+            pipeline = cam_config.pipeline_name()
+            cls = pipeline_classes.get(pipeline)
+            if cls is None:
+                logging.getLogger(__name__).warning(
+                    "Unknown pipeline '%s' for camera '%s'", pipeline, cam_name
+                )
+                continue
+            cameras.append(cls(cam_config, config))
+
+        if not cameras:
+            logging.getLogger(__name__).error("No cameras configured or detected.")
+        return cameras
 
     def _enabled_addons(self, addon_type: str) -> list[tuple[str, dict]]:
         raw = self.config.get_nested("plugins", addon_type, default={})
@@ -221,10 +258,32 @@ class iSpy:
     def get_default_config(self):
         return self.config.get_default_config()
 
+    def _stdin_reader(self):
+        try:
+            for line in sys.stdin:
+                cmd = line.strip().upper()
+                if cmd == "PAUSE":
+                    self.pause_event.set()
+                    self.logger.info("Vision paused by service")
+                elif cmd == "RESUME":
+                    self.pause_event.clear()
+                    self.logger.info("Vision resumed by service")
+                elif cmd == "SHUTDOWN":
+                    self._handle_shutdown()
+                    self.logger.info("Shutdown command received from service")
+                    break
+        except Exception:
+            pass
+
     def run(self, duration_s: float | None = None):
         if not self.cameras:
             self.logger.error("No cameras provided.")
             return
+
+        threading.Thread(
+            target=self._stdin_reader, daemon=True, name="stdin-reader"
+        ).start()
+
         if duration_s is not None:
 
             def _stop():

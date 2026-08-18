@@ -87,8 +87,8 @@ _TUNING_KEYS = (
     "exposure_time", "gain",
 )
 _TUNING_DEFAULTS = {
-    "auto_brightness": True,
-    "auto_exposure": True,
+    "auto_brightness": False,
+    "auto_exposure": False,
     "brightness": 0,
     "contrast": 0,
     "saturation": 0,

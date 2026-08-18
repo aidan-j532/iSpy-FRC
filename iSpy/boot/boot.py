@@ -256,7 +256,7 @@ def _wait_for_pipeline_ready(
     logger.info("All camera pipelines ready.")
 
 
-def on_boot(install_service: bool = False, fresh: bool = False):
+def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = False):
     _configure_quiet_logging()
 
     if fresh:
@@ -280,7 +280,8 @@ def on_boot(install_service: bool = False, fresh: bool = False):
         raise RuntimeError("System validation failed. Aborting boot.")
 
     pipeline_classes = get_pipeline_classes()
-    _wait_for_pipeline_ready(config, pipeline_classes)
+    if wait:
+        _wait_for_pipeline_ready(config, pipeline_classes)
     config.save(quiet=True)
     logger.info("Boot sequence complete.")
 
@@ -323,9 +324,10 @@ def main():
                          help="Forcefully wipe generated state (Config, Outputs, "
                               "YoloModels, QuantizeDataset) and create a fresh "
                               "default setup")
+    parser.add_argument("-w", "--wait", action="store_true",
+                         help="Wait for all pipelines to be ready before running vision")
     args = parser.parse_args()
-    on_boot(install_service=args.service, fresh=args.fresh)
-
+    on_boot(install_service=args.service, fresh=args.fresh, wait=args.wait)
 
 if __name__ == "__main__":
     main()
