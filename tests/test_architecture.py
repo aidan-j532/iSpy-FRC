@@ -1,6 +1,3 @@
-"""generic vision pipeline architecture: camera -> pipeline config, lifecycle
-(prepare/get_ready/state), boot behavior, and the reusable quant dataset"""
-
 import json
 import logging
 import tempfile

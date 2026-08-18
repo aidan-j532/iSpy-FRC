@@ -1,6 +1,3 @@
-"""web calibration wizard tests: ChArUco capture/finish flow, the raw
-calibration feed, and detection pause/heartbeat endpoints."""
-
 import base64
 import tempfile
 import time
@@ -21,7 +18,6 @@ class _FakeVision:
 
 
 class _FakeCamera:
-    """stand-in for a Camera/pipeline exposing the calibration API the web layer uses"""
 
     def __init__(self, name):
         self.name = name
@@ -69,7 +65,6 @@ def _chessboard_image(pattern=(9, 6), img_size=(480, 640), square=60):
 
 
 def _pose_camera_setup(num_kpts=17, intrinsics=False):
-    """config with a pose-model camera (fake .pt + YAML sidecar) and a live cam."""
     tmpdir = Path(tempfile.mkdtemp())
     model = tmpdir / "pose_model.pt"
     sidecar = tmpdir / "pose_model_metadata.yaml"

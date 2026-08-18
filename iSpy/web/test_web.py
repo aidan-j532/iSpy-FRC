@@ -49,8 +49,6 @@ class FakeObject:
             ]
 
 class FakeCamera:
-    """Stands in for ObjectDetectionCamera - only what the web layer touches
-    (config.get, get_frame_age)."""
     def __init__(self, name: str):
         self.config = iSpyCameraConfig({"name": name})
         self._last_frame_time = time.perf_counter()

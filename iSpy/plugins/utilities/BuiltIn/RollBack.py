@@ -58,8 +58,6 @@ class RollBack(UtilityBase):
     def __init__(self, context: dict):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
-        # no enabled flag - being present in the config IS the switch.
-        # record_mode/record_dir used to be top-level config, live here now
         self._video_output_dir = self.config.get("data_dir", "RollbackSave")
         self._fps = float(self.config.get("fps", 30.0))
         self._forced_codec = None
@@ -82,23 +80,6 @@ class RollBack(UtilityBase):
         pass
 
     def update(self, frame_data: dict):
-        # This is what frame data looks like :)
-        # frame_data = {
-        #     "detections": detections,
-        #     "detection_count": len(detections),
-        #     "frame": frame,
-        #     "fps": 1 / loop_s if loop_s > 0 else 0,
-        #     "loop_s": loop_s,
-        #     "vision_s": vision_s,
-        #     "camera_lag_s": camera_lag_s,
-        #     "cameras": self.cameras,
-        #     "camera_frames": handler.get_camera_frames(),
-        #     "code_times": code_times,
-        #     "debug_data": {},
-        #     "pipeline_name": "object_detection",
-        #     "pipeline_settings": {...},
-        #     "camera_config": {...},
-        # }
         frame = frame_data.get("frame")
         if frame is None:
             return

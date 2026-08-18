@@ -41,8 +41,6 @@ class DatasetsModule(WebModule):
         super().__init__(context)
         self.dataset_root = Path.cwd() / "QuantizeDataset"
         self.dataset_root.mkdir(parents=True, exist_ok=True)
-        # quant dataset = reusable folder of cal images; `default` is the
-        # built-in fallback when none is configured
         (self.dataset_root / "default" / "images").mkdir(parents=True, exist_ok=True)
 
     def register_routes(self, flask_app):
@@ -115,8 +113,6 @@ class DatasetsModule(WebModule):
         )
 
     def _frc_download(self):
-        """grab the bundled FRC cal images from the github release, flat into
-        the folder - they stay on disk, nothing deletes them"""
         from iSpy.dataset.dataset import _download_release_images
 
         data = request.get_json(force=True) or {}

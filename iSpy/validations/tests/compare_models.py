@@ -1,20 +1,3 @@
-"""
-Compare a base .pt YOLO model against an optimized/converted model (RKNN,
-ONNX, TFLite, TensorRT, CoreML, etc) to verify a hardware-accelerator
-conversion didn't silently break detection quality or make things slower.
-
-Reuses iSpy's real production inference pipeline (GenericYolo +
-fill_missing_config + metadata sidecars) instead of re-implementing pre/post
-processing, so the comparison reflects real runtime behavior. Supersedes
-test_rknn.py (RKNN-only).
-
-Usage:
-    python -m iSpy.validations.test_optimized_model --config Config/config.json
-    # or: --base YoloModels/pytorch/model.pt --optimized YoloModels/rknn/model.rknn
-
-Test images are pulled at random from QuantizeDataset/valid/.
-"""
-
 import argparse
 import contextlib
 import json
@@ -43,7 +26,6 @@ logger.setLevel(logging.INFO)
 
 @contextlib.contextmanager
 def _quiet_ispy_logging():
-    """mute iSpy's INFO logging so only the clean section()/subline() print output shows"""
     ispy_logger = logging.getLogger("iSpy")
     old_level = ispy_logger.level
     ispy_logger.setLevel(logging.WARNING)
@@ -99,7 +81,6 @@ def warn(msg: str):
 
 @contextlib.contextmanager
 def _quiet_native():
-    """mute native C-library stdout/stderr spam (RKNN toolkit etc print straight to fd 1/2, bypassing python logging)"""
     devnull = "nul" if os.name == "nt" else "/dev/null"
     fd = os.open(devnull, os.O_WRONLY)
     old_out = os.dup(1)
@@ -211,7 +192,6 @@ def _iou(a, b) -> float:
 
 
 def _match_boxes(ref_boxes: list[Box], test_boxes: list[Box], iou_thresh: float):
-    """greedily match each ref (base .pt) box to its best same-class IoU partner in the optimized boxes; returns (ref, test, iou) triples"""
     used: set[int] = set()
     matches = []
     for rb in ref_boxes:
@@ -609,7 +589,6 @@ def _result_to_entry(results: ComparisonResults) -> dict:
 
 
 def upsert_json_report(results: ComparisonResults, out_path: Path) -> None:
-    """append/update this comparison in a single running ledger at out_path, keyed by (base_model, optimized_model) so re-running the same pair updates in place instead of piling up duplicates"""
     entry = _result_to_entry(results)
 
     ledger: dict = {"models": []}
@@ -663,7 +642,6 @@ def compare_models(
     output: str | Path | None = None,
     quiet: bool = False,
 ) -> ComparisonResults | None:
-    """run the comparison without argparse or exiting the process - for calling from other code (e.g. boot.py right after a conversion); returns None (and logs why) instead of raising/exiting so callers can treat a skipped comparison as non-fatal"""
     images_dir = Path(images_dir)
     if not images_dir.exists():
         logger.warning("Comparison images dir not found (%s) - skipping optimized-model comparison.", images_dir)

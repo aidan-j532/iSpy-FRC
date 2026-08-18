@@ -29,8 +29,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
 
     @classmethod
     def show_calibration(cls) -> bool:
-        # open-vocabulary detections carry no known real-world size - there is
-        # nothing for the focal/known-distance calibration to estimate
         return False
 
     def is_ready(self) -> tuple[bool, str]:
@@ -127,8 +125,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
 
     @staticmethod
     def _parse_classes(prompt: str) -> list[str]:
-        """split the comma-separated prompt into class tokens, stripping
-        leading articles and trailing punctuation"""
         classes = []
         for part in str(prompt).split(","):
             token = part.strip().rstrip(".!?").strip()
@@ -200,7 +196,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
             self.prepare()
 
     def _prepare(self):
-        """download/convert the model without blocking boot"""
         self._load_model()
 
     def get_optimization_options(self) -> dict:
@@ -212,8 +207,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         }
 
     def optimize(self, **kwargs) -> str:
-        """build the quantized artifact synchronously; is_ready() reports
-        (False, "optimizing") while it runs"""
         if not self._optimization_requested():
             return "optimization disabled for this camera (set 'Quantize' in camera settings)"
         if self._optimizing:
@@ -248,7 +241,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return status
 
     def _optimize_forced(self) -> str:
-        """force a full rebuild even if an artifact is cached"""
         self._optimizing = True
         self._set_status("optimizing (backend build)")
         try:
@@ -271,7 +263,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return status
 
     def _optimize_runner(self):
-        """runs optimize() off the main thread (started at construction)"""
         status = self.optimize()
         if not self._optimized_active():
             self._optimize_error = status
@@ -322,8 +313,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return ""
 
     def _optimized_active(self) -> bool:
-        """True when the loaded model is the quantized backend artifact in
-        the requested format (a full-precision fallback doesnt count)"""
         if getattr(self, "model", None) is None or not getattr(self, "_quantized", False):
             return False
         if getattr(self.model, "model_type", "") == "tpu":
@@ -334,7 +323,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return self._path_format(path) == self._target_format_cached()
 
     def _is_processable(self) -> bool:
-        """True when run() can actually infer; otherwise pass frames through"""
         if getattr(self, "_optimizing", False):
             return False
         if self.model is None:
@@ -344,7 +332,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return True
 
     def _ensure_world_model(self, size: str) -> str | None:
-        """download weights into <project>/YoloModels/pytorch on first use"""
         url = _WORLD_MODEL_URLS.get(size, _WORLD_MODEL_URLS["s"])
         filename = url.rsplit("/", 1)[-1]
         target = _WORLD_MODEL_DIR / filename
@@ -376,9 +363,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return str(target)
 
     def _resolve_weights(self) -> str | None:
-        """bundled asset takes priority, then auto-downloaded weights"""
-        # assets lives at iSpy/assets; this file moved to
-        # iSpy/vision/pipelines/, so parents[2] resolves to the iSpy package
         asset_path = Path(__file__).resolve().parents[2] / "assets" / "yolo-world.pt"
         if asset_path.exists():
             self.logger.info("Using bundled YOLO World weights at %s", asset_path)
@@ -386,9 +370,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         return self._ensure_world_model(self.model_size)
 
     def _reparameterize_world(self, weights: str) -> str | None:
-        """bake the configured classes into the open-vocabulary weights so
-        the result is a normal fixed-vocab detector that can be exported
-        and quantized"""
         try:
             from ultralytics import YOLOWorld, YOLO
         except Exception as exc:  # pragma: no cover - runtime dependency fallback

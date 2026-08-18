@@ -70,7 +70,6 @@ def run_unit_tests() -> None:
 
 def get_addon_setting(config: dict, addon_type: str, addon_name: str,
                       key: str, default=None):
-    """one setting from an add-on's config entry; add-ons live at plugins.<type>.<name>, presence == enabled"""
     try:
         entry = config["plugins"][addon_type][addon_name]
     except (KeyError, TypeError):

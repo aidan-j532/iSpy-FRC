@@ -1,4 +1,3 @@
-### This was causing to much troubles, and wasn't really solving anything. Later regenerate with copilot or something.
 # import sys
 # import types
 # import numpy as np

@@ -38,11 +38,7 @@ class Object:
         self.ray_direction = ray_direction  # np.ndarray(3,) unit vector, or None
         self.depth_source = depth_source
 
-        # drives which renderer the 3D viewer uses; new detector types just need
-        # a value here + an entry in VIS_RENDERERS in viewer3d.html - nothing else
-        #   "generic" -> cube (default)
-        #   "points"  -> raw keypoint dots, no bones (auto-selected when keypoints_3d is set)
-        #   "planar"  -> flat rectangle + orientation gizmo (AprilTags, QR, barcodes)
+        # vis_type -> renderer mapping (see VIS_RENDERERS in viewer3d.html)
         self.vis_type = vis_type
         self.vis_meta = vis_meta or {}
 

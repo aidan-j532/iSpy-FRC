@@ -38,8 +38,6 @@ class NetworkTableHandler(UtilityBase):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
 
-        # no enabled flag - being present in the config IS the switch.
-        # ip used to be top-level config, lives here now
         ip = self.config.get("network_tables_ip", "10.0.0.2")
         self.inst = ntcore.NetworkTableInstance.getDefault()
         self.inst.setServer(ip)

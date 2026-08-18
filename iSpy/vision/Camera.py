@@ -18,40 +18,28 @@ except AttributeError:
     pass
 
 class CameraOpenTimeout(ValueError):
-    """raised when opening a capture backend exceeds _CAP_OPEN_TIMEOUT; subclasses ValueError so the fallback logic (next backend, then placeholder) still applies"""
+    pass
 
 class Camera:
-    # Resolution used for the synthetic "no camera" placeholder frame.
     _PLACEHOLDER_W = 640
     _PLACEHOLDER_H = 480
 
-    # max wait for the first frame after opening before calling the backend unusable.
-    # MSMF is slow to reach "run" (MF_E_HW_MFT_FAILED_START_STREAMING, 0xC00D3704)
-    # and blind grab() bursts just flood stderr; short enough a dead cam doesnt stall startup
+    # first-frame timeout (MSMF is slow to start)
     _STREAM_START_TIMEOUT = 1.5
 
-    # upper bound on how long cv2.VideoCapture() itself may block - it runs native
-    # code and a wedged MSMF driver (or a device held by another app) can sit in it
-    # forever with no way for python to time out. open runs in a worker thread so a
-    # stuck backend is abandoned after this long instead of stalling startup
+    # max time cv2.VideoCapture() can block before we give up
     _CAP_OPEN_TIMEOUT = 15.0
 
-    # Reader retry cadence and warning throttle.
     _READ_RETRY_DELAY = 0.05
     _READ_REOPEN_AFTER = 10
     _READ_WARN_EVERY = 20
 
-    # calibration wizard pings /heartbeat this often; detections stay paused
-    # while the last heartbeat is this recent (so a closed tab auto-resumes)
     _CALIBRATION_HEARTBEAT_TIMEOUT = 10.0
 
     @staticmethod
     def _get_capture_backend_candidates(sys_platform: str | None = None):
         platform_name = (sys_platform or platform.system()).lower()
         if platform_name == "windows":
-            # MSMF is the most stable Windows backend. CAP_ANY probes obsensor/DSHOW
-            # on every index and spams stderr while CAP_DSHOW freezes; one backend
-            # keeps the stream from being disrupted on open
             return [cv2.CAP_MSMF]
         if platform_name == "linux":
             return [cv2.CAP_V4L2, cv2.CAP_ANY]
@@ -93,29 +81,19 @@ class Camera:
         self._brightness_lut: np.ndarray | None = None
         self._brightness_frame_count = 0
 
-        # manual image tuning - software adjustments applied in the reader
-        # thread so they work on every backend (MSMF/V4L2 often ignore the
-        # equivalent cv2 props silently). 0/1.0 = neutral, no change.
         self._brightness = float(camera_config.get("brightness", 0) or 0)
         self._contrast = float(camera_config.get("contrast", 0) or 0)
         self._saturation = float(camera_config.get("saturation", 0) or 0)
         self._gamma = float(camera_config.get("gamma", 1.0) or 1.0)
-        # color balance - fixes a warm/yellow or green cast in software. 0 = neutral.
         self._white_balance = float(camera_config.get("white_balance", 0) or 0)
         self._tint = float(camera_config.get("tint", 0) or 0)
 
-        # toggled by the reader after repeated failures so re-opens alternate away
-        # from a backend whose stream keeps dying (MSMF -> DirectShow)
         self._prefer_alternate_backend = False
 
-        # UVC exposure/gain; short exposure keeps the camera able to hit the requested fps in low light
-        self._exposure_time = camera_config.get("exposure_time", 100)   # 10 ms
+        self._exposure_time = camera_config.get("exposure_time", 100)
         self._gain = camera_config.get("gain", 200)
-        # auto_exposure=True (default) leaves the driver's auto-exposure alone;
-        # False forces exposure_time. separate from auto_brightness (software).
         self._auto_exposure = bool(camera_config.get("auto_exposure", True))
 
-        # optional per-camera fps cap (0 = uncapped); the reader thread sleeps to hold the avg capture rate at/below this
         try:
             self._fps_cap = max(0, float(camera_config.get("fps_cap", 0) or 0))
         except (TypeError, ValueError):
@@ -138,8 +116,6 @@ class Camera:
                     self.source,
                     exc,
                 )
-                # treat the object as an "image" source backed by the placeholder so
-                # the rest of the pipeline can keep running without modification
                 self.is_image = True
                 self.image = self._make_placeholder_frame()
                 return
@@ -162,7 +138,6 @@ class Camera:
         self, width: int = _PLACEHOLDER_W,
         height: int = _PLACEHOLDER_H,
     ) -> np.ndarray:
-        # Try to load the image first from assets/image.png
         try:
             placeholder = cv2.imread(str(_ASSETS_DIR / "camera_not_found.png"))
             if placeholder is not None:
@@ -182,9 +157,6 @@ class Camera:
         return frame
 
     def _wait_for_first_frame(self, cap, timeout: float = _STREAM_START_TIMEOUT) -> bool:
-        """paced wait for the first valid frame - grab() right after open() fails
-        on MSMF while the hardware MFT starts the stream (0xC00D3704); retry
-        with a small sleep instead of hammering the device in a tight loop"""
         deadline = time.perf_counter() + timeout
         while time.perf_counter() < deadline:
             try:
@@ -196,15 +168,7 @@ class Camera:
         return False
 
     def _open_capture(self, extra_backends: bool = False, prefer_dshow: bool = False):
-        """open the capture with the platform's preferred backend(s); every candidate
-        is verified by config + a real first frame before acceptance. extra_backends
-        adds DirectShow on windows (opens cams MSMF reports as invalidated, e.g.
-        while another app holds the device); prefer_dshow tries DirectShow first to
-        alternate away from a MSMF stream that keeps dying"""
         if self._is_url_source:
-            # network streams (RTSP / HTTP MJPEG / RTMP / snapshot) - let OpenCV
-            # auto-pick the backend (FFmpeg) instead of forcing a device backend
-            # like MSMF or V4L2 that cannot open URLs
             try:
                 cap = self._open_capture_bounded(None)
             except Exception as exc:
@@ -233,8 +197,6 @@ class Camera:
             try:
                 self._configure_capture(cap)
                 if not self._wait_for_first_frame(cap):
-                    # device opened but the stream never started (e.g. MSMF
-                    # hardware MFT failed to run); keep the old backend, move on
                     self.logger.info(
                         "Camera %s: no frame from backend %s within %.1fs - "
                         "trying the next backend.",
@@ -253,11 +215,6 @@ class Camera:
         raise ValueError(f"Camera failed to open: {self.source} ({last_error})")
 
     def _open_capture_bounded(self, backend):
-        """open the capture with a hard wall-clock bound - cv2.VideoCapture() is
-        native and can block forever (wedged MSMF driver, or another app holding
-        the device). run it in a daemon worker thread and abandon the backend
-        after _CAP_OPEN_TIMEOUT; if the worker unblocks later it releases the
-        capture instead of handing it back, so a stuck open cant leak the device"""
         holder = {"cap": None, "error": None, "abandoned": False}
 
         def _worker():
@@ -316,7 +273,6 @@ class Camera:
         is_windows = platform.system() == "Windows"
         is_linux = platform.system() == "Linux"
 
-        # CROSS-PLATFORM FIX: Safely assign parameters based on platform capabilities
         if is_windows:
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
@@ -330,7 +286,6 @@ class Camera:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             cap.set(cv2.CAP_PROP_FPS, 30)
         else:
-            # Fallback configuration for macOS/other systems
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             cap.set(cv2.CAP_PROP_FPS, 30)
@@ -341,7 +296,6 @@ class Camera:
         sys_platform = platform.system()
         is_linux = sys_platform == "Linux"
 
-        # CROSS-PLATFORM FIX: Only run v4l2-ctl configurations if specifically on Linux
         if is_linux and not self._is_url_source:
             device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
 
@@ -390,13 +344,9 @@ class Camera:
 
             time.sleep(0.15)
 
-        # try a safe backend order first, only fall back if the first cant open
-        # the device; each backend is verified with a real first frame
         try:
             self.cap = self._open_capture()
         except ValueError:
-            # MSMF opened the device but its stream never started (common when
-            # another app holds the camera) - give DirectShow a shot before giving up
             self.cap = self._open_capture(extra_backends=True)
 
         if not self.cap.isOpened():
@@ -424,10 +374,6 @@ class Camera:
         self._frame_processors = []
 
     def _reopen_capture(self):
-        """release and re-open the capture after a persistent grab failure (e.g.
-        MSMF -1072873821 MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED or -1072875772
-        MF_E_HW_MFT_FAILED_START_STREAMING when another app grabs the webcam);
-        alternates backend preference so a stuck MSMF stream is replaced by DirectShow"""
         try:
             cap = getattr(self, "cap", None)
             if cap is not None:
@@ -469,8 +415,6 @@ class Camera:
             if not ret:
                 consecutive_failures += 1
                 if consecutive_failures % self._READ_WARN_EVERY == 1:
-                    # Rate-limited (approx once a second, not on every retry)
-                    # so a dead camera doesn't flood the logs.
                     self.logger.warning(
                         "Frame read failed on %s (%d consecutive) - camera busy "
                         "or stream unavailable; re-opening the capture if this persists.",
@@ -517,15 +461,6 @@ class Camera:
             if frame_interval > 0:
                 next_frame_time = time.perf_counter() + frame_interval
 
-    # ------------------------------------------------------------------
-    # Image tuning (web sliders)
-    #
-    # exposure/gain are pushed to the capture hardware (best effort - some
-    # drivers ignore them), brightness/contrast/saturation/gamma are applied
-    # in software in the reader thread so they always visibly work and update
-    # live without a vision restart.
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _clamp_num(value, lo: float, hi: float, default: float) -> float:
         try:
@@ -534,11 +469,6 @@ class Camera:
             return default
 
     def _apply_capture_controls(self, cap=None):
-        """best-effort push of hardware-only controls (exposure, gain) to the
-        open capture. Many backends/drivers reject these silently, so they are
-        a bonus on top of the software adjustments, never the thing the UI
-        depends on. auto_exposure=False forces a fixed exposure_time; True
-        leaves the driver's auto-exposure alone (gain is still applied)."""
         cap = cap if cap is not None else getattr(self, "cap", None)
         if cap is None or self._is_url_source or self.is_image:
             return
@@ -574,10 +504,6 @@ class Camera:
         return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
     def _apply_color_balance(self, frame: np.ndarray, white_balance: float, tint: float) -> np.ndarray:
-        """software white balance + tint on the BGR frame. wb slides the
-        blue/red balance (positive = cooler, fixes warm/yellow casts), tint
-        slides the green/magenta balance. Implemented with per-channel LUTs so
-        it stays uint8/fast and works on any backend."""
         if frame.ndim < 3 or (not white_balance and not tint):
             return frame
         wb = self._clamp_num(white_balance, -100, 100, 0) / 100.0
@@ -597,8 +523,6 @@ class Camera:
         )
 
     def _apply_image_adjustments(self, frame: np.ndarray) -> np.ndarray:
-        """software brightness/contrast/color/saturation/gamma in dependency-safe
-        order; neutral values skip work entirely (frames pass through fast)"""
         contrast = self._contrast
         brightness = self._brightness
         if contrast or brightness:
@@ -619,8 +543,6 @@ class Camera:
         return frame
 
     def set_image_adjustments(self, adjustments: dict) -> dict:
-        """live image tuning from the web UI - applies from the next captured
-        frame, no restart needed. Returns the values now in effect."""
         if "auto_brightness" in adjustments:
             self.auto_brightness = bool(adjustments["auto_brightness"])
         if "brightness" in adjustments:
@@ -661,17 +583,13 @@ class Camera:
         }
 
     def set_calibration(self, active: bool):
-        """temporarily pause detections so the calibration wizard can feed on
-        raw frames. The pause auto-expires when heartbeats stop arriving."""
         self.calibration_active = bool(active)
         self.calibration_last_seen = time.monotonic() if active else 0.0
 
     def calibration_heartbeat(self):
-        """refresh the calibration session's liveness timer"""
         self.calibration_last_seen = time.monotonic()
 
     def in_calibration_mode(self) -> bool:
-        """True while the calibration wizard is open (with a recent heartbeat)"""
         if not self.calibration_active:
             return False
         return (
@@ -679,9 +597,6 @@ class Camera:
         ) < self._CALIBRATION_HEARTBEAT_TIMEOUT
 
     def get_raw_frame(self) -> np.ndarray | None:
-        """latest frame straight from the capture thread - no frame
-        processors, no detection annotations. What the calibration wizard
-        should look at."""
         if self.is_image:
             return self.image.copy() if self.image is not None else None
         with self.frame_lock:

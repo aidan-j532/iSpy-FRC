@@ -1,8 +1,3 @@
-"""model selection keeps vision_model.source_pt and file_path together: picking
-a .pt must point file_path at an already-built optimized artifact for that
-source (else back at the .pt), so a stale artifact from an older model can't
-keep running."""
-
 import logging
 import tempfile
 import unittest
@@ -23,7 +18,6 @@ _REPO = Path(__file__).resolve().parents[1]
 
 
 def _make_source_tree(tmp: Path, names=("pose",)) -> Path:
-    """tmp/YoloModels/{pytorch|rknn|onnx} with source .pt + built rknn builds"""
     tmp = tmp.resolve()
     (tmp / "YoloModels" / "pytorch").mkdir(parents=True, exist_ok=True)
     (tmp / "YoloModels" / "rknn").mkdir(parents=True, exist_ok=True)
@@ -35,7 +29,6 @@ def _make_source_tree(tmp: Path, names=("pose",)) -> Path:
 
 
 class _RootPatched(unittest.TestCase):
-    """run the resolvers against a temp YoloModels tree instead of the repo's"""
 
     def setUp(self):
         self.tmp = _make_source_tree(Path(tempfile.mkdtemp()))
@@ -116,8 +109,6 @@ class ResolveVisionModelFilesTests(_RootPatched):
 
 
 class ModelsSelectTests(unittest.TestCase):
-    """ModelsModule only accepts models under the repo's YoloModels dir, so
-    these use (cleaned up) files there."""
 
     _MODEL = "YoloModels/pytorch/_boot_test_pose.pt"
     _ARTIFACT = "YoloModels/rknn/_boot_test_pose.rknn"
@@ -192,8 +183,6 @@ class _FakeModel:
 
 
 class OptimizedActiveTests(unittest.TestCase):
-    """_optimized_active must reject a leftover artifact built for another
-    model, not trust it just because the source artifact is missing."""
 
     _PT = "YoloModels/pytorch/_boot_test_pose.pt"
     _ARTIFACT = "YoloModels/rknn/_boot_test_pose.rknn"
@@ -247,7 +236,6 @@ class OptimizedActiveTests(unittest.TestCase):
 
 
 class BootLoadTests(unittest.TestCase):
-    """boot must trust source_pt over a stale file_path artifact."""
 
     _PT = "YoloModels/pytorch/_boot_test_pose.pt"
     _ARTIFACT = "YoloModels/rknn/_boot_test_pose.rknn"

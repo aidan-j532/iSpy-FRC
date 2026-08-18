@@ -31,8 +31,6 @@ _ADDON_TYPES_FROM_PTYPE = {
 
 
 def _coerce_setting_value(value, defn: dict):
-    """validate + coerce one add-on setting against its schema; raises
-    ValueError with a human-readable message on bad input"""
     if not isinstance(defn, dict):
         return value
     stype = defn.get("type")
@@ -350,8 +348,6 @@ class PluginStatusModule(WebModule):
         return target
 
     def _validate_addon_source(self, ptype: str, code: str, expected_class_name: str | None) -> str | None:
-        """error string, or None if OK. Cheap static checks - we dont
-        execute untrusted code here"""
         subdir, base_cls, base_name, _ = _TYPE_MAP[ptype]
         if base_name not in code:
             return f"Add-on must subclass {base_name} (import it from iSpy.plugins.bases)."

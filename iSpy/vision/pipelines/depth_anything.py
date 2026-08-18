@@ -31,8 +31,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
 
     @classmethod
     def show_calibration(cls) -> bool:
-        # depth output is a per-pixel range map - no focal length / known-size
-        # distance calibration to configure
         return False
 
     def is_ready(self) -> tuple[bool, str]:
@@ -236,7 +234,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             self.prepare()
 
     def _prepare(self):
-        """download/export the model without blocking boot"""
         self._load_model()
 
     def get_optimization_options(self) -> dict:
@@ -263,8 +260,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             return "onnx"
 
     def optimize(self, **kwargs) -> str:
-        """build the ONNX artifact synchronously; is_ready() reports
-        (False, "optimizing") while it runs"""
         if not self._optimization_requested():
             return "optimization disabled for this camera (set 'Optimize' in camera settings)"
         if self._optimizing:
@@ -298,7 +293,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         return status
 
     def _optimize_forced(self) -> str:
-        """force a full rebuild even if an artifact is cached"""
         self._optimizing = True
         self._set_status("optimizing (onnx build)")
         try:
@@ -321,7 +315,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         return status
 
     def _optimize_runner(self):
-        """runs optimize() off the main thread (started at construction)"""
         status = self.optimize()
         if not self._optimized_active():
             self._optimize_error = status
@@ -356,12 +349,9 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         )
 
     def _optimized_active(self) -> bool:
-        """True once the ONNX session is loaded (artifact is fixed-model
-        and onnx-only, so a live session is the whole check)"""
         return getattr(self, "_session", None) is not None
 
     def _is_processable(self) -> bool:
-        """True when run() can actually infer; otherwise pass frames through"""
         if getattr(self, "_optimizing", False):
             return False
         if self._optimization_requested():
@@ -379,9 +369,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self._load_pipeline()
 
     def _load_optimized(self, force: bool = False):
-        """build/load the requested backend artifact. every backend falls
-        back to onnx when its toolchain is missing or the build fails, so
-        the camera keeps running either way"""
         target = self._target_format_cached()
 
         if target == "onnx":
@@ -405,11 +392,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         return self._load_onnx(force)
 
     def _export_onnx_source(self, force: bool = False, quantize: bool | None = None):
-        """export the depth model to a cached ONNX artifact; the onnx backend
-        runs it directly, every other backend converts from it. quantize is
-        honored only when explicitly given (backends that self-quantize ask
-        for the fp32 source)."""
-
         from iSpy.vision.QuantizedModel import ensure_onnx_model
 
         def build():
@@ -531,9 +513,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             self._load_onnx(force)
 
     def _compile_openvino(self, core, ir_xml: Path, device: str):
-        """compile the IR, retrying once with a fresh GPU blob cache - the Intel
-        GPU plugin can leave a corrupt blob behind after an interrupted compile,
-        and a failed cache write then breaks every later compile"""
         cache_dir = _YOLO_MODELS_DIR / "openvino" / ".cache"
         for attempt in range(2):
             try:
@@ -738,8 +717,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
             self._load_onnx(force)
 
     def _rknn_calibration_txt(self) -> str | None:
-        """rknn-toolkit2 quantizes from a text file of image paths; reuse the
-        configured QuantizeDataset when present"""
         if not self._quantization_dataset:
             return None
         ds = Path(self._quantization_dataset)

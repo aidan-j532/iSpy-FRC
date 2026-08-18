@@ -111,9 +111,6 @@ class QRCodeCamera(VisionPipeline):
         return roll, pitch, yaw
 
     def _decode_scales(self, gray):
-        """try several scales (upsampling helps small/rotated QRs); fast
-        mode only tries native res. Returns points/decoded_info scaled back
-        to the original frame, or (None, [], 1.0)."""
         img_h, img_w = gray.shape[:2]
         scales = [1.0] if self.decode_mode == "fast" else [1.0, 1.5, 2.0, 0.75]
         for scale in scales:

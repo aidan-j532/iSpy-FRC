@@ -29,9 +29,6 @@ _FORMAT_CALIB_COUNTS = {
 
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
-# github release -> web search -> synthetic; synthetic is the fallback,
-# one of em will work, then you can quantize
-
 def calib_count_for_format(target_format: str, default: int = _CALIB_COUNT) -> int:
     return _FORMAT_CALIB_COUNTS.get(target_format, default)
 
@@ -262,7 +259,6 @@ def _search_urls_google(sess, keyword: str, count: int, headers: dict) -> list[s
     return found
 
 def get_active_dataset_dir(default_root: str = "QuantizeDataset") -> Path:
-    """default storage root - each cam's actual dataset is stored in its config ('quantization_dataset')"""
     return Path.cwd() / default_root
 
 def _is_host_reachable(host: str, timeout: int = 3) -> bool:

@@ -8,9 +8,6 @@ logger = logging.getLogger(__name__)
 
 
 class HealthModule(WebModule):
-    """single source of truth for health - replaces StatusReporter +
-    HealthReporter which computed near-identical payloads and drifted"""
-
     plugin_name = "health"
 
     def __init__(self, context: dict):

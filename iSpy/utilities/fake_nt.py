@@ -1,13 +1,3 @@
-"""
-Standalone NT4 server that fakes a robot so you can test iSpy's NetworkTables
-integration on one machine - no real robot needed. Publishes a fake Pose2d to
-"AdvantageKit/RealOutputs/Odometry/Robot" (what get_robot_pose() reads) and
-prints incoming VisionData (what NetworkTableHandler publishes).
-
-Usage: set use_network_tables + network_tables_ip in Config/config.json,
-run this in one terminal, iSpy in another. Needs pyntcore + wpimath.
-"""
-
 import argparse
 import dataclasses
 import math
@@ -31,9 +21,6 @@ class FuelStruct:
 
 
 def make_fake_pose(t: float, radius: float = 2.0, period_s: float = 20.0) -> Pose2d:
-    """A robot slowly driving in a circle and spinning - gives iSpy's
-    tracker/triangulation code actual motion to react to instead of a
-    frozen (0, 0, 0)."""
     omega = 2 * math.pi / period_s
     x = radius * math.cos(omega * t)
     y = radius * math.sin(omega * t)

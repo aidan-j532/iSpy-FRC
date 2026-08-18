@@ -38,7 +38,6 @@ class MultipleCameraHandler:
         while not self._stopped and not stop_event.is_set():
             try:
                 if camera.in_calibration_mode():
-                    # calibration wizard is open - pause detections, feed raw frames
                     objects, frame = [], camera.get_raw_frame()
                 else:
                     objects, frame = camera.run()
@@ -144,7 +143,6 @@ class MultipleCameraHandler:
         return f
 
     def get_camera_frames(self) -> dict[str, np.ndarray]:
-        """named per-camera frames so CamerasModule can serve individual feeds, not just the stitched view"""
         result = {}
         for i, cam in enumerate(self.cameras):
             with self._locks[i]:

@@ -121,7 +121,7 @@ class HealthReporter(UtilityBase):
         self._last_tick = time.perf_counter()
         self._uptime_start = time.perf_counter()
         self._loop_count = 0
-        # stale_threshold used to be top-level config - lives in this add-on's settings now
+        # stale_threshold lives in this add-on's settings now
         self._stale_threshold = self.config.get("stale_threshold", 1.0)
         self._network_handler = None  # set externally after all utilities load
 

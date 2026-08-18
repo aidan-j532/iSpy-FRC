@@ -1,24 +1,3 @@
-"""Camera calibration helpers.
-
-Two complementary workflows, all fed from the web UI:
-
-1. Known-object calibration - measure an object of known real size at a
-   known distance and derive the camera's focal length (px) + horizontal
-   FOV. This feeds every pipeline's depth estimation (object_detection etc).
-
-2. ChArUco intrinsics - run OpenCV's calibrateCameraCharuco over a handful
-   of ChArUco board frames to get a real camera matrix + distortion
-   coefficients. The user selects the correct ChArUco board layout and
-   dictionary, then capture + calibration is fully automatic.
-   AprilTag / QR PnP use these for accurate pose.
-
-Results are stored on the camera's ``calibration`` config dict. The
-known-object values follow iSpy's internal convention: calibration inputs
-are inches (the final unit conversion to meters/feet happens in each
-pipeline). Intrinsics are stored in pixels at their capture resolution and
-scaled to the live frame size at runtime.
-"""
-
 import logging
 
 import cv2
@@ -49,10 +28,6 @@ _draw_detected_corners_charuco = _pick_aruco(
 def _calibrate_charuco_via_calibrate_camera(
     all_corners: list, all_ids: list, board, img_size
 ):
-    """manual ChArUco intrinsics solve for builds that dropped
-    calibrateCameraCharuco (some aruco wheels ship the detector but not the
-    calibrator): build 3D object points from the board's chessboard corners
-    and run plain calibrateCamera. Returns (rms, cam_mat, dist) or None."""
     try:
         # detectBoard ids index straight into getChessboardCorners() (row-major
         # grid layout), so map each corner index to its 3D object point.
@@ -88,8 +63,6 @@ def _calibrate_charuco_via_calibrate_camera(
 
 
 def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
-    """run calibrateCameraCharuco when the build has it, else fall back to a
-    manual object-point solve through plain calibrateCamera."""
     for obj, name in (
         (cv2, "calibrateCameraCharuco"),
         (cv2.aruco, "calibrateCameraCharuco"),
@@ -111,29 +84,24 @@ DEFAULT_CHARUCO_MARKER = 18
 
 
 def focal_from_object(real_size: float, distance: float, pixel_height: float) -> float:
-    """focal length in px from an object of known real size (in) seen at a
-    known distance (in) with a measured pixel height."""
     if real_size <= 0 or distance <= 0 or pixel_height <= 0:
         return 0.0
     return pixel_height * distance / real_size
 
 
 def fov_from_focal(focal_px: float, width_px: float) -> float:
-    """horizontal FOV in degrees from a focal length in px at a given frame width."""
     if focal_px <= 0 or width_px <= 0:
         return 0.0
     return float(2.0 * np.degrees(np.arctan2(width_px / 2.0, focal_px)))
 
 
 def focal_from_fov(fov_deg: float, width_px: float) -> float:
-    """focal length in px from a horizontal FOV in degrees at a given frame width."""
     if fov_deg <= 0 or width_px <= 0:
         return 0.0
     return (width_px / 2.0) / np.tan(np.radians(fov_deg / 2.0))
 
 
 def random_overlay_color():
-    """bright random BGR color so a captured detection stands out on any scene."""
     hue = int(np.random.randint(0, 180))
     sat = int(np.random.randint(180, 256))
     val = int(np.random.randint(180, 256))
@@ -142,9 +110,6 @@ def random_overlay_color():
 
 
 def draw_corners_into(out, corners, color):
-    """draw every corner point on `out` in place (no frame copy). The feed
-    redraws all captured detections every frame, so drawing into one shared
-    copy instead of N copies keeps the live view smooth as captures pile up."""
     if corners is None:
         return out
     for corner in corners:
@@ -155,14 +120,11 @@ def draw_corners_into(out, corners, color):
 
 
 def draw_corners(frame, corners, color):
-    """copy of the frame with a filled circle at every corner point in the
-    given color - used to overlay a captured detection on the live feed."""
     out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     return draw_corners_into(out, corners, color)
 
 
 def draw_markers_into(out, corners, color):
-    """draw each marker's outline on `out` in place (no frame copy)."""
     if corners is None:
         return out
     for corner in corners:
@@ -172,13 +134,11 @@ def draw_markers_into(out, corners, color):
 
 
 def draw_markers(frame, corners, color):
-    """copy of the frame with each marker's outline drawn in the given color."""
     out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     return draw_markers_into(out, corners, color)
 
 
 def draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=None):
-    """draw the ChArUco detection onto `out` in place (no frame copy)."""
     if color is None:
         if marker_corners is not None and marker_ids is not None:
             _draw_detected_markers(out, marker_corners, marker_ids)
@@ -193,16 +153,11 @@ def draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=None)
 
 
 def draw_charuco(frame, corners, ids, marker_corners, marker_ids, color=None):
-    """copy of the frame with detected ChArUco markers + board corners
-    overlaid (for preview). Pass a color to draw the detection in that color
-    instead of OpenCV's defaults (used for captured-frame overlays)."""
     out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     return draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=color)
 
 
 def expected_charuco_corners(pattern) -> int:
-    """inner corners a (cols x rows) ChArUco board has - the auto
-    capture coverage gate compares detected corners against this."""
     try:
         cols, rows = int(pattern[0]), int(pattern[1])
     except (TypeError, ValueError, IndexError):
@@ -211,8 +166,6 @@ def expected_charuco_corners(pattern) -> int:
 
 
 def capture_coverage(corners, expected: int) -> float:
-    """fraction (0..1) of the board's corners visible in a detection - auto
-    capture skips frames where too little of the board is in view."""
     if corners is None or expected <= 0:
         return 0.0
     n = len(np.asarray(corners).reshape(-1, 2))
@@ -220,11 +173,6 @@ def capture_coverage(corners, expected: int) -> float:
 
 
 def frame_diverse(corners, existing_captures, min_shift_px: float = 12.0) -> bool:
-    """True when the newly detected corners moved more than min_shift_px from
-    every already-captured frame (mean nearest-corner displacement). Same-pose
-    frames add no information to an intrinsics solve, so auto capture skips
-    them. existing_captures are the stored capture tuples - the corners live at
-    index 1 as (gray, corners, ids) capture format."""
     new = np.asarray(corners, dtype=np.float64).reshape(-1, 2)
     if len(new) == 0:
         return False
@@ -243,12 +191,6 @@ def frame_diverse(corners, existing_captures, min_shift_px: float = 12.0) -> boo
 
 
 def derive_fov_from_intrinsics(result: dict) -> dict:
-    """from a calibration solve result dict, derive the known-object values the
-    depth pipelines read (horizontal fov + focal length in px) straight from the
-    solved camera matrix - so a board-based intrinsic calibration also covers
-    the focal/FOV path and object_detection never needs the manual known-object
-    measurement. Returns a dict of derived values (empty when the solve lacks
-    usable intrinsics)."""
     try:
         fx = float(result["camera_matrix"][0][0])
         width = float(result["resolution"][0])
@@ -263,8 +205,6 @@ def derive_fov_from_intrinsics(result: dict) -> dict:
 
 
 def _charuco_captures_degenerate(all_corners: list, all_ids: list) -> bool:
-    """True when every capture shows the board at (essentially) the same pose -
-    no corner moved more than 1px between the first capture and the rest."""
     if len(all_corners) < 2:
         return True
     ref = {}
@@ -285,9 +225,6 @@ def make_charuco_board(
     marker_length: float = DEFAULT_CHARUCO_MARKER,
     dictionary_id: int = DEFAULT_CHARUCO_DICT,
 ):
-    """build a ChArUco board for (cols x rows) squares. square_length and
-    marker_length share a unit - the actual value is irrelevant to the
-    intrinsic solve, only the ratio matters."""
     dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
     return cv2.aruco.CharucoBoard((cols, rows), square_length, marker_length, dictionary)
 
@@ -300,9 +237,6 @@ def detect_charuco(
     marker_length: float = DEFAULT_CHARUCO_MARKER,
     dictionary_id: int = DEFAULT_CHARUCO_DICT,
 ):
-    """find a ChArUco board's corners; returns (found, corners, ids,
-    marker_corners, marker_ids, gray). corners/ids feed calibrate_charuco,
-    the marker arrays are only used for the preview overlay."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
     board = make_charuco_board(cols, rows, square_length, marker_length, dictionary_id)
     detector = cv2.aruco.CharucoDetector(board)
@@ -329,9 +263,6 @@ def calibrate_charuco(
     marker_length: float = DEFAULT_CHARUCO_MARKER,
     dictionary_id: int = DEFAULT_CHARUCO_DICT,
 ):
-    """run calibrateCameraCharuco over [(gray_frame, corners, ids), ...];
-    returns a dict with rms + intrinsics, or None when it cannot calibrate.
-    pattern is the (cols, rows) square size the frames were detected with."""
     if len(captures) < 3:
         return None
     cols, rows = pattern
@@ -384,7 +315,6 @@ def calibrate_charuco(
 
 
 def _to_corners(corners):
-    """normalize a corners array to (N, 1, 2) regardless of the cv2 build."""
     a = np.asarray(corners, dtype=np.float32)
     if a.ndim == 2:
         return a.reshape(-1, 1, 2)
@@ -392,7 +322,6 @@ def _to_corners(corners):
 
 
 def _to_ids(ids):
-    """normalize an ids array to (N, 1) regardless of the cv2 build."""
     a = np.asarray(ids, dtype=np.int32)
     if a.ndim == 1:
         return a.reshape(-1, 1)
@@ -400,7 +329,6 @@ def _to_ids(ids):
 
 
 def _to_marker_corners(marker_corners):
-    """normalize a marker corners list to [4x1x2, ...] regardless of cv2 build."""
     out = []
     for marker in marker_corners:
         a = np.asarray(marker, dtype=np.float32).reshape(-1, 2)
@@ -409,8 +337,6 @@ def _to_marker_corners(marker_corners):
 
 
 def intrinsics_for_frame(calib: dict, frame_w: int, frame_h: int):
-    """(camera_matrix, dist_coeffs) scaled from the calibration's capture
-    resolution to the given frame size, or None if not calibrated."""
     if not isinstance(calib, dict):
         return None
     m = calib.get("camera_matrix")
@@ -437,11 +363,6 @@ def intrinsics_for_frame(calib: dict, frame_w: int, frame_h: int):
 
 
 def generate_calibration_board_pdf(path):
-    """Generate a print-ready PDF of the default ChArUco calibration board.
-
-    The board is drawn at 300 DPI so it prints at the correct physical size
-    (25 mm squares, 18 mm markers, 4x5 layout).  *path* should end in .pdf.
-    Returns True on success, False if PIL is not available."""
     try:
         from PIL import Image
     except ImportError:

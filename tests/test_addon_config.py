@@ -1,10 +1,3 @@
-"""add-on (plugin) config restructure tests.
-
-add-ons are dicts keyed by enabled add-on; presence == enabled, no flag.
-settings that used to live at the top level (dbscan, distance_threshold, ...)
-now live in their add-on; legacy list-format configs migrate automatically.
-"""
-
 import json
 import tempfile
 import unittest

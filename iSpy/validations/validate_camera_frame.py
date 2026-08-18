@@ -1,6 +1,5 @@
 import cv2
 
-# This file is two small, probaly shoulnt even be here :)
 
 def clamp(value, minimum=0.0, maximum=100.0):
     return max(minimum, min(maximum, value))

@@ -1,19 +1,3 @@
-"""Generalized model preparation and optimization system.
-
-This module owns everything about turning a base model into a
-hardware-optimized, possibly quantized artifact. Deliberately pipeline-agnostic:
-it knows YOLO/RKNN/OpenVINO/TFLite, formats, quantization, devices and backends -
-the pipelines that use it dont need to.
-
-Responsibilities pulled out of the old object-detection-centric ``boot``:
-recommended format selection (AutoOpt), .pt -> optimized conversion, quantization
-with a reusable QuantizeDataset (never tied to one model), FP32/FP16/INT8,
-backend-specific dep installation, and checking whether conversion is even needed.
-
-Pipelines ask for optimization through their own interface; this is the generic
-implementation underneath.
-"""
-
 import contextlib
 import importlib.metadata
 import importlib.util
@@ -130,15 +114,10 @@ _JETSON_SYSTEM_MANAGED = {"tensorrt", "onnxruntime"}
 
 
 def _model_supports_end2end(model: "ultralytics.YOLO") -> bool:
-    # ultralytics sets this on every model head: end2end = getattr(model[-1], "end2end", False).
-    # reflects the actual trained head, not a version guess
     return bool(getattr(model.model, "end2end", False))
 
 
 def _find_lite_wheel_dir() -> Path:
-    # the lite wheels ship bundled inside the iSpy package (iSpy/rknn_wheels,
-    # per pyproject package-data). _PACKAGE_ROOT is iSpy/vision, so the
-    # package dir is one level up - not the project root.
     pkg_dir = _PACKAGE_ROOT.parent / "rknn_wheels"
     if pkg_dir.exists():
         return pkg_dir
@@ -637,14 +616,6 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
 
 
 def default_quantization_dataset_dir() -> Path:
-    """The general-purpose quantization dataset directory.
-
-    A quantization dataset is a reusable dataset resource, not something
-    permanently attached to one vision model. Pipelines that enable
-    quantization without picking a user dataset use this shared default
-    folder; any other folder inside QuantizeDataset can be selected per
-    camera/pipeline instead.
-    """
     return _PROJECT_ROOT / "QuantizeDataset" / "default"
 
 
@@ -713,7 +684,6 @@ def _format_output_dir(target_format: str) -> Path:
 
 
 def _artifact_name(pt_path: Path, target_format: str) -> str:
-    """artifact filename/dir for a source .pt, without creating anything"""
     stem = pt_path.stem
     if target_format == "rknn":
         return f"{stem}.rknn"
@@ -744,12 +714,6 @@ _ARTIFACT_FORMATS = ("onnx", "rknn", "tflite", "openvino", "engine", "coreml")
 def existing_artifact_for(
     source_pt: Path | str | None, target_format: str | None = None
 ) -> str | None:
-    """config-relative path (YoloModels/<fmt>/<name>) of an already-built
-    optimized artifact for source_pt, or None when nothing has been converted
-    yet. target_format is checked first when given, then every supported
-    format - a camera can run whatever artifact is already on disk, so model
-    selection should reuse it instead of pointing file_path at a stale build
-    for an older model."""
     if not source_pt:
         return None
     source_pt = Path(source_pt)
@@ -767,6 +731,9 @@ def existing_artifact_for(
                 return str(out)
     return None
 
+
+import shutil
+from pathlib import Path
 
 def _remove_path_for_cleanup(path: Path) -> None:
     if not path.exists():
@@ -787,7 +754,6 @@ def _find_tflite_artifact(saved_path: Path) -> Path | None:
 
 
 def _merge_rknn_build_outputs(outputs: list) -> "np.ndarray":
-    """Merge split RKNN inference outputs for format detection during build."""
     import numpy as np
 
     if not outputs:
@@ -812,12 +778,6 @@ def _merge_rknn_build_outputs(outputs: list) -> "np.ndarray":
 
 
 def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
-    """divide the constant input of `node` by `divisor`. the constant may be a graph
-    initializer (older exports) or a Constant NODE (newer exports, e.g. 8.4.x bakes
-    the stride multipliers into onnx::Constant nodes). if that constant feeds other
-    nodes too (rknn toolkit weight-sharing reuses consts), clone it under a new name
-    so only `node` sees the scaled value. no nodes inserted or removed - only a fresh
-    initializer - so rknn's graph topology and layout/tiling are unaffected."""
     import numpy as np
     import onnx
     import onnx.numpy_helper
@@ -922,11 +882,6 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     else:
         divisor = float(input_size)
 
-    # fold the scale into the box branch's EXISTING stride-multiply constant instead
-    # of inserting a new Div/Mul node - new nodes upstream of the output Concat changed
-    # the NC1HWC2 layout/tiling RKNN chose for that region and corrupted the concat at
-    # runtime (pose Concat_5 failed with new nodes present, ran clean once removed).
-    # folding keeps graph topology identical to an unmodified export - only values change
     _fold_scale_into_constant_input(graph, box_producer, divisor, node_by_output)
     logger.info(
         "Box-coordinate normalization applied: folded /%.1f into the existing "
@@ -935,12 +890,9 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
         divisor, box_producer.name,
     )
 
-    kpt_input_name = inputs[2] if len(inputs) > 2 else None
     kpt_coord_scale = None
-    if kpt_input_name is not None:
-        # walk back from the keypoint tensor to the Mul that scales x/y by stride,
-        # mirroring the box branch (kpts_decode: Reshape <- Concat(xy_mul, conf_sigmoid)
-        # <- Mul(xy)). confidence is a separate branch, never touched
+    if len(inputs) > 2:
+        kpt_input_name = inputs[2]
         kpt_reshape = node_by_output.get(kpt_input_name)
         if kpt_reshape is None or kpt_reshape.op_type != "Reshape":
             raise RuntimeError(
@@ -988,11 +940,7 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     onnx.save(model, output_path)
     return divisor, kpt_coord_scale
 
-
 def _find_pose_output_tensors(graph, concat_node):
-    """identify box/conf/kpt tensors feeding the final output Concat by structural
-    role (ultralytics export pattern), not by dimension guessing. concat.input is
-    [boxes, scores, keypoints] for pose, [boxes, scores] for detect - fixed order"""
     node_by_output = {out: n for n in graph.node for out in n.output}
     inputs = list(concat_node.input)
 
@@ -1011,11 +959,6 @@ def _find_pose_output_tensors(graph, concat_node):
 
 
 def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
-    """(re)build dataset.txt inside a user-picked calibration folder from whatever
-    images it contains, using absolute paths so _downscale_calib_images can resolve
-    files living outside the dir. keep an existing dataset.txt only while every
-    listed file still exists, else rebuild - stale entries would silently feed a
-    partial calibration set to the backend"""
     from iSpy.dataset.dataset import _find_images as _find_ds_images
 
     dataset_txt = user_ds / "dataset.txt"
@@ -1042,10 +985,6 @@ def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
 
 
 def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
-    """data.yaml for ultralytics int8 calibration matching the model's actual
-    class count/names (single-class defaults when no sidecar exists) and pointing
-    straight at the user's images - nothing is downloaded. an nc mismatch against
-    a multi-class model would make the export path reject the calibration data"""
     from iSpy.vision.metadata import read_metadata
 
     pt_meta = read_metadata(Path(pt_file)) or {}
@@ -1073,9 +1012,6 @@ def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
 
 
 def _resolve_calibration_dataset(dataset_path, keywords_list, count) -> tuple:
-    """pick a usable calibration dataset, returning (dataset_dir, used_user_path);
-    a user-picked folder is used as-is when it contains images, an empty one falls
-    back to the auto-downloaded default instead of erroring out"""
     from iSpy.dataset.dataset import prepare_quantization_dataset
 
     if dataset_path:

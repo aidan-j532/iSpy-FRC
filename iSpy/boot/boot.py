@@ -133,7 +133,6 @@ def search_for_config():
 
 
 def setup_files(fresh: bool = False):
-    """boot -f wipes generated state (Config, Outputs, YoloModels, QuantizeDataset) & stages bundled models; normal boot just fills in the gaps"""
     yolo_dir = _PROJECT_ROOT / "YoloModels"
     config_dir = _PROJECT_ROOT / "Config"
     outputs_dir = _PROJECT_ROOT / "Outputs"
@@ -190,7 +189,6 @@ def setup_files(fresh: bool = False):
 def _wait_for_pipeline_ready(
     config: iSpyConfig, pipeline_classes: dict[str, type]
 ) -> None:
-    """construct every camera pipeline & wait till they're all ready; fail fast if one errors or the timeout hits, never boot on an unready system"""
     from iSpy.config.iSpyConfig import iSpyCameraConfig
 
     cams = {k: v for k, v in config.config.get("camera_configs", {}).items() if isinstance(v, dict)}

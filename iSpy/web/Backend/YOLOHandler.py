@@ -15,7 +15,6 @@ _YOLO_DIR = _PROJECT_ROOT / "YoloModels"
 
 
 def _model_rel_path(path: Path) -> str:
-    """config-relative (YoloModels/...) path for a model file"""
     try:
         return path.resolve().relative_to(_PROJECT_ROOT.resolve()).as_posix()
     except ValueError:
@@ -23,8 +22,6 @@ def _model_rel_path(path: Path) -> str:
 
 
 def _target_format(settings: dict) -> str:
-    """the artifact format the camera would build: its explicit target_format,
-    else the pipeline's recommended backend for this device"""
     fmt = str(settings.get("target_format") or "auto").strip().lower()
     if fmt and fmt != "auto":
         return fmt

@@ -1,7 +1,3 @@
-"""tests for every built-in add-on: discoverable, valid config_schema(),
-constructs from an iSpyAddonConfig view of its settings (presence == enabled),
-honors its own settings"""
-
 import json
 import tempfile
 import time
@@ -274,9 +270,6 @@ class VideoRecorderTests(unittest.TestCase):
 
 
 class NetworkTableHandlerTests(unittest.TestCase):
-    """NetworkHandler imports ntcore at module level, so each test loads a
-    FRESH copy w/ a patched ntcore in sys.modules - keeps tests hermetic
-    (no real network, no 15s retry loop)"""
 
     def _fresh_module(self, is_connected=True):
         import importlib

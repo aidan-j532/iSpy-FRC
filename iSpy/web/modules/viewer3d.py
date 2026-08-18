@@ -18,7 +18,6 @@ class Viewer3DModule(WebModule):
         detections = frame_data.get("detections", [])
         if self._cached_num_keypoints is None:
             config = self.context.get("config", None)
-            # models are per-camera; fall back to the first model-backed cam
             vm = {}
             if config:
                 from iSpy.config.iSpyConfig import get_pipeline_settings

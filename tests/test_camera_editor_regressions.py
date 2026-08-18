@@ -1,7 +1,3 @@
-"""camera editor picker regressions: a picker must only update the input
-value - if it overwrites el.dataset.original, save silently drops the change
-and the config keeps the old model/dataset"""
-
 import re
 import unittest
 from pathlib import Path

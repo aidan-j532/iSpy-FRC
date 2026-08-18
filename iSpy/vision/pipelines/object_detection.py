@@ -212,9 +212,6 @@ class ObjectDetectionCamera(VisionPipeline):
             ).start()
 
     def _persist_file_path(self, file_path: str, config: iSpyConfig | None):
-        """write a corrected vision_model.file_path back to config.json so a
-        stale artifact from a previous model pick doesn't keep reappearing
-        on every boot."""
         vm_out = self.config.get_pipeline_setting("vision_model")
         if isinstance(vm_out, dict):
             vm_out["file_path"] = file_path
@@ -340,7 +337,6 @@ class ObjectDetectionCamera(VisionPipeline):
         return self._target_format
 
     def _is_processable(self) -> bool:
-        """True when run() can actually infer; otherwise pass frames through"""
         if getattr(self, "_optimizing", False):
             return False
         if self.model is None:
@@ -350,7 +346,6 @@ class ObjectDetectionCamera(VisionPipeline):
         return True
 
     def _source_model_path(self) -> Path | None:
-        """the .pt this camera's optimization builds from, or None"""
         vm = self._current_vm_config()
         source = vm.get("source_pt") or vm.get("file_path")
         p = self._resolve_model_path(str(source or ""))
@@ -359,7 +354,6 @@ class ObjectDetectionCamera(VisionPipeline):
         return None
 
     def _optimized_artifact_path(self) -> Path | None:
-        """existing build artifact at YoloModels/{format}/{stem}.{ext}"""
         src = self._source_model_path()
         if src is None:
             return None
@@ -402,10 +396,6 @@ class ObjectDetectionCamera(VisionPipeline):
         return ""
 
     def _optimized_active(self) -> bool:
-        """True when the loaded model is a backend artifact in the requested
-        format AND built from this camera's source model - a stale artifact
-        for another model doesnt count, so boot re-optimizes. Falls back to
-        a format-only match if the source .pt is gone."""
         if getattr(self, "model", None) is None:
             return False
         if getattr(self.model, "model_type", "") == "tpu":
@@ -453,8 +443,6 @@ class ObjectDetectionCamera(VisionPipeline):
         }
 
     def optimize(self, **kwargs) -> str:
-        """build the optimized artifact synchronously; is_ready() reports
-        (False, "optimizing") while it runs"""
         if self._optimizing:
             return "optimizing"
 
@@ -512,7 +500,6 @@ class ObjectDetectionCamera(VisionPipeline):
             self._optimizing = False
 
     def _optimize_runner(self):
-        """runs optimize() off the main thread (started at construction)"""
         status = self.optimize()
         if not self._optimized_active():
             self._optimize_error = status
@@ -528,10 +515,6 @@ class ObjectDetectionCamera(VisionPipeline):
         }
 
     def _activate_optimized_model(self, artifact_path: str, vm_extra: dict | None = None):
-        """swap the camera onto the fresh artifact: reload the model, start
-        the pipeline worker if needed, persist the per-camera file_path.
-        vm_extra gets merged into the persisted vision_model so the artifact
-        loads the same way on the next boot."""
         vm = self._current_vm_config()
         vm["file_path"] = artifact_path
         vm["quantize"] = True

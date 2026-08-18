@@ -1,8 +1,3 @@
-"""add-on web layer (/addons API) + full iSpy integration tests:
-schemas/settings/enabled state, toggling (presence == enabled), settings
-validation + coercion, disable-before-delete, iSpy loading every add-on.
-"""
-
 import json
 import tempfile
 import unittest
@@ -407,7 +402,6 @@ class iSpyAddonLoadingTests(unittest.TestCase):
             ispy._stop_all_plugins()
 
     def test_ispy_full_pipeline_builtin_addons(self):
-        """all real builtin add-ons load through iSpy with defaults"""
         import tempfile
         from iSpy.iSpy import iSpy
         cfg = iSpyConfig()

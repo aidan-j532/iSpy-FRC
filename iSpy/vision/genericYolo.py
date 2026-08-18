@@ -11,7 +11,7 @@ import warnings
 from pathlib import Path
 
 class ModelFileError(RuntimeError):
-    """Raised when a configured model file is missing, empty, or truncated."""
+    pass
 
 def _validate_model_file(path: str) -> None:
     p = Path(path)
@@ -20,12 +20,8 @@ def _validate_model_file(path: str) -> None:
     size = p.stat().st_size if p.is_file() else sum(
         f.stat().st_size for f in p.rglob("*") if f.is_file()
     )
-    if size < 1024:  # nothing legitimate is this small
-        raise ModelFileError(
-            f"Model file '{p}' is only {size} bytes — it is empty or truncated "
-            f"(likely a bad download, a Git LFS pointer file that was never pulled, "
-            f"or a failed export). Re-download or re-export it before continuing."
-        )
+    if size < 1024:
+        raise ModelFileError(f"Model file '{p}' is only {size} bytes - empty or truncated")
 
 try:
     from rknnlite.api import RKNNLite
@@ -815,9 +811,6 @@ class GenericYolo:
         return tensor.astype(np.float32) / scale
 
     def _merge_rknn_outputs(self, raw_outputs: list) -> np.ndarray:
-        """rejoin RKNN outputs when quantization splits the final Concat - quantized
-        pose models often return separate tensors (boxes 4ch + conf/kpts remainder)
-        instead of one fused output; ultralytics postprocess wants a single (C, N) tensor"""
         if not raw_outputs:
             return np.empty((0,), dtype=np.float32)
 
@@ -1075,10 +1068,6 @@ class GenericYolo:
     def _rescale_camera_matrix(
         self, K: np.ndarray, img_w: int, img_h: int
     ) -> np.ndarray:
-        # user-calibrated intrinsics are for one reference resolution; if the live
-        # frame is a different size the keypoints are unprojected on a different pixel
-        # scale and the skeleton comes out too big/small. infer calib resolution from
-        # the principal point (centered sensor) and rescale fx/fy/cx/cy to the frame
         if img_w <= 0 or img_h <= 0:
             return K
         calib_w = 2.0 * float(K[0, 2])
@@ -1125,10 +1114,6 @@ class GenericYolo:
         image_points = np.asarray(image_points, dtype=np.float64)
         model_points = np.asarray(model_points, dtype=np.float64)
 
-        # auto-select the solver: EPNP is global (no initial guess needed) and
-        # robust on near-planar keypoint templates, where ITERATIVE from an identity
-        # pose collapses to a degenerate local min; refine with ITERATIVE using the
-        # EPNP pose as the initial guess when enough points are available
         ok, rvec, tvec = cv2.solvePnP(
             model_points,
             image_points,

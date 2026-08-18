@@ -8,7 +8,6 @@ from iSpy.vision import calibration as c
 
 
 def _make_board(pattern, img_size=(480, 640), square=60, shift_x=0, scale=1.0):
-    """synthetic chessboard that cv2 reliably detects (white bg, black squares)."""
     cols, rows = pattern
     board = np.full((img_size[0], img_size[1], 3), 255, np.uint8)
     sq = int(square * scale)

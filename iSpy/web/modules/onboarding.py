@@ -1,13 +1,3 @@
-"""First-run tutorial state.
-
-`boot -f` rebuilds the config from defaults, which resets
-config.onboarding.completed to False - that's the app's "fresh boot" signal.
-The web UI reads it once to decide whether to offer the tutorial walkthrough,
-and POSTs here when the user dismisses (skip) or finishes it. Stored in the
-config so it survives restarts and is shared by every browser hitting the
-roboRIO.
-"""
-
 from flask import jsonify, request
 
 from iSpy.web.Backend.WebModule import WebModule

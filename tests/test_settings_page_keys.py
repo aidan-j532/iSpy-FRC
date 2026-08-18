@@ -1,7 +1,3 @@
-"""settings page field regressions: moved global keys (distance_threshold,
-stale_threshold, dbscan.*, record_*, network_tables_*) mustnt reappear as
-data-key fields or saving would resurrect them as top-level config keys"""
-
 import re
 import unittest
 from pathlib import Path

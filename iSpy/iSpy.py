@@ -52,8 +52,6 @@ class iSpy:
         if self.web_app is None and config["app_mode"]:
             self.web_app = create_app(cameras=cameras, config=config)
         if self.web_app is not None:
-            # dashboard may have booted before the pipelines existed (game_loop boots
-            # it first so it's up during slow cam/model init) - hand em over now.
             self.web_app.set_cameras(cameras)
 
         # shared context for every add-on; each one gets its OWN settings view
@@ -62,8 +60,6 @@ class iSpy:
             "global_config": config,
             "cameras": self.cameras,
             "flask_app": self.web_app.flask_app if self.web_app else None,
-            # HealthModule/PluginStatusModule read this lazily per-request, so
-            # it's fine that it's set properly a few lines down.
             "vision_instance": self,
         }
 
@@ -104,7 +100,7 @@ class iSpy:
             else:
                 self.logger.warning("Unknown frame processor: %s", name)
 
-        # wire the NT handler (if enabled) into the merged HealthModule so /api/health can report nt status
+        # wire NT handler into health module for /api/health
         nt = self.utilities.get("network_table_handler")
         health_mod = self.web_app.modules.get("health") if self.web_app else None
         if health_mod and nt:
@@ -133,7 +129,6 @@ class iSpy:
             self.web_app.set_vision_instance(self)
 
     def _enabled_addons(self, addon_type: str) -> list[tuple[str, dict]]:
-        """(name, settings) pairs from plugins.<type> - presence == enabled"""
         raw = self.config.get_nested("plugins", addon_type, default={})
         if not isinstance(raw, dict):
             return []
@@ -155,7 +150,6 @@ class iSpy:
                 logging.getLogger(name).setLevel(logging.WARNING)
 
     def reload_camera(self, cam_key: str, new_config: dict):
-        """not supported anymore - cam settings apply on the next vision start; kept so stale callers fail loudly"""
         raise RuntimeError(
             "reload_camera was removed - camera settings require a vision "
             "restart to take effect."
@@ -207,7 +201,6 @@ class iSpy:
     def run_solo_vision(self, camera):
         try:
             if camera.in_calibration_mode():
-                # calibration wizard is open - pause detections, feed raw frames
                 return [], camera.get_raw_frame()
             objects, frame = camera.run()
             return objects, frame
@@ -269,7 +262,6 @@ class iSpy:
 
         loop_s = time.perf_counter() - t0
 
-        # pipeline context for rollback / replay utilities
         pipeline_name = getattr(camera, "plugin_name", "unknown")
         pipeline_settings = {}
         camera_config_dict = {}
@@ -332,7 +324,6 @@ class iSpy:
 
         loop_s = time.perf_counter() - t0
 
-        # pipeline context for multi-camera: aggregate unique pipeline names
         pipeline_names = set()
         for cam in handler.cameras:
             pipeline_names.add(getattr(cam, "plugin_name", "unknown"))

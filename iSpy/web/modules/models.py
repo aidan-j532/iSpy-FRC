@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 
 def _camera_vision_model(cam) -> dict | None:
-    """the vision_model block - nested pipeline.settings or legacy flat entry"""
     if not isinstance(cam, dict):
         return None
     settings = get_pipeline_settings(cam) or {}
@@ -29,7 +28,6 @@ def _is_safe_path(base: Path, target: Path) -> bool:
 
 
 def _model_rel_path(path: Path) -> str:
-    """config-relative (YoloModels/...) path for a model file"""
     try:
         return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
@@ -37,8 +35,6 @@ def _model_rel_path(path: Path) -> str:
 
 
 def _target_format(settings: dict) -> str:
-    """the artifact format the camera would build: its explicit target_format,
-    else the pipeline's recommended backend for this device"""
     fmt = str(settings.get("target_format") or "auto").strip().lower()
     if fmt and fmt != "auto":
         return fmt
@@ -58,7 +54,6 @@ class ModelsModule(WebModule):
         self.pytorch_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_protected_model_names(self) -> set[str]:
-        """model filenames referenced by any camera's vision_model block"""
         config = self.context.get("config")
         if not config:
             return set()

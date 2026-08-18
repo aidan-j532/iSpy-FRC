@@ -1,18 +1,3 @@
-"""Optical flow odometry with live flow visualization.
-
-[BETA] Estimates robot ground velocity from optical flow. Farneback dense
-flow (or sparse Lucas-Kanade) is measured on the ground region of the
-frame; pixel flow is converted to robot-frame speed using the pinhole
-model and the camera's pitch/height (features moving *down* the image mean
-the robot is moving *forward*). The emitted Object's x/y carry the
-lateral/forward velocity in configured units per second - best treated as
-a soft dead-reckoning signal between vision updates, not an odometry source.
-
-The visualization renders a direction-coded HSV flow field over the ground
-region with a ground-region boundary line, and a compact HUD panel with
-speed / heading / coverage / fps / confidence.
-"""
-
 import cv2
 import logging
 import math
@@ -129,7 +114,6 @@ class OpticalFlowCamera(VisionPipeline):
         return (img_w / 2.0) / math.tan(math.radians(60.0 / 2.0))
 
     def _range_inches(self) -> float:
-        """distance from the camera to the ground region along the optical axis"""
         pitch = math.radians(self.camera_pitch_angle)
         cam_h = abs(self.camera_z)
         if pitch > 1e-3 and cam_h > 1e-6:
@@ -145,10 +129,6 @@ class OpticalFlowCamera(VisionPipeline):
         }.get(self.unit, self.unit + "/s")
 
     def _flow_measure(self, frame):
-        """returns (dx_px, dy_px, coverage, viz). dx/dy are the aggregate
-        full-resolution pixel flow per frame (median of valid ground flow),
-        coverage is the fraction of ground pixels with measurable motion,
-        viz carries everything the visualization needs (in full-res coords)."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
         scale = float(self._setting("flow_scale", 0.5))
         if 0 < scale < 1.0:
@@ -394,11 +374,9 @@ class OpticalFlowCamera(VisionPipeline):
         return self._last_objects
 
     def get_motion(self) -> dict:
-        """lateral/forward velocity (configured units/s) + raw pixel flow"""
         return dict(self._last_motion)
 
     def get_speed(self) -> dict:
-        """forward/lateral speed, total speed, and heading (degrees, + = right)"""
         m = self._last_motion or {}
         return {
             "forward": m.get("forward", 0.0),

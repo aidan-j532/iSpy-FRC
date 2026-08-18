@@ -25,10 +25,6 @@ from iSpy.config.iSpyConfig import (
 )
 from iSpy.vision import calibration as cam_calibration
 
-# Canonical COCO 17-keypoint skeleton (~1.8 m tall, origin at mid-hip, Y-up).
-# Keypoint order: nose, left_eye, right_eye, left_ear, right_ear,
-# left_shoulder, right_shoulder, left_elbow, right_elbow, left_wrist,
-# right_wrist, left_hip, right_hip, left_knee, right_knee, left_ankle, right_ankle.
 COCO17_OBJECT_POINTS = [
     [ 0.00,  0.62,  0.00],  # 0  nose
     [ 0.02,  0.67,  0.00],  # 1  left_eye
@@ -112,9 +108,6 @@ def _to_float(value, default: float = 0.0) -> float:
 
 
 def _camera_calibrated(entry: dict) -> bool:
-    """True when a camera config has real calibration data the depth/PnP paths
-    can use - known-object focal/FOV values or board intrinsics. A fresh camera
-    (all-zero known-object values, no intrinsics) is uncalibrated."""
     if not isinstance(entry, dict):
         return False
     calib = entry.get("calibration") or {}
@@ -135,7 +128,6 @@ def _decode_base64_frame(image_b64):
 
 
 def _pipeline_schema_keys(pipeline_name: str) -> set:
-    """settings keys the pipeline accepts; empty when unknown so pruning never nukes data"""
     try:
         from iSpy.vision.pipelines import get_pipeline_classes
         cls = get_pipeline_classes().get(pipeline_name)
@@ -151,8 +143,6 @@ def _pipeline_schema_keys(pipeline_name: str) -> set:
 
 
 def _prune_stale_pipeline_settings(entry: dict) -> None:
-    """drop settings from a different pipeline (they pile up when a cam
-    switches pipelines) + legacy aliases; unknown keys stay - hand-written tuning knobs"""
     if not isinstance(entry, dict):
         return
     pipeline_name = get_pipeline_name(entry)
@@ -180,8 +170,6 @@ def _prune_stale_pipeline_settings(entry: dict) -> None:
 
 
 def _vision_model_target_format(settings: dict) -> str:
-    """the artifact format the camera would build: its explicit target_format,
-    else the pipeline's recommended backend for this device."""
     fmt = str(settings.get("target_format") or "auto").strip().lower()
     if fmt and fmt != "auto":
         return fmt
@@ -193,8 +181,6 @@ def _vision_model_target_format(settings: dict) -> str:
 
 
 def _vision_model_rel_path(path) -> str:
-    """config-relative (YoloModels/...) path for a model file - keeps configs
-    portable instead of storing absolute windows/linux paths"""
     p = Path(str(path or ""))
     if p.is_absolute():
         try:
@@ -205,11 +191,6 @@ def _vision_model_rel_path(path) -> str:
 
 
 def _resolve_vision_model_files(settings: dict) -> None:
-    """keep vision_model.file_path in sync with source_pt after a model pick:
-    point it at the source's already-built optimized artifact when one exists,
-    otherwise back at the .pt so the camera boots on the right model right
-    away (the background optimizer swaps file_path to the fresh artifact once
-    its build lands)."""
     vm = settings.get("vision_model")
     if not isinstance(vm, dict):
         return
@@ -227,8 +208,6 @@ def _resolve_vision_model_files(settings: dict) -> None:
 
 
 def _windows_cameras_from_registry():
-    """find capture sources via the registry without opening cams; key order ==
-    the order CAP_MSMF assigns indices"""
     devices = []
     try:
         import winreg
@@ -265,8 +244,6 @@ def _windows_cameras_from_registry():
 
 
 def _windows_camera_name(iface):
-    """grab the friendly name from the registry; generic uvc names get replaced
-    by walking up to the parent usb node (thats where the real name lives)"""
     try:
         import winreg
     except ImportError:
@@ -372,7 +349,6 @@ def _v4l2_caps(video_path):
 
 
 def _linux_is_capture_node(video_path):
-    """true if a real capture device; None = caps unreadable, keep the node"""
     caps = _v4l2_caps(video_path)
     if caps == 0:
         return None
@@ -383,8 +359,6 @@ def _linux_is_capture_node(video_path):
 
 
 def _linux_device_key(video_path):
-    """physical device behind a /dev/videoN node - the dedupe key that kills
-    linux "same cam twice" detection (video0+video1 of one uvc cam share it)"""
     m = re.search(r"/video(?P<num>\d+)$", video_path)
     if not m:
         return video_path
@@ -414,7 +388,6 @@ def _linux_sysfs_name(video_path):
 
 
 def _linux_device_groups():
-    """group /dev/videoN nodes by physical device - v4l2-ctl first, sysfs fallback"""
     try:
         result = subprocess.run(
             ["v4l2-ctl", "--list-devices"],
@@ -501,7 +474,6 @@ class CamerasModule(WebModule):
         return fallback
 
     def _pnp_model_info(self, entry):
-        """(vision_model dict, num_keypoints, error) - error is None if usable"""
         settings = get_pipeline_settings(entry) or {}
         vm = settings.get("vision_model")
         if not isinstance(vm, dict) or not vm.get("file_path"):
@@ -664,8 +636,6 @@ class CamerasModule(WebModule):
             self._evict_stale(now)
 
     def _device_key(self, cam) -> str:
-        """hardware id for a running cam; falls back to source when device_id
-        resolution failed (image placeholders etc)"""
         dev_id = getattr(cam, "device_id", None)
         if dev_id:
             return dev_id
@@ -680,7 +650,6 @@ class CamerasModule(WebModule):
     # ------------------------------------------------------------------
 
     def _tuning_values(self, entry: dict) -> dict:
-        """saved tuning values for a cam entry, defaults for keys not set"""
         values = dict(_TUNING_DEFAULTS)
         for key in _TUNING_KEYS:
             if key in entry:
@@ -688,8 +657,6 @@ class CamerasModule(WebModule):
         return values
 
     def _live_cam_for(self, key: str, cam_name: str):
-        """the running Camera object (if web + vision share a process), by
-        config key or display name"""
         for lookup in (key, cam_name):
             cam = self.live_cameras.get(lookup)
             if cam is not None:
@@ -753,7 +720,6 @@ class CamerasModule(WebModule):
     # ------------------------------------------------------------------
 
     def _save_calibration(self, cam_name: str, calib_dict: dict):
-        """merge calib_dict into the camera's calibration and persist; returns the merged dict"""
         config = self.context["config"]
         cams, key, entry = self._find_camera_entry(cam_name)
         if entry is None:
@@ -800,7 +766,6 @@ class CamerasModule(WebModule):
         return jsonify(success=True, calibration=saved)
 
     def _calibration_board_pdf(self):
-        """serve the ChArUco calibration board PDF for printing"""
         assets = Path(__file__).resolve().parent.parent.parent / "assets"
         pdf_path = assets / "calibration_board.pdf"
         if not pdf_path.exists():
@@ -841,7 +806,6 @@ class CamerasModule(WebModule):
 
 
     def _calibration_mode(self, cam_name):
-        """pause/resume detections while the calibration wizard is open"""
         data = request.get_json(force=True) or {}
         active = bool(data.get("active", True))
         cam = self.live_cameras.get(cam_name)
@@ -850,7 +814,6 @@ class CamerasModule(WebModule):
         return jsonify(success=True)
 
     def _calibration_heartbeat(self, cam_name):
-        """keeps the calibration pause alive; stops arriving -> detections resume"""
         cam = self.live_cameras.get(cam_name)
         if cam is not None and hasattr(cam, "calibration_heartbeat"):
             cam.calibration_heartbeat()
@@ -896,8 +859,6 @@ class CamerasModule(WebModule):
         return jsonify(**payload)
 
     def _auto_hint(self, cam_name, msg):
-        """stale auto-capture hint when the board is out of view - only touches
-        a session that is actively auto-capturing so manual users see nothing."""
         _, key, _ = self._find_camera_entry(cam_name)
         key = key or cam_name
         with self.calib_lock:
@@ -906,18 +867,6 @@ class CamerasModule(WebModule):
                 session["auto_msg"] = msg
 
     def _auto_consider(self, key, kind, gray, corners, ids=None, pattern=None, dict_id=None, _synchronous=True):
-        """auto-capture + rolling solve step driven by the live calibration
-        feed. kind is 'charuco'. The frame is stored only when the board is
-        complete enough and moved from every prior capture; a rolling solve
-        refreshes the live RMS. Auto capture never stops or saves on its own -
-        it keeps going until the user pauses, then the wizard's "Calibrate
-        intrinsics" button saves over the captured frames.
-
-        The capture decision is fast and runs inline. The rolling solve is the
-        slow part, so when _synchronous is False (the feed path) it is handed
-        to a daemon thread - the live view keeps streaming while it runs.
-        Direct callers (tests, scripted captures) keep the blocking behavior
-        so the result is guaranteed present on return."""
         need_solve = False
         now = time.monotonic()
         with self.calib_lock:
@@ -972,8 +921,6 @@ class CamerasModule(WebModule):
             ).start()
 
     def _auto_solve_and_finalize(self, key, kind, pattern, dict_id):
-        """run the rolling solve and refresh the live RMS. Runs on a daemon
-        thread when the live feed triggers it so the stream never stalls."""
         try:
             result = self._auto_solve(key, kind, pattern, dict_id)
         except Exception as exc:
@@ -1017,11 +964,6 @@ class CamerasModule(WebModule):
         return result
 
     def _calibration_feed(self, cam_name):
-        """MJPEG feed for the calibration wizard - frames straight from the
-        capture thread (never run through the pipeline's detectors). Pass
-        ?overlay=charuco to draw the detected board on top so the user can see
-        what the detector sees while they move it. Captured frames are drawn on
-        top in their own random color."""
         overlay = request.args.get("overlay", "")
         pattern_arg = request.args.get("pattern")
         dict_arg = request.args.get("dict")
@@ -1043,8 +985,6 @@ class CamerasModule(WebModule):
         )
 
     def _charuco_session_layout(self, cam_name):
-        """cached (pattern, dictionary_id) the user selected for this camera,
-        so the live feed/captures stay on the board's actual layout."""
         _, key, _ = self._find_camera_entry(cam_name)
         key = key or cam_name
         with self.calib_lock:
@@ -1055,11 +995,6 @@ class CamerasModule(WebModule):
 
 
     def _draw_captured_overlays(self, frame, cam_name, overlay):
-        """draw every captured frame's detection on the live feed in its own
-        random color, so each capture is confirmed on the live view
-        (PhotonVision style) instead of a thumbnail strip under the wizard.
-        All layers go onto one shared copy - the copying draw helpers would
-        otherwise cost N full-frame copies per streamed frame."""
         _, key, _ = self._find_camera_entry(cam_name)
         key = key or cam_name
         with self.calib_lock:
@@ -1078,11 +1013,6 @@ class CamerasModule(WebModule):
         return out
 
     def _detect_workframe(self, frame, max_dim=_DETECT_MAX_DIM):
-        """downscaled copy of the frame for board detection plus the scale
-        factor corners must be multiplied by to get back to full-res pixels.
-        Board detection dominates the calibration feed's per-frame cost, so it
-        runs at reduced resolution; captured corners stay in the full-res space
-        the intrinsics solve expects."""
         h, w = frame.shape[:2]
         largest = max(w, h)
         if largest <= max_dim:
@@ -1100,12 +1030,6 @@ class CamerasModule(WebModule):
         return (np.asarray(corners, dtype=np.float32) * factor).astype(np.float32)
 
     def _generate_calibration(self, cam_name, overlay="", pattern=None, dict_id=None):
-        """MJPEG generator for the calibration wizard. Board detection and
-        auto capture are the expensive parts (a rolling solve ~0.1s), so they
-        run on a background worker thread that publishes the latest detection;
-        the stream thread only copies the raw frame, draws the cached overlay
-        and encodes. That keeps the feed smooth at ~20fps even while a solve
-        is running instead of stuttering in fixed intervals."""
         last_frame_time = time.monotonic()
         result_lock = threading.Lock()
         latest = {"detect": None}
@@ -1239,10 +1163,6 @@ class CamerasModule(WebModule):
             stop_evt.set()
 
     def _charuco_status(self, cam_name):
-        """one-shot board detection on the latest raw frame - the wizard polls
-        this to show live 'board found: N corners' feedback next to the feed.
-        The board layout + dictionary come from the user-selected session
-        layout so the feed and captures stay consistent."""
         cam = self.live_cameras.get(cam_name)
         if cam is None or not hasattr(cam, "get_raw_frame"):
             return jsonify(found=False, message="Camera not live")

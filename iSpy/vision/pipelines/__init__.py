@@ -1,10 +1,3 @@
-"""Core vision pipelines.
-
-Pipelines are first-class parts of iSpy, not plugins: config pipeline names
-resolve to real code here, no directory scanning. Config selects one per
-camera via the ``pipeline`` key.
-"""
-
 from iSpy.vision.pipelines.april_tag import AprilTagCamera
 from iSpy.vision.pipelines.depth_anything import DepthAnythingCamera
 from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera

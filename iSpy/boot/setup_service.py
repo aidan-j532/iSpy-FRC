@@ -4,8 +4,6 @@ import os
 import platform
 from pathlib import Path
 
-# Mainly vibe coded but supercool ngl
-
 SERVICE_NAME = "iSpy"
 
 def run(cmd, check=True):

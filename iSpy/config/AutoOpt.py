@@ -51,7 +51,6 @@ def _lsusb_output() -> str:
 
 @lru_cache()
 def has_jetson() -> bool:
-    """jetson dont expose /dev/nvidia0 or nvidia-smi, so has_nvidia() needs its own check"""
     if os.path.exists("/etc/nv_tegra_release"):
         return True
     for path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
