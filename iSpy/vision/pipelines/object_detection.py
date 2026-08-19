@@ -10,7 +10,7 @@ import queue
 import json
 from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.genericYolo import Box, Results, GenericYolo, ModelFileError
-from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, get_pipeline_settings
+from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, get_pipeline_settings, unit_to_inches
 from iSpy.vision import triangulation
 from iSpy.vision import calibration as cam_calibration
 
@@ -40,10 +40,12 @@ class ObjectDetectionCamera(VisionPipeline):
 
             self.camera_bot_relative_yaw = camera_config["yaw"]
             self.camera_pitch_angle = camera_config["pitch"]
-            self.camera_height = camera_config["height"]
-            self.camera_x = camera_config["x"]
-            self.camera_y = camera_config["y"]
-            self.camera_z = camera_config["z"]
+
+            _pos_unit = config.get("unit", "frc")
+            self.camera_height = unit_to_inches(camera_config["height"], _pos_unit)
+            self.camera_x = unit_to_inches(camera_config["x"], _pos_unit)
+            self.camera_y = unit_to_inches(camera_config["y"], _pos_unit)
+            self.camera_z = unit_to_inches(camera_config.get("z", 0.0), _pos_unit)
         except KeyError as e:
             raise ValueError(f"Missing camera config key: {e}")
 
@@ -625,10 +627,6 @@ class ObjectDetectionCamera(VisionPipeline):
                     self._frame_event.clear()
                     continue
 
-            if not self.frame_sync and not self._preproc_q.empty():
-                time.sleep(0.001)
-                continue
-
             last_ts = ts
             orig_shape = frame.shape
             preprocessed = self.model._preprocess_frame(frame)
@@ -864,7 +862,11 @@ class ObjectDetectionCamera(VisionPipeline):
         )
 
     def run(self):
-        frame = self.get_frame()
+        if self.is_image:
+            frame = self.get_frame()
+        else:
+            with self.frame_lock:
+                frame = self.frame
         if frame is None:
             return [], None
         if not self._is_processable():

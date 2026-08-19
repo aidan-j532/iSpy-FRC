@@ -6,7 +6,7 @@ import time
 
 from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.Object import Object
-from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, unit_to_inches
 from iSpy.vision import triangulation
 from iSpy.vision import calibration as cam_calibration
 
@@ -32,10 +32,12 @@ class AprilTagCamera(VisionPipeline):
             self.subsystem = camera_config["subsystem"]
             self.camera_bot_relative_yaw = camera_config.get("yaw", 0.0)
             self.camera_pitch_angle = camera_config.get("pitch", 0.0)
-            self.camera_height = camera_config.get("height", 0.0)
-            self.camera_x = camera_config.get("x", 0.0)
-            self.camera_y = camera_config.get("y", 0.0)
-            self.camera_z = camera_config.get("z", 0.0)
+
+            _pos_unit = config.get("unit", "frc")
+            self.camera_height = unit_to_inches(camera_config.get("height", 0.0), _pos_unit)
+            self.camera_x = unit_to_inches(camera_config.get("x", 0.0), _pos_unit)
+            self.camera_y = unit_to_inches(camera_config.get("y", 0.0), _pos_unit)
+            self.camera_z = unit_to_inches(camera_config.get("z", 0.0), _pos_unit)
             
             calib = camera_config.get("calibration", {})
             self.known_calibration_distance = calib.get("distance", 1.0)

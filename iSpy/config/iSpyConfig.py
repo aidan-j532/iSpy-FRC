@@ -10,7 +10,7 @@ _MODEL_BACKED_PIPELINES = ("object_detection",)
 _CAMERA_CORE_KEYS = {
     "name", "source", "device_id", "subsystem", "grayscale",
     "x", "y", "z", "height", "yaw", "pitch", "calibration",
-    "auto_brightness", "auto_exposure", "exposure_time", "gain", "fps_cap",
+    "exposure_time", "gain", "fps_cap",
     "brightness", "contrast", "saturation", "gamma",
     "white_balance", "tint",
     "csi", "path",
@@ -27,6 +27,38 @@ _LEGACY_SETTING_ALIASES = {
 }
 
 _ADDON_TYPES = ("trackers", "utilities", "frame_processors")
+
+# Conversion factors: how many inches does 1 of the given unit equal.
+_UNIT_TO_INCHES = {
+    "inch": 1.0,
+    "inches": 1.0,
+    "foot": 12.0,
+    "feet": 12.0,
+    "meter": 1.0 / 0.0254,
+    "meters": 1.0 / 0.0254,
+    "centimeter": 1.0 / 2.54,
+    "centimeters": 1.0 / 2.54,
+    # FRC/WPILib: inputs are in inches (calibration convention)
+    "frc": 1.0,
+}
+
+_UNIT_LABELS = {
+    "inch": "in", "inches": "in",
+    "foot": "ft", "feet": "ft",
+    "meter": "m", "meters": "m",
+    "centimeter": "cm", "centimeters": "cm",
+    "frc": "in",
+}
+
+
+def unit_to_inches(value: float, unit: str) -> float:
+    """Convert *value* from *unit* to inches (the internal math unit)."""
+    return value * _UNIT_TO_INCHES.get(unit.lower().strip(), 1.0)
+
+
+def unit_label(unit: str) -> str:
+    """Return a short display label for *unit* (e.g. 'in', 'm', 'ft')."""
+    return _UNIT_LABELS.get(unit.lower().strip(), unit)
 
 # legacy top-level keys folded into individual add-ons. (key, addon type,
 # addon name, target setting key) - used by _migrate_addons.
@@ -613,8 +645,6 @@ class iSpyCameraConfig:
         "pitch": 0,
         "yaw": 0,
         "grayscale": False,
-        "auto_brightness": False,
-        "auto_exposure": False,
         "brightness": 0,
         "contrast": 0,
         "saturation": 0,

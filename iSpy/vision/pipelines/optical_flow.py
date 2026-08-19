@@ -71,7 +71,9 @@ class OpticalFlowCamera(VisionPipeline):
 
         self.subsystem = camera_config.get("subsystem", "field")
         self.camera_pitch_angle = camera_config.get("pitch", 0.0)
-        self.camera_z = camera_config.get("z", 0.0)
+        _pos_unit = config.get("unit", "frc")
+        from iSpy.config.iSpyConfig import unit_to_inches
+        self.camera_z = unit_to_inches(camera_config.get("z", 0.0), _pos_unit)
 
         calib = camera_config.get("calibration", {}) or {}
         self.fov = calib.get("fov", 0.0) or 0.0

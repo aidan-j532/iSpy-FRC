@@ -75,12 +75,6 @@ class Camera:
         self.calibration_active = False
         self.calibration_last_seen = 0.0
 
-        self.auto_brightness = camera_config.get("auto_brightness", True)
-        self._brightness_target = 128.0
-        self._brightness_gamma = 1.0
-        self._brightness_lut: np.ndarray | None = None
-        self._brightness_frame_count = 0
-
         self._brightness = float(camera_config.get("brightness", 0) or 0)
         self._contrast = float(camera_config.get("contrast", 0) or 0)
         self._saturation = float(camera_config.get("saturation", 0) or 0)
@@ -89,10 +83,10 @@ class Camera:
         self._tint = float(camera_config.get("tint", 0) or 0)
 
         self._prefer_alternate_backend = False
+        self._reopen_requested = False
 
         self._exposure_time = camera_config.get("exposure_time", 100)
         self._gain = camera_config.get("gain", 200)
-        self._auto_exposure = bool(camera_config.get("auto_exposure", True))
 
         try:
             self._fps_cap = max(0, float(camera_config.get("fps_cap", 0) or 0))
@@ -332,7 +326,7 @@ class Camera:
                 subprocess.run(
                     ["v4l2-ctl", "-d", device,
                      "--set-ctrl=exposure_dynamic_framerate=0",
-                     "--set-ctrl=auto_exposure=1",
+                     "--set-ctrl=auto_exposure=0",
                      f"--set-ctrl=exposure_time_absolute={self._exposure_time}",
                      f"--set-ctrl=gain={self._gain}"],
                     capture_output=True, text=True, timeout=5,
@@ -400,6 +394,11 @@ class Camera:
         next_frame_time = 0.0
         consecutive_failures = 0
         while not self.stopped:
+            if self._reopen_requested:
+                self._reopen_requested = False
+                self._reopen_capture()
+                time.sleep(0.1)
+                continue
             if frame_interval > 0:
                 now = time.perf_counter()
                 if now < next_frame_time:
@@ -436,22 +435,6 @@ class Camera:
                 time.sleep(0.05) # Don't starve CPU
                 continue
 
-            if self.auto_brightness:
-                self._brightness_frame_count += 1
-                if self._brightness_frame_count % 15 == 0:
-                    mean_br = np.mean(frame)
-                    if abs(mean_br - self._brightness_target) > 5:
-                        target_gamma = max(mean_br, 1.0) / self._brightness_target
-                        target_gamma = np.clip(target_gamma, 0.3, 3.0)
-                        self._brightness_gamma += (target_gamma - self._brightness_gamma) * 0.2
-                        self._brightness_gamma = np.clip(self._brightness_gamma, 0.3, 3.0)
-                        gamma_table = (
-                            (np.arange(256, dtype=np.float32) / 255.0) ** self._brightness_gamma * 255.0
-                        ).astype(np.uint8)
-                        self._brightness_lut = gamma_table
-                if self._brightness_lut is not None:
-                    frame = cv2.LUT(frame, self._brightness_lut)
-
             frame = self._apply_image_adjustments(frame)
 
             with self.frame_lock:
@@ -475,24 +458,24 @@ class Camera:
         if platform.system() == "Linux":
             try:
                 device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
-                args = ["v4l2-ctl", "-d", device]
-                if self._auto_exposure:
-                    args.append("--set-ctrl=auto_exposure=3")
-                else:
-                    args.append("--set-ctrl=auto_exposure=1")
-                    args.append(f"--set-ctrl=exposure_time_absolute={int(self._exposure_time)}")
-                args.append(f"--set-ctrl=gain={int(self._gain)}")
-                subprocess.run(args, capture_output=True, text=True, timeout=5)
+                subprocess.run(
+                    ["v4l2-ctl", "-d", device,
+                     "--set-ctrl=auto_exposure=0",
+                     f"--set-ctrl=exposure_time_absolute={int(self._exposure_time)}",
+                     f"--set-ctrl=gain={int(self._gain)}"],
+                    capture_output=True, text=True, timeout=5,
+                )
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
             return
         try:
-            if not self._auto_exposure:
-                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-                cap.set(cv2.CAP_PROP_EXPOSURE, self._exposure_time)
-            cap.set(cv2.CAP_PROP_GAIN, self._gain)
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
+            ok_exp = cap.set(cv2.CAP_PROP_EXPOSURE, self._exposure_time)
+            ok_gain = cap.set(cv2.CAP_PROP_GAIN, self._gain)
         except Exception:
-            pass
+            ok_exp = ok_gain = False
+        if not ok_exp or not ok_gain:
+            self._reopen_requested = True
 
     def _apply_saturation(self, frame, saturation: float) -> np.ndarray:
         factor = 1.0 + saturation / 100.0
@@ -543,8 +526,6 @@ class Camera:
         return frame
 
     def set_image_adjustments(self, adjustments: dict) -> dict:
-        if "auto_brightness" in adjustments:
-            self.auto_brightness = bool(adjustments["auto_brightness"])
         if "brightness" in adjustments:
             self._brightness = self._clamp_num(adjustments["brightness"], -100, 100, 0)
         if "contrast" in adjustments:
@@ -557,8 +538,6 @@ class Camera:
             self._tint = self._clamp_num(adjustments["tint"], -100, 100, 0)
         if "gamma" in adjustments:
             self._gamma = self._clamp_num(adjustments["gamma"], 0.3, 3.0, 1.0)
-        if "auto_exposure" in adjustments:
-            self._auto_exposure = bool(adjustments["auto_exposure"])
         if "exposure_time" in adjustments:
             self._exposure_time = int(
                 self._clamp_num(adjustments["exposure_time"], 0, 1_000_000, 100)
@@ -570,14 +549,12 @@ class Camera:
 
     def get_image_adjustments(self) -> dict:
         return {
-            "auto_brightness": bool(self.auto_brightness),
             "brightness": self._brightness,
             "contrast": self._contrast,
             "saturation": self._saturation,
             "white_balance": self._white_balance,
             "tint": self._tint,
             "gamma": self._gamma,
-            "auto_exposure": bool(self._auto_exposure),
             "exposure_time": self._exposure_time,
             "gain": self._gain,
         }

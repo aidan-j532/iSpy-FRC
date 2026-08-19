@@ -82,13 +82,11 @@ _SETTING_ALIASES = {"quantized": "quantize", "auto_opt": "optimize"}
 # image tuning knobs (sliders in the camera lightbox). these live on the cam
 # entry like the other capture keys; the live Camera applies them immediately
 _TUNING_KEYS = (
-    "auto_brightness", "auto_exposure", "brightness", "contrast",
+    "brightness", "contrast",
     "saturation", "white_balance", "tint", "gamma",
     "exposure_time", "gain",
 )
 _TUNING_DEFAULTS = {
-    "auto_brightness": False,
-    "auto_exposure": False,
     "brightness": 0,
     "contrast": 0,
     "saturation": 0,
@@ -691,8 +689,6 @@ class CamerasModule(WebModule):
         for k, v in cleaned.items():
             if v is None:
                 entry.pop(k, None)
-            elif k == "auto_brightness":
-                entry[k] = bool(v)
             else:
                 entry[k] = v
         config = self.context["config"]
@@ -706,6 +702,11 @@ class CamerasModule(WebModule):
                 return jsonify(error=f"Failed to apply tuning: {exc}"), 500
         else:
             applied = self._tuning_values(entry)
+            return jsonify(
+                success=True,
+                note="Saved to config. Restart vision to apply - camera is not live.",
+                applied=applied,
+            )
         return jsonify(
             success=True,
             note="Saved - applies immediately to the live feed.",
