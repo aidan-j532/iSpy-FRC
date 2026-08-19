@@ -314,7 +314,15 @@ class Results:
             if not all(math.isfinite(v) for v in box.xyxy):
                 continue
             x1, y1, x2, y2 = map(int, box.xyxy)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            # confidence-based color: green >= 0.7, yellow >= 0.4, red < 0.4
+            if box.conf >= 0.7:
+                color = (0, 255, 0)
+            elif box.conf >= 0.4:
+                color = (0, 255, 255)
+            else:
+                color = (0, 0, 255)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            label = f"{box.conf:.0%}"
             if box.rotation is not None:
                 roll, pitch, yaw = box.rotation
                 label = (
@@ -322,16 +330,18 @@ class Results:
                     f"P:{math.degrees(pitch):.0f} "
                     f"Y:{math.degrees(yaw):.0f}"
                 )
-                cv2.putText(
-                    frame,
-                    label,
-                    (x1, y1 - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.4,
-                    (0, 200, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+            cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+            cv2.putText(
+                frame,
+                label,
+                (x1 + 2, y1 - 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 0, 0),
+                1,
+                cv2.LINE_AA,
+            )
         for kpt_set in self.keypoints:
             nk = kpt_set.shape[0]
             skeleton = self._SKELETONS.get(nk)

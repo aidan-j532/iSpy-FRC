@@ -285,6 +285,15 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
     config.save(quiet=True)
     logger.info("Boot sequence complete.")
 
+    # Start UDP announce beacon so tools/find_ispy.py can locate this board
+    # even when mDNS and DHCP hostname resolution both fail.
+    try:
+        from iSpy.boot.announce import start_announcer
+        start_announcer(daemon=True)
+        logger.info("UDP announce beacon started.")
+    except Exception as exc:
+        logger.warning("Could not start UDP announcer (non-fatal): %s", exc)
+
     if install_service:
         install_script = str(_BOOT_DIR / "install.py")
         try:

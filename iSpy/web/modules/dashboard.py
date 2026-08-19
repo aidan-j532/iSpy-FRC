@@ -20,6 +20,7 @@ class DashboardModule(WebModule):
 
     def __init__(self, context: dict):
         super().__init__(context)
+        self._data_lock = threading.Lock()
         self._latest: dict = {
             "fps": 0, "vision_ms": 0, "camera_lag_ms": 0,
             "detections": 0, "loop_s": 0,

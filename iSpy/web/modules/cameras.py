@@ -229,11 +229,15 @@ def _windows_cameras_from_registry():
             subkey_pos += 1
             if "#{" not in iface:
                 continue
+            raw_hw = iface[:iface.find("#{")]
+            # USB cameras expose two UVC interfaces (MI_00 video, MI_01 metadata)
+            # - strip &MI_XX so they collapse to the same physical device
+            dedup_key = re.sub(r"&MI_\w+", "", raw_hw, flags=re.IGNORECASE)
             devices.append({
                 "index": camera_index,
                 "name": _windows_camera_name(iface) or f"Camera {camera_index}",
-                # unique per device interface (USB\VID_...&PID_...&MI_01\<instance>) - dedupe key + stable device_id
-                "hw_id": iface[:iface.find("#{")],
+                "hw_id": raw_hw,
+                "dedup_key": dedup_key,
             })
             camera_index += 1
     finally:
@@ -1594,7 +1598,7 @@ class CamerasModule(WebModule):
                     # all nodes confirmed non-capture (encoder/codec/radio...) - skip the group
                     continue
                 node = sorted(capture)[0]
-                key = _linux_device_key(node) or node
+                key = _linux_device_key(node) or _linux_sysfs_name(node) or node
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
@@ -1609,7 +1613,7 @@ class CamerasModule(WebModule):
                 is_capture = _linux_is_capture_node(path)
                 if is_capture is False:
                     continue
-                key = _linux_device_key(path) or path
+                key = _linux_device_key(path) or _linux_sysfs_name(path) or path
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
@@ -1627,17 +1631,17 @@ class CamerasModule(WebModule):
                 claimed = {s for s in self.sources.values() if s}
             seen_interfaces = set()
             for cam in _windows_cameras_from_registry():
-                hw_id = cam.get("hw_id")
-                if hw_id in seen_interfaces:
+                dedup = cam.get("dedup_key") or cam.get("hw_id")
+                if dedup in seen_interfaces:
                     continue
-                seen_interfaces.add(hw_id)
+                seen_interfaces.add(dedup)
                 index = str(cam["index"])
                 if index in claimed:
                     continue
                 devices.append({
                     "path": index,
                     "name": cam["name"],
-                    "device_id": hw_id,
+                    "device_id": cam.get("hw_id"),
                 })
 
         else:

@@ -5,6 +5,105 @@ import platform
 from pathlib import Path
 
 SERVICE_NAME = "iSpy"
+FIRST_BOOT_SERVICE_NAME = "ispy-first-boot"
+
+MDNS_HOSTNAME = "ispy"
+
+
+def setup_mdns(hostname: str = MDNS_HOSTNAME) -> None:
+    """Make the board reachable at http://<hostname>.local - Linux/avahi only."""
+    if get_platform() not in ("linux_systemd", "linux_other"):
+        print("mDNS setup skipped (only implemented for Linux/avahi).")
+        return
+
+    check = run(["systemctl", "list-unit-files", "avahi-daemon.service"], check=False)
+    if "avahi-daemon.service" not in check.stdout:
+        print("Installing avahi-daemon...")
+        install = run(["sudo", "apt-get", "install", "-y", "avahi-daemon"], check=False)
+        if install.returncode != 0:
+            print(f"Failed to install avahi-daemon: {install.stderr.strip()}")
+            print(f"Install it manually, then re-run setup_mdns() to get {hostname}.local")
+            return
+
+    current = run(["hostname"], check=False).stdout.strip()
+    if current != hostname:
+        result = run(["sudo", "hostnamectl", "set-hostname", hostname], check=False)
+        if result.returncode != 0:
+            print(f"Failed to set hostname: {result.stderr.strip()}")
+            return
+        run(["sudo", "sed", "-i", f"s/{current}/{hostname}/g", "/etc/hosts"], check=False)
+
+    run(["sudo", "systemctl", "enable", "avahi-daemon"], check=False)
+    run(["sudo", "systemctl", "restart", "avahi-daemon"], check=False)
+    print(f"mDNS ready - board will be reachable at http://{hostname}.local:5000")
+    print("(requires a reboot if the hostname just changed)")
+
+    # Best-effort: ask DHCP client to send hostname so routers that publish
+    # DHCP client hostnames into local DNS can resolve "ispy" (no .local).
+    # This is a fallback for Windows machines without Bonjour — not all
+    # environments support it, so failures are logged and ignored.
+    _configure_dhcp_hostname(hostname)
+
+def _configure_dhcp_hostname(hostname: str) -> None:
+    """Best-effort: configure DHCP client to advertise hostname.
+
+    Routers that publish DHCP client hostnames into local DNS will then
+    resolve ``<hostname>`` (without .local) — useful for Windows clients
+    that lack Bonjour/mDNS.  Failures are non-fatal.
+    """
+    # Try dhcpcd first (common on Raspberry Pi OS / Armbian).
+    dhcpcd_conf = "/etc/dhcpcd.conf"
+    if os.path.exists(dhcpcd_conf):
+        try:
+            with open(dhcpcd_conf) as f:
+                existing = f.read()
+            marker = f"# iSpy hostname hint"
+            if marker not in existing:
+                with open(dhcpcd_conf, "a") as f:
+                    f.write(f"\n{marker}\nhostname {hostname}\n")
+                run(["sudo", "systemctl", "restart", "dhcpcd"], check=False)
+                print(f"dhcpcd: configured hostname hint '{hostname}' for DHCP.")
+        except Exception as exc:
+            print(f"dhcpcd: could not set hostname hint (non-fatal): {exc}")
+
+    # Try NetworkManager (used on some Armbian builds).
+    nm_conns = run(
+        ["sudo", "nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
+        check=False,
+    )
+    if nm_conns.returncode == 0 and nm_conns.stdout.strip():
+        try:
+            # Get the primary connection name
+            primary = run(["sudo", "nmcli", "-t", "-f", "NAME", "general", "status"], check=False)
+            conn_name = primary.stdout.strip().split("\n")[0] if primary.stdout.strip() else ""
+            if conn_name:
+                run(
+                    ["sudo", "nmcli", "connection", "modify", conn_name,
+                     "ipv4.dhcp-send-hostname", "yes",
+                     "ipv4.dhcp-hostname", hostname],
+                    check=False,
+                )
+                run(["sudo", "nmcli", "connection", "up", conn_name], check=False)
+                print(f"NetworkManager: configured DHCP hostname '{hostname}'.")
+        except Exception as exc:
+            print(f"NetworkManager: could not set DHCP hostname (non-fatal): {exc}")
+
+    # Try systemd-networkd (fallback for minimal images).
+    networkd_dir = "/etc/systemd/network"
+    if os.path.isdir(networkd_dir):
+        try:
+            for conffile in os.listdir(networkd_dir):
+                if conffile.endswith(".network"):
+                    path = os.path.join(networkd_dir, conffile)
+                    with open(path) as f:
+                        existing = f.read()
+                    if "Hostname" not in existing:
+                        with open(path, "a") as f:
+                            f.write(f"\n[DHCP]\nHostname={hostname}\n")
+                        print(f"systemd-networkd: configured DHCP hostname in {conffile}.")
+        except Exception as exc:
+            print(f"systemd-networkd: could not set DHCP hostname (non-fatal): {exc}")
+
 
 def run(cmd, check=True):
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
@@ -20,17 +119,57 @@ def get_platform():
         return "linux_systemd"
     return "linux_other"
 
-def setup_systemd(script_path):
+def setup_first_boot_service(project_root: str | None = None) -> None:
+    """Write and enable the ispy-first-boot.service oneshot unit."""
+    python = sys.executable
+    workdir = project_root or os.getcwd()
+
+    unit = f"""[Unit]
+Description=iSpy first-boot setup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={python} -m iSpy.boot.first_boot
+WorkingDirectory={workdir}
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+"""
+    unit_file = f"/etc/systemd/system/{FIRST_BOOT_SERVICE_NAME}.service"
+
+    proc = subprocess.run(
+        ["sudo", "tee", unit_file],
+        input=unit,
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        print(f"Failed to write {FIRST_BOOT_SERVICE_NAME}.service: {proc.stderr}")
+        sys.exit(1)
+
+    run(["sudo", "systemctl", "daemon-reload"])
+    run(["sudo", "systemctl", "enable", FIRST_BOOT_SERVICE_NAME])
+    run(["sudo", "systemctl", "start", FIRST_BOOT_SERVICE_NAME])
+    print(f"Service '{FIRST_BOOT_SERVICE_NAME}' installed, enabled, and started.")
+
+
+def setup_systemd(script_path, project_root: str | None = None):
     user = "pi"
     python = sys.executable
-    workdir = os.path.dirname(os.path.abspath(script_path))
+    workdir = project_root or os.getcwd()
 
     service = f"""[Unit]
 Description={SERVICE_NAME}
-After=network.target
+After=network-online.target ispy-first-boot.service
+Requires=ispy-first-boot.service
 
 [Service]
-ExecStart={python} {os.path.abspath(script_path)}
+ExecStart={python} -m iSpy.boot.boot
 Restart=on-failure
 RestartSec=5
 User={user}
@@ -192,11 +331,13 @@ def setup_macos(script_path):
     print(f"  Remove:  rm {plist_path}")
 
 
-def setup(script_path: str):
+def setup(script_path: str, project_root: str | None = None):
     detected = get_platform()
     print(f"Detected platform: {detected}")
     if detected == "linux_systemd":
-        setup_systemd(script_path)
+        setup_first_boot_service(project_root)
+        setup_systemd(script_path, project_root)
+        setup_mdns()
     elif detected == "windows":
         setup_windows(script_path)
     elif detected == "macos":
