@@ -51,6 +51,20 @@ def _coerce_setting_value(value, defn: dict):
         return bool(value)
     if stype == "text":
         return str(value)
+    if stype == "list":
+        if not isinstance(value, list):
+            raise ValueError(f"'{defn.get('label', 'value')}' must be a list")
+        fields = defn.get("fields", {})
+        clean = []
+        for idx, row in enumerate(value):
+            if not isinstance(row, dict):
+                raise ValueError(f"Row {idx + 1} of '{defn.get('label', 'value')}' must be an object")
+            clean_row = {}
+            for fkey, fdefn in fields.items():
+                if fkey in row:
+                    clean_row[fkey] = _coerce_setting_value(row[fkey], fdefn)
+            clean.append(clean_row)
+        return clean
     return value
 
 

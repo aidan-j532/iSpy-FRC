@@ -2,17 +2,62 @@ from pathlib import Path
 from flask import jsonify, render_template
 from iSpy.web.Backend.WebModule import WebModule
 
+
 class Viewer3DModule(WebModule):
+    """3D viewer backend.
+
+    Provides a generic overlay system so any add-on can contribute 3D objects
+    to the viewer without the viewer knowing about specific types.
+
+    Overlay format (JSON)::
+
+        {
+            "id": "unique_id",
+            "type": "box",           # renderer type
+            "x": 0, "y": 0, "z": 0, # position (field coords)
+            "roll": 0, "pitch": 0, "yaw": 0,
+            "label": "optional",
+            "color": "#4c8bf5",
+            "data": { ... }          # type-specific payload
+        }
+
+    Built-in renderer types:
+        box      -- data: {width, height, depth}
+        sphere   -- data: {radius}
+        group    -- data: {children: [...overlays...]}
+    """
+
     plugin_name = "viewer3d"
 
     def __init__(self, context: dict):
         super().__init__(context)
         self._latest_objects = []
         self._cached_num_keypoints = None
+        self._overlays: dict[str, dict] = {}
+
+    # -- overlay API (called by add-ons) ----------------------------------
+
+    def add_overlay(self, overlay_id: str, overlay: dict) -> None:
+        """Register or update an overlay.  Call from any add-on that has a
+        reference to this module (via ``context["vision_instance"].web_app``)."""
+        overlay["id"] = overlay_id
+        self._overlays[overlay_id] = overlay
+
+    def remove_overlay(self, overlay_id: str) -> None:
+        """Remove a previously registered overlay."""
+        self._overlays.pop(overlay_id, None)
+
+    # -- routes ------------------------------------------------------------
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/viewer3d", "viewer3d_page", lambda: render_template("viewer3d.html"))
-        flask_app.add_url_rule("/api/detections/latest", "api_detections_latest", self._latest)
+        flask_app.add_url_rule("/viewer3d", "viewer3d_page",
+                               lambda: render_template("viewer3d.html"))
+        flask_app.add_url_rule("/api/detections/latest", "api_detections_latest",
+                               self._latest)
+        flask_app.add_url_rule("/api/overlays", "api_overlays",
+                               self._overlays_endpoint)
+
+    # -- update (called every vision tick) ---------------------------------
 
     def update(self, frame_data: dict):
         detections = frame_data.get("detections", [])
@@ -34,7 +79,7 @@ class Viewer3DModule(WebModule):
         self._latest_objects = []
         for idx, obj in enumerate(detections):
             if getattr(obj, "depth_source", "") == "optical_flow":
-                continue  # velocity signal, not a 3D position - don't render it
+                continue
             obj_entry = {
                 "id": idx,
                 "x": getattr(obj, "x", 0),
@@ -53,6 +98,8 @@ class Viewer3DModule(WebModule):
             if kpts is not None:
                 obj_entry["keypoints_3d"] = kpts
             self._latest_objects.append(obj_entry)
+
+    # -- internals ---------------------------------------------------------
 
     def _get_num_keypoints(self, vm: dict) -> int:
         if not vm:
@@ -78,3 +125,6 @@ class Viewer3DModule(WebModule):
 
     def _latest(self):
         return jsonify(objects=self._latest_objects)
+
+    def _overlays_endpoint(self):
+        return jsonify(overlays=list(self._overlays.values()))

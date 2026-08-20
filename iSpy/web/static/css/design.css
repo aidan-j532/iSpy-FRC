@@ -543,6 +543,13 @@ pre {
 ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
+/* List-type settings table */
+.list-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 4px; }
+.list-table th { text-align: left; padding: 4px 6px; color: var(--text-dim); border-bottom: 1px solid var(--border); font-weight: 500; }
+.list-table td { padding: 3px 4px; }
+.list-table td .form-input { width: 100%; padding: 3px 6px; font-size: 0.82rem; }
+.list-table td select.form-input { padding: 3px 4px; }
+
 /* Responsive */
 @media (max-width: 768px) {
   .sidebar { width: 64px; min-width: 64px; padding: 16px 8px; align-items: center; }

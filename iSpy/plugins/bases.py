@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from iSpy.config.iSpyConfig import iSpyAddonConfig
 
 # settings types the add-on settings editor understands
-_SCHEMA_TYPES = ("text", "number", "toggle")
+_SCHEMA_TYPES = ("text", "number", "toggle", "list")
 _SCHEMA_TYPE_FALLBACK = {
     bool: "toggle",
     int: "number",

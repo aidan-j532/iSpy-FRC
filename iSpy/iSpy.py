@@ -65,6 +65,7 @@ class iSpy:
             "cameras": self.cameras,
             "flask_app": self.web_app.flask_app if self.web_app else None,
             "vision_instance": self,
+            "viewer3d": self.web_app.modules.get("viewer3d") if self.web_app else None,
         }
 
         tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)
@@ -343,6 +344,7 @@ class iSpy:
             "pipeline_name": pipeline_name,
             "pipeline_settings": pipeline_settings,
             "camera_config": camera_config_dict,
+            "robot_pose": {"x": pose.X(), "y": pose.Y(), "heading": pose.rotation().radians()},
         }
         if hasattr(camera, "get_debug_data"):
             frame_data["debug_data"] = camera.get_debug_data() or {}
@@ -402,6 +404,7 @@ class iSpy:
             "pipeline_name": ",".join(sorted(pipeline_names)),
             "pipeline_settings": {},
             "camera_config": {},
+            "robot_pose": {"x": pose.X(), "y": pose.Y(), "heading": pose.rotation().radians()},
         }
         if hasattr(handler, "get_camera_debug_data"):
             frame_data["debug_data"] = handler.get_camera_debug_data() or {}

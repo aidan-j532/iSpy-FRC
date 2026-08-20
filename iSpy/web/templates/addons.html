@@ -147,6 +147,11 @@ function settingsFields(schema, current) {
     const label = esc(def.label || key);
     const hint = def.hint ? `<small class="text-dim">${esc(def.hint)}</small>` : '';
     const value = (key in current) ? current[key] : def.default;
+
+    if (def.type === 'list') {
+      return renderListField(key, def, value || []);
+    }
+
     if (def.type === 'toggle') {
       return `<label class="form-row settings-toggle-row">
         <input type="checkbox" class="toggle-input" data-key="${key}" data-type="toggle" ${value ? 'checked' : ''}>
@@ -162,6 +167,93 @@ function settingsFields(schema, current) {
     </div>`;
   }).join('');
 }
+
+function renderListField(key, def, rows) {
+  const fields = def.fields || {};
+  const fieldKeys = Object.keys(fields);
+  if (fieldKeys.length === 0) return '';
+
+  const headerCells = fieldKeys.map(fk => {
+    const fdef = fields[fk] || {};
+    return `<th>${esc(fdef.label || fk)}</th>`;
+  }).join('');
+
+  const rowsHtml = rows.map((row, ri) => {
+    const cells = fieldKeys.map(fk => {
+      const fdef = fields[fk] || {};
+      const val = row[fk] != null ? row[fk] : (fdef.default || '');
+      if (fdef.type === 'select') {
+        const opts = (fdef.options || []).map(opt =>
+          `<option value="${esc(opt)}" ${opt === val ? 'selected' : ''}>${esc(opt)}</option>`
+        ).join('');
+        return `<td><select class="form-input list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="select">${opts}</select></td>`;
+      }
+      if (fdef.type === 'toggle') {
+        return `<td><input type="checkbox" class="list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="toggle" ${val ? 'checked' : ''}></td>`;
+      }
+      const inputType = fdef.type === 'number' ? 'number' : 'text';
+      return `<td><input class="form-input list-cell" type="${inputType}" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="${fdef.type || 'text'}" value="${esc(val == null ? '' : String(val))}" step="any"></td>`;
+    }).join('');
+    return `<tr>${cells}<td><button class="btn-sm btn-bad" onclick="removeListRow(this)" title="Remove">&times;</button></td></tr>`;
+  }).join('');
+
+  return `<div class="form-row" style="flex-direction:column;gap:4px;">
+    <span class="form-label">${esc(def.label || key)}</span>
+    ${def.hint ? `<small class="text-dim">${esc(def.hint)}</small>` : ''}
+    <div style="overflow-x:auto;">
+      <table class="list-table" data-list-key="${key}">
+        <thead><tr>${headerCells}<th></th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    <button class="btn-sm" onclick="addListRow('${jsStr(key)}')" type="button">+ Add</button>
+  </div>`;
+}
+
+window.addListRow = function(key) {
+  const table = document.querySelector(`.list-table[data-list-key="${CSS.escape(key)}"]`);
+  if (!table) return;
+  // find schema from the parent panel's addon data
+  const panel = table.closest('.addon-settings-panel');
+  const addonKey = panel ? panel.dataset.addon : '';
+  const parts = addonKey.split('::');
+  const addonName = parts[1] || '';
+  const addonType = parts[0] || '';
+  const addon = allAddons.find(a => a.name === addonName && a.type === addonType);
+  if (!addon) return;
+  const def = (addon.config_schema || {})[key];
+  if (!def || !def.fields) return;
+  const fields = def.fields;
+  const fieldKeys = Object.keys(fields);
+  const newRow = {};
+  for (const fk of fieldKeys) {
+    newRow[fk] = fields[fk].default != null ? fields[fk].default : '';
+  }
+  const tbody = table.querySelector('tbody');
+  const ri = tbody.rows.length;
+  const cells = fieldKeys.map(fk => {
+    const fdef = fields[fk] || {};
+    const val = newRow[fk];
+    if (fdef.type === 'select') {
+      const opts = (fdef.options || []).map(opt =>
+        `<option value="${esc(opt)}" ${opt === val ? 'selected' : ''}>${esc(opt)}</option>`
+      ).join('');
+      return `<td><select class="form-input list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="select">${opts}</select></td>`;
+    }
+    if (fdef.type === 'toggle') {
+      return `<td><input type="checkbox" class="list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="toggle" ${val ? 'checked' : ''}></td>`;
+    }
+    const inputType = fdef.type === 'number' ? 'number' : 'text';
+    return `<td><input class="form-input list-cell" type="${inputType}" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="${fdef.type || 'text'}" value="${esc(val == null ? '' : String(val))}" step="any"></td>`;
+  }).join('');
+  const tr = document.createElement('tr');
+  tr.innerHTML = cells + `<td><button class="btn-sm btn-bad" onclick="removeListRow(this)" title="Remove">&times;</button></td>`;
+  tbody.appendChild(tr);
+};
+
+window.removeListRow = function(btn) {
+  btn.closest('tr').remove();
+};
 
 function renderRow(p) {
   const key = `${p.type}::${p.name}`;
@@ -242,6 +334,22 @@ function stashOpenPanels() {
     panel.querySelectorAll('[data-key]').forEach(el => {
       vals[el.dataset.key] = el.type === 'checkbox' ? el.checked : el.value;
     });
+    // stash list-type settings as JSON strings for round-trip preservation
+    panel.querySelectorAll('.list-table').forEach(table => {
+      const listKey = table.dataset.listKey;
+      if (!listKey) return;
+      const rows = [];
+      table.querySelectorAll('tbody tr').forEach(tr => {
+        const row = {};
+        tr.querySelectorAll('.list-cell').forEach(cell => {
+          const fk = cell.dataset.field;
+          const ft = cell.dataset.fieldType;
+          row[fk] = ft === 'toggle' ? cell.checked : cell.value;
+        });
+        rows.push(row);
+      });
+      vals[listKey] = rows;
+    });
     open[panel.dataset.addon] = vals;
   });
   return open;
@@ -253,6 +361,7 @@ function restoreOpenPanels(open) {
     if (!panel) return;
     panel.style.display = '';
     Object.entries(vals).forEach(([k, v]) => {
+      if (Array.isArray(v)) return; // list values restored via re-render
       const el = panel.querySelector(`[data-key="${k}"]`);
       if (!el) return;
       if (el.type === 'checkbox') el.checked = v; else el.value = v;
@@ -337,9 +446,32 @@ async function saveSettings(name, type) {
       } else {
         settings[k] = el.value;
       }
-    } else {
+    } else if (stype !== 'list') {
       settings[k] = el.value;
     }
+  });
+  // collect list-type settings from their tables
+  panel.querySelectorAll('.list-table').forEach(table => {
+    const listKey = table.dataset.listKey;
+    if (!listKey) return;
+    const rows = [];
+    table.querySelectorAll('tbody tr').forEach(tr => {
+      const row = {};
+      tr.querySelectorAll('.list-cell').forEach(cell => {
+        const fk = cell.dataset.field;
+        const ft = cell.dataset.fieldType;
+        if (ft === 'toggle') {
+          row[fk] = cell.checked;
+        } else if (ft === 'number') {
+          const v = cell.value.trim();
+          row[fk] = v !== '' ? Number(v) : '';
+        } else {
+          row[fk] = cell.value;
+        }
+      });
+      rows.push(row);
+    });
+    settings[listKey] = rows;
   });
   if (invalid) return;
   try {

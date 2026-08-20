@@ -32,10 +32,13 @@
   <label>
     <input type="checkbox" id="light-bg" onchange="toggleLightBg()"> White BG
   </label>
+  <label>
+    <input type="checkbox" id="show-overlays" checked onchange="toggleOverlays()"> Overlays
+  </label>
 </div>
 <div id="scene-container"></div>
 <div class="card" style="margin-top:12px;">
-  <h3>Detections</h3>
+  <h3>Detections &amp; Overlays</h3>
   <div id="object-list">
     <table>
       <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th><th>Pitch</th><th>Yaw</th><th>Roll</th><th>Vis</th></tr></thead>
@@ -86,7 +89,6 @@ scene.add(dirLight);
 const hemiLight = new THREE.HemisphereLight(0x4c8bf5, 0x111318, 0.3);
 scene.add(hemiLight);
 
-// grid spans 20 real units (meters etc) with 0.25-unit cells so it reads as a ruler
 const gridHelper = new THREE.GridHelper(20, 80, 0x2a2e38, 0x1a1d24);
 scene.add(gridHelper);
 const axesHelper = new THREE.AxesHelper(8);
@@ -129,17 +131,13 @@ window.setViewPreset = function() {
   controls.update();
 };
 
-const boxes = {};
-const BOX_COLOR = 0x4c8bf5;
-// the viewer is real physical units (same as the config "unit" - meters etc),
-// so a 0.165m AprilTag renders as a 0.165-unit square and the grid reads as a
-// ruler. no auto-normalization - that made huge/small scenes look identical.
+// --- constants ---
 const GRID_UNIT = 0.25;
-const CUBE_SIZE = 0.25;      // generic object center marker (~one grid cell)
-const DOT_RADIUS = 0.05;     // pose keypoint dot
+const CUBE_SIZE = 0.25;
+const DOT_RADIUS = 0.05;
+const BOX_COLOR = 0x4c8bf5;
 
-// helpers
-
+// --- helpers ---
 function disposeMesh(obj) {
   if (obj.geometry) obj.geometry.dispose();
   if (obj.material) {
@@ -151,12 +149,13 @@ function disposeMesh(obj) {
   }
 }
 
-// map a raw [x, y, z] position into viewer axes (Z-up, no scaling)
 function toViewer(px, py, pz) {
   return new THREE.Vector3(px, pz, py);
 }
 
-// vis renderer registry - register a {create, update} pair keyed by vis_type, nothing else changes
+// ============================================================
+// Detection renderers (existing -- renders vision detections)
+// ============================================================
 
 function makeCubeMarker() {
   const geo = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
@@ -174,28 +173,19 @@ function updateCubeMarker(mesh, o) {
   mesh.rotation.set(o.roll, o.yaw, o.pitch);
 }
 
-// flat rect + axes gizmo for planar fiducials (apriltags etc); vis_meta.size is the
-// real edge length in scene units
 function makePlanarMarker(o) {
   const g = new THREE.Group();
   const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
-
   const planeGeo = new THREE.PlaneGeometry(size, size);
   const planeMat = new THREE.MeshStandardMaterial({
     color: 0xffaa00, transparent: true, opacity: 0.75, side: THREE.DoubleSide,
   });
-  const plane = new THREE.Mesh(planeGeo, planeMat);
-  g.add(plane);
-
-  const edges = new THREE.LineSegments(
+  g.add(new THREE.Mesh(planeGeo, planeMat));
+  g.add(new THREE.LineSegments(
     new THREE.EdgesGeometry(planeGeo),
     new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }),
-  );
-  g.add(edges);
-
-  const axesLen = size * 0.6;
-  g.add(new THREE.AxesHelper(axesLen));
-
+  ));
+  g.add(new THREE.AxesHelper(size * 0.6));
   g.userData.planarSize = size;
   return g;
 }
@@ -204,18 +194,14 @@ function updatePlanarMarker(g, o) {
   g.position.copy(toViewer(o.x, o.y, o.z));
   g.rotation.set(o.roll, o.yaw, o.pitch);
   const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
-  const base = g.userData.planarSize || size;
-  g.scale.setScalar(size / base);
+  g.scale.setScalar(size / (g.userData.planarSize || size));
 }
 
-// just plot the points, no bones - count can vary frame to frame
 function buildPointCloud(kpts3d) {
   const g = new THREE.Group();
-
   const pts = kpts3d.map(k => toViewer(k[0], k[1], k[2]));
   const dotGeo = new THREE.SphereGeometry(DOT_RADIUS, 12, 12);
   const dotMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
-
   for (const p of pts) {
     const m = new THREE.Mesh(dotGeo, dotMat);
     m.position.copy(p);
@@ -227,7 +213,6 @@ function buildPointCloud(kpts3d) {
 
 function updatePointCloud(g, kpts3d) {
   const pts = kpts3d.map(k => toViewer(k[0], k[1], k[2]));
-
   while (g.children.length < pts.length) {
     const dotGeo = new THREE.SphereGeometry(g.userData.dotRadius || DOT_RADIUS, 12, 12);
     const dotMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
@@ -250,14 +235,14 @@ const VIS_RENDERERS = {
 };
 
 function resolveVisType(o) {
-  // back-compat: keypoints_3d forces the points renderer even if vis_type is missing
   const hasKp = o.keypoints_3d && o.keypoints_3d.length >= 3;
   if (hasKp) return "points";
   if (o.vis_type && VIS_RENDERERS[o.vis_type]) return o.vis_type;
   return "generic";
 }
 
-// main sync
+// detection sync
+const boxes = {};
 
 function createBoxForDetection(o) {
   const key = o.id;
@@ -267,7 +252,6 @@ function createBoxForDetection(o) {
     if (prev.userData.visType === visType) return prev;
     cleanupBox(key);
   }
-
   const renderer = VIS_RENDERERS[visType] || VIS_RENDERERS.generic;
   const obj3d = renderer.create(o);
   obj3d.userData.visType = visType;
@@ -289,16 +273,12 @@ function cleanupBox(key) {
   delete boxes[key];
 }
 
-function sync(objects) {
+function syncDetections(objects) {
   const seen = new Set();
-  const tbody = document.getElementById('obj-tbody');
-  let rows = '';
-
   for (const o of objects) {
     seen.add(o.id);
     const key = o.id;
     const visType = resolveVisType(o);
-
     if (!boxes[key]) {
       boxes[key] = createBoxForDetection(o);
     } else if (boxes[key].userData.visType !== visType) {
@@ -306,30 +286,186 @@ function sync(objects) {
     } else {
       updateExistingBox(boxes[key], o);
     }
-
-    const nk = o.num_keypoints || (o.keypoints_3d ? o.keypoints_3d.length : 0);
-    const label = visType === 'points' ? `${nk} pts`
-                : visType === 'planar' ? (o.vis_meta && o.vis_meta.tag_id != null ? `tag ${o.vis_meta.tag_id}` : 'planar')
-                : '-';
-    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.pitch * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.roll * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
   }
-
   for (const k in boxes) {
     const idNum = parseInt(k, 10);
     if (!isNaN(idNum) && !seen.has(idNum)) {
       cleanupBox(k);
     }
   }
+}
 
+// ============================================================
+// Overlay renderers (generic -- any add-on can push overlays)
+//
+// Each renderer is a { create(overlay), update(mesh, overlay) }
+// pair keyed by the overlay's "type" field.  Add-ons push
+// overlay dicts via Viewer3DModule.add_overlay(); the frontend
+// renders them through this registry.
+// ============================================================
+
+function parseColor(hex, fallback) {
+  if (!hex) return fallback;
+  try { return parseInt(hex.replace('#', ''), 16); } catch { return fallback; }
+}
+
+const OVERLAY_RENDERERS = {
+  box: {
+    create(o) {
+      const d = o.data || {};
+      const w = d.width || 0.5, h = d.height || 0.5, dep = d.depth || 0.5;
+      const geo = new THREE.BoxGeometry(w, h, dep);
+      const col = parseColor(o.color, 0x4c8bf5);
+      const mat = new THREE.MeshStandardMaterial({ color: col, transparent: true, opacity: 0.8 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      const wireGeo = new THREE.EdgesGeometry(geo);
+      const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 });
+      mesh.add(new THREE.LineSegments(wireGeo, wireMat));
+      return mesh;
+    },
+    update(mesh, o) {
+      mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
+      mesh.rotation.set(o.roll || 0, o.yaw || 0, o.pitch || 0);
+    },
+  },
+
+  sphere: {
+    create(o) {
+      const d = o.data || {};
+      const r = d.radius || 0.25;
+      const geo = new THREE.SphereGeometry(r, 20, 20);
+      const col = parseColor(o.color, 0x4caf50);
+      const mat = new THREE.MeshStandardMaterial({ color: col, transparent: true, opacity: 0.8 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      return mesh;
+    },
+    update(mesh, o) {
+      mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
+      mesh.rotation.set(o.roll || 0, o.yaw || 0, o.pitch || 0);
+    },
+  },
+
+  group: {
+    create(o) {
+      const g = new THREE.Group();
+      g.userData.overlayDef = o;
+      return g;
+    },
+    update(g, o) {
+      g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
+      g.rotation.set(o.roll || 0, o.yaw || 0, o.pitch || 0);
+      const children = (o.data && o.data.children) || [];
+      syncOverlayChildren(g, children);
+    },
+  },
+};
+
+function syncOverlayChildren(group, childrenDef) {
+  const existing = group.userData.childMeshes || {};
+  const seen = new Set();
+  for (const childDef of childrenDef) {
+    const cid = childDef.id || (childDef.type + '_' + seen.size);
+    seen.add(cid);
+    const renderer = OVERLAY_RENDERERS[childDef.type];
+    if (!renderer) continue;
+    if (!existing[cid]) {
+      const mesh = renderer.create(childDef);
+      mesh.userData.overlayId = cid;
+      group.add(mesh);
+      existing[cid] = { mesh, def: childDef, type: childDef.type };
+    } else {
+      const entry = existing[cid];
+      if (entry.type === childDef.type) {
+        renderer.update(entry.mesh, childDef);
+      }
+    }
+  }
+  for (const cid in existing) {
+    if (!seen.has(cid)) {
+      group.remove(existing[cid].mesh);
+      disposeMesh(existing[cid].mesh);
+      delete existing[cid];
+    }
+  }
+  group.userData.childMeshes = existing;
+}
+
+// overlay sync
+const overlayMeshes = {};
+
+function syncOverlays(overlays) {
+  const seen = new Set();
+  for (const o of overlays) {
+    const id = o.id;
+    if (!id) continue;
+    seen.add(id);
+    const renderer = OVERLAY_RENDERERS[o.type];
+    if (!renderer) continue;
+    if (!overlayMeshes[id]) {
+      const mesh = renderer.create(o);
+      mesh.userData.overlayId = id;
+      scene.add(mesh);
+      overlayMeshes[id] = { mesh, type: o.type };
+    } else if (overlayMeshes[id].type === o.type) {
+      renderer.update(overlayMeshes[id].mesh, o);
+    }
+  }
+  for (const id in overlayMeshes) {
+    if (!seen.has(id)) {
+      scene.remove(overlayMeshes[id].mesh);
+      disposeMesh(overlayMeshes[id].mesh);
+      delete overlayMeshes[id];
+    }
+  }
+}
+
+window.toggleOverlays = function() {
+  const show = document.getElementById('show-overlays').checked;
+  for (const id in overlayMeshes) {
+    overlayMeshes[id].mesh.visible = show;
+  }
+};
+
+// ============================================================
+// Table rendering
+// ============================================================
+
+function renderTable(objects, overlays) {
+  const tbody = document.getElementById('obj-tbody');
+  let rows = '';
+  for (const o of objects) {
+    const nk = o.num_keypoints || (o.keypoints_3d ? o.keypoints_3d.length : 0);
+    const visType = resolveVisType(o);
+    const label = visType === 'points' ? `${nk} pts`
+                : visType === 'planar' ? (o.vis_meta && o.vis_meta.tag_id != null ? `tag ${o.vis_meta.tag_id}` : 'planar')
+                : '-';
+    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.pitch * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.roll * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
+  }
+  for (const o of overlays) {
+    if (!o.id) continue;
+    const label = o.label || o.type;
+    rows += `<tr class="obj-row" style="color:#4c8bf5"><td>${o.id}</td><td>${(o.x||0).toFixed(2)}</td><td>${(o.y||0).toFixed(2)}</td><td>${(o.z||0).toFixed(2)}</td><td>-</td><td>${((o.yaw||0) * 180 / Math.PI).toFixed(1)}&deg;</td><td>-</td><td>${label}</td></tr>`;
+  }
   tbody.innerHTML = rows || '<tr><td colspan="8" class="empty-state">No detections</td></tr>';
 }
 
-// poll & animate
+// ============================================================
+// Poll & animate
+// ============================================================
 
 async function poll() {
   try {
-    const d = await fetch('/api/detections/latest').then(r => r.json());
-    sync(d.objects || []);
+    const [detRes, ovRes] = await Promise.all([
+      fetch('/api/detections/latest').then(r => r.json()),
+      fetch('/api/overlays').then(r => r.json()),
+    ]);
+    const objects = detRes.objects || [];
+    const overlays = ovRes.overlays || [];
+    syncDetections(objects);
+    syncOverlays(overlays);
+    renderTable(objects, overlays);
   } catch (_) {}
 }
 setInterval(poll, 200);
