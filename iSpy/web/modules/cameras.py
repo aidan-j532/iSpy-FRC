@@ -1200,15 +1200,30 @@ class CamerasModule(WebModule):
         if overlay == "charuco":
             worker = threading.Thread(target=detection_worker, daemon=True)
             worker.start()
-            deadline = time.monotonic() + 3.0
-            while True:
-                with result_lock:
-                    ready = latest["detect"] is not None
-                if ready or time.monotonic() > deadline:
-                    break
-                time.sleep(0.02)
         try:
+            warmup_deadline = (time.monotonic() + 3.0) if overlay == "charuco" else 0
             while True:
+                if overlay == "charuco" and time.monotonic() < warmup_deadline:
+                    with result_lock:
+                        ready = latest["detect"] is not None
+                    if ready:
+                        warmup_deadline = 0
+                    else:
+                        cam = self.live_cameras.get(cam_name)
+                        _frame = None
+                        if cam is not None and hasattr(cam, "get_raw_frame"):
+                            _frame = cam.get_raw_frame()
+                        if _frame is not None:
+                            last_frame_time = time.monotonic()
+                            _sf = _frame
+                            if _FEED_MAX_DIM and _frame.shape[1] > _FEED_MAX_DIM:
+                                _f = _FEED_MAX_DIM / float(_frame.shape[1])
+                                _sf = cv2.resize(_frame, (int(round(_frame.shape[1] * _f)), int(round(_frame.shape[0] * _f))))
+                            _ok, _buf = cv2.imencode(".jpg", _sf, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                            if _ok:
+                                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + _buf.tobytes() + b"\r\n")
+                        time.sleep(0.02)
+                        continue
                 cam = self.live_cameras.get(cam_name)
                 frame = None
                 if cam is not None and hasattr(cam, "get_raw_frame"):
