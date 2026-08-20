@@ -63,7 +63,6 @@
       <span id="calibration-note" class="restart-badge">Applies after vision restart</span>
       <button class="modal-close" onclick="closeCalibrationWizard()" title="Close">&times;</button>
     </div>
-    <div id="calibration-tabs" class="calib-tabs"></div>
     <div id="calibration-body"></div>
     <div class="modal-actions calib-footer">
       <button onclick="resetCalibration()" class="btn-sm btn-warn">Reset calibration</button>
@@ -189,19 +188,6 @@
     font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
   }
   .calib-pipeline-badge.visible { display: inline-block; }
-  .calib-tabs {
-    display: none; gap: 0; border-bottom: 1px solid var(--border); margin-top: 12px;
-  }
-  .calib-tabs.visible { display: flex; }
-  .calib-tab {
-    padding: 8px 16px; border: none; background: transparent;
-    color: var(--text-dim); font-size: 0.85rem; font-weight: 500;
-    border-bottom: 2px solid transparent; cursor: pointer;
-    transition: color var(--transition), border-color var(--transition);
-    font-family: var(--font);
-  }
-  .calib-tab:hover { color: var(--text); }
-  .calib-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .calib-stage {
     position: relative; border-radius: var(--radius); overflow: hidden;
     background: #000; border: 1px solid var(--border);
@@ -1892,15 +1878,7 @@ function openCalibrationWizard() {
   tabsEl.classList.remove('visible');
 
   if (calibrationState.mode === 'focal') {
-    renderCalibTabs(tabsEl, ['intrinsics', 'ChArUco Intrinsics', 'known', 'Known Object'], calibrationState.focalTab || 'intrinsics', (tab) => {
-      calibrationState.focalTab = tab;
-      calibrationState.frozen = false;
-      calibrationState.liveSrc = null;
-      calibrationState.canvas = null;
-      calibrationState.ctx = null;
-      calibrationState.frame = null;
-      openCalibrationWizard();
-    });
+    calibrationState.focalTab = 'intrinsics';
     renderFocalCalibration(body);
     renderPnpSectionIfApplicable(body);
     startAutoCapture('charuco');
@@ -1921,8 +1899,6 @@ function closeCalibrationWizard() {
   const camera = calibrationState.camera;
   $id('calibration-modal').style.display = 'none';
   $id('calibration-body').innerHTML = '';
-  $id('calibration-tabs').innerHTML = '';
-  $id('calibration-tabs').classList.remove('visible');
   $id('calibration-pipeline-badge').classList.remove('visible');
   calibrationState.camera = null;
   calibrationState.pipeline = null;
@@ -1939,20 +1915,6 @@ function closeCalibrationWizard() {
   if (!refreshTimer) refreshTimer = setInterval(refreshCameras, currentRate);
 }
 
-function renderCalibTabs(container, tabs, activeKey, onChange) {
-  container.innerHTML = '';
-  container.classList.add('visible');
-  tabs.forEach(([key, label]) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'calib-tab' + (key === activeKey ? ' active' : '');
-    btn.dataset.tab = key;
-    btn.textContent = label;
-    btn.onclick = () => onChange(key);
-    container.appendChild(btn);
-  });
-}
-
 function renderFocalCalibration(body) {
   if (!calibrationState.focalTab) calibrationState.focalTab = 'intrinsics';
   calibrationState.overlayPattern = [7, 9];
@@ -1961,22 +1923,6 @@ function renderFocalCalibration(body) {
   calibrationState.intrinsicsActive = isIntrinsics;
   calibrationState.focalActive = !isIntrinsics;
   body.innerHTML = isIntrinsics ? focalIntrinsicsBody() : focalKnownBody();
-}
-
-function setFocalTab(tab) {
-  calibrationState.focalTab = tab;
-  calibrationState.frozen = false;
-  calibrationState.liveSrc = null;
-  calibrationState.canvas = null;
-  calibrationState.ctx = null;
-  calibrationState.frame = null;
-  document.querySelectorAll('#calibration-tabs .calib-tab').forEach(b => {
-    b.classList.toggle('active', b.dataset.tab === tab);
-  });
-  const body = $id('calibration-body');
-  body.innerHTML = tab === 'intrinsics' ? focalIntrinsicsBody() : focalKnownBody();
-  renderPnpSectionIfApplicable(body);
-  startAutoCapture('charuco');
 }
 
 function focalIntrinsicsBody() {
