@@ -260,13 +260,8 @@ def _windows_camera_name(iface):
         if body.startswith(prefix):
             body = body[len(prefix):]
             break
-    parts = body.split("#", 1)
-    if len(parts) != 2:
-        return None
-    hw_id, instance_id = parts
 
-    def _read_name(enum_parent, instance):
-        enum_path = f"SYSTEM\\CurrentControlSet\\Enum\\{enum_parent}\\{instance}"
+    def _read_name(enum_path):
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, enum_path)
         except OSError:
@@ -289,7 +284,15 @@ def _windows_camera_name(iface):
             winreg.CloseKey(key)
         return None
 
-    name = _read_name(hw_id, instance_id)
+    # Each # in the interface path maps to \ in the registry Enum path:
+    #   USB#VID_xxx&PID_yyy&MI_00#instance_id -> Enum\USB\VID_xxx&PID_yyy&MI_00\instance_id
+    parts = body.split("#")
+    if len(parts) < 3:
+        return None
+    enum_path = "SYSTEM\\CurrentControlSet\\Enum\\" + "\\".join(parts)
+    hw_id = "\\".join(parts[:2])
+
+    name = _read_name(enum_path)
     if name and name.lower() not in _GENERIC_WINDOWS_NAMES:
         return name
 
@@ -309,7 +312,7 @@ def _windows_camera_name(iface):
                 except OSError:
                     sub = None
                 if sub:
-                    parent_name = _read_name(parent_hw, sub)
+                    parent_name = _read_name(f"{parent_root}\\{sub}")
                     if parent_name:
                         return parent_name
             finally:
@@ -349,6 +352,17 @@ def _v4l2_caps(video_path):
         finally:
             os.close(fd)
     return 0
+
+
+_LINUX_NON_CAMERA_KEYWORDS = {"codec", "encode", "decode", "radio", "loopback"}
+
+
+def _linux_is_known_non_camera(video_path):
+    name = _linux_sysfs_name(video_path)
+    if not name:
+        return False
+    lower = name.lower()
+    return any(kw in lower for kw in _LINUX_NON_CAMERA_KEYWORDS)
 
 
 def _linux_is_capture_node(video_path):
@@ -1659,7 +1673,13 @@ class CamerasModule(WebModule):
             for label, nodes in _linux_device_groups():
                 capture = [n for n in nodes if _linux_is_capture_node(n)]
                 if not capture:
-                    capture = [n for n in nodes if _linux_is_capture_node(n) is None]
+                    # nodes where caps couldn't be read - include only if sysfs
+                    # name doesn't scream "not a camera" (codec/encoder/decoder)
+                    capture = [
+                        n for n in nodes
+                        if _linux_is_capture_node(n) is None
+                        and not _linux_is_known_non_camera(n)
+                    ]
                 if not capture:
                     # all nodes confirmed non-capture (encoder/codec/radio...) - skip the group
                     continue
@@ -1678,6 +1698,8 @@ class CamerasModule(WebModule):
             for path in sorted(glob.glob("/dev/video*")):
                 is_capture = _linux_is_capture_node(path)
                 if is_capture is False:
+                    continue
+                if is_capture is None and _linux_is_known_non_camera(path):
                     continue
                 key = _linux_device_key(path) or _linux_sysfs_name(path) or path
                 if key in seen_keys:

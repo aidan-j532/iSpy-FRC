@@ -59,13 +59,16 @@
   <div class="modal calibration-modal">
     <div id="calibration-header">
       <h3 id="calibration-title">Calibrate Camera</h3>
+      <span id="calibration-pipeline-badge" class="calib-pipeline-badge"></span>
       <span id="calibration-note" class="restart-badge">Applies after vision restart</span>
+      <button class="modal-close" onclick="closeCalibrationWizard()" title="Close">&times;</button>
     </div>
+    <div id="calibration-tabs" class="calib-tabs"></div>
     <div id="calibration-body"></div>
-    <div class="modal-actions">
-      <button onclick="resetCalibration()" class="btn-sm" style="background:var(--warn);">Reset calibration</button>
+    <div class="modal-actions calib-footer">
+      <button onclick="resetCalibration()" class="btn-sm btn-warn">Reset calibration</button>
       <span style="flex:1"></span>
-      <button onclick="closeCalibrationWizard()" style="background:var(--border);">Close</button>
+      <button onclick="closeCalibrationWizard()" class="btn-secondary">Close</button>
     </div>
   </div>
 </div>
@@ -176,16 +179,80 @@
   #camera-modal-header h3 { margin: 0; }
   #camera-modal-note { margin-left: auto; }
 
-  .calibration-modal { max-width: 720px; width: 94%; }
-  #calibration-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-  #calibration-header h3 { margin: 0; }
+  .calibration-modal { max-width: 760px; width: 94%; }
+  #calibration-header { display: flex; align-items: center; gap: 10px; margin-bottom: 0; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+  #calibration-header h3 { margin: 0; font-size: 1rem; }
   #calibration-note { margin-left: auto; }
-  .calib-stage { position: relative; margin: 8px 0; border-radius: 6px; overflow: hidden; }
-  .calib-stage img { width: 100%; display: block; background: #000; }
-  .calib-stage canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; cursor: crosshair; touch-action: none; }
+  .calib-pipeline-badge {
+    display: none; padding: 2px 8px; border-radius: var(--radius-sm);
+    background: var(--accent-dim); color: var(--accent);
+    font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .calib-pipeline-badge.visible { display: inline-block; }
+  .calib-tabs {
+    display: none; gap: 0; border-bottom: 1px solid var(--border); margin-top: 12px;
+  }
+  .calib-tabs.visible { display: flex; }
+  .calib-tab {
+    padding: 8px 16px; border: none; background: transparent;
+    color: var(--text-dim); font-size: 0.85rem; font-weight: 500;
+    border-bottom: 2px solid transparent; cursor: pointer;
+    transition: color var(--transition), border-color var(--transition);
+    font-family: var(--font);
+  }
+  .calib-tab:hover { color: var(--text); }
+  .calib-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .calib-stage {
+    position: relative; border-radius: var(--radius); overflow: hidden;
+    background: #000; border: 1px solid var(--border);
+  }
+  .calib-stage img { width: 100%; display: block; aspect-ratio: 16/9; object-fit: contain; background: #000; }
+  .calib-stage canvas {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: none; cursor: crosshair; touch-action: none;
+  }
+  .calib-stage-empty {
+    aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted); font-size: 0.85rem;
+  }
+  .calib-section {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px; margin-top: 12px;
+  }
+  .calib-section-title {
+    font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 10px;
+  }
+  .calib-auto-bar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .calib-auto-stats {
+    display: flex; gap: 16px; font-size: 0.82rem; color: var(--text-dim);
+  }
+  .calib-auto-stat { display: flex; align-items: center; gap: 4px; }
+  .calib-auto-stat strong { color: var(--text); font-family: var(--mono); }
+  .calib-auto-msg { font-size: 0.8rem; color: var(--text-muted); margin-top: 6px; }
+  .calib-progress-wrap {
+    height: 4px; background: var(--border); border-radius: 2px;
+    margin-top: 8px; overflow: hidden;
+  }
+  .calib-progress { height: 100%; background: var(--ok); border-radius: 2px; transition: width 0.4s ease; }
   .calib-status { margin: 8px 0; font-size: 0.85rem; color: var(--text-dim); line-height: 1.5; }
-  .calib-status.ok { color: #2c7; }
-  .calib-status.err { color: #f66; }
+  .calib-status.ok { color: var(--ok); }
+  .calib-status.err { color: var(--bad); }
+  .calib-result-card {
+    background: var(--ok-dim); border: 1px solid var(--ok);
+    border-radius: var(--radius); padding: 12px 14px; margin-top: 10px;
+  }
+  .calib-result-card.err {
+    background: var(--bad-dim); border-color: var(--bad);
+  }
+  .calib-result-title { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .calib-result-card.ok .calib-result-title { color: var(--ok); }
+  .calib-result-card.err .calib-result-title { color: var(--bad); }
+  .calib-result-body { font-size: 0.88rem; line-height: 1.5; }
+  .calib-result-body strong { font-family: var(--mono); }
+  .calib-footer { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
   .form-unit { color: var(--text-dim); font-weight: 400; font-size: 0.8rem; }
 
   .settings-section details summary {
@@ -1572,26 +1639,34 @@ async function renderPnpSectionIfApplicable(body) {
 
 function pnpSectionHtml(info) {
   const note = info.has_intrinsics ? '' :
-    '<div class="calib-status err">Run ChArUco intrinsics on this camera first - PnP needs camera_matrix + dist_coeffs.</div>';
+    '<div class="calib-status err" style="margin-bottom:8px;">Run ChArUco intrinsics on this camera first - PnP needs camera_matrix + dist_coeffs.</div>';
   return `
-    <h3>Pose PnP (${info.num_keypoints} keypoints)</h3>
-    ${note}
-    <p class="form-help" style="margin:0 0 10px 0;">3D position (meters) of each model keypoint in the object's own local frame. Model-specific - matches however your pose model's keypoints were labeled during training.</p>
-    <div id="pnp-kpt-table"></div>
-    <div class="form-row"><span class="form-label">Min keypoint conf</span>
-      <input type="number" step="0.05" class="form-input" id="pnp-min-conf" value="0.5"></div>
-    <div class="form-row"><span class="form-label">Mode</span>
-      <select class="form-input" id="pnp-mode">
-        <option value="flexible">Flexible (deformable, per-keypoint depth)</option>
-        <option value="rigid">Rigid (fixed shape, whole-object pose)</option>
-      </select></div>
-    <div class="form-row"><span class="form-label"></span>
-      <div style="display:flex;gap:8px;">
-        ${info.default_object_points ? '<button type="button" class="btn-sm" onclick="loadCocoDefaults()">Load COCO Defaults</button>' : ''}
-        <button type="button" class="btn-sm btn-ok" onclick="savePnpConfig()" ${info.has_intrinsics ? '' : 'disabled'}>Save PnP Config</button>
-        <button type="button" class="btn-sm btn-bad" onclick="clearPnpConfig()">Clear</button>
-      </div></div>
-    <div class="calib-status" id="pnp-result"></div>`;
+    <div class="calib-section" style="margin-top:12px;">
+      <div class="calib-section-title">Pose PnP (${info.num_keypoints} keypoints)</div>
+      ${note}
+      <div class="calib-auto-msg" style="margin-top:0;margin-bottom:8px;">3D position (meters) of each model keypoint in the object's own local frame. Matches however your pose model's keypoints were labeled during training.</div>
+      <div id="pnp-kpt-table"></div>
+      <div class="form-row" style="margin-top:10px;">
+        <span class="form-label">Min keypoint conf</span>
+        <input type="number" step="0.05" class="form-input" id="pnp-min-conf" value="0.5">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Mode</span>
+        <select class="form-input" id="pnp-mode">
+          <option value="flexible">Flexible (deformable, per-keypoint depth)</option>
+          <option value="rigid">Rigid (fixed shape, whole-object pose)</option>
+        </select>
+      </div>
+      <div class="form-row" style="margin-top:6px;">
+        <span class="form-label"></span>
+        <div style="display:flex;gap:8px;">
+          ${info.default_object_points ? '<button type="button" class="btn-sm btn-secondary" onclick="loadCocoDefaults()">Load COCO Defaults</button>' : ''}
+          <button type="button" class="btn-sm btn-ok" onclick="savePnpConfig()" ${info.has_intrinsics ? '' : 'disabled'}>Save PnP Config</button>
+          <button type="button" class="btn-sm btn-bad" onclick="clearPnpConfig()">Clear</button>
+        </div>
+      </div>
+      <div class="calib-status" id="pnp-result"></div>
+    </div>`;
 }
 
 function fillPnpKeypointTable(info) {
@@ -1733,20 +1808,24 @@ async function toggleAutoCapture() {
 }
 
 function updateAutoCaptureUi() {
-  const status = $id(autoCaptureState.kind + '-auto-status');
-  const toggle = $id(autoCaptureState.kind + '-auto-toggle');
-  if (!status) return;
+  const countEl = $id('charuco-auto-count');
+  const rmsEl = $id('charuco-auto-rms');
+  const statusEl = $id('charuco-auto-status');
+  const progressEl = $id('charuco-auto-progress');
+  const toggle = $id('charuco-auto-toggle');
+  if (!statusEl) return;
   if (!autoCaptureState.enabled) {
-    status.textContent = 'Auto capture paused - press Start to resume, then Calibrate intrinsics when ready.';
+    statusEl.textContent = 'Auto capture paused. Press Start to resume, then Calibrate when ready.';
     if (toggle) toggle.textContent = 'Start';
+    if (progressEl) progressEl.style.width = '0%';
     return;
   }
-  const rmsTxt = autoCaptureState.rms != null
-    ? ' &middot; live RMS <strong>' + Number(autoCaptureState.rms).toFixed(2) + 'px</strong>'
-    : '';
-  status.innerHTML = 'Auto: <strong>' + autoCaptureState.captured +
-    '</strong> frames' + rmsTxt + '. ' + (autoCaptureState.message || '') + ' Press Pause when done, then Calibrate intrinsics.';
   if (toggle) toggle.textContent = 'Pause';
+  if (countEl) countEl.textContent = autoCaptureState.captured;
+  if (rmsEl) rmsEl.textContent = autoCaptureState.rms != null ? Number(autoCaptureState.rms).toFixed(2) + ' px' : '\u2014';
+  const pct = Math.min(100, (autoCaptureState.captured / 25) * 100);
+  if (progressEl) progressEl.style.width = pct + '%';
+  statusEl.textContent = autoCaptureState.message || (autoCaptureState.captured > 0 ? 'Collecting diverse frames...' : 'Point the board at the camera to begin.');
 }
 
 function pauseCameraGridFeeds() {
@@ -1792,9 +1871,6 @@ function openCalibrationWizard() {
   if (!calibrationState.camera) { showToast('Camera not loaded', 'error'); return; }
   calibrationState.frozen = false;
 
-  // keep the CPU on the calibration feed - pause the background camera grid
-  // polling AND the other cameras' live thumbnails while the wizard is open
-  // (everything resumes on close)
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = null;
@@ -1802,10 +1878,29 @@ function openCalibrationWizard() {
   pauseCameraGridFeeds();
 
   $id('calibration-title').textContent = 'Calibrate ' + calibrationState.camera;
+
+  const pipelineNames = { object_detection: 'Object Detection', april_tag: 'AprilTag', qr_code: 'QR Code', optical_flow: 'Optical Flow' };
+  const badge = $id('calibration-pipeline-badge');
+  badge.textContent = pipelineNames[calibrationState.pipeline] || calibrationState.pipeline;
+  badge.classList.add('visible');
+
   const body = $id('calibration-body');
   body.innerHTML = '';
 
+  const tabsEl = $id('calibration-tabs');
+  tabsEl.innerHTML = '';
+  tabsEl.classList.remove('visible');
+
   if (calibrationState.mode === 'focal') {
+    renderCalibTabs(tabsEl, ['intrinsics', 'ChArUco Intrinsics', 'known', 'Known Object'], calibrationState.focalTab || 'intrinsics', (tab) => {
+      calibrationState.focalTab = tab;
+      calibrationState.frozen = false;
+      calibrationState.liveSrc = null;
+      calibrationState.canvas = null;
+      calibrationState.ctx = null;
+      calibrationState.frame = null;
+      openCalibrationWizard();
+    });
     renderFocalCalibration(body);
     renderPnpSectionIfApplicable(body);
     startAutoCapture('charuco');
@@ -1813,9 +1908,9 @@ function openCalibrationWizard() {
     renderCharucoCalibration(body);
     startAutoCapture('charuco');
   } else if (calibrationState.mode === 'beta') {
-    body.innerHTML = '<div class="card empty-state">The optical_flow pipeline is in beta - its motion estimation reads the camera FOV, so it is excluded from the calibration wizard for now.</div>';
+    body.innerHTML = '<div class="calib-section"><div class="calib-section-title">Optical Flow</div><div class="calib-status">The optical_flow pipeline is in beta. Its motion estimation reads camera FOV directly, so calibration is not needed.</div></div>';
   } else {
-    body.innerHTML = '<div class="card empty-state">This pipeline does not use distance calibration (no depth-from-size or PnP), so there is nothing to calibrate here.</div>';
+    body.innerHTML = '<div class="calib-section"><div class="calib-section-title">Not Applicable</div><div class="calib-status">This pipeline does not use distance calibration (no depth-from-size or PnP), so there is nothing to calibrate.</div></div>';
   }
   
   $id('calibration-modal').style.display = 'flex';
@@ -1826,6 +1921,9 @@ function closeCalibrationWizard() {
   const camera = calibrationState.camera;
   $id('calibration-modal').style.display = 'none';
   $id('calibration-body').innerHTML = '';
+  $id('calibration-tabs').innerHTML = '';
+  $id('calibration-tabs').classList.remove('visible');
+  $id('calibration-pipeline-badge').classList.remove('visible');
   calibrationState.camera = null;
   calibrationState.pipeline = null;
   calibrationState.canvas = null;
@@ -1841,6 +1939,19 @@ function closeCalibrationWizard() {
   if (!refreshTimer) refreshTimer = setInterval(refreshCameras, currentRate);
 }
 
+function renderCalibTabs(container, tabs, activeKey, onChange) {
+  container.innerHTML = '';
+  container.classList.add('visible');
+  tabs.forEach(([key, label]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'calib-tab' + (key === activeKey ? ' active' : '');
+    btn.textContent = label;
+    btn.onclick = () => onChange(key);
+    container.appendChild(btn);
+  });
+}
+
 function renderFocalCalibration(body) {
   if (!calibrationState.focalTab) calibrationState.focalTab = 'intrinsics';
   calibrationState.overlayPattern = [7, 9];
@@ -1848,16 +1959,7 @@ function renderFocalCalibration(body) {
   const isIntrinsics = calibrationState.focalTab === 'intrinsics';
   calibrationState.intrinsicsActive = isIntrinsics;
   calibrationState.focalActive = !isIntrinsics;
-  body.innerHTML = `
-    <div class="form-row">
-      <span class="form-label">Mode</span>
-      <div style="display:flex;gap:8px;flex:1;">
-        <button type="button" class="btn-sm ${isIntrinsics ? 'btn-ok' : ''}" onclick="setFocalTab('intrinsics')">ChArUco intrinsics</button>
-        <button type="button" class="btn-sm ${!isIntrinsics ? 'btn-ok' : ''}" onclick="setFocalTab('known')">Known object</button>
-      </div>
-    </div>
-    ${isIntrinsics ? focalIntrinsicsBody() : focalKnownBody()}
-  `;
+  body.innerHTML = isIntrinsics ? focalIntrinsicsBody() : focalKnownBody();
 }
 
 function setFocalTab(tab) {
@@ -1867,60 +1969,64 @@ function setFocalTab(tab) {
   calibrationState.canvas = null;
   calibrationState.ctx = null;
   calibrationState.frame = null;
-  const body = $id('calibration-body');
-  renderFocalCalibration(body);
-  renderPnpSectionIfApplicable(body);
+  openCalibrationWizard();
 }
 
 function focalIntrinsicsBody() {
   return `
-    <div class="form-row"><span class="form-label">Live view</span>
-      <div class="calib-stage" style="width:100%;">
+    <div class="calib-section">
+      <div class="calib-section-title">Live View</div>
+      <div class="calib-stage">
         <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
+      <div class="calib-auto-msg" id="charuco-note">Hold the printed ChArUco board in view. Auto capture is on - just move the board around through varied angles. Every capture is drawn on the live view. Press Pause when you have enough, then calibrate.</div>
     </div>
-    <div class="calib-status" id="charuco-note">Select your ChArUco board layout and dictionary above, then hold the printed board in view. Auto capture is ON: just keep moving the board around through varied angles - it stores the frames itself. Press Pause when you have enough, then calibrate intrinsics. Every capture stays drawn on the live view in its own color. Detections are paused while this is open.</div>
     ${charucoCaptureSectionHtml()}
   `;
 }
 
 function focalKnownBody() {
   return `
-    <div class="form-row"><span class="form-label">Live view</span>
-      <div class="calib-stage" style="width:100%;">
+    <div class="calib-section">
+      <div class="calib-section-title">Live View</div>
+      <div class="calib-stage">
         <img id="calib-feed" src="${calibrationFeedUrl()}" alt="live feed"
              onload="calibrationFeedReady()" onerror="calibrationFeedError()">
         <canvas id="calib-canvas"></canvas>
       </div>
+      <div class="calib-auto-msg" id="focal-feed-note">Point the camera at an object of known size, then click "Freeze &amp; measure".</div>
     </div>
-    <div class="calib-status" id="focal-feed-note">Point the camera at an object of known size, then click "Freeze &amp; measure".</div>
-    <div class="form-row">
-      <span class="form-label">Measure</span>
-      <div style="display:flex;gap:8px;flex:1;">
+    <div class="calib-section">
+      <div class="calib-section-title">Measure</div>
+      <div class="form-row">
+        <span class="form-label">Action</span>
         <button type="button" class="btn-sm btn-ok" id="calib-freeze-btn" onclick="toggleCalibrationFreeze()">Freeze &amp; measure</button>
       </div>
+      <div class="form-row">
+        <span class="form-label">Pixel height <span class="form-unit">px</span></span>
+        <input type="number" step="0.5" class="form-input" id="focal-pixel-height" placeholder="drag on the frozen frame, or type it">
+      </div>
     </div>
-    <div class="form-row">
-      <span class="form-label">Pixel height <span class="form-unit">px</span></span>
-      <input type="number" step="0.5" class="form-input" id="focal-pixel-height" placeholder="drag on the frozen frame, or type it">
+    <div class="calib-section">
+      <div class="calib-section-title">Object Details</div>
+      <div class="form-row">
+        <span class="form-label">Object size <span class="form-unit">in</span></span>
+        <input type="number" step="0.1" class="form-input" id="focal-real-size" placeholder="e.g. 6.5">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Distance <span class="form-unit">in</span></span>
+        <input type="number" step="0.1" class="form-input" id="focal-distance" placeholder="camera to object">
+      </div>
+      <div class="form-row">
+        <span class="form-label">Frame width <span class="form-unit">px</span></span>
+        <span id="focal-frame-width" class="text-dim" style="font-family:var(--mono);font-size:0.85rem;">from the live frame</span>
+      </div>
+      <div class="form-row" style="margin-top:6px;">
+        <span class="form-label"></span>
+        <button type="button" class="btn-ok" onclick="computeFocalCalibration()">Compute &amp; save</button>
+      </div>
     </div>
-    <div class="form-row">
-      <span class="form-label">Object size <span class="form-unit">in</span></span>
-      <input type="number" step="0.1" class="form-input" id="focal-real-size" placeholder="e.g. 6.5">
-    </div>
-    <div class="form-row">
-      <span class="form-label">Distance <span class="form-unit">in</span></span>
-      <input type="number" step="0.1" class="form-input" id="focal-distance" placeholder="camera to object">
-    </div>
-    <div class="form-row">
-      <span class="form-label">Frame width <span class="form-unit">px</span></span>
-      <span id="focal-frame-width" class="form-input" style="border:none;padding-top:8px;background:transparent;">from the live frame</span>
-    </div>
-    <div class="form-row">
-      <span class="form-label"></span>
-      <button type="button" class="btn-sm btn-ok" onclick="computeFocalCalibration()">Compute &amp; save</button>
-    </div>
-    <div class="calib-status" id="focal-result"></div>
+    <div id="focal-result"></div>
   `;
 }
 
@@ -1934,7 +2040,7 @@ function calibrationFeedReady() {
 }
 
 function calibrationFeedError() {
-  const note = $id('focal-feed-note');
+  const note = $id('focal-feed-note') || $id('charuco-note');
   if (note) note.textContent = 'Live feed not loading - start vision from the dashboard first.';
 }
 
@@ -2087,9 +2193,8 @@ async function computeFocalCalibration() {
     showToast('Enter a pixel height, object size, and distance.', 'error');
     return;
   }
-  const res = $id('focal-result');
-  res.className = 'calib-status';
-  res.textContent = 'Computing...';
+  const container = $id('focal-result');
+  container.innerHTML = '<div class="calib-status">Computing...</div>';
   try {
     const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/focal`, {
       method: 'POST',
@@ -2098,12 +2203,22 @@ async function computeFocalCalibration() {
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Calibration failed');
-    res.className = 'calib-status ok';
-    res.innerHTML = `Focal length <strong>${j.focal_length_px} px</strong> &middot; horizontal FOV <strong>${j.fov_deg}&deg;</strong> - saved. Restart vision to apply.`;
+    container.innerHTML = `
+      <div class="calib-result-card ok">
+        <div class="calib-result-title">Calibration saved</div>
+        <div class="calib-result-body">
+          Focal length <strong>${j.focal_length_px} px</strong> &middot;
+          horizontal FOV <strong>${j.fov_deg}&deg;</strong>.
+          Restart vision to apply.
+        </div>
+      </div>`;
     refreshCalibrationFields(j.calibration);
   } catch (e) {
-    res.className = 'calib-status err';
-    res.textContent = e.message || 'Failed to compute calibration';
+    container.innerHTML = `
+      <div class="calib-result-card err">
+        <div class="calib-result-title">Calibration failed</div>
+        <div class="calib-result-body">${escapeHtml(e.message || 'Failed to compute calibration')}</div>
+      </div>`;
   }
 }
 
@@ -2114,28 +2229,38 @@ function refreshCalibrationFields(cal) {
 
 
 function charucoCaptureSectionHtml() {
-  // shared ChArUco capture UI used by the dedicated 'charuco' wizard and the
-  // focal wizard's optional "precision intrinsics" step
   return `
-    <div class="form-row">
-      <span class="form-label">Board</span>
-      <div style="flex:1;display:flex;flex-direction:column;gap:4px;">
-        <span style="color:#ccc;">ChArUco 7x9 (DICT_4X4_50) &middot; 25 mm squares &middot; 18 mm markers</span>
-        <a href="/api/cameras/calibration/board" target="_blank" class="btn-sm" style="display:inline-block;width:fit-content;text-decoration:none;">Download board PDF</a>
-      </div>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Auto capture</span>
-      <div style="display:flex;gap:8px;flex:1;align-items:center;flex-wrap:wrap;">
+    <div class="calib-section">
+      <div class="calib-section-title">Auto Capture</div>
+      <div class="calib-auto-bar">
         <button type="button" class="btn-sm btn-ok" id="charuco-auto-toggle" onclick="toggleAutoCapture()">Pause</button>
-        <span id="charuco-auto-status" class="form-help" style="margin:0;">Starting...</span>
+        <div class="calib-auto-stats">
+          <span class="calib-auto-stat">Frames: <strong id="charuco-auto-count">0</strong></span>
+          <span class="calib-auto-stat">RMS: <strong id="charuco-auto-rms">&mdash;</strong></span>
+        </div>
+      </div>
+      <div class="calib-progress-wrap"><div class="calib-progress" id="charuco-auto-progress" style="width:0%"></div></div>
+      <div class="calib-auto-msg" id="charuco-auto-status">Starting...</div>
+    </div>
+    <div class="calib-section">
+      <div class="calib-section-title">Calibration Board</div>
+      <div class="form-row" style="margin-bottom:0;">
+        <span class="form-label">Layout</span>
+        <span class="text-dim" style="font-size:0.85rem;">ChArUco 7x9 &middot; DICT_4X4_50 &middot; 25 mm squares &middot; 18 mm markers</span>
+      </div>
+      <div class="form-row" style="margin-bottom:0;margin-top:6px;">
+        <span class="form-label">Print</span>
+        <a href="/api/cameras/calibration/board" target="_blank" class="btn-sm btn-secondary" style="text-decoration:none;">Download Board PDF</a>
       </div>
     </div>
-    <div class="form-row" style="margin-top:10px;">
-      <span class="form-label"></span>
-      <button type="button" class="btn-ok" onclick="finishCharucoCalibration()" id="charuco-finish-btn">Calibrate intrinsics</button>
+    <div class="calib-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div class="calib-section-title" style="margin-bottom:0;">Ready to calibrate?</div>
+        <button type="button" class="btn-ok" onclick="finishCharucoCalibration()" id="charuco-finish-btn">Calibrate Intrinsics</button>
+      </div>
     </div>
-    <div class="calib-status" id="charuco-result"></div>`;
+    <div id="charuco-result"></div>
+  `;
 }
 
 function renderCharucoCalibration(body) {
@@ -2143,12 +2268,13 @@ function renderCharucoCalibration(body) {
   calibrationState.overlayDict = 0;
   calibrationState.intrinsicsActive = false;
   body.innerHTML = `
-    <div class="form-row"><span class="form-label">Live view</span>
-      <div class="calib-stage" style="width:100%;">
+    <div class="calib-section">
+      <div class="calib-section-title">Live View</div>
+      <div class="calib-stage">
         <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
+      <div class="calib-auto-msg" id="charuco-note">Hold the printed ChArUco board in view. Green corners and marker outlines mean the board is detected. Auto capture is on - move the board around through varied angles. Press Pause when done, then calibrate.</div>
     </div>
-    <div class="calib-status" id="charuco-note">Select your ChArUco board layout and dictionary above, then hold the printed board in view and fill the frame with it. Green corners + marker outlines = board detected on the live view. Auto capture is ON: just keep moving the board around through varied angles - it stores the frames itself. Press Pause when you have enough, then calibrate intrinsics. Every capture stays drawn on the live view in a fresh random color. Detections are paused while this is open.</div>
     ${charucoCaptureSectionHtml()}
   `;
 }
@@ -2179,10 +2305,10 @@ function reconnectCalibrationFeed() {
 
 async function finishCharucoCalibration() {
   const btn = $id('charuco-finish-btn');
-  const result = $id('charuco-result');
+  const container = $id('charuco-result');
   btn.disabled = true;
-  result.className = 'calib-status';
-  result.textContent = 'Calibrating - this can take a moment...';
+  btn.textContent = 'Calibrating...';
+  container.innerHTML = '<div class="calib-status">Calibrating - this can take a moment...</div>';
   try {
     const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/charuco/finish`, {
       method: 'POST',
@@ -2194,14 +2320,25 @@ async function finishCharucoCalibration() {
     const res = j.result;
     const fx = res.camera_matrix[0][0].toFixed(1);
     const fy = res.camera_matrix[1][1].toFixed(1);
-    result.className = 'calib-status ok';
-    result.innerHTML = `Done! Reprojection error <strong>${res.rms.toFixed(3)} px</strong> (lower is better), focal <strong>${fx} x ${fy} px</strong> at ${res.resolution[0]}x${res.resolution[1]}. Restart vision to apply.`;
+    container.innerHTML = `
+      <div class="calib-result-card ok">
+        <div class="calib-result-title">Calibration complete</div>
+        <div class="calib-result-body">
+          Reprojection error <strong>${res.rms.toFixed(3)} px</strong> (lower is better) &middot;
+          focal <strong>${fx} x ${fy} px</strong> at ${res.resolution[0]}x${res.resolution[1]}.
+          Restart vision to apply.
+        </div>
+      </div>`;
     refreshCalibrationFields(j.calibration);
   } catch (e) {
-    result.className = 'calib-status err';
-    result.textContent = e.message || 'Calibration failed';
+    container.innerHTML = `
+      <div class="calib-result-card err">
+        <div class="calib-result-title">Calibration failed</div>
+        <div class="calib-result-body">${escapeHtml(e.message || 'Failed to run calibration')}</div>
+      </div>`;
   } finally {
     btn.disabled = false;
+    btn.textContent = 'Calibrate Intrinsics';
   }
 }
 
@@ -2222,14 +2359,16 @@ async function resetCalibration() {
     if (!r.ok) throw new Error(j.error || 'Reset failed');
     showToast('Calibration reset.', 'success');
     refreshCalibrationFields(j.calibration);
+    const resultContainers = $id('focal-result');
+    if (resultContainers) resultContainers.innerHTML = '';
+    const charucoResult = $id('charuco-result');
+    if (charucoResult) charucoResult.innerHTML = '';
     if (calibrationState.mode === 'charuco' || calibrationState.mode === 'focal') {
       clearCalibrationSession('charuco');
       startAutoCapture('charuco');
     }
     if (calibrationState.mode === 'focal') {
       unfreezeCalibrationFrame();
-      const el = $id('focal-result');
-      if (el) el.textContent = '';
     }
   } catch (e) {
     showToast(e.message || 'Reset failed', 'error');

@@ -87,12 +87,14 @@
       "name": "object_detection",
       "settings": {
         "vision_model": {
-          "file_path": "YoloModels\\pytorch\\_default_v26_detect_for_fuel.pt",
+          "file_path": "YoloModels/pytorch/_default_detect.pt",
           "source_pt": "YoloModels/pytorch/_default_detect.pt"
         },
         "min_conf": 0.5,
-        "optimize": false,
-        "quantize": false
+        "optimize": true,
+        "quantize": true,
+        "quantization_dataset": "C:\\Users\\Aidan\\Documents\\Vscode\\iSpy-FRC\\iSpy-FRC\\QuantizeDataset\\default\\images",
+        "target_format": "auto"
       }
     }
   }
