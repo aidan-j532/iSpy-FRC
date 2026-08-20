@@ -1946,6 +1946,7 @@ function renderCalibTabs(container, tabs, activeKey, onChange) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'calib-tab' + (key === activeKey ? ' active' : '');
+    btn.dataset.tab = key;
     btn.textContent = label;
     btn.onclick = () => onChange(key);
     container.appendChild(btn);
@@ -1969,7 +1970,13 @@ function setFocalTab(tab) {
   calibrationState.canvas = null;
   calibrationState.ctx = null;
   calibrationState.frame = null;
-  openCalibrationWizard();
+  document.querySelectorAll('#calibration-tabs .calib-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  const body = $id('calibration-body');
+  body.innerHTML = tab === 'intrinsics' ? focalIntrinsicsBody() : focalKnownBody();
+  renderPnpSectionIfApplicable(body);
+  startAutoCapture('charuco');
 }
 
 function focalIntrinsicsBody() {
