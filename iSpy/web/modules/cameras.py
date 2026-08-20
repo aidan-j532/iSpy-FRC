@@ -359,10 +359,16 @@ _LINUX_NON_CAMERA_KEYWORDS = {"codec", "encode", "decode", "radio", "loopback"}
 
 def _linux_is_known_non_camera(video_path):
     name = _linux_sysfs_name(video_path)
-    if not name:
-        return False
-    lower = name.lower()
-    return any(kw in lower for kw in _LINUX_NON_CAMERA_KEYWORDS)
+    if name:
+        lower = name.lower()
+        if any(kw in lower for kw in _LINUX_NON_CAMERA_KEYWORDS):
+            return True
+    # e.g. /dev/video-dec0, /dev/video-enc0 — the part after "video-" starts
+    # with a non-digit which real camera nodes never do
+    basename = os.path.basename(video_path).lower()
+    if basename.startswith("video-") and len(basename) > 6 and not basename[6].isdigit():
+        return True
+    return False
 
 
 def _linux_is_capture_node(video_path):
