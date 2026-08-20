@@ -1,6 +1,7 @@
 import base64
 import copy
 import glob
+import json
 import logging
 import os
 import platform
@@ -434,6 +435,10 @@ class CamerasModule(WebModule):
         self._discover_lock = threading.Lock()
         self.calib_sessions: dict[str, dict] = {}
         self.calib_lock = threading.Lock()
+        self._auto_discover_stop = threading.Event()
+        self._auto_discover_thread: threading.Thread | None = None
+        self._sse_lock = threading.Lock()
+        self._sse_clients: list = []
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/cameras", "cameras_page", lambda: render_template("cameras.html"))
@@ -464,6 +469,67 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_save", self._pnp_save, methods=["POST"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_clear", self._pnp_clear, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/calibration/board", "api_calibration_board_pdf", self._calibration_board_pdf)
+        flask_app.add_url_rule("/api/cameras/events", "api_cameras_events", self._sse_stream)
+
+    def start(self):
+        if self._auto_discover_thread is None or not self._auto_discover_thread.is_alive():
+            self._auto_discover_stop.clear()
+            self._auto_discover_thread = threading.Thread(
+                target=self._auto_discover_loop, daemon=True, name="AutoDiscover"
+            )
+            self._auto_discover_thread.start()
+
+    def stop(self):
+        self._auto_discover_stop.set()
+        if self._auto_discover_thread and self._auto_discover_thread.is_alive():
+            self._auto_discover_thread.join(timeout=3)
+
+    def _auto_discover_loop(self):
+        last_device_ids: set = set()
+        while not self._auto_discover_stop.is_set():
+            self._auto_discover_stop.wait(10.0)
+            if self._auto_discover_stop.is_set():
+                break
+            try:
+                devices = self._probe_devices()
+                current_ids = {d.get("device_id") or d.get("path") for d in devices}
+                if current_ids != last_device_ids:
+                    new_ids = current_ids - last_device_ids
+                    removed_ids = last_device_ids - current_ids
+                    last_device_ids = current_ids
+                    self._push_sse({
+                        "type": "cameras_changed",
+                        "devices": devices,
+                        "new": [d for d in devices if (d.get("device_id") or d.get("path")) in new_ids],
+                        "removed_ids": list(removed_ids),
+                    })
+            except Exception:
+                pass
+
+    def _sse_stream(self):
+        def generate():
+            q: list = []
+            with self._sse_lock:
+                self._sse_clients.append(q)
+            try:
+                while True:
+                    while q:
+                        payload = q.pop(0)
+                        yield f"data: {json.dumps(payload)}\n\n"
+                    time.sleep(0.1)
+            except GeneratorExit:
+                pass
+            finally:
+                with self._sse_lock:
+                    if q in self._sse_clients:
+                        self._sse_clients.remove(q)
+        return Response(generate(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    def _push_sse(self, payload: dict):
+        with self._sse_lock:
+            for q in self._sse_clients:
+                q.append(payload)
 
     def _camera_display_name(self, cam, fallback: str = "camera") -> str:
         if hasattr(cam, "config") and cam.config is not None:

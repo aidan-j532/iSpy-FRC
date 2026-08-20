@@ -84,7 +84,16 @@ class iSpyWebApp:
                     self.logger.exception("Web module '%s' set_cameras failed", name)
 
     def run(self, host="0.0.0.0", port=5000):
+        self.start()
         self.flask_app.run(host=host, port=port, threaded=True)
+
+    def start(self):
+        for name, mod in self.modules.items():
+            if hasattr(mod, "start"):
+                try:
+                    mod.start()
+                except Exception:
+                    self.logger.exception("Failed to start web module '%s'", name)
 
     def stop(self):
         for mod in self.modules.values():

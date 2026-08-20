@@ -14,9 +14,8 @@ class HealthModule(WebModule):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
         config = context["config"]
-        self.cameras = context.get("cameras", [])
-
         self._lock = threading.Lock()
+        self.cameras = context.get("cameras", [])
         self._fps = 0.0
         self._vision_s = 0.0
         self._detections = 0
@@ -33,7 +32,8 @@ class HealthModule(WebModule):
         self._network_handler = handler
 
     def set_cameras(self, cameras):
-        self.cameras = cameras
+        with self._lock:
+            self.cameras = cameras
 
     def register_routes(self, flask_app):
         # minimal stable contract for watchdogs - external tooling may depend on the shape
@@ -55,7 +55,9 @@ class HealthModule(WebModule):
     def _camera_status(self):
         cameras_data = []
         all_ok = True
-        for cam in self.cameras:
+        with self._lock:
+            cams = list(self.cameras)
+        for cam in cams:
             try:
                 age = cam.get_frame_age()
                 ok = age < self._stale_threshold

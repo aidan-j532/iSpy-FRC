@@ -40,7 +40,7 @@ class DashboardModule(WebModule):
         flask_app.add_url_rule("/api/events", "api_events", self._sse_stream)
 
     def update(self, frame_data: dict):
-        self._latest = {
+        tick = {
             "fps": round(frame_data.get("fps", 0), 1),
             "vision_ms": round(frame_data.get("vision_s", 0) * 1000, 1),
             "camera_lag_ms": round(frame_data.get("camera_lag_s", 0) * 1000, 1),
@@ -48,26 +48,28 @@ class DashboardModule(WebModule):
             "loop_s": round(frame_data.get("loop_s", 0) * 1000, 1),
             "uptime_s": round(time.perf_counter() - self._start_time, 1),
         }
-        self._vision_last_tick = time.perf_counter()
 
-        detections = frame_data.get("detections", [])
-        self._detection_classes = {}
-        for obj in detections:
+        det_classes = {}
+        for obj in frame_data.get("detections", []):
             cls_name = getattr(obj, "name", None) or "unknown"
-            self._detection_classes[cls_name] = self._detection_classes.get(cls_name, 0) + 1
+            det_classes[cls_name] = det_classes.get(cls_name, 0) + 1
 
-        if not self._model_info:
-            self._refresh_model_info()
+        with self._data_lock:
+            self._latest = tick
+            self._vision_last_tick = time.perf_counter()
+            self._detection_classes = det_classes
+            if not self._model_info:
+                self._refresh_model_info_unlocked()
 
         self._push_sse({
             "type": "tick",
-            **self._latest,
-            "detection_classes": self._detection_classes,
+            **tick,
+            "detection_classes": det_classes,
             "cameras": self._get_camera_status(),
             "system": self._get_system_metrics(),
         })
 
-    def _refresh_model_info(self):
+    def _refresh_model_info_unlocked(self):
         try:
             config = self.context.get("config")
             if not config:
@@ -100,11 +102,12 @@ class DashboardModule(WebModule):
             self._model_info = {}
 
     def set_plugins(self, trackers: dict, utilities: dict, frame_processors: dict):
-        self._plugin_info = {
-            "trackers": list(trackers.keys()),
-            "utilities": list(utilities.keys()),
-            "frame_processors": list(frame_processors.keys()),
-        }
+        with self._data_lock:
+            self._plugin_info = {
+                "trackers": list(trackers.keys()),
+                "utilities": list(utilities.keys()),
+                "frame_processors": list(frame_processors.keys()),
+            }
 
     def _get_system_metrics(self) -> dict:
         if not PSUTIL_AVAILABLE:
@@ -178,15 +181,20 @@ class DashboardModule(WebModule):
 
     def _build_full_payload(self) -> dict:
         vision_running = (time.perf_counter() - self._vision_last_tick) < 5.0 if self._vision_last_tick else False
+        with self._data_lock:
+            latest = dict(self._latest)
+            detection_classes = dict(self._detection_classes)
+            model_info = dict(self._model_info)
+            plugin_info = dict(self._plugin_info)
         return {
-            **self._latest,
+            **latest,
             "vision_running": vision_running,
             "uptime_s": round(time.perf_counter() - self._start_time, 1),
             "cameras": self._get_camera_status(),
             "system": self._get_system_metrics(),
-            "model": self._model_info,
-            "detection_classes": self._detection_classes,
-            "plugins": self._plugin_info,
+            "model": model_info,
+            "detection_classes": detection_classes,
+            "plugins": plugin_info,
         }
 
     def _api_status(self):
