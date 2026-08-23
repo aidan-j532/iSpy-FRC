@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
-from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline, SUPPORTED_TARGET_FORMATS
+from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 
@@ -177,6 +177,10 @@ class DepthAnythingCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
             camera_config.get("grayscale", False),
         )
 
+        # file_path drift guard - see OptimizableModelPipeline._resync_stale_model_file_path
+        if self._optimization_requested():
+            self._resync_stale_model_file_path(config)
+
         # optimization requested + no active artifact yet -> kick off the
         # build on a bg thread so the app keeps running
         if self._optimization_requested() and not self._optimized_active():
@@ -250,28 +254,46 @@ class DepthAnythingCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
         self._set_status(status)
         return status
 
-    def _resolve_target_format(self) -> str:
-        explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
-        if explicit and explicit != "auto":
-            target = explicit
-        else:
-            target = self.recommended_format()
-
-        # same supported set as object_detection - 'auto' can pick any
-        # backend the device + installed toolchains can actually run
-        # (rknn on Rockchip, engine on NVIDIA, openvino on Intel, ...).
-        if target not in SUPPORTED_TARGET_FORMATS:
-            self.logger.warning(
-                "Recommended target format %r unsupported - using onnx", target,
-            )
-            return "onnx"
-        return target
+    # _resolve_target_format is inherited from OptimizableModelPipeline -
+    # this pipeline has no override-worthy behaviour (unlike yolo_world,
+    # whose recommend_format() call deliberately keeps dependency checks).
 
     def _optimization_requested(self) -> bool:
         # depth estimation can be disabled entirely - no model, no build
         return bool(getattr(self, "estimate_depth", True)) and (
             super()._optimization_requested()
         )
+
+    def _optimized_active(self) -> bool:
+        return getattr(self, "_session", None) is not None
+
+    # ------------------------------------------------------------------
+    # stale-artifact resync hooks (see OptimizableModelPipeline)
+    #
+    # Depth Anything ships exactly one Hugging Face checkpoint and every
+    # artifact path is derived from config at boot (fixed stem + input
+    # size + target format), so there is no user-picked source model and
+    # no persisted path that could drift. The hooks exist so the boot
+    # guard is callable on every model-backed pipeline instead of raising
+    # AttributeError if a future refactor adds persisted state.
+    # ------------------------------------------------------------------
+
+    def _resolve_model_path(self, path: str) -> Path | None:
+        if not path:
+            return None
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(__file__).resolve().parents[3] / p
+        return p
+
+    def _source_model_path(self) -> Path | None:
+        # single fixed HF checkpoint - no authoritative user-picked .pt
+        # exists, so there is never anything to resync against (yet)
+        return None
+
+    def _persist_file_path(self, file_path: str, config: iSpyConfig | None):
+        # artifact locations are derived, not stored - nothing to persist
+        pass
 
     def _optimized_active(self) -> bool:
         return getattr(self, "_session", None) is not None

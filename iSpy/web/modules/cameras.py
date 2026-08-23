@@ -64,6 +64,9 @@ _AUTO_DIVERSITY_PX = 12.0
 # than before (subpixel corner accuracy scales with detection resolution).
 _DETECT_MAX_DIM = 1280
 _FEED_MAX_DIM = 1280
+# overlay feeds hold their opening chunk until the detector's first tick (or
+# this deadline) so the first frame served is already annotated
+_CALIB_FEED_WARMUP_S = 1.5
 # the rolling solve is the other big periodic CPU spike - left unchecked it
 # re-runs a full bundle solve on every captured frame (every ~0.25-0.5s while
 # the board is being moved), which stutters the live feed. Throttle it and
@@ -1084,6 +1087,16 @@ class CamerasModule(WebModule):
             d = session.get("charuco_dict")
         return tuple(p) if p else None, d
 
+    def _remember_charuco_layout(self, cam_name, pattern, dictionary_id):
+        if pattern is None:
+            return
+        _, key, _ = self._find_camera_entry(cam_name)
+        key = key or cam_name
+        with self.calib_lock:
+            session = self.calib_sessions.setdefault(key, {})
+            session["charuco_pattern"] = [int(pattern[0]), int(pattern[1])]
+            if dictionary_id is not None:
+                session["charuco_dict"] = int(dictionary_id)
 
     def _draw_captured_overlays(self, frame, cam_name, overlay):
         _, key, _ = self._find_camera_entry(cam_name)
@@ -1164,6 +1177,24 @@ class CamerasModule(WebModule):
                         if found:
                             matched_pattern = cand
                             break
+                    if not found:
+                        # nothing matched the session/requested layout - sweep
+                        # common layouts and dictionaries so a board printed
+                        # outside the defaults is still picked up live
+                        afound, acorners, aids, amc, ami, _, apat, adict = (
+                            cam_calibration.detect_charuco_auto(
+                                work,
+                                preferred_pattern=candidates[0] if candidates else None,
+                                preferred_dict=effective_dict,
+                            )
+                        )
+                        if afound:
+                            found = True
+                            corners, ids = acorners, aids
+                            marker_corners, marker_ids = amc, ami
+                            matched_pattern = tuple(apat)
+                            matched_dict = adict
+                            self._remember_charuco_layout(cam_name, matched_pattern, adict)
                     if scale != 1.0:
                         corners = self._rescale_corners(corners, 1.0 / scale)
                         marker_corners = self._rescale_corners(marker_corners, 1.0 / scale)
@@ -1201,29 +1232,16 @@ class CamerasModule(WebModule):
             worker = threading.Thread(target=detection_worker, daemon=True)
             worker.start()
         try:
-            warmup_deadline = (time.monotonic() + 3.0) if overlay == "charuco" else 0
+            warmup_deadline = (time.monotonic() + _CALIB_FEED_WARMUP_S) if overlay == "charuco" else 0
+            # hold chunks until the detector's first tick so the opening frame
+            # of an overlay feed is already annotated rather than raw
+            while overlay == "charuco" and time.monotonic() < warmup_deadline:
+                with result_lock:
+                    ready = latest["detect"] is not None
+                if ready:
+                    break
+                stop_evt.wait(0.02)
             while True:
-                if overlay == "charuco" and time.monotonic() < warmup_deadline:
-                    with result_lock:
-                        ready = latest["detect"] is not None
-                    if ready:
-                        warmup_deadline = 0
-                    else:
-                        cam = self.live_cameras.get(cam_name)
-                        _frame = None
-                        if cam is not None and hasattr(cam, "get_raw_frame"):
-                            _frame = cam.get_raw_frame()
-                        if _frame is not None:
-                            last_frame_time = time.monotonic()
-                            _sf = _frame
-                            if _FEED_MAX_DIM and _frame.shape[1] > _FEED_MAX_DIM:
-                                _f = _FEED_MAX_DIM / float(_frame.shape[1])
-                                _sf = cv2.resize(_frame, (int(round(_frame.shape[1] * _f)), int(round(_frame.shape[0] * _f))))
-                            _ok, _buf = cv2.imencode(".jpg", _sf, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                            if _ok:
-                                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + _buf.tobytes() + b"\r\n")
-                        time.sleep(0.02)
-                        continue
                 cam = self.live_cameras.get(cam_name)
                 frame = None
                 if cam is not None and hasattr(cam, "get_raw_frame"):
@@ -1277,29 +1295,33 @@ class CamerasModule(WebModule):
             return jsonify(found=False, message="No frame yet")
         session_pattern, session_dict = self._charuco_session_layout(cam_name)
         preferred_pattern = session_pattern or tuple(cam_calibration.DEFAULT_CHARUCO_PATTERN)
-        kwargs = {}
-        if session_dict is not None:
-            kwargs["dictionary_id"] = session_dict
-        found, corners, ids, marker_corners, marker_ids, gray = (
-            cam_calibration.detect_charuco(
+        # always sweep: a compatible-but-wrong grid can match the visible
+        # corners, so let the scan rank candidates instead of trusting the
+        # preferred layout blindly
+        found, corners, ids, marker_corners, marker_ids, _, apat, adict = (
+            cam_calibration.detect_charuco_auto(
                 frame,
-                preferred_pattern[0], preferred_pattern[1],
-                **kwargs,
+                preferred_pattern=preferred_pattern,
+                preferred_dict=session_dict,
             )
         )
+        matched_pattern = tuple(apat) if found else preferred_pattern
+        matched_dict = adict if found else session_dict
+        if found:
+            self._remember_charuco_layout(cam_name, matched_pattern, adict)
         payload = {
             "found": bool(found),
             "corners": int(len(corners)) if found else 0,
             "markers": int(len(marker_corners)) if found else 0,
-            "pattern": list(preferred_pattern),
-            "dictionary": session_dict,
+            "pattern": list(matched_pattern),
+            "dictionary": matched_dict,
         }
         if not found:
             payload["message"] = "Board not visible - show the whole board in frame, even lighting helps."
         else:
             payload["message"] = (
-                f"Board detected as {preferred_pattern[0]}x{preferred_pattern[1]} "
-                f"(dictionary {session_dict}). Move it around and capture."
+                f"Board detected as {matched_pattern[0]}x{matched_pattern[1]} "
+                f"(dictionary {matched_dict}). Move it around and capture."
             )
         return jsonify(**payload)
 

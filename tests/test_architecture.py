@@ -275,6 +275,56 @@ class PipelineLifecycleTests(unittest.TestCase):
             for key in keys:
                 self.assertIn(key, options, f"{cls.__name__} missing {key}")
 
+    def test_stale_artifact_resync_hooks_exist_on_all_model_backed_pipelines(self):
+        # _resync_stale_model_file_path() needs three pipeline-provided
+        # helpers; every model-backed pipeline must define them so the
+        # boot guard is callable everywhere (a missing hook would turn the
+        # guard into an AttributeError and silently drop the protection)
+        from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
+
+        hooks = ("_source_model_path", "_resolve_model_path", "_persist_file_path")
+        for cls in (ObjectDetectionCamera, YoloWorldCamera, DepthAnythingCamera):
+            self.assertTrue(issubclass(cls, OptimizableModelPipeline), cls.__name__)
+            for hook in hooks:
+                owner = next(
+                    (k for k in cls.__mro__ if hook in vars(k)), None
+                )
+                self.assertIsNotNone(owner, f"{cls.__name__} missing resync hook {hook}")
+                self.assertIsNot(
+                    owner, OptimizableModelPipeline,
+                    f"{cls.__name__} inherits {hook} instead of defining it",
+                )
+
+    def test_resync_stale_model_file_path_is_safe_on_every_model_backed_pipeline(self):
+        # calling the guard on a bare instance must never raise - pipelines
+        # without persisted model state exit cleanly via their hooks
+        yw = YoloWorldCamera.__new__(YoloWorldCamera)
+        yw.logger = logging.getLogger("test.yw")
+        yw.model_size = "s"
+        yw.classes = ["object"]
+        yw._resync_stale_model_file_path(None)
+
+        da = DepthAnythingCamera.__new__(DepthAnythingCamera)
+        da.logger = logging.getLogger("test.da")
+        da._resync_stale_model_file_path(None)  # fixed checkpoint -> no-op
+
+        od = ObjectDetectionCamera.__new__(ObjectDetectionCamera)
+        od.logger = logging.getLogger("test.od")
+
+        def _no_vm():
+            return {}
+
+        od._current_vm_config = _no_vm
+
+        def _resolve(path):
+            return Path(path) if path else None
+
+        od._resolve_model_path = _resolve
+        persisted = []
+        od._persist_file_path = lambda fp, cfg: persisted.append(fp)
+        od._resync_stale_model_file_path(None)  # no vision_model block -> no-op
+        self.assertEqual(persisted, [])
+
     def test_optimize_disabled_returns_explanation(self):
         # optimize disabled in config -> explain instead of pretending to build
         yw = YoloWorldCamera.__new__(YoloWorldCamera)

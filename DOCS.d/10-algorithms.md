@@ -115,7 +115,7 @@ def make_charuco_board(cols, rows, square_length=DEFAULT_CHARUCO_SQUARE,
 ```
 
 Parameters:
-- `cols`, `rows`: number of chessboard squares (not markers — markers are
+- `cols`, `rows`: number of board squares (not markers — markers are
   inside each square)
 - `square_length`: side length of each square in mm
 - `marker_length`: side length of each ArUco marker in mm (must be < square_length)
@@ -154,6 +154,35 @@ def detect_charuco(frame, cols, rows, square_length=..., marker_length=..., dict
 5. Return `found=True` if at least 4 corners are detected.
 
 **Return tuple:** `(found, corners, ids, marker_corners, marker_ids, gray)`
+
+#### detect_charuco_auto() (line 420)
+
+Auto-detects a board without knowing its layout up front. Sweeps
+`CHARUCO_COMMON_PATTERNS` (7x5, 5x7, 8x6, 6x8, 6x6 + default) x
+`CHARUCO_COMMON_DICTS` (DICT_4X4_50/5X5_250/6X6_250) and returns the best
+match:
+
+```python
+def detect_charuco_auto(frame, preferred_pattern=None, preferred_dict=None):
+    # try preferred layout first, then sweep the common ones;
+    # rank by (corner count, -board area) so a wrong-but-compatible grid
+    # (e.g. a 7x5 print also "fits" a 7x9 grid) loses to the smallest
+    # board that explains what is visible
+    score = (len(corners), -(pattern[0] * pattern[1]))
+```
+
+**Behavior:**
+1. Builds the candidate list with the preferred pattern/dict first (so a
+   known-good session layout wins ties).
+2. Runs `detect_charuco()` per candidate; exceptions are swallowed.
+3. Returns the highest-scoring detection.
+
+**Return tuple:** `(found, corners, ids, marker_corners, marker_ids, gray,
+matched_pattern, matched_dict)` — last two are `None` when not found.
+
+**Cost:** every miss is a full detector pass per candidate (~18 passes worst
+case), so callers only fall back to the sweep after the session layout fails,
+and remember the matched layout afterwards (`_remember_charuco_layout`).
 
 #### _to_corners() (line 468), _to_ids() (line 475), _to_marker_corners() (line 482)
 

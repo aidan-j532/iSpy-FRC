@@ -33,9 +33,17 @@ share one base: `iSpy/vision/pipelines/optimizable.py::OptimizableModelPipeline`
 It owns the common `config_schema()` fields (`optimize`, `target_format`,
 `quantize`, `quantization_dataset`, `input_size`), target-format resolution,
 optimization-request handling, and the stale-model resync-on-boot protection
-(filename-stem comparison). Pipelines override only genuinely
-pipeline-specific behaviour (postprocess shape, backend loaders). Fixes to
-optimization behaviour now land once, not three times.
+(filename-stem comparison) - every model-backed pipeline implements the three
+resync hooks (`_source_model_path` / `_resolve_model_path` /
+`_persist_file_path`) and calls the guard in `__init__`. Only
+object_detection has persisted model state today, so its guard can actually
+fire; yolo_world/depth_anything derive paths from config at boot, their hooks
+resolve to None/no-op, and the guard exits immediately - wired anyway so the
+protection survives future refactors instead of dying as an AttributeError.
+Pipelines override only genuinely pipeline-specific behaviour (postprocess
+shape, backend loaders; `yolo_world._resolve_target_format` deliberately keeps
+dependency-aware format recommendation). Fixes to optimization behaviour now
+land once, not three times.
 
 ## Opt-in compatibility declarations
 

@@ -562,7 +562,7 @@ class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
 
     def _focal_length_px_fov(self, img_w: int) -> float:
         # FOV-derived intrinsic - doesnt rely on a game piece's known size.
-        # A chessboard-calibrated camera matrix is the most accurate source.
+        # A ChArUco-calibrated camera matrix is the most accurate source.
         intr = cam_calibration.intrinsics_for_frame(
             self.config.get("calibration", {}), img_w, 1
         )

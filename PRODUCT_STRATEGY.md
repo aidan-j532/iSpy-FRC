@@ -189,7 +189,7 @@ One click: "benchmark this model on my hardware." Shows FPS, latency, accuracy, 
 - YOLO inference across 8+ backends
 - Depth estimation (Depth Anything V2)
 - Optical flow
-- Camera calibration (ChArUco, chessboard)
+- Camera calibration (ChArUco, auto layout detection)
 - DBSCAN clustering
 - EMA smoothing
 - YOLO-World zero-shot detection

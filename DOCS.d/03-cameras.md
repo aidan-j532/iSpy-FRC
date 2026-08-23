@@ -6,11 +6,10 @@
 
 ## Overview
 
-`iSpy/web/modules/cameras.py` (1824 lines) is the largest module in the codebase. It handles:
+`iSpy/web/modules/cameras.py` (1687 lines) is the largest module in the codebase. It handles:
 - Camera CRUD (add/edit/remove via web UI)
 - Live MJPEG video feeds for each camera
 - ChArUco board calibration (intrinsics + extrinsics)
-- Chessboard calibration
 - Focal length calibration (known-object method)
 - PnP pose calibration
 - Camera device discovery (Linux v4l2, Windows registry)
@@ -33,8 +32,6 @@
 | /api/cameras/<name>/calibration/charuco/capture | POST | Capture a ChArUco frame |
 | /api/cameras/<name>/calibration/charuco/status | GET | ChArUco detection status |
 | /api/cameras/<name>/calibration/charuco/intrinsics | GET | Computed intrinsics matrix |
-| /api/cameras/<name>/calibration/chessboard/feed | GET | Chessboard calibration stream |
-| /api/cameras/<name>/calibration/chessboard/capture | POST | Capture a chessboard frame |
 | /api/cameras/<name>/calibration/pnp | GET/POST | PnP pose calibration |
 | /api/cameras/discover | GET | Discover connected camera devices |
 | /api/cameras/grid | GET | Camera grid overview |
@@ -66,7 +63,7 @@ def _generate(self, cam_name):
 
 ## Calibration Feed Generator (_generate_calibration)
 
-Similar to _generate, but with overlay rendering for calibration boards. Two modes:
+Similar to _generate, but with overlay rendering for calibration boards.
 
 ### ChArUco mode (overlay="charuco")
 
@@ -74,17 +71,17 @@ Similar to _generate, but with overlay rendering for calibration boards. Two mod
    - Reads frames from the camera
    - Runs ChArUco board detection (cv2.aruco)
    - Caches the latest detection result
-2. During a 3-second warmup period, yields raw frames without overlay so the img tag gets data immediately (prevents the "camera not loading" bug)
-3. After warmup, each frame gets the detection overlay drawn on it:
+2. The generator holds the opening MJPEG chunk until the detector's first tick
+   (deadline: `_CALIB_FEED_WARMUP_S` = 1.5s) so the first served frame is
+   already annotated rather than raw - prevents the "camera not loading" and
+   "feed goes black" bugs without streaming un-annotated frames
+3. Each frame gets the detection overlay drawn on it:
    - Green lines connecting detected corners
    - Blue dots for marker centers
-   - Auto-detects board layout (5x7, 7x5, 8x6, etc.) from a list of common patterns
-
-### Chessboard mode (overlay="chessboard")
-
-1. Similar worker thread pattern
-2. Detects chessboard corners with cv2.findChessboardCorners
-3. Draws green corner overlay
+4. If nothing matches the session's stored layout, `detect_charuco_auto()`
+   sweeps common board patterns (5x7, 7x5, 8x6, 6x6, ...) and dictionaries
+   (DICT_4X4/5X5/6X6_250) and ranks candidates by corner coverage; the matched
+   layout is remembered in the session so later ticks use it directly
 
 ---
 

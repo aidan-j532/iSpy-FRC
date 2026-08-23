@@ -7,20 +7,6 @@ import numpy as np
 from iSpy.vision import calibration as c
 
 
-def _make_board(pattern, img_size=(480, 640), square=60, shift_x=0, scale=1.0):
-    cols, rows = pattern
-    board = np.full((img_size[0], img_size[1], 3), 255, np.uint8)
-    sq = int(square * scale)
-    ox = (img_size[1] - (cols + 1) * sq) // 2 + shift_x
-    oy = (img_size[0] - (rows + 1) * sq) // 2
-    for y in range(rows + 1):
-        for x in range(cols + 1):
-            if (x + y) % 2 == 0:
-                cv2.rectangle(board, (ox + x * sq, oy + y * sq),
-                              (ox + (x + 1) * sq, oy + (y + 1) * sq), (0, 0, 0), -1)
-    return board
-
-
 class FocalLengthTests(unittest.TestCase):
     def test_focal_from_object(self):
         # 6.5in object, 24in away, 60px tall -> f = 60 * 24 / 6.5
@@ -126,44 +112,10 @@ class CharucoCalibrationTests(unittest.TestCase):
         self.assertIsNone(c.calibrate_charuco(captures, pattern))
 
 
-class ChessboardCalibrationTests(unittest.TestCase):
-    def test_detects_synthetic_board(self):
-        pattern = (9, 6)
-        found, corners, gray = c.detect_chessboard(_make_board(pattern), *pattern)
-        self.assertTrue(found)
-        self.assertEqual(corners.shape[0], 9 * 6)
-
-    def test_calibrates_varied_frames(self):
-        pattern = (9, 6)
-        captures = []
-        for i, (sx, scale) in enumerate([(0, 1.0), (-40, 1.0), (60, 1.0),
-                                         (0, 0.85), (-60, 1.0), (80, 0.9),
-                                         (0, 1.0), (50, 0.88), (-20, 1.0)]):
-            board = _make_board(pattern, shift_x=sx, scale=scale)
-            found, corners, _ = c.detect_chessboard(board, *pattern)
-            if found:
-                captures.append((board, corners))
-        self.assertGreaterEqual(len(captures), 3)
-        res = c.calibrate_chessboard(captures, pattern)
-        self.assertIsNotNone(res)
-        self.assertEqual(res["resolution"], [640, 480])
-        self.assertEqual(len(res["camera_matrix"]), 3)
-        self.assertEqual(len(res["dist_coeffs"]), 5)
-
-    def test_rejects_degenerate_frames(self):
-        pattern = (9, 6)
-        board = _make_board(pattern)
-        found, corners, _ = c.detect_chessboard(board, *pattern)
-        self.assertTrue(found)
-        captures = [(board, corners) for _ in range(5)]
-        self.assertIsNone(c.calibrate_chessboard(captures, pattern))
-
-
 class AutoCaptureScoringTests(unittest.TestCase):
     def test_expected_corners(self):
         self.assertEqual(c.expected_charuco_corners((7, 5)), 24)
         self.assertEqual(c.expected_charuco_corners((8, 6)), 35)
-        self.assertEqual(c.expected_chessboard_corners((9, 6)), 54)
         self.assertEqual(c.expected_charuco_corners("garbage"), 0)
 
     def test_capture_coverage_counts_corners(self):
@@ -223,15 +175,6 @@ class OverlayColorTests(unittest.TestCase):
         b, g, r = out[:, :, 0].astype(int), out[:, :, 1].astype(int), out[:, :, 2].astype(int)
         painted = (r > 200) & (g > 150) & (b < 50)
         self.assertTrue(bool(painted.any()), "expected the given color to be drawn")
-
-    def test_draw_chessboard_color_uses_given_color(self):
-        frame = self._flat_frame()
-        found, corners, _ = c.detect_chessboard(_make_board((9, 6)), * (9, 6))
-        self.assertTrue(found)
-        out = c.draw_chessboard(frame, corners, 9, 6, color=(10, 200, 250))
-        b, g, r = out[:, :, 0].astype(int), out[:, :, 1].astype(int), out[:, :, 2].astype(int)
-        painted = (r > 200) & (g > 150) & (b < 50)
-        self.assertTrue(bool(painted.any()), "expected colored chessboard corners on the copy")
 
     def test_draw_charuco_color_uses_given_color(self):
         frame = self._flat_frame()

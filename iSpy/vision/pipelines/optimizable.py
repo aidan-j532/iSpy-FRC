@@ -210,8 +210,12 @@ class OptimizableModelPipeline:
     # exists, else the .pt itself (the background optimizer swaps file_path
     # once its fresh build lands).
     #
-    # Only pipelines that expose a vision_model.file_path implement
-    # _source_model_path(); for everyone else this is inert.
+    # Only pipelines with a persisted, user-picked source model have a
+    # resync that can actually fire (object_detection today). The other
+    # model-backed pipelines still implement the three helpers - their
+    # paths are derived from config at boot, so _source_model_path()
+    # resolves to None and the guard exits immediately - so this stays
+    # safely callable everywhere instead of an AttributeError landmine.
     # ------------------------------------------------------------------
 
     def _resync_stale_model_file_path(self, config) -> None:

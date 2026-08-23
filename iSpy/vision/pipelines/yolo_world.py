@@ -118,7 +118,10 @@ class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
             raw_quantize = raw_quantize.strip().lower() in ("1", "true", "yes", "on")
         self.quantize = bool(raw_quantize)
 
-        self.target_format = str(camera_config.get_pipeline_setting("target_format") or "auto").lower()
+        # same name the mixin contract expects (_requested_format); the raw
+        # setting ("auto" allowed) - resolution happens lazily via
+        # _target_format_cached()
+        self._requested_format = str(camera_config.get_pipeline_setting("target_format") or "auto").lower()
         self._quantization_dataset = camera_config.get_pipeline_setting("quantization_dataset") or None
         self._model_input_size = int(camera_config.get_pipeline_setting("input_size") or 640)
 
@@ -139,6 +142,10 @@ class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
         self._optimize_error: str | None = None
         self._target_format: str | None = None
         super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
+
+        # file_path drift guard - see OptimizableModelPipeline._resync_stale_model_file_path
+        if self._optimization_requested():
+            self._resync_stale_model_file_path(config)
 
         # optimization requested + no active artifact yet -> kick off the
         # build on a bg thread so the app keeps running
@@ -215,7 +222,7 @@ class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
         return status
 
     def _resolve_target_format(self) -> str:
-        explicit = str(getattr(self, "target_format", "") or "").strip().lower()
+        explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
         if explicit and explicit != "auto":
             target = explicit
         else:
@@ -242,6 +249,60 @@ class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
         if not path:
             return False
         return self._path_format(path) == self._target_format_cached()
+
+    # ------------------------------------------------------------------
+    # stale-artifact resync hooks (see OptimizableModelPipeline)
+    #
+    # yolo_world derives every model path from config at boot (model_size
+    # -> weights -> class-hashed reparameterization -> artifact), so there
+    # is no persisted file_path that can drift the way object_detection's
+    # vision_model.file_path can. The hooks exist so the boot guard is
+    # callable on every model-backed pipeline instead of raising
+    # AttributeError if a future refactor adds persisted state.
+    # ------------------------------------------------------------------
+
+    @property
+    def yolo_model_file(self):
+        # mixin-facing alias: the artifact currently loaded/selected
+        return getattr(self, "_model_path", None)
+
+    @yolo_model_file.setter
+    def yolo_model_file(self, value):
+        self._model_path = value
+
+    def _resolve_model_path(self, path: str) -> Path | None:
+        if not path:
+            return None
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(__file__).resolve().parents[3] / p
+        return p
+
+    def _source_model_path(self) -> Path | None:
+        # authoritative source = the reparameterized .pt for the CURRENT
+        # model_size/class set. Existence-check only - never download or
+        # build here; nothing on disk yet means nothing to sync against.
+        asset = Path(__file__).resolve().parents[2] / "assets" / "yolo-world.pt"
+        weights = asset if asset.exists() else None
+        if weights is None:
+            url = _WORLD_MODEL_URLS.get(self.model_size, _WORLD_MODEL_URLS["s"])
+            downloaded = _WORLD_MODEL_DIR / url.rsplit("/", 1)[-1]
+            if downloaded.exists() and downloaded.stat().st_size >= 1024:
+                weights = downloaded
+        if weights is None:
+            return None
+        classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[:8]
+        fixed = _WORLD_MODEL_DIR / "world" / f"{weights.stem}-{classes_key}.pt"
+        if fixed.exists() and fixed.stat().st_size >= 1024:
+            return fixed
+        return None
+
+    def _persist_file_path(self, file_path: str, config: iSpyConfig | None):
+        # no model path is stored in config - loads are re-derived from
+        # model_size/classes on every boot, so there is nothing to write;
+        # the mixin's in-memory correction via the yolo_model_file alias
+        # already keeps the running session consistent.
+        pass
 
     def _ensure_world_model(self, size: str) -> str | None:
         url = _WORLD_MODEL_URLS.get(size, _WORLD_MODEL_URLS["s"])
@@ -376,9 +437,12 @@ class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 return
 
             from iSpy.vision.QuantizedModel import ensure_quantized_model
+            # cached resolved format (not the raw "auto" setting) so the
+            # artifact built here is always the one _optimized_active()
+            # expects to find
             artifact, converted = ensure_quantized_model(
                 fixed,
-                self.target_format,
+                self._target_format_cached(),
                 (self._model_input_size, self._model_input_size),
                 quantize=True,
                 dataset_path=self._quantization_dataset,

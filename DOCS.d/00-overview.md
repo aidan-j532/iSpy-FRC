@@ -13,7 +13,7 @@ iSpy-FRC is a real-time computer vision pipeline for the FIRST Robotics Competit
 
 - YOLO inference across 8+ backend formats (RKNN, ONNX, TFLite, TensorRT, OpenVINO, CoreML, Hailo HEF, Google TPU)
 - Automatic hardware detection and model conversion at boot
-- Camera calibration via ChArUco boards, chessboard patterns, and known-object focal length
+- Camera calibration via ChArUco boards (auto layout detection) and known-object focal length
 - 6DoF pose estimation via solvePnP
 - Multi-camera stereo triangulation
 - Monocular depth estimation (Depth Anything V2)
@@ -51,7 +51,7 @@ iSpy-FRC/
 │   ├── vision/                        # Vision system
 │   │   ├── Camera.py                  # Threaded camera reader with VideoCapture (650 lines)
 │   │   ├── Object.py                  # Detection data class (110 lines)
-│   │   ├── calibration.py             # ChArUco, chessboard, focal length math (542 lines)
+│   │   ├── calibration.py             # ChArUco, focal length math (522 lines)
 │   │   ├── triangulation.py           # pixel_to_ray, ground_plane_intersection, stereo (133 lines)
 │   │   ├── genericYolo.py             # Central inference engine — all backends (1386 lines)
 │   │   ├── ModelInspector.py          # Model file introspection and config filling (946 lines)
@@ -351,7 +351,7 @@ The iSpy system runs multiple concurrent threads. Here is every thread and its p
 | **Prepare thread** (background pipelines) | `BackgroundPreparedPipeline.prepare()` → `threading.Thread(target=self._prepare, daemon=True)` (`base.py:90-95`) | Runs heavy model loading/optimization in a background thread so the constructor returns immediately. `is_ready()` reports status. |
 | **Optimize runner** (per camera, when optimizing) | `ObjectDetectionCamera.__init__()` → `threading.Thread(target=self._optimize_runner, daemon=True)` (`object_detection.py:210-214`) | Builds the optimized model artifact (RKNN/ONNX/TFLite/Engine) in a background thread so the app keeps running during conversion. |
 | **Video recorder** | `RollBack._start_recorder()` → `threading.Thread(target=self._worker, daemon=True)` (`RollBack.py:161-162`) | Async video writer: pulls frames from a `queue.Queue` and writes them to disk via `cv2.VideoWriter`. Prevents blocking the vision loop on disk I/O. |
-| **Detection worker** (calibration feed) | `CamerasModule._generate_calibration()` (inside `cameras.py`) | Runs ChArUco/chessboard detection on a downscaled frame copy for the live calibration overlay. Result is cached under a `result_lock`. |
+| **Detection worker** (calibration feed) | `CamerasModule._generate_calibration()` (inside `cameras.py`) | Runs ChArUco detection on a downscaled frame copy for the live calibration overlay, falling back to a common-layout sweep (`detect_charuco_auto`). Result is cached under a `result_lock`. |
 
 ---
 
@@ -431,7 +431,7 @@ torch_xla                    # Google TPU (Cloud TPU / bare metal)
 | `plugins/utilities/BuiltIn/NetworkHandler.py` | 250 | NetworkTables publish, robot pose read, viewer overlay |
 | `web/modules/health.py` | 140 | Core HealthModule: /health + /api/health (absorbed health_reporter/status_reporter) |
 | `plugins/utilities/BuiltIn/RollBack.py` | 228 | Video recording with async queue-based writer |
-| `vision/calibration.py` | 542 | ChArUco/chessboard detection, Levenberg-Marquardt calibration, focal length math |
+| `vision/calibration.py` | 522 | ChArUco detection (incl. auto layout sweep), Levenberg-Marquardt calibration, focal length math |
 | `iSpy/iSpy.py` | 509 | Vision loop orchestrator (solo + multi mode) |
 | `vision/triangulation.py` | 133 | Pixel-to-ray, ground-plane intersection, stereo triangulation |
 | `vision/Object.py` | 110 | Detection data class with relative_to() transform |

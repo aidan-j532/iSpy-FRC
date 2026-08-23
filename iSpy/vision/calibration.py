@@ -399,6 +399,64 @@ def detect_charuco(
     return found, corners, ids, marker_corners, marker_ids, gray
 
 
+# Layouts/dictionaries swept by detect_charuco_auto when nothing matches the
+# session's stored layout. Kept short on purpose: every miss costs a full
+# detector pass, and this only runs until a board has been matched once.
+CHARUCO_COMMON_PATTERNS = (
+    DEFAULT_CHARUCO_PATTERN,
+    (7, 5),
+    (5, 7),
+    (8, 6),
+    (6, 8),
+    (6, 6),
+)
+CHARUCO_COMMON_DICTS = (
+    DEFAULT_CHARUCO_DICT,
+    cv2.aruco.DICT_5X5_250,
+    cv2.aruco.DICT_6X6_250,
+)
+
+
+def detect_charuco_auto(frame, preferred_pattern=None, preferred_dict=None):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+    patterns = []
+    if preferred_pattern is not None:
+        try:
+            patterns.append((int(preferred_pattern[0]), int(preferred_pattern[1])))
+        except (TypeError, ValueError, IndexError):
+            pass
+    for pat in CHARUCO_COMMON_PATTERNS:
+        if tuple(pat) not in patterns:
+            patterns.append(tuple(pat))
+    dicts = []
+    if preferred_dict is not None:
+        dicts.append(int(preferred_dict))
+    for dictionary_id in CHARUCO_COMMON_DICTS:
+        if dictionary_id not in dicts:
+            dicts.append(dictionary_id)
+    best = None
+    for pattern in patterns:
+        for dictionary_id in dicts:
+            try:
+                found, corners, ids, mc, mi, _ = detect_charuco(
+                    gray, pattern[0], pattern[1], dictionary_id=dictionary_id
+                )
+            except Exception:
+                continue
+            if not found:
+                continue
+            # a wrong-but-compatible grid can match the same corners, so rank
+            # by coverage first, then prefer the smallest board that explains
+            # what is visible (a 7x5 print also "fits" a 7x9 grid)
+            score = (len(corners), -(pattern[0] * pattern[1]))
+            if best is None or score > best[0]:
+                best = (score, corners, ids, mc, mi, pattern, dictionary_id)
+    if best is not None:
+        _, corners, ids, mc, mi, pattern, dictionary_id = best
+        return True, corners, ids, mc, mi, gray, pattern, dictionary_id
+    return False, None, None, None, None, gray, None, None
+
+
 def calibrate_charuco(
     captures,
     pattern=DEFAULT_CHARUCO_PATTERN,

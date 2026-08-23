@@ -16,7 +16,7 @@ def get_structured_recommendations(config: dict) -> list[dict]:
 
     for cam_name, cam_cfg in config.get("camera_configs", {}).items():
         calib = cam_cfg.get("calibration", {})
-        # chessboard-calibrated intrinsics are a valid calibration on their own
+        # calibrated intrinsics are a valid calibration on their own
         if calib.get("camera_matrix") is None and calib.get("size", 0) == 0 and calib.get("distance", 0) == 0:
             add("critical", f"calib.{cam_name}",
                 f"Camera '{cam_name}' is uncalibrated (size/distance are 0) - distance estimates will be wrong.")

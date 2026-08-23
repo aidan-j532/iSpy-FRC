@@ -35,18 +35,22 @@ python -m pytest tests/ -v -x
 
 | File | Lines | Tests | Coverage Area |
 |------|-------|-------|---------------|
-| `test_calibration.py` | 248 | ~15 | Calibration math: focal length, intrinsics, ChArUco detection, chessboard, scoring, overlay rendering |
-| `test_calibration_web.py` | 491 | 26 | Calibration web API: ChArUco feed/capture/status, chessboard, PnP, auto-capture |
-| `test_addons.py` | 464 | ~20 | Plugin discovery, base classes, object_tracker, path_planner, video_recorder, network_table_handler, HealthModule, examples |
-| `test_addon_web.py` | 431 | ~15 | Plugin status API: toggle, settings, source view, delete, coerce, upload |
-| `test_addon_config.py` | 318 | ~10 | Config migration: legacy list to addon dict format |
-| `test_architecture.py` | 452 | ~15 | Pipeline config, lifecycle, boot readiness, quantize dirs |
-| `test_model_select.py` | 298 | ~10 | Model selection, artifact resolution, optimized-active checks |
-| `test_pipeline_schemas.py` | 148 | 10 | Vision pipeline config schemas, debug hooks, capture backend |
+| `test_calibration.py` | 161 | 20 | Calibration math: focal length, intrinsics, ChArUco detection, scoring, overlay rendering |
+| `test_calibration_web.py` | 408 | 24 | Calibration web API: ChArUco feed/capture/status, PnP, auto-capture |
+| `test_addons.py` | 464 | 50 | Plugin discovery, base classes, object_tracker, path_planner, video_recorder, network_table_handler, HealthModule, examples |
+| `test_addon_web.py` | 431 | 30 | Plugin status API: toggle, settings, source view, delete, coerce, upload |
+| `test_addon_config.py` | 318 | 26 | Config migration: legacy list to addon dict format |
+| `test_architecture.py` | 452 | 27 | Pipeline config, lifecycle, boot readiness, quantize dirs |
+| `test_model_select.py` | 298 | 14 | Model selection, artifact resolution, optimized-active checks |
+| `test_pipeline_schemas.py` | 148 | 12 | Vision pipeline config schemas, debug hooks, capture backend |
 | `test_settings_page_keys.py` | 47 | 4 | Regression: removed legacy keys not in settings.html |
 | `test_camera_editor_regressions.py` | 32 | 4 | Regression: camera editor HTML has expected JS functions |
+| `test_camera_geometry.py` | - | 14 | Camera geometry math regression coverage |
+| `test_control_channel.py` | - | 11 | Control channel messaging |
+| `test_output_schema.py` | - | 8 | Vision output schema validation |
+| `test_boot_camera_cleanup.py` | - | 10 | Boot-time stale camera cleanup |
 
-**Total:** ~100 tests across 10 files (2,629 lines).
+**Total:** 254 tests across 14 files (3,258 lines).
 
 ---
 
@@ -142,45 +146,6 @@ def _charuco_b64(pattern=(7, 5), size=(640, 480), rotate=False):
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
 ```
 
-#### _chessboard_image() (in test_calibration_web.py)
-
-Generates a synthetic chessboard image for testing:
-
-```python
-def _chessboard_image(pattern=(9, 6), img_size=(480, 640), square=60):
-    cols, rows = pattern
-    board = np.full((img_size[0], img_size[1], 3), 255, np.uint8)
-    sq = int(square)
-    ox = (img_size[1] - (cols + 1) * sq) // 2
-    oy = (img_size[0] - (rows + 1) * sq) // 2
-    for y in range(rows + 1):
-        for x in range(cols + 1):
-            if (x + y) % 2 == 0:
-                cv2.rectangle(board, ...)
-    return board
-```
-
-#### _make_board() (in test_calibration.py)
-
-Generates a synthetic chessboard for calibration tests:
-
-```python
-def _make_board(pattern, img_size=(480, 640), square=60, shift_x=0, scale=1.0):
-    cols, rows = pattern
-    board = np.full((img_size[0], img_size[1], 3), 255, np.uint8)
-    sq = int(square * scale)
-    ox = (img_size[1] - (cols + 1) * sq) // 2 + shift_x
-    oy = (img_size[0] - (rows + 1) * sq) // 2
-    for y in range(rows + 1):
-        for x in range(cols + 1):
-            if (x + y) % 2 == 0:
-                cv2.rectangle(board, ...)
-    return board
-```
-
-Supports `shift_x` for testing position diversity and `scale` for testing
-different sizes.
-
 ---
 
 ## Detailed Test Coverage
@@ -221,14 +186,13 @@ Tests the calibration web API endpoints:
 
 | Test Class | Tests | What It Covers |
 |------------|-------|----------------|
-| `CalibrationWebTests` | 26 | Full calibration web API |
+| `CalibrationWebTests` | 24 | Full calibration web API |
 
 **Key tests:**
 - `test_charuco_feed_returns_jpeg` — verifies `/calibration/charuco/feed` returns MJPEG stream.
 - `test_charuco_capture_stores_frame` — POST to `/calibration/charuco/capture` stores the frame.
 - `test_charuco_status_reports_detection` — GET `/calibration/charuco/status` reports detection status.
 - `test_charuco_intrinsics_after_captures` — after enough captures, intrinsics endpoint returns results.
-- `test_chessboard_capture_reports_color` — chessboard capture endpoint (currently returns 404).
 - `test_pnp_calibration` — PnP calibration endpoint test.
 - `test_auto_capture_pause_resume` — auto-capture mode pause/resume.
 
@@ -374,49 +338,21 @@ Regression test for camera editor HTML:
 
 ## Known Test Issues
 
-### Pre-existing Failures
+None. The historical auto-detect failures (`detect_charuco` identifying a 7x5
+print against wrong grids) and chessboard endpoint gaps were resolved by
+implementing `detect_charuco_auto()` (layout/dictionary sweep ranked by corner
+coverage) and removing chessboard support entirely.
 
-1. **`test_auto_detect_finds_non_default_pattern_and_dict`** — AttributeError for
-   missing function. The auto-detect function hasn't been implemented yet.
+### Historically Slow Tests
 
-2. **`test_charuco_overlay_feed_auto_detects_non_default_layout`** — Auto-detect
-   pattern detection returns wrong layout. The detection algorithm identifies
-   7x9 instead of the expected non-default pattern.
+These timing-sensitive flows can be slow on busy machines but pass reliably:
 
-3. **`test_charuco_status_auto_detects_layout_and_dictionary`** — Pattern mismatch:
-   detected 7x9 instead of 8x6. The auto-detection heuristic defaults to 7x9.
-
-4. **`test_charuco_status_reports_detection`** — Pattern mismatch: detected 7x9
-   instead of 7x5. The auto-detection doesn't match the test's expected pattern.
-
-5. **`test_chessboard_capture_reports_color`** — Returns 404. Chessboard capture
-   endpoint is not implemented in the web API.
-
-6. **`test_chessboard_overlay_feed_draws_detected_board`** — Chessboard overlay
-   not working. The chessboard detection in the overlay feed is not implemented.
-
-### Slow/Hanging Tests
-
-- **`test_auto_capture_stores_frames_then_finish_saves`** — Timeout in the
-  auto-capture flow. The test waits for auto-capture to collect frames and save,
-  but the timing-sensitive nature causes intermittent hangs.
-
-- **`test_charuco_capture_finish_flow`** — Timeout in capture finish flow. Similar
-  timing issue with the capture completion sequence.
-
-### Workarounds
-
-Skip known-broken tests:
-```bash
-python -m pytest tests/ -v -k "not (test_auto_detect_finds_non_default or test_charuco_overlay_feed_auto or test_charuco_status_auto or test_charuco_status_reports or test_chessboard_capture or test_chessboard_overlay)"
-```
-
-Skip slow/hanging tests:
-```bash
-python -m pytest tests/ -v -k "not (test_auto_capture_stores or test_charuco_capture_finish)"
-```
+- **`test_auto_capture_stores_frames_then_finish_saves`** — waits for
+  auto-capture to collect frames and save.
+- **`test_charuco_capture_finish_flow`** — capture completion sequence.
 
 ---
+
 
 ## Validation Tools (`iSpy/validations/`)
 
@@ -514,6 +450,6 @@ Provides a test fixture config used by some tests:
 ### Test Data
 
 - Synthetic images are generated in-test (no external test data files).
-- ChArUco boards are generated via `c.make_charuco_board()`.
-- Chessboard images are drawn programmatically.
+- ChArUco boards are generated via `c.make_charuco_board()` and
+  `generateImage(marginSize=...)` (margins control apparent board size).
 - Camera frames are numpy arrays filled with zeros or random data.

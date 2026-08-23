@@ -406,12 +406,6 @@ GET /api/cameras/<name>/calibration/charuco/intrinsics
 
 # PnP calibration
 POST /api/cameras/<name>/calibration/pnp
-
-# Chessboard feed (alternative to ChArUco)
-GET /api/cameras/<name>/calibration/chessboard/feed
-
-# Chessboard capture
-POST /api/cameras/<name>/calibration/chessboard/capture
 ```
 
 ---
