@@ -102,6 +102,22 @@ def _build_vision_pipeline_payloads():
     return pipelines
 
 
+def _active_pipeline_names(config) -> set:
+    """pipeline plugin_names currently assigned to at least one camera"""
+    names = set()
+    try:
+        cameras = getattr(config, "camera_configs", None) or {}
+        for cam in cameras.values():
+            name = getattr(cam, "pipeline_name", None)
+            if callable(name):
+                name = name()
+            if name:
+                names.add(str(name))
+    except Exception:
+        logger.warning("Failed to read active camera pipelines")
+    return names
+
+
 class PluginStatusModule(WebModule):
     plugin_name = "plugin_status"
 
@@ -144,6 +160,7 @@ class PluginStatusModule(WebModule):
 
     def _available(self):
         config = self.context.get("config")
+        active_pipelines = _active_pipeline_names(config)
 
         available = []
         for ptype, (subdir, base_cls, _, _) in _TYPE_MAP.items():
@@ -180,6 +197,8 @@ class PluginStatusModule(WebModule):
                 # files under <subdir>/BuiltIn/ are iSpy's bundled add-ons:
                 # toggleable/configureable but not deletable
                 is_builtin = bool(filename and filename.startswith("BuiltIn/"))
+                supported = getattr(cls, "supported_pipelines", None)
+                supported = list(supported) if supported else []
                 available.append({
                     "name": name,
                     "type": ptype,
@@ -189,6 +208,10 @@ class PluginStatusModule(WebModule):
                     "filename": filename,
                     "config_schema": schema if isinstance(schema, dict) else {},
                     "settings": settings,
+                    "supported_pipelines": supported,
+                    "pipeline_warning": sorted(
+                        active_pipelines - set(supported)
+                    ) if supported else [],
                 })
         return jsonify(available=available)
 

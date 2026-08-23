@@ -7,9 +7,9 @@ import logging
 from pathlib import Path
 from flask import Flask, jsonify, request
 
-logger = logging.getLogger(__name__)
+from iSpy.core.control_channel import SupervisorControlClient, state_file_path
 
-_STATE_FILE = Path.cwd() / "Outputs" / "service_state.json"
+logger = logging.getLogger(__name__)
 
 
 class VisionSupervisor:
@@ -19,6 +19,10 @@ class VisionSupervisor:
         self.status = "stopped"   # stopped | running | paused | error
         self.last_error = None
         self.lock = threading.RLock()
+        self._watch_thread: threading.Thread | None = None
+        # talks to the control channel the vision process publishes in the
+        # state file (control_port); replaces the old stdin pipe
+        self._control = SupervisorControlClient()
 
     def start(self):
         with self.lock:
@@ -26,13 +30,14 @@ class VisionSupervisor:
                 return {"ok": False, "error": "already running"}
             self.proc = subprocess.Popen(
                 [sys.executable, self.entry_point],
-                stdin=subprocess.PIPE, text=True,
                 cwd=str(Path.cwd()),
             )
+            self._control.invalidate()
             self.status = "running"
             self.last_error = None
             self._save_state()
-            threading.Thread(target=self._watch, daemon=True).start()
+            self._watch_thread = threading.Thread(target=self._watch, daemon=True)
+            self._watch_thread.start()
             return {"ok": True, "pid": self.proc.pid}
 
     def _watch(self):
@@ -51,25 +56,23 @@ class VisionSupervisor:
         with self.lock:
             if not self.proc or self.proc.poll() is not None:
                 return {"ok": False, "error": "not running"}
-            try:
-                self.proc.stdin.write(cmd + "\n")
-                self.proc.stdin.flush()
-                return {"ok": True}
-            except Exception as e:
-                return {"ok": False, "error": str(e)}
+        ok, detail = self._control.send(cmd)
+        return {"ok": ok, "error": None if ok else detail}
 
     def pause(self):
         r = self._send("PAUSE")
         if r["ok"]:
-            self.status = "paused"
-            self._save_state()
+            with self.lock:
+                self.status = "paused"
+                self._save_state()
         return r
 
     def resume(self):
         r = self._send("RESUME")
         if r["ok"]:
-            self.status = "running"
-            self._save_state()
+            with self.lock:
+                self.status = "running"
+                self._save_state()
         return r
 
     def stop(self, timeout=10):
@@ -79,6 +82,8 @@ class VisionSupervisor:
                 self._save_state()
                 return {"ok": True}
             self.status = "stopping"
+            # best-effort graceful request; if the control channel isn't up
+            # yet (child still booting) we fall through to terminate/kill
             self._send("SHUTDOWN")
         try:
             self.proc.wait(timeout=timeout)
@@ -88,6 +93,10 @@ class VisionSupervisor:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+        watcher = self._watch_thread
+        if watcher is not None and watcher is not threading.current_thread():
+            # let the exit-status write land before we overwrite with "stopped"
+            watcher.join(timeout=2)
         with self.lock:
             self.status = "stopped"
             self._save_state()
@@ -99,12 +108,27 @@ class VisionSupervisor:
         return self.start()
 
     def _save_state(self):
-        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        state_file = state_file_path()
+        state_file.parent.mkdir(parents=True, exist_ok=True)
         pid = self.proc.pid if (self.proc and self.proc.poll() is None) else None
-        _STATE_FILE.write_text(json.dumps({
+        # merge instead of overwrite - the vision process owns control_port
+        # in this same file and must survive our status updates
+        try:
+            state = json.loads(state_file.read_text())
+            if not isinstance(state, dict):
+                state = {}
+        except Exception:
+            state = {}
+        state.update({
             "status": self.status, "pid": pid, "last_error": self.last_error,
             "updated": time.time(),
-        }))
+        })
+        try:
+            tmp = state_file.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(state))
+            tmp.replace(state_file)
+        except OSError:
+            logger.exception("Failed to write service state file")
 
     def get_status(self):
         with self.lock:

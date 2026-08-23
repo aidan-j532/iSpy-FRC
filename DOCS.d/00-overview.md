@@ -77,9 +77,8 @@ iSpy-FRC/
 │   │   │   └── example_tracker.py     # Template for new trackers
 │   │   ├── utilities/                 # Side-effect plugins
 │   │   │   ├── BuiltIn/
-│   │   │   │   ├── NetworkHandler.py  # NetworkTables publish + robot pose read (250 lines)
-│   │   │   │   ├── HealthReporter.py  # Thread-safe metrics + /health/detailed (235 lines)
-│   │   │   │   └── RollBack.py        # Video recording with async writer (228 lines)
+│   │   │   ├── NetworkHandler.py  # NetworkTables publish + robot pose read (250 lines)
+│   │   │   └── RollBack.py        # Video recording with async writer (228 lines)
 │   │   │   └── example_utility.py     # Template for new utilities
 │   │   ├── frame_processors/          # Frame manipulation plugins
 │   │   │   └── example_frame_processor.py
@@ -271,7 +270,7 @@ The `run_solo_mode()` method at `iSpy.py:419` runs a continuous `while` loop. Ea
 │       │   ├── _send_detections(): create FuelStruct[], publish as struct[]   │
 │       │   ├── inst.flush()                                                   │
 │       │   └── _update_viewer_overlay(): push robot box to 3D viewer          │
-│       ├── HealthReporter.update():                                           │
+│       ├── HealthModule.update() [core web module]:                            │
 │       │   └── Updates thread-safe metrics (fps, vision_s, detections, etc.)  │
 │       └── RollBack.update():                                                 │
 │           └── _write() → clean_frame → queue.put → _worker writes to disk    │
@@ -364,7 +363,7 @@ The iSpy system runs multiple concurrent threads. Here is every thread and its p
 | `pause_event` | `threading.Event` | `iSpy.py:40` | When set, the vision loop pauses: skips inference, re-sends the last `frame_data` with `fps=0`, and sleeps 50ms per tick. Flask server stays alive. Set/cleared by PAUSE/RESUME stdin commands. |
 | `Camera.frame_lock` | `threading.Lock` | `Camera.py:71` | Protects `Camera.frame` and `Camera.frame_timestamp`. The reader thread writes under this lock; the main thread reads under this lock. |
 | `Camera._frame_event` | `threading.Event` | `Camera.py:72` | Signaled by the reader thread when a new frame is available. Used by the preprocess worker to avoid busy-waiting. |
-| `HealthReporter._lock` | `threading.Lock` | `HealthReporter.py:117` | Protects the health metrics (`_fps`, `_vision_s`, `_detections`, `_last_tick`, `_loop_count`) which are written by the vision loop and read by the Flask `/health/detailed` route. |
+| `HealthModule._lock` | `threading.Lock` | `health.py:17` | Protects the health metrics (`_fps`, `_vision_s`, `_detections`, `_last_tick`, `_loop_count`) which are written by the vision loop and read by the Flask `/health/detailed` route. |
 | `result_lock` (calibration) | `threading.Lock` | In `cameras.py` calibration feed | Protects the detection worker's cached result which is read by the feed generator. |
 | `BackgroundPreparedPipeline._prep_lock` | `threading.Lock` | `base.py:81` | Ensures `prepare()` only starts the background thread once. |
 
@@ -430,7 +429,7 @@ torch_xla                    # Google TPU (Cloud TPU / bare metal)
 | `iSpy/config/iSpyConfig.py` | 757 | Configuration system (load/save/migrate/CRUD) |
 | `vision/Camera.py` | 650 | Threaded camera reader with V4L2/MSMF backends |
 | `plugins/utilities/BuiltIn/NetworkHandler.py` | 250 | NetworkTables publish, robot pose read, viewer overlay |
-| `plugins/utilities/BuiltIn/HealthReporter.py` | 235 | Thread-safe health metrics, /health/detailed endpoint |
+| `web/modules/health.py` | 140 | Core HealthModule: /health + /api/health (absorbed health_reporter/status_reporter) |
 | `plugins/utilities/BuiltIn/RollBack.py` | 228 | Video recording with async queue-based writer |
 | `vision/calibration.py` | 542 | ChArUco/chessboard detection, Levenberg-Marquardt calibration, focal length math |
 | `iSpy/iSpy.py` | 509 | Vision loop orchestrator (solo + multi mode) |

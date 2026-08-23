@@ -73,7 +73,16 @@ class OpticalFlowCamera(VisionPipeline):
         self.camera_pitch_angle = camera_config.get("pitch", 0.0)
         _pos_unit = config.get("unit", "frc")
         from iSpy.config.iSpyConfig import unit_to_inches
-        self.camera_z = unit_to_inches(camera_config.get("z", 0.0), _pos_unit)
+        # 'height' is the single mount-height field (matches other pipelines);
+        # legacy 'z' is deprecated and ignored
+        self.camera_height = unit_to_inches(camera_config.get("height", 0.0), _pos_unit)
+        _legacy_z = camera_config.get("z")
+        if _legacy_z not in (None, 0, 0.0):
+            self.logger.warning(
+                "Camera config key 'z' (%s) is deprecated and ignored - "
+                "'height' is the single mount-height field.",
+                _legacy_z,
+            )
 
         calib = camera_config.get("calibration", {}) or {}
         self.fov = calib.get("fov", 0.0) or 0.0
@@ -117,7 +126,7 @@ class OpticalFlowCamera(VisionPipeline):
 
     def _range_inches(self) -> float:
         pitch = math.radians(self.camera_pitch_angle)
-        cam_h = abs(self.camera_z)
+        cam_h = abs(self.camera_height)
         if pitch > 1e-3 and cam_h > 1e-6:
             return max(cam_h / math.tan(pitch), 1.0)
         return max(float(self._setting("nominal_range", 60)), 1.0)

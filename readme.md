@@ -194,8 +194,12 @@ entry; missing settings fall back to defaults declared by the add-on's schema.
 | `trackers.object_tracker` | `distance_threshold: 0.5`, `stale_threshold: 1.0` | Stitches detections into a single object per camera; drops stale detections |
 | `trackers.path_planner` | `epsilon: 0.3`, `min_samples: 3` | DBSCAN clustering of tracked objects into game-piece piles |
 | `utilities.network_table_handler` | `network_tables_ip: "10.0.0.2"` | Publishes vision output to the robot over NetworkTables |
-| `utilities.video_recorder` | `record_dir: "VideoRecordings"`, `fps: 30.0`, `max_queue: 300`, `downsample: 1` | Saves the annotated video feed to disk |
-| `utilities.health_reporter` | `stale_threshold: 1.0` | Serves camera/vision health over HTTP + NetworkTables |
+| `utilities.rollback` | `data_dir: "VideoRecordings"`, `fps: 30.0`, `max_queue: 300`, `downsample: 1` | Ring-buffer video recorder for reviewing past footage |
+
+Health reporting is **not** an add-on: it is the always-on core web module
+(`iSpy/web/modules/health.py`, `/health` + `/api/health`). Tune its stale-frame
+threshold with the top-level config key `health_stale_threshold` (Settings →
+Advanced).
 
 All add-ons (enabled state, settings) are managed from the **Add-ons page** in
 the web UI.
@@ -364,7 +368,7 @@ game_loop.py
         │     └── GenericYolo (RKNN / ONNX / TFLite / Ultralytics)
         ├── MultipleCameraHandler (merges multi-camera detections)
         ├── Trackers (object_tracker -> path_planner -> your plugins)
-        ├── Utilities (health_reporter, video_recorder, network_handler, your plugins)
+        ├── Utilities (rollback, network_handler, your plugins)
         └── CameraApp (Flask web server)
 ```
 

@@ -39,6 +39,13 @@ class StatusMixin:
 
 
 class AddonBase(StatusMixin):
+    # vision pipeline plugin_names this add-on is known to work with.
+    # None (default) means "works with any pipeline" - no compatibility
+    # warning is shown on the Add-ons page. Set a tuple of pipeline
+    # names to flag mismatches when a camera runs something else,
+    # e.g. supported_pipelines = ("object_detection",).
+    supported_pipelines: tuple | None = None
+
     def __init__(self, context: dict):
         StatusMixin.__init__(self)
         self.context: dict = context or {}

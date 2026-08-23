@@ -414,74 +414,32 @@ PLUGIN_SCHEMA = {
 
 ---
 
-## Built-In Utility: HealthReporter (`iSpy/plugins/utilities/BuiltIn/HealthReporter.py` — 235 lines)
+## Health Reporting (core web module, not an add-on)
 
-Thread-safe health metrics collector + `/health/detailed` Flask endpoint.
+The old `HealthReporter` utility was merged into the always-on core
+`HealthModule` (`iSpy/web/modules/health.py`) along with the legacy
+`StatusReporter`. There is deliberately no opt-in health add-on anymore — this
+keeps `/health` registered exactly once so enabling every add-on can never
+cause a Flask duplicate-endpoint collision.
 
-### `__init__` (line 112-127)
-
-```python
-self._lock = threading.Lock()
-self._fps = 0.0
-self._vision_s = 0.0
-self._detections = 0
-self._last_tick = 0.0
-self._loop_count = 0
-self._start_time = time.time()
-self._thread_count = threading.active_count()
-```
-
-### `update(frame_data)` (line 129-148)
-
-Acquires the lock and updates all metrics:
-```python
-with self._lock:
-    self._fps = frame_data["fps"]
-    self._vision_s = frame_data["vision_s"]
-    self._detections = frame_data["detection_count"]
-    self._last_tick = time.time()
-    self._loop_count += 1
-    self._thread_count = threading.active_count()
-```
-
-### `_register_routes(flask_app)` (line 151-190)
-
-Registers 3 endpoints:
+### Endpoints (registered once at boot)
 
 #### `GET /health`
-Returns JSON: `{"status": "ok"}` with a 200 status code.
+Minimal watchdog contract: `{"status": "ok" | "degraded"}` with 200/503.
 
 #### `GET /health/detailed`
-Returns comprehensive health report:
-```json
-{
-    "status": "ok" | "stale" | "unhealthy",
-    "uptime_seconds": 3600.0,
-    "fps": 30.0,
-    "avg_fps": 29.5,
-    "loop_count": 108000,
-    "vision_time_ms": 5.2,
-    "detection_count": 3,
-    "cpu_percent": 45.0,
-    "memory_mb": 256.0,
-    "threads": 12,
-    "last_tick_age_seconds": 0.033,
-    "timestamp": "2024-01-15T12:00:00Z"
-}
-```
+Full payload: uptime_s, loop_count, loop_stale_s, fps, vision_ms,
+detections, per-camera `{name, source, ok, frame_age_ms}` and
+network_tables `{enabled, connected}`. 503 when degraded.
 
-Health status logic:
-```python
-if last_tick_age < 1.0:
-    status = "ok"
-elif last_tick_age < 5.0:
-    status = "stale"
-else:
-    status = "unhealthy"
-```
+#### `GET /api/health`
+Everything above plus live `plugins` statuses pulled from the vision instance.
 
-#### `GET /health/ready`
-Returns 200 if healthy, 503 if unhealthy.
+### Stale threshold
+Configured by the **top-level** config key `health_stale_threshold`
+(default `1.0`, exposed in Settings → Advanced). The vision loop feeds the
+module via `update(frame_data)`; NetworkTables connectivity comes from
+`set_network_handler(nt)` wiring done in `iSpy/iSpy.py`.
 
 ---
 

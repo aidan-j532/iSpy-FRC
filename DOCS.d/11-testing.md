@@ -37,7 +37,7 @@ python -m pytest tests/ -v -x
 |------|-------|-------|---------------|
 | `test_calibration.py` | 248 | ~15 | Calibration math: focal length, intrinsics, ChArUco detection, chessboard, scoring, overlay rendering |
 | `test_calibration_web.py` | 491 | 26 | Calibration web API: ChArUco feed/capture/status, chessboard, PnP, auto-capture |
-| `test_addons.py` | 464 | ~20 | Plugin discovery, base classes, object_tracker, path_planner, video_recorder, network_table_handler, health_reporter, examples |
+| `test_addons.py` | 464 | ~20 | Plugin discovery, base classes, object_tracker, path_planner, video_recorder, network_table_handler, HealthModule, examples |
 | `test_addon_web.py` | 431 | ~15 | Plugin status API: toggle, settings, source view, delete, coerce, upload |
 | `test_addon_config.py` | 318 | ~10 | Config migration: legacy list to addon dict format |
 | `test_architecture.py` | 452 | ~15 | Pipeline config, lifecycle, boot readiness, quantize dirs |
@@ -243,7 +243,7 @@ Tests the plugin system:
 | `PathPlannerTests` | 3 | path_planner plugin: init, cluster, plan |
 | `VideoRecorderTests` | 2 | video_recorder plugin: init, record |
 | `NetworkTableHandlerTests` | 3 | network_table_handler: init, publish, IP config |
-| `HealthReporterTests` | 2 | health_reporter: init, report |
+| `HealthModuleTests` | 8 | core health module: stale threshold config, payload, cameras, NT wiring, plugin statuses |
 | `ExamplePluginTests` | 3 | example_* plugins: load, basic functionality |
 
 **AddonDiscoveryTests:**

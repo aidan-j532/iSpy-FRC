@@ -190,7 +190,7 @@ SHUTDOWN
                 "enabled": false,
                 "settings": {}
             },
-            "health_reporter": {
+            "rollback": {
                 "enabled": false,
                 "settings": {}
             }

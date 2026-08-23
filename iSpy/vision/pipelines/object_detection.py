@@ -9,12 +9,13 @@ import threading
 import queue
 import json
 from iSpy.vision.pipelines.base import VisionPipeline
+from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
 from iSpy.vision.genericYolo import Box, Results, GenericYolo, ModelFileError
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, get_pipeline_settings, unit_to_inches
 from iSpy.vision import triangulation
 from iSpy.vision import calibration as cam_calibration
 
-class ObjectDetectionCamera(VisionPipeline):
+class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
     plugin_name = "object_detection"
 
     def __init__(
@@ -42,16 +43,28 @@ class ObjectDetectionCamera(VisionPipeline):
             self.camera_pitch_angle = camera_config["pitch"]
 
             _pos_unit = config.get("unit", "frc")
+            # single source of truth for ray-origin/triangulation height:
+            # the user-facing "height" field (Mount height in the UI)
             self.camera_height = unit_to_inches(camera_config["height"], _pos_unit)
             self.camera_x = unit_to_inches(camera_config["x"], _pos_unit)
             self.camera_y = unit_to_inches(camera_config["y"], _pos_unit)
-            self.camera_z = unit_to_inches(camera_config.get("z", 0.0), _pos_unit)
+            _legacy_z = camera_config.get("z")
+            if _legacy_z not in (None, 0, 0.0):
+                self.logger.warning(
+                    "Camera '%s': config key 'z' (%s) is deprecated and ignored - "
+                    "'height' is the single mount-height field feeding "
+                    "triangulation.",
+                    self._cam_name, _legacy_z,
+                )
         except KeyError as e:
             raise ValueError(f"Missing camera config key: {e}")
 
         # Model architecture fields come only from metadata sidecars, not config.
         # Config holds user-preference fields; vision_model is per-camera
         # pipeline settings (migrated from the old top-level key).
+        self.object_heights = self._parse_object_heights(
+            camera_config.get_pipeline_setting("object_heights")
+        )
         from iSpy.vision.ModelInspector import fill_missing_config
         vm_cfg = camera_config.get_pipeline_setting("vision_model")
         if not isinstance(vm_cfg, dict) or not vm_cfg:
@@ -140,29 +153,9 @@ class ObjectDetectionCamera(VisionPipeline):
         super().__init__(camera_config, self.input_size, self.grayscale)
 
         # file_path can drift from source_pt when the model was re-picked in
-        # the UI: it may point at a stale artifact built for an older model,
-        # which would silently keep that old model running. Trust the source -
-        # load its already-built artifact when one exists, else the .pt itself
-        # (the background optimizer swaps file_path to the fresh artifact once
-        # its build lands).
+        # the UI (see OptimizableModelPipeline._resync_stale_model_file_path)
         if self._optimization_requested():
-            source = self._source_model_path()
-            current = str(self.yolo_model_file or "")
-            current_stem = Path(current).stem if current else None
-            source_stem = source.stem if source is not None else None
-            if source is not None and current and current_stem != source_stem:
-                from iSpy.vision.optimizer import existing_artifact_for
-                artifact = existing_artifact_for(source, self._target_format_cached())
-                preferred = artifact or str(self._resolve_model_path(source) or source)
-                if self._resolve_model_path(current) != self._resolve_model_path(preferred):
-                    self.logger.warning(
-                        "Camera '%s': vision_model.file_path (%s) doesn't match "
-                        "source_pt (%s) - correcting to %s and persisting.",
-                        self._cam_name, current, source, preferred,
-                    )
-                    vm_filled["file_path"] = preferred
-                    self.yolo_model_file = preferred
-                    self._persist_file_path(preferred, config)
+            self._resync_stale_model_file_path(config)
         try:
             self.model = GenericYolo(vm_filled, self.core_mask, iSpy_config=config)
         except ModelFileError as e:
@@ -232,9 +225,50 @@ class ObjectDetectionCamera(VisionPipeline):
         except Exception:
             self.logger.exception("Failed to persist corrected vision_model.file_path")
 
+    @staticmethod
+    def _parse_object_heights(raw) -> dict[str, float]:
+        """Normalize the object_heights pipeline setting to {class_name: inches}.
+
+        Accepts a list of {"class_name", "height_in"} rows (UI form), a plain
+        {class_name: height} dict, or a JSON string of either.
+        """
+        if not raw:
+            return {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (ValueError, TypeError):
+                return {}
+        if isinstance(raw, dict):
+            out = {}
+            for name, height in raw.items():
+                try:
+                    height = float(height or 0)
+                except (TypeError, ValueError):
+                    continue
+                if str(name).strip() and height > 0:
+                    out[str(name).strip()] = height
+            return out
+        if not isinstance(raw, list):
+            return {}
+        out = {}
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("class_name", "") or "").strip()
+            if not name:
+                continue
+            try:
+                height = float(row.get("height_in", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if height > 0:
+                out[name] = height
+        return out
+
     @classmethod
     def config_schema(cls) -> dict:
-        return {
+        schema = {
             "vision_model": {
                 "type": "model",
                 "label": "YOLO Model (.pt)",
@@ -243,67 +277,34 @@ class ObjectDetectionCamera(VisionPipeline):
                         "chosen file is used for detection and as the source "
                         "for optimization builds.",
             },
-            "optimize": {
-                "type": "toggle",
-                "label": "Optimize/Convert",
-                "default": False,
-                "optimize_toggle": True,
-                "help": "Build the best optimized backend artifact for this device "
-                        "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
-                        "etc.) in the background. Falls back to the top-level "
-                        "config 'optimize' when unset.",
-            },
-            "target_format": {
-                "type": "select",
-                "label": "Target format",
-                "options": ["auto", "onnx"],
-                "default": "auto",
-                "quantization": True,
-                "help": "'auto' picks the best backend for this device via "
-                        "recommend_format(). Set an explicit format to override.",
-            },
-            "quantize": {
-                "type": "toggle",
-                "label": "Quantize model",
-                "default": False,
-                "quantization": True,
-                "help": "Quantize the optimized artifact (int8). Only meaningful "
-                        "with optimize or target_format set.",
-            },
-            "quantization_dataset": {
-                "type": "browse",
-                "label": "Quantization dataset",
-                "default": "",
-                "browse_root": "QuantizeDataset",
-                "quantization": True,
-                "gated_by": "quantize",
-                "help": "Optional folder of calibration images used for "
-                        "quantization. Leave empty to auto-download images "
-                        "from the model's calibration keywords.",
-            },
             "min_conf": {
                 "type": "number",
                 "label": "Min confidence",
                 "default": 0.5,
                 "step": 0.05,
             },
+            "object_heights": {
+                "type": "list",
+                "label": "Object heights above ground",
+                "help": "Per-class flat height (inches) above the ground "
+                        "plane. Distance is found by intersecting the "
+                        "detection ray with a plane at this height instead of "
+                        "the floor. Classes without an entry are assumed to "
+                        "sit on the ground. This is a flat per-class height "
+                        "assumption, not a full 3D size-based fallback.",
+                "default": [],
+                "fields": {
+                    "class_name": {"type": "text", "label": "Class"},
+                    "height_in": {
+                        "type": "number", "label": "Height (in)", "default": 0,
+                        "step": 0.5,
+                    },
+                },
+            },
         }
-
-    @classmethod
-    def recommended_format(cls) -> str:
-        try:
-            from iSpy.config.AutoOpt import recommend_format
-
-            return recommend_format(ignore_dependencies=True)
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "AutoOpt.recommend_format did NOT work for your device, falling back to ONNX!"
-            )
-            return "onnx"
-
-    @classmethod
-    def needs_model_backend(cls) -> bool:
-        return True
+        # input_size comes from the model metadata sidecar here, not config
+        schema.update(cls._optimization_schema(target_formats=("auto", "onnx")))
+        return schema
 
     @classmethod
     def uses_user_model(cls) -> bool:
@@ -316,36 +317,6 @@ class ObjectDetectionCamera(VisionPipeline):
         if not p.is_absolute():
             p = Path(__file__).resolve().parents[3] / p
         return p
-
-    def _resolve_target_format(self) -> str:
-        explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
-        if explicit and explicit != "auto":
-            target = explicit
-        else:
-            target = self.recommended_format()
-            
-        # Note right now the user only has access to ONNX for a reason!
-        supported = {"onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu"}
-        if target not in supported:
-            self.logger.warning(
-                "Recommended target format %r unsupported - using onnx", target,
-            )
-            return "onnx"
-        return target
-
-    def _target_format_cached(self) -> str:
-        if self._target_format is None:
-            self._target_format = self._resolve_target_format()
-        return self._target_format
-
-    def _is_processable(self) -> bool:
-        if getattr(self, "_optimizing", False):
-            return False
-        if self.model is None:
-            return False
-        if self._optimization_requested():
-            return self._optimized_active()
-        return True
 
     def _source_model_path(self) -> Path | None:
         vm = self._current_vm_config()
@@ -367,35 +338,6 @@ class ObjectDetectionCamera(VisionPipeline):
         if p.exists():
             return p
         return None
-
-    def _optimization_requested(self) -> bool:
-        # quantize flag OR the old boot auto_opt behavior; legacy
-        # 'quantized'/'auto_opt' keys still honored
-        if bool(getattr(self, "quantize", False)):
-            return True
-        if getattr(self, "_auto_opt", False):
-            return True
-        vm = self._current_vm_config()
-        return bool(vm.get("optimize") or vm.get("auto_opt")) or bool(
-            vm.get("quantize") or vm.get("quantized")
-        )
-
-    @staticmethod
-    def _path_format(path: str) -> str:
-        p = str(path).lower()
-        if "openvino_model" in p or p.endswith(".xml"):
-            return "openvino"
-        for ext, fmt in (
-            (".pt", "pytorch"),
-            (".onnx", "onnx"),
-            (".rknn", "rknn"),
-            (".tflite", "tflite"),
-            (".engine", "engine"),
-            (".mlpackage", "coreml"),
-        ):
-            if p.endswith(ext):
-                return fmt
-        return ""
 
     def _optimized_active(self) -> bool:
         if getattr(self, "model", None) is None:
@@ -435,14 +377,6 @@ class ObjectDetectionCamera(VisionPipeline):
         status = self._optimize_error or "optimizing"
         self._set_status(status)
         return False, status
-
-    def get_optimization_options(self) -> dict:
-        schema = self.config_schema()
-        return {
-            key: schema[key]
-            for key in ("optimize", "target_format", "quantize", "quantization_dataset")
-            if key in schema
-        }
 
     def optimize(self, **kwargs) -> str:
         if self._optimizing:
@@ -500,12 +434,6 @@ class ObjectDetectionCamera(VisionPipeline):
             return f"error: optimize failed - {exc}"
         finally:
             self._optimizing = False
-
-    def _optimize_runner(self):
-        status = self.optimize()
-        if not self._optimized_active():
-            self._optimize_error = status
-        self._set_status(status)
 
     def _current_vm_config(self) -> dict:
         vm = self.config.get_pipeline_setting("vision_model")
@@ -648,7 +576,7 @@ class ObjectDetectionCamera(VisionPipeline):
         f = self._focal_length_px_fov(img_w)
         return triangulation.pixel_to_ray(
             pixel_x, pixel_y, img_w, img_h, f,
-            self.camera_x, self.camera_y, self.camera_z,
+            self.camera_x, self.camera_y, self.camera_height,
             self.camera_bot_relative_yaw, self.camera_pitch_angle,
         )
 
@@ -671,21 +599,23 @@ class ObjectDetectionCamera(VisionPipeline):
         # return 0.8 <= aspect <= 1.2
 
     def _box_to_robot_point(
-        self, box: Box, img_w: int, img_h: int
+        self, box: Box, img_w: int, img_h: int, ground_z: float = 0.0
     ) -> np.ndarray | None:
-        # unified depth model: cast the bottom-center ray and hit the ground
-        # plane (objects assumed to sit on the ground). size-based heuristic
-        # is only a fallback for when the ray runs parallel to the ground.
+        # unified depth model: cast the bottom-center ray and intersect it with
+        # the horizontal plane the object is assumed to sit on. ground_z=0
+        # (ground plane) is the default; per-class heights come from the
+        # object_heights pipeline setting (inches). size-based heuristic is
+        # only a fallback for when the ray runs parallel to that plane.
         x1, y1, x2, y2 = box.xyxy
         ray = self._pixel_ray((x1 + x2) / 2.0, y2, img_w, img_h)
-        gp = triangulation.ground_plane_intersection(ray, ground_z=0.0)
+        gp = triangulation.ground_plane_intersection(ray, ground_z=ground_z)
         if gp is not None:
             scale = self.conversions.get(self.unit, self.conversions["meter"])
             return gp * scale
-        return self._size_based_point(box, img_w, img_h)
+        return self._size_based_point(box, img_w, img_h, ground_z=ground_z)
 
     def _size_based_point(
-        self, box: Box, img_w: int, img_h: int
+        self, box: Box, img_w: int, img_h: int, ground_z: float = 0.0
     ) -> np.ndarray | None:
         x1, y1, x2, y2 = box.xyxy
         avg_px = ((x2 - x1) + (y2 - y1)) / 2.0
@@ -693,9 +623,12 @@ class ObjectDetectionCamera(VisionPipeline):
             return None
         cx = (x1 + x2) / 2.0
         distance_los = (self.ball_d_inches * self.focal_length_pixels) / avg_px
-        return self._pixel_to_robot_coordinates(
-            cx, (y1 + y2) / 2.0, distance_los, img_w, img_h
+        base = self._pixel_to_robot_coordinates(
+            cx, (y1 + y2) / 2.0, distance_los, img_w, img_h,
+            obj_height_z=ground_z,
         )
+        scale = self.conversions.get(self.unit, self.conversions["meter"])
+        return np.array([base[0], base[1], ground_z * scale], dtype=np.float64)
 
     def _pixel_to_robot_coordinates(
         self,
@@ -704,12 +637,16 @@ class ObjectDetectionCamera(VisionPipeline):
         distance_los: float,
         img_w: int,
         img_h: int,
+        obj_height_z: float = 0.0,
     ) -> np.ndarray:
         pixel_offset_x = pixel_x - img_w / 2.0
         horizontal_angle_rad = math.atan(pixel_offset_x / self.focal_length_pixels)
 
-        if self.camera_height > 0 and distance_los > self.camera_height:
-            true_horiz = math.sqrt(distance_los**2 - self.camera_height**2)
+        # vertical offset between the camera and the assumed object plane;
+        # an elevated object shrinks this triangle leg vs the ground plane
+        vertical_delta = max(self.camera_height - obj_height_z, 0.0)
+        if vertical_delta > 0 and distance_los > vertical_delta:
+            true_horiz = math.sqrt(distance_los**2 - vertical_delta**2)
         else:
             true_horiz = distance_los * math.cos(math.radians(self.camera_pitch_angle))
 
@@ -785,7 +722,7 @@ class ObjectDetectionCamera(VisionPipeline):
             pt,
             self.camera_x,
             self.camera_y,
-            self.camera_z,
+            self.camera_height,
             self.camera_bot_relative_yaw,
             self.camera_pitch_angle,
         ) * scale
@@ -812,25 +749,30 @@ class ObjectDetectionCamera(VisionPipeline):
         bottom_x = (box.xyxy[0] + box.xyxy[2]) / 2.0
         bottom_y = box.xyxy[3]
         ray = self._pixel_ray(bottom_x, bottom_y, img_w, img_h)
+        class_name = self._class_names.get(box.cls_id, f"class_{box.cls_id}")
+        # per-class assumed plane height (inches, ray frame); 0 = ground plane
+        obj_plane_z = float(self.object_heights.get(class_name, 0.0))
+        scale = self.conversions.get(self.unit, self.conversions["meter"])
 
         depth_source = "monocular"
         if box.translation is not None:
             pt = self._pnp_to_robot_coordinates(box.translation)
         else:
-            pt = self._box_to_robot_point(box, img_w, img_h)
+            pt = self._box_to_robot_point(
+                box, img_w, img_h, ground_z=obj_plane_z
+            )
             if pt is None:
                 return None
-            # both depth models assume the object sits on the ground, so z
-            # is the ground-plane intersection (0). z_mode kept for back-compat
+            # depth model assumes the object sits on its configured plane,
+            # so z is that plane's height. z_mode kept for back-compat
             if self.z_mode == "ground_plane":
                 depth_source = "ground_plane"
-            pt = np.array([pt[0], pt[1], 0.0])
+            pt = np.array([pt[0], pt[1], obj_plane_z * scale])
 
         roll, pitch, yaw = 0.0, 0.0, 0.0
         if box.rotation is not None:
             roll, pitch, yaw = box.rotation
         z = float(pt[2]) if len(pt) > 2 else 0.0
-        class_name = self._class_names.get(box.cls_id, f"class_{box.cls_id}")
 
         kpts_3d_robot = None
         if box.keypoints_3d is not None:

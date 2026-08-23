@@ -22,10 +22,9 @@ class HealthModule(WebModule):
         self._loop_count = 0
         self._last_tick = time.perf_counter()
         self._uptime_start = time.perf_counter()
-        # stale_threshold moved from the global config into the health_reporter add-on
-        self._stale_threshold = config.get_addon_setting(
-            "utilities", "health_reporter", "stale_threshold", 1.0
-        )
+        # single canonical health implementation (PROMPT 5 merged the old
+        # health_reporter/status_reporter add-ons into this always-on module)
+        self._stale_threshold = float(config.get("health_stale_threshold", 1.0) or 1.0)
         self._network_handler = None  # wired externally, see iSpy.py
 
     def set_network_handler(self, handler):

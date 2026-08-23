@@ -34,10 +34,18 @@ class AprilTagCamera(VisionPipeline):
             self.camera_pitch_angle = camera_config.get("pitch", 0.0)
 
             _pos_unit = config.get("unit", "frc")
+            # 'height' is the single mount-height field feeding triangulation
             self.camera_height = unit_to_inches(camera_config.get("height", 0.0), _pos_unit)
             self.camera_x = unit_to_inches(camera_config.get("x", 0.0), _pos_unit)
             self.camera_y = unit_to_inches(camera_config.get("y", 0.0), _pos_unit)
-            self.camera_z = unit_to_inches(camera_config.get("z", 0.0), _pos_unit)
+            _legacy_z = camera_config.get("z")
+            if _legacy_z not in (None, 0, 0.0):
+                self.logger.warning(
+                    "Camera config key 'z' (%s) is deprecated and ignored - "
+                    "'height' is the single mount-height field feeding "
+                    "triangulation.",
+                    _legacy_z,
+                )
             
             calib = camera_config.get("calibration", {})
             self.known_calibration_distance = calib.get("distance", 1.0)
@@ -101,7 +109,7 @@ class AprilTagCamera(VisionPipeline):
             pt,
             self.camera_x,
             self.camera_y,
-            self.camera_z,
+            self.camera_height,
             self.camera_bot_relative_yaw,
             self.camera_pitch_angle,
         ) * scale
@@ -190,7 +198,7 @@ class AprilTagCamera(VisionPipeline):
                     center_px = np.mean(tag_corners, axis=0)
                     ray = triangulation.pixel_to_ray(
                         center_px[0], center_px[1], img_w, img_h, f,
-                        self.camera_x, self.camera_y, self.camera_z,
+                        self.camera_x, self.camera_y, self.camera_height,
                         self.camera_bot_relative_yaw, self.camera_pitch_angle
                     )
                     obj.ray_origin = ray.origin

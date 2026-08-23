@@ -355,18 +355,26 @@ Old configs stored plugins as lists: `["object_tracker", "path_planner"]`. Conve
 **Step 2: Legacy fold-in** (lines 322-328)
 The `dbscan` top-level key is folded into `trackers.path_planner` settings.
 
-**Step 3: Legacy key folds** (lines 329-336)
+**Step 3: Legacy key folds** (lines 333-342)
 Uses `_ADDON_LEGACY_FOLDS` to move top-level settings into their addon:
 ```python
 _ADDON_LEGACY_FOLDS = (
     ("dbscan",             "trackers",    "object_tracker", None),
     ("distance_threshold", "trackers",    "object_tracker", "distance_threshold"),
     ("stale_threshold",    "trackers",    "object_tracker", "stale_threshold"),
-    ("stale_threshold",    "utilities",   "health_reporter", "stale_threshold"),
 )
 ```
 
-**Step 4: Legacy flags** (lines 338-341)
+**Step 3b: Merged health add-ons** (lines 347-364)
+The `health_reporter`/`status_reporter` utilities were merged into the
+always-on core `HealthModule`. Any legacy `utilities.health_reporter.stale_threshold`
+(or top-level `stale_threshold`) is rewritten to the top-level
+`health_stale_threshold` key and the dead addon entries are popped:
+```python
+_MERGED_HEALTH_ADDONS = ("health_reporter", "status_reporter")
+```
+
+**Step 4: Legacy flags**
 Boolean flags like `use_network_tables: true` become addon presence:
 ```python
 _ADDON_LEGACY_FLAGS = {

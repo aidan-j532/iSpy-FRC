@@ -8,6 +8,7 @@ import numpy as np
 import requests
 
 from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
+from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline, SUPPORTED_TARGET_FORMATS
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 
@@ -20,12 +21,10 @@ _WORLD_MODEL_URLS = {
 }
 
 
-class YoloWorldCamera(BackgroundPreparedPipeline):
+class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
     plugin_name = "yolo_world"
 
-    @classmethod
-    def needs_model_backend(cls) -> bool:
-        return True
+    _OPT_OPTIONS_EXTRA = ("input_size",)
 
     @classmethod
     def show_calibration(cls) -> bool:
@@ -64,7 +63,7 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
 
     @classmethod
     def config_schema(cls) -> dict:
-        return {
+        schema = {
             "prompt": {
                 "type": "text",
                 "label": "Prompt",
@@ -77,51 +76,12 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
                 "default": "s",
                 "help": "YOLO World v2 weights are downloaded automatically from Ultralytics on first use.",
             },
-            "optimize": {
-                "type": "toggle",
-                "label": "Optimize/Convert",
-                "default": False,
-                "optimize_toggle": True,
-                "help": "Build the best optimized backend artifact for this device "
-                        "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
-                        "etc.) in the background. Falls back to the top-level "
-                        "config 'optimize' when unset.",
-            },
-            "target_format": {
-                "type": "select",
-                "label": "Target Format",
-                "options": ["auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"],
-                "default": "auto",
-                "quantization": True,
-                "help": "'auto' picks the best format for this device (rknn on Rockchip NPUs, tflite on Edge TPU, engine on NVIDIA, onnx elsewhere).",
-            },
-            "quantize": {
-                "type": "toggle",
-                "label": "Quantize model",
-                "default": False,
-                "quantization": True,
-                "help": "Quantize the optimized artifact (int8). Only meaningful "
-                        "with optimize or target_format set.",
-            },
-            "quantization_dataset": {
-                "type": "browse",
-                "label": "Quantization dataset",
-                "default": "",
-                "browse_root": "QuantizeDataset",
-                "quantization": True,
-                "gated_by": "quantize",
-                "help": "Optional folder of calibration images used for "
-                        "quantization. Leave empty to auto-download images "
-                        "from the model's calibration keywords.",
-            },
-            "input_size": {
-                "type": "number",
-                "label": "Input Size",
-                "default": 640,
-                "quantization": True,
-                "help": "Letterbox resolution used for the quantized model conversion and inference.",
-            },
         }
+        schema.update(cls._optimization_schema(
+            target_formats=("auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"),
+            input_size_default=640,
+        ))
+        return schema
 
     @staticmethod
     def _parse_classes(prompt: str) -> list[str]:
@@ -198,14 +158,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
     def _prepare(self):
         self._load_model()
 
-    def get_optimization_options(self) -> dict:
-        schema = self.config_schema()
-        return {
-            key: schema[key]
-            for key in ("optimize", "quantize", "target_format", "quantization_dataset", "input_size")
-            if key in schema
-        }
-
     def optimize(self, **kwargs) -> str:
         if not self._optimization_requested():
             return "optimization disabled for this camera (set 'Quantize' in camera settings)"
@@ -262,17 +214,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         self._set_status(status)
         return status
 
-    def _optimize_runner(self):
-        status = self.optimize()
-        if not self._optimized_active():
-            self._optimize_error = status
-        self._set_status(status)
-
-    def _optimization_requested(self) -> bool:
-        return bool(getattr(self, "quantize", False)) or bool(
-            getattr(self, "_auto_opt", False)
-        )
-
     def _resolve_target_format(self) -> str:
         explicit = str(getattr(self, "target_format", "") or "").strip().lower()
         if explicit and explicit != "auto":
@@ -280,37 +221,17 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         else:
             # same resolution ensure_quantized_model uses so readiness
             # agrees with the artifact that actually gets built
+            # (deliberately NOT ignore_dependencies - unlike the other
+            # model-backed pipelines, a dependency-less guess here could
+            # disagree with the artifact ensure_quantized_model builds)
             from iSpy.config.AutoOpt import recommend_format
             target = recommend_format()
-        supported = {"onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu"}
-        if target not in supported:
+        if target not in SUPPORTED_TARGET_FORMATS:
             self.logger.warning(
                 "Recommended target format %r unsupported - using onnx", target,
             )
             return "onnx"
         return target
-
-    def _target_format_cached(self) -> str:
-        if self._target_format is None:
-            self._target_format = self._resolve_target_format()
-        return self._target_format
-
-    @staticmethod
-    def _path_format(path: str) -> str:
-        p = str(path).lower()
-        if "openvino_model" in p or p.endswith(".xml"):
-            return "openvino"
-        for ext, fmt in (
-            (".pt", "pytorch"),
-            (".onnx", "onnx"),
-            (".rknn", "rknn"),
-            (".tflite", "tflite"),
-            (".engine", "engine"),
-            (".mlpackage", "coreml"),
-        ):
-            if p.endswith(ext):
-                return fmt
-        return ""
 
     def _optimized_active(self) -> bool:
         if getattr(self, "model", None) is None or not getattr(self, "_quantized", False):
@@ -321,15 +242,6 @@ class YoloWorldCamera(BackgroundPreparedPipeline):
         if not path:
             return False
         return self._path_format(path) == self._target_format_cached()
-
-    def _is_processable(self) -> bool:
-        if getattr(self, "_optimizing", False):
-            return False
-        if self.model is None:
-            return False
-        if self._optimization_requested():
-            return self._optimized_active()
-        return True
 
     def _ensure_world_model(self, size: str) -> str | None:
         url = _WORLD_MODEL_URLS.get(size, _WORLD_MODEL_URLS["s"])

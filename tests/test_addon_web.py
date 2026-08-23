@@ -74,17 +74,46 @@ class PluginStatusModuleTests(unittest.TestCase):
         by_name = {(p["type"], p["name"]): p for p in payload["available"]}
         # <type>/BuiltIn/ add-ons are builtin - toggleable + configurable but never deletable
         self.assertTrue(by_name[("tracker", "object_tracker")]["builtin"])
-        self.assertTrue(by_name[("utility", "video_recorder")]["builtin"])
+        self.assertTrue(by_name[("utility", "rollback")]["builtin"])
         # ...user-authored ones arent
         self.assertFalse(by_name[("tracker", "example_tracker")]["builtin"])
+
+    def test_pipeline_mismatch_warning_payload(self):
+        # an addon declaring supported_pipelines gets a warning listing the
+        # active camera pipelines it does NOT support; universal addons
+        # (supported_pipelines=None) never warn
+        mod, cfg = self._module()
+        cam_key = next(iter(cfg.config["camera_configs"]))
+        cfg.config["camera_configs"][cam_key]["pipeline"]["name"] = "yolo_world"
+        with _app_context():
+            payload = mod._available().get_json()
+        by_name = {(p["type"], p["name"]): p for p in payload["available"]}
+
+        tracker = by_name[("tracker", "object_tracker")]
+        self.assertEqual(tracker["supported_pipelines"], [])
+        self.assertEqual(tracker["pipeline_warning"], [])
+
+        class ConeOnlyTracker(TrackerBase):
+            plugin_name = "cone_only"
+            supported_pipelines = ("object_detection",)
+
+        with mock.patch(
+            "iSpy.web.Backend.PluginStatus.load_plugins",
+            return_value={"cone_only": ConeOnlyTracker},
+        ):
+            with _app_context():
+                payload = mod._available().get_json()
+        cone = next(p for p in payload["available"] if p["name"] == "cone_only")
+        self.assertEqual(cone["supported_pipelines"], ["object_detection"])
+        self.assertEqual(cone["pipeline_warning"], ["yolo_world"])
 
     def test_source_serves_bundled_addon_file(self):
         mod, cfg = self._module()
         with _app_context():
-            resp = mod._source("utility", "health_reporter")
+            resp = mod._source("utility", "rollback")
         payload = resp.get_json()
-        self.assertIn("class HealthReporter", payload["source"])
-        self.assertEqual(payload["filename"], "BuiltIn/HealthReporter.py")
+        self.assertIn("class RollBack", payload["source"])
+        self.assertEqual(payload["filename"], "BuiltIn/RollBack.py")
 
     def test_source_serves_custom_addon_file(self):
         mod, cfg = self._module()
@@ -246,7 +275,7 @@ class PluginStatusModuleTests(unittest.TestCase):
     def test_status_reports_loaded_instances(self):
         vision = FakeVision()
         vision.trackers["object_tracker"] = mock.Mock(get_status=lambda: "running")
-        vision.utilities["health_reporter"] = mock.Mock(get_status=lambda: "idle")
+        vision.utilities["rollback"] = mock.Mock(get_status=lambda: "idle")
         mod = PluginStatusModule({"config": iSpyConfig(),
                                   "vision_instance": vision})
         with _app_context():
@@ -256,7 +285,7 @@ class PluginStatusModuleTests(unittest.TestCase):
         by_name = {p["name"]: p for p in plugins}
         self.assertEqual(by_name["object_tracker"]["type"], "tracker")
         self.assertEqual(by_name["object_tracker"]["status"], "running")
-        self.assertEqual(by_name["health_reporter"]["status"], "idle")
+        self.assertEqual(by_name["rollback"]["status"], "idle")
 
     # ---------- delete ----------
 
@@ -360,9 +389,12 @@ class iSpyAddonLoadingTests(unittest.TestCase):
     def _build_config(self):
         cfg = iSpyConfig()
         cfg.config["app_mode"] = False
+        recordings_dir = tempfile.mkdtemp(prefix="ispy_rollback_")
+        self.addCleanup(_rmtree, recordings_dir)
         cfg.config["plugins"] = {
             "trackers": {"example_tracker": {"count_start": 5}},
-            "utilities": {"health_reporter": {"stale_threshold": 2.0}},
+            "utilities": {"rollback": {"data_dir": recordings_dir,
+                                       "downsample": 2}},
             "frame_processors": {"example_frame_processor": {}},
         }
         return cfg
@@ -373,14 +405,14 @@ class iSpyAddonLoadingTests(unittest.TestCase):
         ispy = iSpy(cameras=[], config=cfg)
         try:
             self.assertIn("example_tracker", ispy.trackers)
-            self.assertIn("health_reporter", ispy.utilities)
+            self.assertIn("rollback", ispy.utilities)
             self.assertIn("example_frame_processor", ispy.frame_processors)
 
             tracker = ispy.trackers["example_tracker"]
             self.assertEqual(tracker.count, 5)  # own settings applied
 
-            reporter = ispy.utilities["health_reporter"]
-            self.assertEqual(reporter._stale_threshold, 2.0)
+            recorder = ispy.utilities["rollback"]
+            self.assertEqual(recorder._downsample, 2)
 
             fp = ispy.frame_processors["example_frame_processor"]
             self.assertEqual(fp.process(123), 0)
@@ -404,6 +436,8 @@ class iSpyAddonLoadingTests(unittest.TestCase):
     def test_ispy_full_pipeline_builtin_addons(self):
         import tempfile
         from iSpy.iSpy import iSpy
+        recordings_dir = tempfile.mkdtemp(prefix="ispy_rollback_")
+        self.addCleanup(_rmtree, recordings_dir, ignore_errors=True)
         cfg = iSpyConfig()
         cfg.config["app_mode"] = False
         cfg.config["plugins"] = {
@@ -412,7 +446,7 @@ class iSpyAddonLoadingTests(unittest.TestCase):
                 "path_planner": {},
             },
             "utilities": {
-                "health_reporter": {},
+                "rollback": {"data_dir": recordings_dir},
             },
             "frame_processors": {},
         }
@@ -422,9 +456,71 @@ class iSpyAddonLoadingTests(unittest.TestCase):
                 ispy.trackers["object_tracker"].distance_threshold, 0.5)
             self.assertEqual(ispy.trackers["path_planner"].epsilon, 0.3)
             self.assertEqual(
-                ispy.utilities["health_reporter"]._stale_threshold, 1.0)
+                ispy.utilities["rollback"]._fps, 30.0)
         finally:
             ispy._stop_all_plugins()
+
+
+def _rmtree(path, ignore_errors=False):
+    import shutil
+    shutil.rmtree(path, ignore_errors=ignore_errors)
+
+
+class AllBuiltinsEnabledBootTests(unittest.TestCase):
+    """PROMPT 5 regression: enabling every built-in utility/tracker/
+    frame_processor simultaneously must not blow up Flask boot with a
+    duplicate-endpoint AssertionError (the old health_reporter +
+    HealthModule both registered the 'health' endpoint)."""
+
+    def test_web_app_boots_with_every_builtin_addon_enabled(self):
+        from iSpy.iSpy import iSpy
+        from iSpy.web.Backend.WebApp import create_app
+
+        cfg = iSpyConfig()
+        cfg.config["app_mode"] = False
+        plugins_cfg = {"trackers": {}, "utilities": {}, "frame_processors": {}}
+        for kind, base in (("trackers", TrackerBase),
+                           ("utilities", UtilityBase),
+                           ("frame_processors", FrameProcessorBase)):
+            for name in load_plugins(PLUGIN_ROOT / kind, base):
+                plugins_cfg[kind][name] = {}
+        cfg.config["plugins"] = plugins_cfg
+
+        web_app = create_app(cameras=[], config=cfg)
+        # NetworkTableHandler retries NT connection for 15s when offline;
+        # skip the sleeps so the test stays fast.
+        with mock.patch("time.sleep"):
+            vision = iSpy(cameras=[], config=cfg, web_app=web_app)
+        try:
+            # every built-in add-on loaded onto one live flask app
+            for kind in ("trackers", "utilities", "frame_processors"):
+                expected = set(plugins_cfg[kind])
+                loaded = getattr(vision, kind)
+                self.assertEqual(set(loaded), expected)
+
+            # no real NT server in CI - report connected so /health is "ok"
+            nt = vision.utilities.get("network_table_handler")
+            if nt is not None:
+                mock.patch.object(nt, "isConnected", return_value=True).start()
+
+            client = web_app.flask_app.test_client()
+            r = client.get("/health")  # previously: duplicate 'health' endpoint
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.get_json()["status"], "ok")
+
+            r2 = client.get("/api/health")
+            self.assertEqual(r2.status_code, 200)
+            api_payload = r2.get_json()
+            self.assertEqual(api_payload["status"], "ok")
+            # plugin statuses surface through the canonical health payload
+            listed = {(p["type"], p["name"]) for p in api_payload["plugins"]}
+            self.assertIn(("utility", "rollback"), listed)
+            self.assertIn(("tracker", "object_tracker"), listed)
+
+            r3 = client.get("/addons")
+            self.assertEqual(r3.status_code, 200)
+        finally:
+            vision._stop_all_plugins()
 
 
 if __name__ == "__main__":

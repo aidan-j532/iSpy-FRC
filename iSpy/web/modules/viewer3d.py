@@ -80,23 +80,30 @@ class Viewer3DModule(WebModule):
         for idx, obj in enumerate(detections):
             if getattr(obj, "depth_source", "") == "optical_flow":
                 continue
-            obj_entry = {
-                "id": idx,
-                "x": getattr(obj, "x", 0),
-                "y": getattr(obj, "y", 0),
-                "z": getattr(obj, "z", 0),
-                "roll": getattr(obj, "roll", 0),
-                "yaw": getattr(obj, "yaw", 0),
-                "pitch": getattr(obj, "pitch", 0),
-                "name": getattr(obj, "name", "unknown"),
-                "confidence": getattr(obj, "confidence", 0),
-                "num_keypoints": num_kpts,
-                "vis_type": getattr(obj, "vis_type", "generic"),
-                "vis_meta": getattr(obj, "vis_meta", {}) or {},
-            }
-            kpts = getattr(obj, "keypoints_3d", None)
-            if kpts is not None:
-                obj_entry["keypoints_3d"] = kpts
+            # universal pipeline-output schema (iSpy/vision/pipelines/base.py)
+            if hasattr(obj, "to_dict"):
+                obj_entry = obj.to_dict()
+            else:  # legacy plain-object fallback
+                obj_entry = {
+                    "id": idx,
+                    "x": getattr(obj, "x", 0),
+                    "y": getattr(obj, "y", 0),
+                    "z": getattr(obj, "z", 0),
+                    "roll": getattr(obj, "roll", 0),
+                    "yaw": getattr(obj, "yaw", 0),
+                    "pitch": getattr(obj, "pitch", 0),
+                    "name": getattr(obj, "name", "unknown"),
+                    "confidence": getattr(obj, "confidence", 0),
+                    "vis_type": getattr(obj, "vis_type", "generic"),
+                    "vis_meta": getattr(obj, "vis_meta", {}) or {},
+                }
+            obj_entry["id"] = idx
+            obj_entry["num_keypoints"] = num_kpts
+            kpts = obj_entry.get("keypoints_3d")
+            if kpts is None:
+                kpts = getattr(obj, "keypoints_3d", None)
+                if kpts is not None:
+                    obj_entry["keypoints_3d"] = kpts
             self._latest_objects.append(obj_entry)
 
     # -- internals ---------------------------------------------------------

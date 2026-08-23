@@ -66,8 +66,11 @@ _ADDON_LEGACY_FOLDS = (
     ("dbscan",           "trackers",    "object_tracker", None),  # special: dict
     ("distance_threshold", "trackers",  "object_tracker", "distance_threshold"),
     ("stale_threshold",  "trackers",    "object_tracker", "stale_threshold"),
-    ("stale_threshold",  "utilities",   "health_reporter", "stale_threshold"),
 )
+
+# health reporting is a core web module (HealthModule) - these opt-in
+# utilities were removed; their settings fold into top-level keys instead
+_MERGED_HEALTH_ADDONS = ("health_reporter", "status_reporter")
 
 # legacy enabled flags - the flag value is discarded once it becomes add-on presence
 _ADDON_LEGACY_FLAGS = {
@@ -200,6 +203,8 @@ class iSpyConfig:
             "optimize": False,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
+            # seconds without a fresh frame before /health reports degraded
+            "health_stale_threshold": 1.0,
             "metrics": True,
             "app_mode": True,
             "max_fps": 0,
@@ -338,6 +343,25 @@ class iSpyConfig:
             if self.config.get(flag):
                 {"trackers": trackers,
                  "utilities": utilities}[addon_type].setdefault(addon_name, {})
+
+        # the health_reporter/status_reporter add-ons were merged into the
+        # always-on HealthModule web module; their stale_threshold setting
+        # lives at the top level as health_stale_threshold now. An explicit
+        # legacy value overrides the default; migration is idempotent since
+        # the old keys are removed below and never re-written.
+        migrated_stale = None
+        for gone_name in _MERGED_HEALTH_ADDONS:
+            gone = utilities.pop(gone_name, None)
+            if isinstance(gone, dict) and isinstance(
+                gone.get("stale_threshold"), (int, float)
+            ):
+                migrated_stale = gone["stale_threshold"]
+        if migrated_stale is None:
+            top_stale = self.config.get("stale_threshold")
+            if isinstance(top_stale, (int, float)):
+                migrated_stale = top_stale
+        if migrated_stale is not None:
+            self.config["health_stale_threshold"] = migrated_stale
 
         for legacy_key, (addon_type, addon_name, target_key) in _ADDON_LEGACY_SETTINGS.items():
             value = self.config.get(legacy_key)

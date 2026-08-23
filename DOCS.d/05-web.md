@@ -865,10 +865,11 @@ First-boot wizard. Renders inline HTML with camera source, name, subsystem,
 unit, and NetworkTables settings. On submit, normalizes config via
 `ensure_camera_entries_ready()`.
 
-### Status.py (96 lines)
+### Status.py (deleted)
 
-Legacy `StatusReporter` (UtilityBase). Registers `/health` route. Superseded
-by `HealthModule` but still present for backward compatibility.
+Legacy `StatusReporter` (UtilityBase) registered a duplicate `/health` route
+that crashed Flask when enabled alongside `HealthModule`. It was removed:
+`HealthModule` (above) is the single canonical health implementation.
 
 ---
 

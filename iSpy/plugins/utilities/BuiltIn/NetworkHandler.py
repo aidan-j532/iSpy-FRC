@@ -5,7 +5,6 @@ import time
 import wpiutil.wpistruct
 from wpimath.geometry import Pose2d
 from iSpy.plugins.bases import UtilityBase
-from iSpy.vision.Object import Object
 
 
 @wpiutil.wpistruct.make_wpistruct(name="Fuel")
@@ -180,19 +179,27 @@ class NetworkTableHandler(UtilityBase):
         return self._tables[table_name]
 
     def _send_detections(self, detections: list):
+        """Publish detections as struct[] using the universal output schema.
+
+        Every entry is flattened via Object.to_dict() (or passed through if
+        already a schema dict), so ANY pipeline's output -- object detection,
+        april tags, qr codes, optical flow, depth -- publishes identically.
+        """
         table = self._get_table("VisionData")
         pub_key = "pub/VisionData/vision_data"
-        structs = [
-            FuelStruct(
-                x=float(d.get_position_normally()[0]),
-                y=float(d.get_position_normally()[1]),
-                z=float(d.get_position_normally()[2]),
-                roll=d.roll,
-                pitch=d.pitch,
-                yaw=d.yaw,
-            )
-            for d in detections
-        ]
+        structs = []
+        for entry in detections:
+            data = entry.to_dict() if hasattr(entry, "to_dict") else entry
+            if not isinstance(data, dict):
+                continue
+            structs.append(FuelStruct(
+                x=float(data.get("x", 0.0)),
+                y=float(data.get("y", 0.0)),
+                z=float(data.get("z", 0.0)),
+                roll=float(data.get("roll", 0.0)),
+                pitch=float(data.get("pitch", 0.0)),
+                yaw=float(data.get("yaw", 0.0)),
+            ))
         if pub_key not in self._subscribers:
             self._subscribers[pub_key] = table.getStructArrayTopic(
                 "vision_data", FuelStruct

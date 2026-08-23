@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 
 from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
+from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline, SUPPORTED_TARGET_FORMATS
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 
@@ -16,18 +17,14 @@ _DEPTH_ARTIFACT_STEM = "depth_anything_v2_small"
 _DEPTH_HF_CACHE_DIR = Path(__file__).resolve().parents[3] / "YoloModels" / "huggingface"
 _YOLO_MODELS_DIR = Path(__file__).resolve().parents[3] / "YoloModels"
 
-_DEPTH_BACKEND_FORMATS = {"onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu"}
-
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
 
-class DepthAnythingCamera(BackgroundPreparedPipeline):
+class DepthAnythingCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
     plugin_name = "depth_anything"
 
-    @classmethod
-    def needs_model_backend(cls) -> bool:
-        return True
+    _OPT_OPTIONS_EXTRA = ("input_size", "model_size")
 
     @classmethod
     def show_calibration(cls) -> bool:
@@ -66,58 +63,13 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
 
     @classmethod
     def config_schema(cls) -> dict:
-        return {
+        schema = {
             "model_size": {
                 "type": "select",
                 "label": "Model Size",
                 "options": ["small"],
                 "default": "small",
                 "help": "Depth Anything V2 Small is downloaded automatically from Hugging Face.",
-            },
-            "optimize": {
-                "type": "toggle",
-                "label": "Optimize/Convert",
-                "default": False,
-                "optimize_toggle": True,
-                "help": "Build the best optimized backend artifact for this device "
-                        "(onnx for the Depth Anything model) in the background. "
-                        "Falls back to the top-level config 'optimize' when unset.",
-            },
-            "target_format": {
-                "type": "select",
-                "label": "Target format",
-                "options": ["auto", "onnx"],
-                "default": "auto",
-                "quantization": True,
-                "help": "'auto' picks the best backend for this device via "
-                        "recommend_format(). Set an explicit format to override.",
-            },
-            "quantize": {
-                "type": "toggle",
-                "label": "Quantize model",
-                "default": False,
-                "quantization": True,
-                "help": "Quantize the optimized artifact (int8). Only meaningful "
-                        "with optimize or target_format set.",
-            },
-            "quantization_dataset": {
-                "type": "browse",
-                "label": "Quantization dataset",
-                "default": "",
-                "browse_root": "QuantizeDataset",
-                "quantization": True,
-                "gated_by": "quantize",
-                "help": "Optional folder of calibration images used for "
-                        "quantization. Leave empty to auto-download images "
-                        "from the model's calibration keywords.",
-            },
-            "input_size": {
-                "type": "number",
-                "label": "Input Size",
-                "default": 518,
-                "quantization": True,
-                "help": "Square resolution used for the optimized ONNX export "
-                        "and inference.",
             },
             "estimate_depth": {
                 "type": "toggle",
@@ -137,6 +89,13 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
                 "step": 1,
             },
         }
+        schema.update(cls._optimization_schema(
+            target_formats=("auto", "onnx"),
+            input_size_default=_DEPTH_INPUT_SIZE,
+            input_size_help="Square resolution used for the optimized ONNX export "
+                            "and inference.",
+        ))
+        return schema
 
     def __init__(
         self,
@@ -236,29 +195,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
     def _prepare(self):
         self._load_model()
 
-    def get_optimization_options(self) -> dict:
-        schema = self.config_schema()
-        return {
-            key: schema[key]
-            for key in (
-                "optimize", "quantize", "target_format",
-                "quantization_dataset", "input_size", "model_size",
-            )
-            if key in schema
-        }
-
-    @classmethod
-    def recommended_format(cls) -> str:
-        try:
-            from iSpy.config.AutoOpt import recommend_format
-
-            return recommend_format(ignore_dependencies=True)
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "AutoOpt.recommend_format did NOT work for your device, falling back to ONNX!"
-            )
-            return "onnx"
-
     def optimize(self, **kwargs) -> str:
         if not self._optimization_requested():
             return "optimization disabled for this camera (set 'Optimize' in camera settings)"
@@ -314,12 +250,6 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         self._set_status(status)
         return status
 
-    def _optimize_runner(self):
-        status = self.optimize()
-        if not self._optimized_active():
-            self._optimize_error = status
-        self._set_status(status)
-
     def _resolve_target_format(self) -> str:
         explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
         if explicit and explicit != "auto":
@@ -330,22 +260,17 @@ class DepthAnythingCamera(BackgroundPreparedPipeline):
         # same supported set as object_detection - 'auto' can pick any
         # backend the device + installed toolchains can actually run
         # (rknn on Rockchip, engine on NVIDIA, openvino on Intel, ...).
-        if target not in _DEPTH_BACKEND_FORMATS:
+        if target not in SUPPORTED_TARGET_FORMATS:
             self.logger.warning(
                 "Recommended target format %r unsupported - using onnx", target,
             )
             return "onnx"
         return target
 
-    def _target_format_cached(self) -> str:
-        if self._target_format is None:
-            self._target_format = self._resolve_target_format()
-        return self._target_format
-
     def _optimization_requested(self) -> bool:
+        # depth estimation can be disabled entirely - no model, no build
         return bool(getattr(self, "estimate_depth", True)) and (
-            bool(getattr(self, "_auto_opt", False))
-            or bool(getattr(self, "quantize", False))
+            super()._optimization_requested()
         )
 
     def _optimized_active(self) -> bool:

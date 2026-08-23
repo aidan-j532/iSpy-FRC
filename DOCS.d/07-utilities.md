@@ -1,7 +1,8 @@
 # 07 -- Utilities and Plugins
 
-> Built-in utility plugins: NetworkTables handler, health reporter, video
-> recorder, and rollback. Also covers the MultipleCameraHandler core utility.
+> Built-in utility plugins: NetworkTables handler and rollback. Also covers
+> the MultipleCameraHandler core utility, the core Health web module (which
+> absorbed the old health_reporter add-on), and plugin base classes.
 > Every function, class, method, data flow, and code path is documented.
 
 ---
@@ -9,7 +10,7 @@
 ## Table of Contents
 
 1. [NetworkTableHandler](#networktablehandler)
-2. [HealthReporter](#healthreporter)
+2. [Health (core web module)](#health-core-web-module--formerly-the-healthreporter-add-on)
 3. [RollBack (Video Recorder)](#rollback-video-recorder)
 4. [MultipleCameraHandler](#multiplecamerahandler)
 5. [Plugin Base Classes](#plugin-base-classes)
@@ -256,129 +257,26 @@ so it sits on the ground plane.
 
 ---
 
-## HealthReporter
+## Health (core web module — formerly the `HealthReporter` add-on)
 
-**File:** `iSpy/plugins/utilities/BuiltIn/HealthReporter.py` (235 lines)
+**File:** `iSpy/web/modules/health.py` (`HealthModule`)
 
-Monitors system health and exposes it via the web API. This is a built-in
-utility plugin that provides the `/health/detailed` endpoint with an HTML
-dashboard.
+The standalone health utilities (`health_reporter`, `status_reporter`) were
+merged into this always-on web module so `/health` is registered exactly once
+and enabling every add-on can never trigger a Flask duplicate-endpoint
+collision. See [02-plugins.md](02-plugins.md) for the endpoint/payload spec.
 
-### `config_schema()` (lines 99-109)
+Key points:
 
-```python
-{
-    "stale_threshold": {
-        "type": "number",
-        "label": "Stale Threshold (s)",
-        "hint": "Frames older than this (s) mark a camera or the main loop as stale/degraded.",
-        "default": 1.0,
-    },
-}
-```
-
-### `__init__(context)` (lines 111-145)
-
-Instance variables:
-```python
-self.cameras = context.get("cameras", [])
-self._lock = threading.Lock()       # Thread-safe metric access
-self._fps = 0.0
-self._vision_s = 0.0
-self._detections = 0
-self._last_tick = time.perf_counter()
-self._uptime_start = time.perf_counter()
-self._loop_count = 0
-self._stale_threshold = self.config.get("stale_threshold", 1.0)
-self._network_handler = None        # Wired externally
-```
-
-Route registration (lines 128-143):
-- Checks if `/health/detailed` is already registered by `HealthModule`
-- Only registers if not already present (avoids Flask assertion error)
-- Catches `AssertionError` if race condition occurs
-
-### `set_network_handler(handler)` (line 147-148)
-
-Called from `iSpy.__init__()` after all utilities load:
-```python
-nt = self.utilities.get("network_table_handler")
-health_mod = self.web_app.modules.get("health")
-if health_mod and nt:
-    health_mod.set_network_handler(nt)
-```
-
-### `update(frame_data)` (lines 150-156)
-
-Thread-safe update:
-```python
-with self._lock:
-    self._fps = round(frame_data.get("fps", 0), 1)
-    self._vision_s = round(frame_data.get("vision_s", 0) * 1000, 2)
-    self._detections = frame_data.get("detection_count", 0)
-    self._last_tick = time.perf_counter()
-    self._loop_count += 1
-```
-
-### `_build_payload()` (lines 161-229)
-
-Builds the complete health payload:
-
-```python
-stale_s = round(now - last_tick, 2)
-uptime_s = round(now - self._uptime_start, 1)
-```
-
-**Per-camera health** (lines 173-200):
-- Calls `cam.get_frame_age()` for each camera
-- `cam_ok = age < self._stale_threshold`
-- Falls back to error state on exception
-
-**NetworkTables status** (lines 202-207):
-- Queries `self._network_handler.isConnected()`
-- Returns `None` if no handler configured
-
-**Overall health** (lines 209-213):
-```python
-healthy = (
-    stale_s < self._stale_threshold
-    and all_cameras_ok
-    and (nt_connected is None or nt_connected)
-)
-```
-
-**Payload shape:**
-```python
-{
-    "status": "ok" | "degraded",
-    "uptime_s": float,
-    "loop_count": int,
-    "loop_stale_s": float,
-    "fps": float,
-    "vision_ms": float,
-    "detections": int,
-    "cameras": [{"name", "source", "ok", "frame_age_ms"}, ...],
-    "network_tables": {"enabled": bool, "connected": bool|null},
-}
-```
-
-### `_health_route()` (lines 231-235)
-
-Returns HTML if `Accept: text/html`, otherwise JSON:
-```python
-if "text/html" in request.headers.get("Accept", ""):
-    return Response(_HTML, mimetype="text/html")
-return jsonify(payload), (200 if healthy else 503)
-```
-
-### Embedded HTML (lines 13-94)
-
-A self-contained HTML page with inline CSS and JavaScript that polls
-`/health/detailed` every 250ms and updates the DOM. Shows:
-- Status (OK/DEGRADED with color coding)
-- FPS, inference time, detections, loop stale, uptime, loop count
-- Per-camera cards with source, status, frame age
-- NetworkTables enabled/connected status
+- **Stale threshold:** top-level config key `health_stale_threshold`
+  (default `1.0`), editable in Settings → Advanced. Legacy
+  `utilities.health_reporter.stale_threshold` values are migrated there by
+  `_migrate_addons()` in `iSpyConfig.py`.
+- **Wiring:** the vision loop calls `update(frame_data)` each tick;
+  `iSpy/iSpy.py` connects NetworkTables status via
+  `health_mod.set_network_handler(nt)`.
+- **Payloads:** `/health` (minimal watchdog contract, 200/503),
+  `/health/detailed` and `/api/health` (full payload + live plugin statuses).
 
 ---
 
@@ -720,7 +618,7 @@ Vision loop tick
   |       |     _update_viewer_overlay() -> viewer.add_overlay()
   |       |     inst.flush()
   |       |
-  |       |-- HealthReporter:
+  |       |-- HealthModule (web module, via web_app.update):
   |       |     Updates fps, vision_s, detections, last_tick, loop_count
   |       |
   |       |-- RollBack:

@@ -277,6 +277,10 @@ function renderRow(p) {
     ? `<span class="builtin-pill beta-pill" title="Experimental - may change or misbehave">beta</span>`
     : '';
 
+  const warnPill = (p.pipeline_warning && p.pipeline_warning.length)
+    ? `<span class="builtin-pill beta-pill" title="This add-on declares support for: ${(p.supported_pipelines || []).join(', ') || '(none)'}. Camera(s) currently run: ${p.pipeline_warning.join(', ')}.">pipeline mismatch</span>`
+    : '';
+
   const toggle = isPipeline ? '' : `
     <label class="switch" title="${p.enabled ? 'Disable' : 'Enable'}">
       <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlugin('${jsStr(p.name)}','${p.type}',this.checked)">
@@ -315,6 +319,7 @@ function renderRow(p) {
         ${typeBadge(p.type)}
         ${builtinPill}
         ${betaPill}
+        ${warnPill}
       </div>
       ${p.doc ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
       <div class="addon-right">

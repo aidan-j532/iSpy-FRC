@@ -1,4 +1,4 @@
-from boot.boot import on_boot as boot_run
+from iSpy.boot.boot import on_boot as boot_run
 from iSpy.core.game_loop import main as game_loop_main
 import argparse
 
@@ -15,5 +15,8 @@ def main():
                         help="Wait for all pipelines to be ready before running vision")
     args = parser.parse_args()
     boot_run(install_service=args.service, fresh=args.fresh, wait=args.wait)
-    
+
     game_loop_main()
+
+if __name__ == "__main__":
+    main()

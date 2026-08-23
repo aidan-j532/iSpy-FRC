@@ -7,7 +7,7 @@ from unittest import mock
 
 import numpy as np
 
-from iSpy.config.iSpyConfig import iSpyAddonConfig
+from iSpy.config.iSpyConfig import iSpyAddonConfig, iSpyConfig
 from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import (
     TrackerBase, UtilityBase, FrameProcessorBase, AddonBase,
@@ -39,8 +39,7 @@ class AddonDiscoveryTests(unittest.TestCase):
         utilities = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)
         fps = load_plugins(PLUGIN_ROOT / "frame_processors", FrameProcessorBase)
         self.assertTrue({"object_tracker", "path_planner"} <= set(trackers))
-        self.assertTrue({"network_table_handler", "video_recorder",
-                         "health_reporter"} <= set(utilities))
+        self.assertTrue({"network_table_handler", "rollback"} <= set(utilities))
         self.assertIn("example_frame_processor", fps)
         self.assertIn("example_tracker", trackers)
         self.assertIn("example_utility", utilities)
@@ -53,7 +52,7 @@ class AddonDiscoveryTests(unittest.TestCase):
                 self.assertTrue(issubclass(cls, AddonBase), name)
 
     def test_addon_schemas_are_valid(self):
-        valid_types = {"text", "number", "toggle"}
+        valid_types = {"text", "number", "toggle", "list"}
         for subdir, base in (("trackers", TrackerBase),
                              ("utilities", UtilityBase),
                              ("frame_processors", FrameProcessorBase)):
@@ -68,6 +67,8 @@ class AddonDiscoveryTests(unittest.TestCase):
                         self.assertIsInstance(defn.get("default", 0), (int, float))
                     elif defn["type"] == "toggle":
                         self.assertIsInstance(defn.get("default", False), bool)
+                    elif defn["type"] == "list":
+                        self.assertIn("fields", defn, f"{name}.{key}")
                     else:
                         self.assertIsInstance(defn.get("default", ""), str)
                     self.assertIn("label", defn, f"{name}.{key}")
@@ -152,6 +153,38 @@ class ObjectTrackerTests(unittest.TestCase):
         fuels = tracker.update([Object(0.0, 0.0), Object(5.0, 5.0)], 0, 0, 0)
         self.assertEqual(len(fuels), 2)
 
+    def test_different_names_never_merge_even_when_close(self):
+        # a cone 10cm from a robot must not merge into the robot
+        cone = Object(0.0, 0.0)
+        cone.name = "cone"
+        robot = Object(0.1, 0.05)
+        robot.name = "robot"
+        tracked = self._make().update([cone, robot], 0, 0, 0)
+        self.assertEqual(len(tracked), 2)
+        names = {o.name for o in tracked}
+        self.assertEqual(names, {"cone", "robot"})
+
+    def test_same_name_close_detections_still_merge(self):
+        tracker = self._make()
+        a = Object(0.0, 0.0)
+        a.name = "cone"
+        b = Object(0.03, -0.02)
+        b.name = "cone"
+        tracked = tracker.update([a], 0, 0, 0)
+        first_id = tracked[0].get_id()
+        tracked = tracker.update([b], 0, 0, 0)
+        self.assertEqual(len(tracked), 1)
+        self.assertEqual(tracked[0].get_id(), first_id)
+
+    def test_empty_names_are_treated_as_equal(self):
+        # legacy pipelines that never set .name keep old merge behavior
+        tracker = self._make()
+        tracked = tracker.update([Object(0.0, 0.0)], 0, 0, 0)
+        first_id = tracked[0].get_id()
+        tracked = tracker.update([Object(0.03, -0.02)], 0, 0, 0)
+        self.assertEqual(len(tracked), 1)
+        self.assertEqual(tracked[0].get_id(), first_id)
+
     def test_stale_objects_are_dropped(self):
         tracker = self._make({"stale_threshold": 0.05})
         tracker.update([Object(0.0, 0.0)], 0, 0, 0)
@@ -215,21 +248,21 @@ class PathPlannerTests(unittest.TestCase):
         self._make().stop()
 
 
-class VideoRecorderTests(unittest.TestCase):
+class RollBackTests(unittest.TestCase):
     def test_schema_defaults_apply(self):
-        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["video_recorder"]
+        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["rollback"]
         with tempfile.TemporaryDirectory() as tmp:
-            rec = cls(addon_context(cls, {"record_dir": tmp}))
-            self.assertEqual(rec._output_dir, tmp)
+            rec = cls(addon_context(cls, {"data_dir": tmp}))
+            self.assertEqual(rec._video_output_dir, tmp)
             self.assertEqual(rec._fps, 30.0)
             self.assertEqual(rec._max_queue, 300)
             self.assertEqual(rec._downsample, 1)
 
     def test_enabled_by_presence_records_frames_to_disk(self):
-        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["video_recorder"]
+        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["rollback"]
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch("iSpy.plugins.utilities.BuiltIn.VideoRecorder.time.sleep"):
-                rec = cls(addon_context(cls, {"record_dir": tmp, "downsample": 1}))
+            with mock.patch("iSpy.plugins.utilities.BuiltIn.RollBack.time.sleep"):
+                rec = cls(addon_context(cls, {"data_dir": tmp, "downsample": 1}))
                 frame = np.zeros((48, 64, 3), dtype=np.uint8)
                 for _ in range(5):
                     rec.update({"frame": frame})
@@ -240,10 +273,10 @@ class VideoRecorderTests(unittest.TestCase):
                                "recording file must contain frames")
 
     def test_records_only_every_nth_frame(self):
-        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["video_recorder"]
+        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["rollback"]
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch("iSpy.plugins.utilities.BuiltIn.VideoRecorder.time.sleep"):
-                rec = cls(addon_context(cls, {"record_dir": tmp, "downsample": 3}))
+            with mock.patch("iSpy.plugins.utilities.BuiltIn.RollBack.time.sleep"):
+                rec = cls(addon_context(cls, {"data_dir": tmp, "downsample": 3}))
                 frame = np.zeros((48, 64, 3), dtype=np.uint8)
                 for _ in range(6):
                     rec.update({"frame": frame})
@@ -253,9 +286,9 @@ class VideoRecorderTests(unittest.TestCase):
             self.assertEqual(len(files), 1)
 
     def test_skips_missing_frames(self):
-        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["video_recorder"]
+        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["rollback"]
         with tempfile.TemporaryDirectory() as tmp:
-            rec = cls(addon_context(cls, {"record_dir": tmp}))
+            rec = cls(addon_context(cls, {"data_dir": tmp}))
             rec.update({"frame": None})  # must not raise / start a writer
             self.assertFalse(rec._started)
             rec.update({})  # missing key entirely
@@ -263,9 +296,9 @@ class VideoRecorderTests(unittest.TestCase):
             rec.stop()
 
     def test_stop_before_start_is_safe(self):
-        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["video_recorder"]
+        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["rollback"]
         with tempfile.TemporaryDirectory() as tmp:
-            rec = cls(addon_context(cls, {"record_dir": tmp}))
+            rec = cls(addon_context(cls, {"data_dir": tmp}))
             rec.stop()  # no-op, no crash
 
 
@@ -320,8 +353,8 @@ class NetworkTableHandlerTests(unittest.TestCase):
             "detections": [], "fps": 30.5, "detection_count": 2,
             "camera_lag_s": 0.04, "cameras": [],
         })
-        self.assertGreaterEqual(self._fake_inst.flush.call_count, 2)
-        self._fake_inst.putNumber.assert_called()
+        self.assertGreaterEqual(self._fake_inst.flush.call_count, 1)
+        self._fake_inst.getStructArrayTopic.assert_called()
 
     def test_update_with_connected_false_is_noop(self):
         mod = self._fresh_module(is_connected=False)
@@ -336,6 +369,29 @@ class NetworkTableHandlerTests(unittest.TestCase):
                         "camera_lag_s": 0.0, "cameras": []})
         self._fake_inst.getStructArrayTopic.assert_called()
 
+    def test_update_is_pipeline_agnostic(self):
+        # detections from ANY pipeline (april tag, qr, depth, custom) flow
+        # through unchanged - the publisher only touches generic Object
+        # accessors, never YOLO-specific fields
+        handler = self._handler({})
+        tag = Object(0.5, -1.25, 2.0)
+        tag.name = "april_tag_3"
+        tag.roll = 0.1
+        tag.pitch = -0.2
+        tag.yaw = 3.0
+        qr = Object(9.0, 8.0, 7.0)
+        qr.name = "qr_code"
+        handler.update({"detections": [tag, qr], "fps": 60,
+                        "detection_count": 2, "camera_lag_s": 0.0,
+                        "cameras": []})
+        self._fake_inst.getStructArrayTopic.assert_called()
+        pub = handler._subscribers["pub/VisionData/vision_data"]
+        structs = pub.set.call_args[0][0]
+        self.assertEqual(len(structs), 2)
+        self.assertAlmostEqual(structs[0].x, 0.5)
+        self.assertAlmostEqual(structs[0].y, -1.25)
+        self.assertAlmostEqual(structs[1].z, 7.0)
+
     def test_get_robot_pose(self):
         handler = self._handler({})
         result = handler.get_robot_pose()
@@ -348,7 +404,11 @@ class NetworkTableHandlerTests(unittest.TestCase):
         handler.update({"detections": []})
 
 
-class HealthReporterTests(unittest.TestCase):
+class HealthModuleTests(unittest.TestCase):
+    """The always-on HealthModule (iSpy/web/modules/health.py) is the single
+    canonical health implementation since health_reporter/status_reporter
+    were merged into it (PROMPT 5)."""
+
     class FakeCamera:
         def __init__(self, name, age):
             self.source = name
@@ -358,25 +418,24 @@ class HealthReporterTests(unittest.TestCase):
         def get_frame_age(self):
             return self._age
 
-    def _make(self, settings=None, cameras=None):
-        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)[
-            "health_reporter"]
-        ctx = addon_context(cls, settings)
-        ctx["cameras"] = cameras or []
-        return cls(ctx)
+    def _make(self, threshold=None, cameras=None, vision=None):
+        from iSpy.web.modules.health import HealthModule
+        cfg = iSpyConfig()
+        if threshold is not None:
+            cfg.config["health_stale_threshold"] = threshold
+        ctx = {"config": cfg, "cameras": cameras or [], "vision_instance": vision}
+        return HealthModule(ctx)
 
-    def test_schema_defaults_apply(self):
-        reporter = self._make()
-        self.assertEqual(reporter._stale_threshold, 1.0)
-
-    def test_custom_stale_threshold_applies(self):
-        reporter = self._make({"stale_threshold": 2.5})
-        self.assertEqual(reporter._stale_threshold, 2.5)
+    def test_stale_threshold_from_top_level_config(self):
+        # used to live under utilities.health_reporter.stale_threshold;
+        # now a plain top-level config key read by the core module
+        self.assertEqual(self._make()._stale_threshold, 1.0)
+        self.assertEqual(self._make(threshold=2.5)._stale_threshold, 2.5)
 
     def test_payload_reflects_updates(self):
-        reporter = self._make()
-        reporter.update({"fps": 25.0, "vision_s": 0.02, "detection_count": 7})
-        payload, healthy = reporter._build_payload()
+        mod = self._make()
+        mod.update({"fps": 25.0, "vision_s": 0.02, "detection_count": 7})
+        payload, _healthy = mod._build_payload()
         self.assertEqual(payload["fps"], 25.0)
         self.assertEqual(payload["vision_ms"], 20.0)
         self.assertEqual(payload["detections"], 7)
@@ -385,21 +444,21 @@ class HealthReporterTests(unittest.TestCase):
         self.assertIn("network_tables", payload)
 
     def test_camera_status_marks_stale(self):
-        reporter = self._make(
+        mod = self._make(
             cameras=[self.FakeCamera("a", 0.1), self.FakeCamera("b", 5.0)]
         )
-        payload, healthy = reporter._build_payload()
+        payload, healthy = mod._build_payload()
         by_name = {c["name"]: c for c in payload["cameras"]}
         self.assertTrue(by_name["a"]["ok"])
         self.assertFalse(by_name["b"]["ok"])
         self.assertFalse(healthy)
 
     def test_network_handler_integration(self):
-        reporter = self._make()
+        mod = self._make()
         fake_handler = mock.Mock()
         fake_handler.isConnected.return_value = True
-        reporter.set_network_handler(fake_handler)
-        payload, healthy = reporter._build_payload()
+        mod.set_network_handler(fake_handler)
+        payload, healthy = mod._build_payload()
         self.assertTrue(payload["network_tables"]["enabled"])
         self.assertTrue(payload["network_tables"]["connected"])
 
@@ -410,10 +469,21 @@ class HealthReporterTests(unittest.TestCase):
             def get_frame_age(self):
                 raise RuntimeError("boom")
 
-        reporter = self._make(cameras=[BrokenCam()])
-        payload, healthy = reporter._build_payload()
+        mod = self._make(cameras=[BrokenCam()])
+        payload, healthy = mod._build_payload()
         self.assertFalse(healthy)
         self.assertFalse(payload["cameras"][0]["ok"])
+
+    def test_plugin_statuses_pulled_from_vision_instance(self):
+        vision = mock.Mock()
+        vision.trackers = {"object_tracker": mock.Mock(get_status=lambda: "running")}
+        vision.utilities = {}
+        vision.frame_processors = {}
+        mod = self._make(vision=vision)
+        statuses = mod._plugin_statuses()
+        self.assertEqual(statuses,
+                         [{"name": "object_tracker", "type": "tracker",
+                           "status": "running"}])
 
     def test_stop_is_safe(self):
         self._make().stop()

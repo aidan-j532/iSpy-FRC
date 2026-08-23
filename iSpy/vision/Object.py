@@ -95,6 +95,74 @@ class Object:
         if self.alive >= self.alive_time:
             self.destroyed = True
 
+    # ------------------------------------------------------------------
+    # Universal output schema (see VisionPipeline.OUTPUT_SCHEMA)
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> dict:
+        """Serialize to the universal pipeline-output schema.
+
+        JSON-safe, pipeline-agnostic: every pipeline's Objects flatten to the
+        same keys; ``vis_type`` selects how to interpret them and ``vis_meta``
+        carries the pipeline-specific payload (tag ids, flow vectors, depth
+        estimates, ...).
+        """
+        return {
+            "id": self.id,
+            "name": self.name,
+            "confidence": float(self.confidence),
+            "x": float(self.x),
+            "y": float(self.y),
+            "z": float(self.z),
+            "roll": float(self.roll),
+            "pitch": float(self.pitch),
+            "yaw": float(self.yaw),
+            "depth_source": self.depth_source,
+            "vis_type": self.vis_type,
+            "vis_meta": dict(self.vis_meta),
+            "keypoints_3d": (
+                [[float(c) for c in kpt] for kpt in self.keypoints_3d]
+                if self.keypoints_3d is not None else None
+            ),
+            "ray_origin": (
+                [float(c) for c in self.ray_origin]
+                if self.ray_origin is not None else None
+            ),
+            "ray_direction": (
+                [float(c) for c in self.ray_direction]
+                if self.ray_direction is not None else None
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Object":
+        """Rebuild an Object from :meth:`to_dict` output.
+
+        Tolerates missing keys and legacy flat dicts; unknown keys are ignored.
+        """
+        obj = cls(
+            x=float(data.get("x", 0.0)),
+            y=float(data.get("y", 0.0)),
+            z=float(data.get("z", 0.0)),
+            id=data.get("id"),
+            roll=float(data.get("roll", 0.0)),
+            pitch=float(data.get("pitch", 0.0)),
+            yaw=float(data.get("yaw", 0.0)),
+            name=str(data.get("name", "unknown")),
+            confidence=float(data.get("confidence", 0.0)),
+            keypoints_3d=data.get("keypoints_3d"),
+            depth_source=str(data.get("depth_source", "monocular")),
+            vis_type=str(data.get("vis_type", "generic")),
+            vis_meta=dict(data.get("vis_meta") or {}),
+        )
+        origin = data.get("ray_origin")
+        direction = data.get("ray_direction")
+        if origin is not None:
+            obj.ray_origin = np.asarray(origin, dtype=float)
+        if direction is not None:
+            obj.ray_direction = np.asarray(direction, dtype=float)
+        return obj
+
     def __str__(self) -> str:
         rot = (
             f"  Roll: {math.degrees(self.roll):.1f}°"

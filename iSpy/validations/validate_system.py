@@ -305,11 +305,11 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
             "Verify this matches your robot's IP address."
         )
 
-    stale = get_addon_setting(config, "utilities", "health_reporter",
-                              "stale_threshold",
-                              get_addon_setting(config, "trackers",
-                                                "object_tracker",
-                                                "stale_threshold", 1.0))
+    stale = config.get("health_stale_threshold")
+    if stale is None:
+        stale = get_addon_setting(config, "trackers",
+                                  "object_tracker",
+                                  "stale_threshold", 1.0)
     if stale > 3.0:
         recommendations.append(
             f"stale_threshold is high ({stale}s). "

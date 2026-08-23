@@ -145,7 +145,9 @@ class AddonMigrationTests(unittest.TestCase):
         cfg2 = self._load(json.loads(json.dumps(cfg1.config)))
         self.assertEqual(cfg1.config["plugins"], cfg2.config["plugins"])
 
-    def test_new_dict_layout_loads_untouched(self):
+    def test_new_dict_layout_loads_and_folds_merged_health_addons(self):
+        # health_reporter no longer exists as an add-on; its stale_threshold
+        # migrates to the top-level health_stale_threshold key (PROMPT 5)
         data = {
             "plugins": {
                 "trackers": {"object_tracker": {"distance_threshold": 0.9}},
@@ -161,10 +163,10 @@ class AddonMigrationTests(unittest.TestCase):
             cfg.get_addon_settings("trackers", "object_tracker"),
             {"distance_threshold": 0.9},
         )
-        self.assertEqual(
-            cfg.get_addon_settings("utilities", "health_reporter"),
-            {"stale_threshold": 0.7},
-        )
+        self.assertIsNone(cfg.get_addon_settings("utilities", "health_reporter"))
+        self.assertNotIn("health_reporter",
+                         cfg.config["plugins"]["utilities"])
+        self.assertAlmostEqual(cfg.config["health_stale_threshold"], 0.7)
 
     def test_malformed_addon_values_do_not_crash(self):
         data = {

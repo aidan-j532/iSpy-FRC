@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import json
 import shutil
 import subprocess
@@ -71,6 +72,122 @@ def _bootstrap_default_camera(config: iSpyConfig):
         "First boot: auto-configured camera '%s' -> %s (pipeline=%s)",
         name, dev["path"], get_pipeline_name(cam_cfg),
     )
+
+
+# vid/pid (+uvc interface) chunk of a windows-style device id - the trailing
+# instance segment changes whenever a cam moves to another usb port, so
+# presence checks match on this instead of the raw id
+_USB_ID_RE = re.compile(r"VID_[0-9A-F]+&PID_[0-9A-F]+(?:&MI_\d+)?", re.IGNORECASE)
+_IMAGE_SOURCE_EXTS = (".png", ".jpg", ".jpeg", ".bmp")
+
+
+def _usb_signature(device_id) -> str | None:
+    if not isinstance(device_id, str):
+        return None
+    m = _USB_ID_RE.search(device_id.upper())
+    return m.group(0) if m else None
+
+
+def _is_non_device_source(source) -> bool:
+    # network streams and image files are not pluggable hardware - never
+    # retire a camera just because no local capture device matches them
+    if not isinstance(source, str):
+        return False
+    return "://" in source or source.lower().endswith(_IMAGE_SOURCE_EXTS)
+
+
+def _camera_present(cam_cfg: dict, probed_ids: set, probed_paths: set,
+                    probed_sigs: set) -> bool:
+    device_id = cam_cfg.get("device_id")
+    source = cam_cfg.get("source")
+    if _is_non_device_source(source):
+        return True
+    if device_id:
+        if str(device_id) in probed_ids:
+            return True
+        sig = _usb_signature(device_id)
+        if sig and sig in probed_sigs:
+            return True  # same physical cam, different usb port
+    src_str = str(source)
+    if src_str in probed_paths:
+        return True
+    if isinstance(source, str) and ("/" in source or "\\" in source):
+        # path-like sources (/dev/video0 ...) are stable identities - trust
+        # the filesystem over the probe result
+        return os.path.exists(source)
+    if device_id:
+        # hardware identity is known and nothing on the system matched it -
+        # the camera is genuinely unplugged
+        return False
+    # bare index without a device_id: index assignment shifts when cams unplug,
+    # so there is no trustworthy signal here - keep the entry
+    return True
+
+
+def cleanup_missing_cameras(config: iSpyConfig) -> None:
+    """Boot-time cleanup: retire configured cameras whose hardware is gone.
+
+    A retired camera's full entry is stashed in Save/camera_profiles.json under
+    its device_id - the same store the web ui reads when re-adding a device -
+    so plugging it back in and re-creating it restores the previous settings.
+    """
+    cams = {
+        k: v for k, v in (config.get("camera_configs") or {}).items()
+        if isinstance(v, dict)
+    }
+    if len(cams) <= 1:
+        return
+
+    try:
+        from iSpy.web.modules.cameras import CamerasModule  # same probing the web ui uses
+        devices = CamerasModule({})._probe_devices()
+    except Exception as exc:
+        logger.warning("Boot camera cleanup skipped - device probe failed: %s", exc)
+        return
+    if not devices:
+        logger.info(
+            "Boot camera cleanup skipped - no capture devices detected, "
+            "probe results not trustworthy."
+        )
+        return
+
+    probed_ids = {str(d.get("device_id")) for d in devices if d.get("device_id")}
+    probed_paths = {str(d.get("path")) for d in devices if d.get("path")}
+    probed_sigs = {s for s in (_usb_signature(i) for i in probed_ids) if s}
+
+    missing = [
+        name for name, cfg in cams.items()
+        if not _camera_present(cfg, probed_ids, probed_paths, probed_sigs)
+    ]
+    if not missing:
+        return
+
+    # never retire everything - validate_system and the vision core both need
+    # at least one configured camera to boot
+    if len(missing) >= len(cams):
+        kept = next(iter(cams))
+        missing = [name for name in missing if name != kept]
+        logger.warning(
+            "Every configured camera is missing from the system - keeping "
+            "'%s' anyway so the boot still has something to run.", kept,
+        )
+
+    from iSpy.web.Backend.save_store import read, write
+    profiles = read("camera_profiles", {}) or {}
+    for name in missing:
+        entry = cams.pop(name)
+        device_id = entry.get("device_id")
+        if device_id:
+            profiles[device_id] = entry
+        logger.info(
+            "Boot camera cleanup: camera '%s' (%s) is gone from the system - "
+            "removed from config, settings saved%s.",
+            name, entry.get("source"),
+            " under its device profile" if device_id else "",
+        )
+    config.set("camera_configs", cams)
+    write("camera_profiles", profiles)
+    config.save()
 
 
 def _close_logging_handlers() -> None:
@@ -275,6 +392,8 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
             )
         logger.info("Using existing config: %s", config_path)
         config = iSpyConfig(config_path, create=False)
+
+    cleanup_missing_cameras(config)
 
     if not validate_system():
         raise RuntimeError("System validation failed. Aborting boot.")

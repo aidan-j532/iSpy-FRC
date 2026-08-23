@@ -304,6 +304,13 @@
     .camera-lightbox-feed { order: 1; }
     .camera-lightbox-tuning { order: 2; width: 100%; border-left: none; border-top: 1px solid var(--border); max-height: 40vh; }
   }
+  /* schema list fields (e.g. per-class object heights) */
+  .schema-list { width: 100%; }
+  .schema-list table { width: 100%; border-collapse: collapse; }
+  .schema-list th { text-align: left; font-size: .72rem; color: var(--text-dim); padding: 2px 6px 4px; font-weight: 600; }
+  .schema-list td { padding: 2px 4px; }
+  .schema-list .form-input { width: 100%; min-width: 60px; }
+  .schema-list-actions { margin-top: 6px; display: flex; gap: 6px; }
 </style>
 
 <script>
@@ -348,7 +355,7 @@ const COMMON_FIELDS = {
   pipeline: { label: 'Pipeline', type: 'pipeline', required: true },
   x: { label: 'X offset', type: 'number', step: 0.01, unit: _posUnit(), default: 0 },
   y: { label: 'Y offset', type: 'number', step: 0.01, unit: _posUnit(), default: 0 },
-  height: { label: 'Mount height', type: 'number', step: 0.01, unit: _posUnit(), default: 0, help: 'Height of the camera above the ground plane.' },
+  height: { label: 'Mount height', type: 'number', step: 0.01, unit: _posUnit(), default: 0, help: 'Height of the camera above the ground plane. Feeds the triangulation ray origin - this is the field pipelines actually use.' },
   yaw: { label: 'Yaw', type: 'number', step: 0.1, unit: 'deg', default: 0, help: 'Horizontal rotation. Positive angles turn the camera right.' },
   pitch: { label: 'Pitch', type: 'number', step: 0.1, unit: 'deg', default: 0, help: 'Vertical tilt. Positive tilts the camera down toward the field.' },
   subsystem: { label: 'Subsystem', type: 'select', options: ['field', 'robot', 'other'], default: 'field' },
@@ -437,6 +444,89 @@ function syncOptimization() {
 
 /* Field building */
 
+/* editable row-table for schema fields of type 'list'
+   (rows are objects keyed by def.fields, e.g. object_heights) */
+function buildSchemaList(key, def) {
+  const fields = def.fields || {};
+  const wrap = document.createElement('div');
+  wrap.className = 'schema-list';
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const hrow = document.createElement('tr');
+  Object.keys(fields).forEach(fk => {
+    const th = document.createElement('th');
+    th.textContent = (fields[fk] && fields[fk].label) || humanizeFieldName(fk);
+    hrow.appendChild(th);
+  });
+  hrow.appendChild(document.createElement('th'));
+  thead.appendChild(hrow);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  const actions = document.createElement('div');
+  actions.className = 'schema-list-actions';
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'btn-sm';
+  addBtn.textContent = '+ Add';
+  addBtn.onclick = () => appendSchemaListRow(tbody, key, null, fields);
+  actions.appendChild(addBtn);
+  wrap.appendChild(actions);
+  return wrap;
+}
+
+function appendSchemaListRow(tbody, key, rowData, fields) {
+  const tr = document.createElement('tr');
+  Object.keys(fields).forEach(fk => {
+    const fdef = fields[fk] || {};
+    const td = document.createElement('td');
+    const input = document.createElement('input');
+    input.className = 'form-input list-cell';
+    input.dataset.field = fk;
+    input.dataset.fieldType = fdef.type || 'text';
+    input.type = fdef.type === 'number' ? 'number' : 'text';
+    if (fdef.step != null) input.step = fdef.step;
+    const v = rowData ? rowData[fk] : (fdef.default != null ? fdef.default : '');
+    input.value = v == null ? '' : String(v);
+    td.appendChild(input);
+    tr.appendChild(td);
+  });
+  const tdDel = document.createElement('td');
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'btn-sm';
+  del.textContent = '\u00d7';
+  del.setAttribute('aria-label', 'Remove row');
+  del.onclick = () => tr.remove();
+  tdDel.appendChild(del);
+  tr.appendChild(tdDel);
+  tbody.appendChild(tr);
+}
+
+function readSchemaList(el, def) {
+  const rows = [];
+  el.querySelectorAll('tbody tr').forEach(tr => {
+    const row = {};
+    let hasValue = false;
+    tr.querySelectorAll('.list-cell').forEach(cell => {
+      const fk = cell.dataset.field;
+      let v;
+      if (cell.dataset.fieldType === 'number') {
+        v = cell.value === '' ? (def.fields[fk].default ?? 0) : Number(cell.value);
+      } else if (cell.dataset.fieldType === 'toggle') {
+        v = cell.checked;
+      } else {
+        v = cell.value;
+      }
+      row[fk] = v;
+      if (v !== '' && v !== 0 && v !== false) hasValue = true;
+    });
+    if (hasValue) rows.push(row);
+  });
+  return rows;
+}
+
 function buildField(key, def, source) {
   const row = document.createElement('div');
   row.className = 'form-field';
@@ -493,6 +583,8 @@ function buildField(key, def, source) {
     control.className = 'form-input';
     control.type = 'number';
     if (def.step != null) control.step = def.step;
+  } else if (type === 'list') {
+    control = buildSchemaList(key, def);
   } else {
     control = document.createElement('input');
     control.className = 'form-input';
@@ -573,10 +665,22 @@ function setFieldValue(key, value) {
     el.value = (value == null || value === '') ? '' : Number(value);
   } else if (def.type === 'boolean') {
     el.value = (value === true || value === 'true') ? 'true' : 'false';
+  } else if (def.type === 'list') {
+    const tbody = el.querySelector('tbody');
+    if (tbody) {
+      tbody.innerHTML = '';
+      const rows = Array.isArray(value)
+        ? value
+        : (typeof value === 'string' && value ? (() => { try { return JSON.parse(value); } catch (_) { return []; } })() : []);
+      (Array.isArray(rows) ? rows : []).forEach(rowData =>
+        appendSchemaListRow(tbody, key, rowData, def.fields || {}));
+    }
   } else {
     el.value = value == null ? (def.default != null ? String(def.default) : '') : String(value);
   }
-  el.dataset.original = String(value == null ? def.default ?? '' : value);
+  el.dataset.original = def.type === 'list'
+    ? JSON.stringify(Array.isArray(value) ? value : [])
+    : String(value == null ? def.default ?? '' : value);
 }
 
 function readField(key) {
@@ -589,6 +693,7 @@ function readField(key) {
     return Number(el.value);
   }
   if (def.type === 'boolean') return el.value === 'true';
+  if (def.type === 'list') return readSchemaList(el, def);
   if (el.value === '' && def.default != null) return def.default;
   return el.value;
 }
@@ -961,7 +1066,10 @@ function collectSchemaFields(payload) {
     let value = readField(key);
     if (camModal.mode === 'edit') {
       const original = field.el.dataset.original;
-      if (original !== undefined && String(value) === original) return;
+      const comparable = schemaDef.type === 'list'
+        ? JSON.stringify(Array.isArray(value) ? value : [])
+        : String(value);
+      if (original !== undefined && comparable === original) return;
     }
     settings[key] = value;
   });

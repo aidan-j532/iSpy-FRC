@@ -87,6 +87,12 @@ class ObjectTracker(TrackerBase):
             existing_pos = np.array(existing.get_position())
 
             if np.linalg.norm(new_pos - existing_pos) < self.distance_threshold:
+                # distance alone is not enough - a cone 30cm from a robot
+                # must never merge into the robot. only merge detections of
+                # the same class/name (empty names on both sides are treated
+                # as equal for backwards compatibility)
+                if not self._same_identity(new_det, existing):
+                    continue
 
                 # reset timer
                 existing.reset_time()
@@ -109,6 +115,14 @@ class ObjectTracker(TrackerBase):
                 return True
 
         return False
+
+    @staticmethod
+    def _same_identity(a: Object, b: Object) -> bool:
+        name_a = getattr(a, "name", "") or ""
+        name_b = getattr(b, "name", "") or ""
+        if not name_a and not name_b:
+            return True
+        return bool(name_a) and bool(name_b) and name_a == name_b
 
     def get_tracked_objects(self) -> list[Object]:
         return self.tracked_objects

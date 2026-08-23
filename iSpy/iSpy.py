@@ -4,10 +4,10 @@ import time
 import threading
 import logging
 import os
-import sys
 from iSpy.config.iSpyConfig import iSpyConfig
 import signal
 from iSpy.vision.pipelines.base import VisionPipeline
+from iSpy.core.control_channel import ControlServer
 from iSpy.validations.model_validator import (
     enforce_model_organization,
     validate_model_organization,
@@ -30,6 +30,14 @@ _PLUGIN_ROOT = PROJECT_ROOT / "plugins"
 class iSpy:
     def __init__(self, config: iSpyConfig, cameras: list[VisionPipeline] | None = None, web_app=None):
         self.config = config
+        self.logger = logging.getLogger(__name__)
+
+        # bring the web app up FIRST so the UI is reachable while cameras/models/
+        # plugins are still loading - they wire in later via set_cameras()/set_vision_instance()
+        self.web_app = web_app
+        if self.web_app is None and config.config.get("app_mode", False):
+            self.web_app = create_app(cameras=[], config=config)
+            threading.Thread(target=self.web_app.run, daemon=True, name="iSpyWebServer").start()
 
         if cameras is None:
             cameras = self._build_cameras_from_config(config)
@@ -38,7 +46,6 @@ class iSpy:
         self.shutdown_event = threading.Event()
         self.pause_event = threading.Event()
         os.makedirs("Outputs", exist_ok=True)
-        self.logger = logging.getLogger(__name__)
 
         signal.signal(signal.SIGINT, lambda *_: self._handle_shutdown())
         signal.signal(signal.SIGTERM, lambda *_: self._handle_shutdown())
@@ -52,9 +59,6 @@ class iSpy:
         else:
             self.logger.info("%d cameras - multi mode.", len(cameras))
             self.camera_handler = MultipleCameraHandler(cameras, config)
-        self.web_app = web_app
-        if self.web_app is None and config.config.get("app_mode", False):
-            self.web_app = create_app(cameras=self.cameras, config=config)
         if self.web_app is not None:
             self.web_app.set_cameras(self.cameras)
 
@@ -114,9 +118,7 @@ class iSpy:
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
         if self.web_app:
-            if web_app is None:
-                # only start the server if we made it here - a pre-booted app is already serving
-                threading.Thread(target=self.web_app.run, daemon=True).start()
+            # server thread already started above; just wire in what loaded since then
             dash = self.web_app.modules.get("dashboard")
             if dash and hasattr(dash, "set_plugins"):
                 dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
@@ -259,31 +261,24 @@ class iSpy:
     def get_default_config(self):
         return self.config.get_default_config()
 
-    def _stdin_reader(self):
-        try:
-            for line in sys.stdin:
-                cmd = line.strip().upper()
-                if cmd == "PAUSE":
-                    self.pause_event.set()
-                    self.logger.info("Vision paused by service")
-                elif cmd == "RESUME":
-                    self.pause_event.clear()
-                    self.logger.info("Vision resumed by service")
-                elif cmd == "SHUTDOWN":
-                    self._handle_shutdown()
-                    self.logger.info("Shutdown command received from service")
-                    break
-        except Exception:
-            pass
+    def _control_server(self) -> ControlServer:
+        return ControlServer({
+            "PAUSE": self.pause_event.set,
+            "RESUME": self.pause_event.clear,
+            "SHUTDOWN": self._handle_shutdown,
+        })
 
     def run(self, duration_s: float | None = None):
         if not self.cameras:
             self.logger.error("No cameras provided.")
             return
 
-        threading.Thread(
-            target=self._stdin_reader, daemon=True, name="stdin-reader"
-        ).start()
+        control = self._control_server()
+        try:
+            control.start()
+        except OSError:
+            self.logger.exception("Control channel failed to start - service pause/resume unavailable.")
+            control = None
 
         if duration_s is not None:
 
@@ -293,10 +288,14 @@ class iSpy:
 
             threading.Thread(target=_stop, daemon=True).start()
 
-        if len(self.cameras) == 1:
-            self.run_solo_mode()
-        else:
-            self.run_multi_mode()
+        try:
+            if len(self.cameras) == 1:
+                self.run_solo_mode()
+            else:
+                self.run_multi_mode()
+        finally:
+            if control is not None:
+                control.stop()
 
     def _run_loop_body_solo(self, camera) -> dict:
         t0 = time.perf_counter()
