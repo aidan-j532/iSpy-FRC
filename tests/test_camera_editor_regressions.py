@@ -28,5 +28,19 @@ class TestCameraEditorPickers(unittest.TestCase):
         self.assertIn("el.dataset.original", func_body("collectSchemaFields"))
 
 
+class TestSectionFlowValidation(unittest.TestCase):
+    """Save and Continue must be able to advance past every section."""
+
+    def test_list_fields_never_block_validation(self):
+        # list-type schema fields (e.g. object_heights) render a table div
+        # with no .value - they must not read as permanently empty
+        body = func_body("validateCurrentSection")
+        self.assertIn("'list'", body)
+
+    def test_nullable_fields_of_any_type_can_be_empty(self):
+        body = func_body("validateCurrentSection")
+        self.assertIn("def.nullable || String(el.value || '').trim() !== ''", body)
+
+
 if __name__ == "__main__":
     unittest.main()

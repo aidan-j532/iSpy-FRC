@@ -901,12 +901,12 @@ function validateCurrentSection() {
     if (!field) return;
     const { el, def } = field;
     let ok = true;
-    if (def.type === 'toggle' || def.type === 'boolean' || def.type === 'select') {
-      ok = true; // always in a valid state
+    if (def.type === 'toggle' || def.type === 'boolean' || def.type === 'select' || def.type === 'list') {
+      ok = true; // always in a valid state (list rows manage their own contents)
     } else if (def.type === 'number') {
       ok = def.nullable || el.value !== '';
     } else {
-      ok = String(el.value || '').trim() !== '';
+      ok = def.nullable || String(el.value || '').trim() !== '';
     }
     row.classList.toggle('field-invalid', !ok);
     if (!ok && !firstBad) firstBad = row;

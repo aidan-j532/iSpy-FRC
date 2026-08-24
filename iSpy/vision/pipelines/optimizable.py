@@ -85,6 +85,7 @@ class OptimizableModelPipeline:
                 "type": "browse",
                 "label": "Quantization dataset",
                 "default": "",
+                "nullable": True,
                 "browse_root": "QuantizeDataset",
                 "quantization": True,
                 "gated_by": "quantize",
