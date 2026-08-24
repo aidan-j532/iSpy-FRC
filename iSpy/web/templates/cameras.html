@@ -1949,10 +1949,6 @@ function openCalibrationWizard() {
   const body = $id('calibration-body');
   body.innerHTML = '';
 
-  const tabsEl = $id('calibration-tabs');
-  tabsEl.innerHTML = '';
-  tabsEl.classList.remove('visible');
-
   if (calibrationState.mode === 'focal') {
     calibrationState.focalTab = 'intrinsics';
     renderFocalCalibration(body);
