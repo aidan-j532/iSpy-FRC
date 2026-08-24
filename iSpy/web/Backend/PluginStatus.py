@@ -4,7 +4,10 @@ from flask import jsonify, render_template, request
 from pathlib import Path
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.plugins._loader import load_plugins
-from iSpy.plugins.bases import TrackerBase, UtilityBase, FrameProcessorBase, VisionBase
+from iSpy.plugins.bases import (
+    TrackerBase, UtilityBase, FrameProcessorBase, VisionBase,
+    validate_output_key,
+)
 
 import iSpy.plugins as _plugins_pkg
 
@@ -28,6 +31,20 @@ _ADDON_TYPES_FROM_PTYPE = {
     "tracker": "trackers", "utility": "utilities",
     "frame_processor": "frame_processors",
 }
+
+# core frame_data keys offered as NetworkTables publish sources; detections
+# keeps its special-case struct[] handling
+_CORE_PUBLISH_SOURCES = [
+    {"source": "fps", "label": "fps"},
+    {"source": "loop_s", "label": "loop_s"},
+    {"source": "vision_s", "label": "vision_s"},
+    {"source": "camera_lag_s", "label": "camera_lag_s"},
+    {"source": "detection_count", "label": "detection_count"},
+    {"source": "detections", "label": "detections (struct[])"},
+    {"source": "robot_pose.x", "label": "robot_pose.x"},
+    {"source": "robot_pose.y", "label": "robot_pose.y"},
+    {"source": "robot_pose.heading", "label": "robot_pose.heading"},
+]
 
 
 def _coerce_setting_value(value, defn: dict):
@@ -134,6 +151,10 @@ class PluginStatusModule(WebModule):
         flask_app.add_url_rule("/api/plugins/create", "api_plugins_create", self._create, methods=["POST"])
         flask_app.add_url_rule("/api/plugins/<ptype>/<name>", "api_plugins_delete", self._delete, methods=["DELETE"])
         flask_app.add_url_rule("/api/plugins/<ptype>/<name>/source", "api_plugins_source", self._source, methods=["GET"])
+        flask_app.add_url_rule(
+            "/api/plugins/publish-sources", "api_plugins_publish_sources",
+            self._publish_sources,
+        )
 
     # ---------- read ----------
 
@@ -214,6 +235,50 @@ class PluginStatusModule(WebModule):
                     ) if supported else [],
                 })
         return jsonify(available=available)
+
+    def _publish_sources(self):
+        """Selectable NetworkTables publish sources.
+
+        Core frame_data sources plus every enabled utility's DECLARED
+        output_key (from its configured/schema output_key setting) as
+        addon_data.<key> - declared outputs are listed even before the
+        utility has produced its first value.
+        """
+        config = self.context.get("config")
+        addon_sources = []
+        try:
+            discovered = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
+        except Exception:
+            logger.exception("Failed to load utility plugins for publish sources")
+            discovered = {}
+        for name, cls in sorted(discovered.items()):
+            settings = config.get_addon_settings("utilities", name) if config else None
+            if settings is None:
+                continue  # only enabled utilities expose outputs
+            schema = {}
+            try:
+                schema = cls.config_schema() or {}
+            except Exception:
+                logger.warning("Failed to load config schema for add-on '%s'", name)
+            raw = settings.get("output_key", schema.get("output_key", {}).get("default"))
+            key, _err = validate_output_key(raw)
+            if not key:
+                continue
+            addon_sources.append({
+                "source": f"addon_data.{key}",
+                "label": f"{key} ({name})",
+                "utility": name,
+            })
+        by_source: dict[str, list[dict]] = {}
+        for entry in addon_sources:
+            by_source.setdefault(entry["source"], []).append(entry)
+        for group in by_source.values():
+            if len(group) > 1:
+                for entry in group:
+                    entry["duplicate"] = True
+        return jsonify(sources=_CORE_PUBLISH_SOURCES + sorted(
+            addon_sources, key=lambda e: e["source"]
+        ))
 
     def _filename_for(self, subdir: str, plugin_name: str) -> str | None:
         # best-effort: find the file whose plugin_name matches so the UI
@@ -362,6 +427,12 @@ class PluginStatusModule(WebModule):
                 clean[key] = _coerce_setting_value(value, defn)
             except ValueError as e:
                 return jsonify(error=str(e)), 400
+
+        if config_type == "utilities" and "output_key" in clean:
+            normalized, err = validate_output_key(clean["output_key"])
+            if normalized is None:
+                return jsonify(error=err or "Invalid Output Key"), 400
+            clean["output_key"] = normalized
 
         config.update_addon_settings(config_type, name, clean, save=False)
         config.save()

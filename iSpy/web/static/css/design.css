@@ -349,6 +349,34 @@ pre {
 .modal-warning { color: var(--warn); font-size: 0.82rem; }
 .modal-danger-text { color: var(--bad); font-size: 0.82rem; }
 
+/* Time warning popup */
+.time-warning-overlay {
+  position: fixed; inset: 0; background: rgba(1,4,9,0.85); z-index: 10500;
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(6px);
+}
+.time-warning-card {
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px; max-width: 460px; width: 90%; box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+.time-warning-icon {
+  margin: 0 auto 12px; width: 44px; height: 44px; border-radius: 50%;
+  background: var(--accent-dim); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+}
+.time-warning-header { font-size: 1.15rem; font-weight: 600; margin: 0 0 8px 0; }
+.time-warning-desc { color: var(--text-dim); font-size: 0.9rem; line-height: 1.5; margin: 0 0 16px 0; }
+.time-warning-timer {
+  font-family: var(--mono); font-size: 2.2rem; font-weight: 600;
+  color: var(--warn); letter-spacing: 0.02em; line-height: 1.2;
+}
+.time-warning-bar {
+  height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; margin: 10px 0 18px;
+}
+.time-warning-bar i { display: block; height: 100%; width: 100%; background: var(--warn); transition: width 0.95s linear; }
+.time-warning-actions { display: flex; justify-content: center; }
+
 /* Settings form */
 .settings-tab-content { display: block; }
 .settings-section { margin-bottom: 24px; }

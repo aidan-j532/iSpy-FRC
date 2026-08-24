@@ -407,7 +407,7 @@ Calibration stages (rendered dynamically in `#calibration-body`):
 #### Folder Picker (lines 75-120)
 
 Two-tab modal (device / upload):
-- **On Device**: File browser with FRC dataset download panel
+- **On Device**: File browser with pre-bundled datasets panel (links to `/datasets/bundled`)
 - **Upload**: Name input + file upload for images
 
 #### Model Picker (lines 122-146)

@@ -2,7 +2,12 @@ import logging
 from pathlib import Path
 from flask import jsonify, render_template, request, send_from_directory
 from iSpy.web.Backend.WebModule import WebModule
-from iSpy.dataset.dataset import add_image_to_dataset_txt, remove_image_from_dataset_txt
+from iSpy.dataset.dataset import (
+    _rebuild_dataset_txt,
+    add_image_to_dataset_txt,
+    remove_image_from_dataset_txt,
+)
+from iSpy.dataset.bundled_datasets import BUNDLED_DATASETS
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +46,14 @@ class DatasetsModule(WebModule):
         super().__init__(context)
         self.dataset_root = Path.cwd() / "QuantizeDataset"
         self.dataset_root.mkdir(parents=True, exist_ok=True)
-        (self.dataset_root / "default" / "images").mkdir(parents=True, exist_ok=True)
+        (self.dataset_root / "default").mkdir(parents=True, exist_ok=True)
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/datasets", "datasets_page", lambda: render_template("datasets.html"))
+        flask_app.add_url_rule(
+            "/datasets/bundled", "datasets_bundled_page",
+            lambda: render_template("bundled_datasets.html"),
+        )
         flask_app.add_url_rule("/api/datasets", "api_datasets_list", self._list, methods=["GET"])
         flask_app.add_url_rule("/api/datasets", "api_datasets_create", self._create, methods=["POST"])
         flask_app.add_url_rule("/api/datasets/<name>/images", "api_ds_images", self._list_images, methods=["GET"])
@@ -52,19 +61,20 @@ class DatasetsModule(WebModule):
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_get", self._get_image, methods=["GET"])
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_delete", self._delete_image, methods=["DELETE"])
         flask_app.add_url_rule("/api/fs/dirs", "api_fs_dirs", self._browse_dirs, methods=["GET"])
-        flask_app.add_url_rule("/api/datasets/frc-download", "api_ds_frc_download", self._frc_download, methods=["POST"])
+        flask_app.add_url_rule("/api/datasets/bundled", "api_ds_bundled_list", self._bundled_list, methods=["GET"])
+        flask_app.add_url_rule("/api/datasets/bundled/install", "api_ds_bundled_install", self._bundled_install, methods=["POST"])
 
     def _images_dir(self, name: str) -> Path:
-        return self.dataset_root / name / "images"
-    
+        # datasets live flat: QuantizeDataset/<name>/img1.png ...
+        return self.dataset_root / name
+
     def _list(self):
         out = []
         if self.dataset_root.exists():
             for d in sorted(self.dataset_root.iterdir()):
                 if not d.is_dir():
                     continue
-                images_dir = d / "images"
-                count = _count_images_in_dir(images_dir)
+                count = _count_images_in_dir(d)
                 out.append({"name": d.name, "image_count": count})
         return jsonify(datasets=out)
 
@@ -78,7 +88,7 @@ class DatasetsModule(WebModule):
             return jsonify(error="Invalid path"), 400
         if target.exists():
             return jsonify(error=f"Dataset '{name}' already exists"), 409
-        (target / "images").mkdir(parents=True, exist_ok=True)
+        target.mkdir(parents=True, exist_ok=True)
         return jsonify(success=True, name=name)
 
     def _browse_dirs(self):
@@ -112,32 +122,62 @@ class DatasetsModule(WebModule):
             inside_dataset_root=_is_safe_path(self.dataset_root, base),
         )
 
-    def _frc_download(self):
+    def _bundled_list(self):
+        out = []
+        for entry in BUNDLED_DATASETS:
+            name = _validate_filename(str(entry.get("name", "")))
+            ds_dir = self._images_dir(name)
+            count = _count_images_in_dir(ds_dir)
+            out.append({
+                "name": name,
+                "description": str(entry.get("description", "")),
+                "installed": count > 0,
+                "image_count": count,
+            })
+        return jsonify(datasets=out)
+
+    def _bundled_install(self):
         from iSpy.dataset.dataset import _download_release_images
 
         data = request.get_json(force=True) or {}
-        raw = str(data.get("path", "")).strip()
-        if not raw:
-            return jsonify(error="No folder selected"), 400
-        try:
-            folder = Path(raw).resolve()
-        except Exception:
+        name = _validate_filename(str(data.get("name", "")))
+        entry = next(
+            (e for e in BUNDLED_DATASETS
+             if _validate_filename(str(e.get("name", ""))) == name),
+            None,
+        )
+        if entry is None:
+            return jsonify(error=f"Unknown bundled dataset '{name}'"), 404
+
+        target = self.dataset_root / name
+        if not _is_safe_path(self.dataset_root, target):
             return jsonify(error="Invalid path"), 400
-        if not folder.is_dir():
-            return jsonify(error="Folder not found"), 404
+        target.mkdir(parents=True, exist_ok=True)
 
         try:
-            images = _download_release_images(folder, count=200, target_dir="")
+            images = _download_release_images(
+                target, count=1_000_000,
+                release_url=str(entry.get("url", "")),
+                target_dir="",
+            )
         except Exception as e:
-            logger.exception("FRC dataset download failed: %s", e)
+            logger.exception("Bundled dataset download failed: %s", e)
             return jsonify(error=f"Download failed: {e}"), 500
+        if not images:
+            return jsonify(error="Download failed - no images were extracted"), 502
+
+        # bare filenames now that datasets are flat
+        _rebuild_dataset_txt(target)
         return jsonify(success=True, downloaded=len(images))
 
     def _list_images(self, name):
         d = self._images_dir(name)
         if not d.exists():
             return jsonify(images=[], count=0)
-        files = sorted(p.name for p in d.iterdir() if p.suffix.lower() in _IMG_EXTS)
+        files = sorted(
+            p.name for p in d.iterdir()
+            if p.is_file() and p.suffix.lower() in _IMG_EXTS
+        )
         return jsonify(images=files, count=len(files))
 
     def _get_image(self, name, filename):
@@ -162,8 +202,7 @@ class DatasetsModule(WebModule):
         dest = d / safe_name
         f.save(str(dest))
 
-        ds_root = dest.parent.parent
-        add_image_to_dataset_txt(ds_root, f"images/{dest.name}")
+        add_image_to_dataset_txt(d, dest.name)
 
         return jsonify(success=True, filename=dest.name)
 
@@ -175,7 +214,6 @@ class DatasetsModule(WebModule):
             return jsonify(error="Not found"), 404
         target.unlink()
 
-        ds_root = d.parent
-        remove_image_from_dataset_txt(ds_root, f"images/{safe_filename}")
+        remove_image_from_dataset_txt(d, safe_filename)
 
         return jsonify(success=True)

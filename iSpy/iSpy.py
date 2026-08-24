@@ -13,7 +13,10 @@ from iSpy.validations.model_validator import (
     validate_model_organization,
 )
 from iSpy.plugins._loader import load_plugins
-from iSpy.plugins.bases import TrackerBase, UtilityBase, FrameProcessorBase
+from iSpy.plugins.bases import (
+    TrackerBase, UtilityBase, FrameProcessorBase,
+    find_duplicate_output_keys,
+)
 from iSpy.config.iSpyConfig import iSpyAddonConfig
 from wpimath.geometry import Pose2d
 from iSpy.web.Backend.WebApp import create_app
@@ -95,6 +98,14 @@ class iSpy:
                     self.logger.exception("Failed to initialize utility plugin: %s", name)
             else:
                 self.logger.warning("Unknown utility plugin: %s", name)
+
+        for key, names in find_duplicate_output_keys(self.utilities).items():
+            self.logger.warning(
+                "Enabled utilities %s declare the same output_key '%s' - "
+                "they will overwrite each other's addon_data value each tick "
+                "(update order decides the winner).",
+                ", ".join(names), key,
+            )
 
         frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", FrameProcessorBase)
         self.frame_processors = {}

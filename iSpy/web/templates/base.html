@@ -88,6 +88,109 @@
     }
   </script>
   <script>
+    // ---- time warning popup ----
+    // Blocks the whole page behind a dark overlay until the countdown finishes.
+    // Usage:
+    //   showTimeWarning({
+    //     header: 'Heads up',
+    //     duration: 10,                      // seconds you must wait
+    //     description: 'Read this carefully.',
+    //     continueMessage: 'Got it',         // button label once the wait ends
+    //     onClose: function () {}            // optional callback on dismiss
+    //   });
+    (function () {
+      const queue = [];
+      let overlay = null;
+      let tick = null;
+
+      function fmt(s) {
+        if (s >= 60) return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+        return s + 's';
+      }
+
+      function next() {
+        const opts = queue.shift();
+        if (!opts) return;
+        render(opts);
+      }
+
+      function dismiss(opts) {
+        if (tick) { clearInterval(tick); tick = null; }
+        if (overlay) { overlay.remove(); overlay = null; }
+        if (typeof opts.onClose === 'function') {
+          try { opts.onClose(); } catch (e) {}
+        }
+        next();
+      }
+
+      function render(opts) {
+        const duration = Math.max(0, parseInt(opts.duration, 10) || 0);
+        const header = opts.header || 'Please wait';
+        const description = opts.description || '';
+        const continueMessage = opts.continueMessage || 'Continue';
+
+        overlay = document.createElement('div');
+        overlay.className = 'time-warning-overlay';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+
+        const card = document.createElement('div');
+        card.className = 'time-warning-card';
+        card.innerHTML =
+          '<div class="time-warning-icon">' +
+            '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+          '</div>' +
+          '<h3 class="time-warning-header"></h3>' +
+          '<p class="time-warning-desc"></p>' +
+          '<div class="time-warning-timer"></div>' +
+          '<div class="time-warning-bar"><i></i></div>' +
+          '<div class="time-warning-actions">' +
+            '<button class="btn-ok" disabled></button>' +
+          '</div>';
+        card.querySelector('.time-warning-header').textContent = header;
+        card.querySelector('.time-warning-desc').textContent = description;
+
+        const timerEl = card.querySelector('.time-warning-timer');
+        const barEl = card.querySelector('.time-warning-bar i');
+        const btn = card.querySelector('button');
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        let remaining = duration;
+        const finish = () => dismiss(opts);
+
+        btn.addEventListener('click', finish);
+        overlay.addEventListener('click', e => e.stopPropagation());
+
+        function update() {
+          if (remaining > 0) {
+            timerEl.textContent = fmt(remaining);
+            barEl.style.width = Math.max(0, (remaining / duration) * 100) + '%';
+            btn.textContent = continueMessage + ' (' + remaining + ')';
+            remaining -= 1;
+          } else {
+            timerEl.textContent = '0s';
+            barEl.style.width = '0%';
+            btn.disabled = false;
+            btn.textContent = continueMessage;
+            clearInterval(tick); tick = null;
+            btn.focus();
+          }
+        }
+        update();
+        if (duration > 0) tick = setInterval(update, 1000);
+      }
+
+      window.showTimeWarning = function (opts) {
+        opts = opts || {};
+        queue.push(opts);
+        if (!overlay && !tick) next();
+        return { close: () => dismiss(opts) };
+      };
+    })();
+  </script>
+  <script>
     // ---- first-run tutorial walkthrough ----
     (function () {
       const KEY = 'ispy_tour_index';

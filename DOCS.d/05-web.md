@@ -793,18 +793,22 @@ Sets the active model across all cameras. Updates both `source_pt` and
 
 **File:** `iSpy/web/modules/datasets.py` (181 lines)
 
-Manages quantization datasets in `QuantizeDataset/<name>/images/`.
+Manages quantization datasets flat in `QuantizeDataset/<name>/` (images sit
+directly in the dataset folder, e.g. `QuantizeDataset/robotics_calibration/img1.png`).
+Bundled datasets offered for download are defined in `iSpy/dataset/bundled_datasets.py`.
 
 ### Routes
 
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/datasets` | GET | Renders `datasets.html` |
+| `/datasets/bundled` | GET | Renders `bundled_datasets.html` (pre-bundled dataset page) |
 | `/api/datasets` | GET/POST | List/create datasets |
 | `/api/datasets/<name>/images` | GET/POST | List/upload images |
 | `/api/datasets/<name>/images/<filename>` | GET/DELETE | Get/delete image |
 | `/api/fs/dirs` | GET | Browse filesystem directories |
-| `/api/datasets/frc-download` | POST | Download FRC calibration set |
+| `/api/datasets/bundled` | GET | List pre-bundled datasets (install state) |
+| `/api/datasets/bundled/install` | POST | Download a bundled dataset from its GitHub release |
 
 ---
 

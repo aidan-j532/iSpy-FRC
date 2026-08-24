@@ -85,14 +85,13 @@
         <span id="folder-picker-path" class="text-dim" style="word-break:break-all;padding-top:8px;"></span>
       </div>
       <div id="folder-picker-count" class="text-dim" style="padding-bottom:4px;"></div>
-      <div id="frc-download-panel" class="frc-download-panel" style="margin:6px 0 10px;padding:10px;border:1px solid var(--warn);border-radius:6px;background:var(--warn-dim);">
+      <div id="bundled-datasets-panel" class="frc-download-panel" style="margin:6px 0 10px;padding:10px;border:1px solid var(--warn);border-radius:6px;background:var(--warn-dim);">
         <div style="margin-bottom:8px;">
-          <strong>Download the bundled FRC calibration set (200 images)</strong>
-          <div class="form-help">Downloads the 200 generic robotics images from the project's GitHub release into this folder. It is a generic set - it may not calibrate well for every model or target. For best quantization results, use your own images of your actual game pieces and field targets.</div>
+          <strong>Need quantization images?</strong>
+          <div class="form-help">Grab one of our pre-bundled datasets instead of uploading your own - they install straight into your dataset library from the project's GitHub releases.</div>
         </div>
         <div class="upload-row">
-          <button onclick="downloadFrcDataset()" id="frc-download-btn">Download FRC Dataset</button>
-          <span id="frc-download-status" class="upload-status"></span>
+          <button onclick="window.location.href='/datasets/bundled'">Try Out Our Pre-Bundled Datasets</button>
         </div>
       </div>
       <div id="folder-picker-list" class="folder-picker-list"></div>
@@ -1176,10 +1175,8 @@ async function loadFolderPicker(path) {
     countEl.textContent = count > 0
       ? `${count} usable image${count !== 1 ? 's' : ''} found in this folder`
       : 'No usable images found in this folder';
-    const frcPanel = $id('frc-download-panel');
-    frcPanel.style.display = '';
-    $id('frc-download-btn').disabled = false;
-    $id('frc-download-status').textContent = '';
+    const bundlePanel = $id('bundled-datasets-panel');
+    bundlePanel.style.display = '';
     const list = $id('folder-picker-list');
     list.innerHTML = '';
     if (data.parent) {
@@ -1203,35 +1200,6 @@ async function loadFolderPicker(path) {
       list.appendChild(btn);
     });
   } catch (e) { showToast('Failed to browse folder', 'error'); }
-}
-
-async function downloadFrcDataset() {
-  const risk = 'Downloading the bundled FRC calibration set (200 generic robotics images) into "' +
-    folderPickerPath +
-    '". It is a generic set - it may not calibrate well for every model or target. ' +
-    'For best quantization results, use your own images of your actual game pieces and field targets. Download anyway?';
-  if (!confirm(risk)) return;
-  const btn = $id('frc-download-btn');
-  const status = $id('frc-download-status');
-  btn.disabled = true;
-  status.textContent = 'Downloading FRC dataset...';
-  try {
-    const r = await fetch('/api/datasets/frc-download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: folderPickerPath }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || 'Download failed');
-    status.textContent = `Downloaded ${j.downloaded} images`;
-    showToast(`Downloaded ${j.downloaded} FRC calibration images`, 'success');
-    loadFolderPicker(folderPickerPath);
-  } catch (e) {
-    status.textContent = '';
-    showToast(e.message || 'Download failed', 'error');
-  } finally {
-    btn.disabled = false;
-  }
 }
 
 function confirmFolderPick() {

@@ -68,6 +68,47 @@ class UtilityBase(AddonBase):
 
 Typical uses: NetworkTables publish, health reporting, video recording.
 
+#### Utility runtime output (`output_key` → `addon_data`)
+
+Utilities that produce a meaningful runtime value can declare an `output_key`
+in their `config_schema()`:
+
+```python
+{
+    "output_key": {
+        "type": "text",
+        "label": "Output Key",
+        "default": "example_output",
+    },
+}
+```
+
+and publish each tick via the base-class helper:
+
+```python
+def update(self, frame_data: dict):
+    self.publish_output(frame_data, value)
+    # -> frame_data["addon_data"][<output_key>] = value
+```
+
+Rules:
+- All utility outputs live under `frame_data["addon_data"]` — user-configured
+  keys can never overwrite core entries like `fps`, `detections`, or `frame`.
+- Keys are whitespace-normalized; empty/whitespace-only keys are rejected by
+  the settings API and ignored at runtime. Dots are not allowed (reserved for
+  nested source paths).
+- Two enabled utilities declaring the same key log a collision warning at
+  boot (`find_duplicate_output_keys`) and overwrite each other per tick —
+  the web UI flags these sources with ⚠.
+- Utilities without `output_key` are unaffected; frame processors and
+  trackers do not participate in this system.
+
+NetworkTables publishing picks these up as `addon_data.<output_key>` sources;
+the Add-ons page offers them in the Source dropdown via
+`GET /api/plugins/publish-sources`. Type `auto` detects bool / int / float /
+str from the live value (bool checked before int) and falls back to a JSON
+string for dicts/lists — arbitrary values are never converted into NT4 structs.
+
 ### `FrameProcessorBase(AddonBase)` (line 68)
 
 Frame manipulation plugins that run between frame capture and vision inference.

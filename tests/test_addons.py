@@ -525,9 +525,22 @@ class ExampleAddonTests(unittest.TestCase):
         ctx["flask_app"] = app
         util = cls(ctx)
         with app.test_client() as client:
-            resp = client.get("/dashboard")
+            resp = client.get("/ispy-example")
             self.assertEqual(resp.status_code, 200)
             self.assertIn("hello", resp.get_data(as_text=True))
+
+    def test_example_utility_declares_and_publishes_output(self):
+        # template utilities demonstrate the addon output system:
+        # output_key declared in schema -> counter published every tick
+        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)[
+            "example_utility"]
+        self.assertIn("output_key", cls.config_schema())
+        util = cls(addon_context(cls))
+        frame_data = {}
+        util.update(frame_data)
+        util.update(frame_data)
+        self.assertEqual(
+            frame_data["addon_data"]["example_output"], 2)
 
 
 if __name__ == "__main__":

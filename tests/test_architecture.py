@@ -451,7 +451,7 @@ class QuantizeDatasetTests(unittest.TestCase):
             with mock.patch("iSpy.web.modules.datasets.Path.cwd",
                             return_value=Path(tmp)):
                 mod = DatasetsModule({"config": None})
-                self.assertTrue((Path(tmp) / "QuantizeDataset" / "default" / "images").exists())
+                self.assertTrue((Path(tmp) / "QuantizeDataset" / "default").exists())
                 # No global "active dataset" state file should be written.
                 self.assertFalse((Path(tmp) / "Config" / "active_dataset.json").exists())
                 self.assertFalse(hasattr(mod, "_active"))
@@ -473,7 +473,7 @@ class QuantizeDatasetTests(unittest.TestCase):
                     result, status = (resp[0], resp[1]) if isinstance(resp, tuple) else (resp, 200)
                     self.assertEqual(status, 200)
                     self.assertTrue(
-                        (Path(tmp) / "QuantizeDataset" / "competition" / "images").exists()
+                        (Path(tmp) / "QuantizeDataset" / "competition").exists()
                     )
 
                     resp = mod._list()

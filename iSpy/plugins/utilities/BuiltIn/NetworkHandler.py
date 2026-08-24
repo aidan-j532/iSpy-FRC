@@ -1,5 +1,6 @@
-import ntcore
+import json
 import logging
+import ntcore
 import dataclasses
 import time
 import wpiutil.wpistruct
@@ -42,7 +43,12 @@ class NetworkTableHandler(UtilityBase):
             "publish": {
                 "type": "list",
                 "label": "Publish to NetworkTables",
-                "hint": "Data entries published every tick.  Source is a frame_data key (e.g. fps, detection_count, camera_lag_s).",
+                "hint": "Data entries published every tick. Sources are "
+                        "frame_data keys (fps, detection_count, camera_lag_s, "
+                        "detections) plus utility outputs as "
+                        "addon_data.<output_key>. Type 'auto' detects bool / "
+                        "number / string from the value; dicts and lists are "
+                        "published as a JSON string.",
                 "default": DEFAULT_PUBLISH,
                 "fields": {
                     "name": {
@@ -52,10 +58,12 @@ class NetworkTableHandler(UtilityBase):
                     "data_type": {
                         "type": "select",
                         "label": "Type",
-                        "options": ["number", "boolean", "string", "struct[]"],
+                        "options": ["auto", "number", "boolean", "string", "struct[]"],
+                        "default": "auto",
                     },
                     "source": {
-                        "type": "text",
+                        "type": "select",
+                        "options_source": "publish_sources",
                         "label": "Source",
                     },
                     "nt_topic": {
@@ -142,7 +150,9 @@ class NetworkTableHandler(UtilityBase):
             return
 
         try:
-            if data_type == "struct[]":
+            if data_type == "auto":
+                self._publish_auto(value, nt_topic)
+            elif data_type == "struct[]":
                 self._send_detections(value)
             elif data_type == "number":
                 self._send_data(float(value), nt_topic, "VisionData")
@@ -153,11 +163,36 @@ class NetworkTableHandler(UtilityBase):
         except Exception as e:
             self.logger.error("Failed to publish '%s': %s", name, e)
 
+    def _publish_auto(self, value, nt_topic: str):
+        """Publish with automatic scalar type detection.
+
+        bool must be tested before int (bool is a subclass of int). Dicts,
+        lists, tuples, and anything else non-scalar fall back to a JSON
+        string - arbitrary values are never turned into NT4 structs.
+        """
+        if isinstance(value, bool):
+            self._send_data(bool(value), nt_topic, "VisionData")
+        elif isinstance(value, (int, float)):
+            self._send_data(float(value), nt_topic, "VisionData")
+        elif isinstance(value, str):
+            self._send_data(str(value), nt_topic, "VisionData")
+        else:
+            try:
+                encoded = json.dumps(value, default=str)
+            except (TypeError, ValueError) as e:
+                self.logger.warning(
+                    "Could not serialize addon output for topic '%s': %s",
+                    nt_topic, e,
+                )
+                return
+            self._send_data(encoded, nt_topic, "VisionData")
+
     def _resolve_source(self, source: str, frame_data: dict):
         """Resolve a dotted source key against frame_data.
 
-        Supports dotted paths like ``debug_data.fps`` and special-case
-        ``detections`` which returns the raw detection list.
+        Supports dotted paths like ``debug_data.fps`` and utility outputs
+        via ``addon_data.<output_key>``, plus special-case ``detections``
+        which returns the raw detection list.
         """
         if source == "detections":
             return frame_data.get("detections", [])

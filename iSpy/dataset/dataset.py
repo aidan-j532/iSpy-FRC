@@ -7,7 +7,6 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_DIRS = ["images"]
 _IMAGE_EXTS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
 _CALIB_COUNT = 200
 _IMGSZ = 640
@@ -36,7 +35,7 @@ def _download_release_images(
     folder: Path,
     count: int = _CALIB_COUNT,
     release_url: str | None = None,
-    target_dir: str = "images",
+    target_dir: str = "",
 ) -> list[Path]:
     import zipfile
     import io
@@ -369,7 +368,7 @@ def _generate_synthetic_images(
     folder: Path,
     count: int,
     imgsz: int = _IMGSZ,
-    target_dir: str = "images",
+    target_dir: str = "",
 ) -> list[Path]:
     import numpy as np
     try:
@@ -432,7 +431,7 @@ def _generate_synthetic_images_pil(
     folder: Path,
     count: int,
     imgsz: int = _IMGSZ,
-    target_dir: str = "images",
+    target_dir: str = "",
 ) -> list[Path]:
     from PIL import Image, ImageDraw
     import random
@@ -473,7 +472,7 @@ def _download_images(
     count: int = _CALIB_COUNT,
     boot: bool = False,
     start_index: int = 0,
-    target_dir: str = "images",
+    target_dir: str = "",
 ) -> list[Path]:
     images_dir = folder / target_dir
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -541,7 +540,10 @@ def _find_images(folder: Path):
 
 def _rebuild_dataset_txt(ds: Path, root: Path | None = None):
     search_root = root or ds
-    imgs = _find_images(search_root)
+    imgs = [
+        p for p in _find_images(search_root)
+        if "valid" not in p.relative_to(search_root).parts
+    ]
     if imgs:
         (ds / "dataset.txt").write_text(
             "\n".join(str(img.relative_to(ds)) for img in imgs) + "\n"
@@ -632,6 +634,14 @@ def add_validate_images(
     return validation_dir
 
 
+def _find_train_images(ds: Path) -> list[Path]:
+    """Calibration images only - the internal valid/ split is excluded."""
+    return [
+        p for p in _find_images(ds)
+        if "valid" not in p.relative_to(ds).parts
+    ]
+
+
 def prepare_quantization_dataset(
     dataset_path: str = "dataset",
     imgsz: int = _IMGSZ,
@@ -640,33 +650,30 @@ def prepare_quantization_dataset(
     count: int = _CALIB_COUNT,
 ) -> Path:
     ds = Path(dataset_path)
-    for sub in _REQUIRED_DIRS:
-        (ds / sub).mkdir(parents=True, exist_ok=True)
+    ds.mkdir(parents=True, exist_ok=True)
     (ds / "valid" / "images").mkdir(parents=True, exist_ok=True)
 
     data_yaml = ds / "data.yaml"
     data_yaml.write_text(
-        "train: images\n"
-        "val: valid/images\n"
+        f"train: {ds.resolve()}\n"
+        f"val: {(ds / 'valid' / 'images').resolve()}\n"
         "nc: 1\n"
         "names: ['object']\n"
     )
 
-    images_dir = ds / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
-    existing = _find_images(images_dir)
+    existing = _find_train_images(ds)
     if len(existing) >= count:
         logger.info("Dataset already has %d images, skipping download", len(existing))
-        _rebuild_dataset_txt(ds, root=images_dir)
+        _rebuild_dataset_txt(ds)
     else:
         release_url = _extract_release_url(keywords)
         if release_url:
             logger.info("Keyword is a release URL - downloading calibration images from %s", release_url)
-            _download_release_images(ds, count, release_url=release_url, target_dir="images")
-            existing = _find_images(images_dir)
+            _download_release_images(ds, count, release_url=release_url, target_dir="")
+            existing = _find_train_images(ds)
         else:
-            _download_release_images(ds, count, target_dir="images")
-            existing = _find_images(images_dir)
+            _download_release_images(ds, count, target_dir="")
+            existing = _find_train_images(ds)
 
             if keywords and len(existing) < count:
                 remaining = count - len(existing)
@@ -675,18 +682,18 @@ def prepare_quantization_dataset(
                     "fetching %d more via keyword search (%s) instead of discarding them.",
                     len(existing), count, remaining, ", ".join(keywords),
                 )
-                _download_images(keywords, ds, remaining, boot=boot, start_index=len(existing), target_dir="images")
-                existing = _find_images(images_dir)
+                _download_images(keywords, ds, remaining, boot=boot, start_index=len(existing))
+                existing = _find_train_images(ds)
 
         if len(existing) < count:
             logger.warning("Only have %d / %d images. Generating synthetic fallback...", len(existing), count)
-            _generate_synthetic_images(ds, count - len(existing), imgsz, target_dir="images")
+            _generate_synthetic_images(ds, count - len(existing), imgsz, target_dir="")
 
-        _rebuild_dataset_txt(ds, root=images_dir)
+        _rebuild_dataset_txt(ds)
 
     add_validate_images(ds, count=count, imgsz=imgsz, boot=boot, keywords=keywords)
 
-    final_count = len(_find_images(images_dir))
+    final_count = len(_find_train_images(ds))
     logger.info("Quantization dataset ready at %s (%d images)", ds.resolve(), final_count)
     return ds
 

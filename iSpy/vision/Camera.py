@@ -36,6 +36,11 @@ class Camera:
 
     _CALIBRATION_HEARTBEAT_TIMEOUT = 10.0
 
+    # how long to wait between reconnect attempts when the device is missing
+    _RECONNECT_RETRY_DELAY = 3.0
+    # warn about the missing device at most every N attempts (~30s)
+    _RECONNECT_WARN_EVERY = 10
+
     @staticmethod
     def _get_capture_backend_candidates(sys_platform: str | None = None):
         platform_name = (sys_platform or platform.system()).lower()
@@ -72,6 +77,13 @@ class Camera:
         self._frame_event = threading.Event()
         self._frame_processors = []
 
+        # False until the capture device is successfully opened. While False,
+        # the placeholder frame is served but the reader thread keeps polling
+        # for the device so it recovers automatically when plugged back in.
+        self._connected = False
+        self._reconnect_failures = 0
+        self._placeholder_frame = self._make_placeholder_frame()
+
         self.calibration_active = False
         self.calibration_last_seen = 0.0
 
@@ -100,19 +112,21 @@ class Camera:
                     "Could not read image '%s' - using synthetic placeholder frame.",
                     self.source,
                 )
-                self.image = self._make_placeholder_frame()
+                self.image = self._placeholder_frame
         else:
             try:
                 self._open_camera()
-            except (ValueError, Exception) as exc:
+                self._connected = True
+            except Exception as exc:
+                # Don't fall back to a static image forever - stay in camera
+                # mode and keep searching for the device in the reader thread.
                 self.logger.warning(
-                    "Camera source '%s' could not be opened (%s) - using synthetic placeholder frame.",
+                    "Camera source '%s' could not be opened (%s) - showing "
+                    "placeholder and searching for the device in the background.",
                     self.source,
                     exc,
                 )
-                self.is_image = True
-                self.image = self._make_placeholder_frame()
-                return
+                self.cap = None
 
             self._reader_thread: threading.Thread | None = None
             self._reader_thread = threading.Thread(
@@ -367,7 +381,29 @@ class Camera:
             
         self._frame_processors = []
 
+    def _attempt_reconnect(self) -> bool:
+        """Try to open the capture device; keep searching if it's absent."""
+        try:
+            self._open_camera()
+        except Exception as exc:
+            self._reconnect_failures += 1
+            if (
+                self._reconnect_failures == 1
+                or self._reconnect_failures % self._RECONNECT_WARN_EVERY == 0
+            ):
+                self.logger.warning(
+                    "Camera %s: still waiting for device (%s) - retrying every %.0fs.",
+                    self.source, exc, self._RECONNECT_RETRY_DELAY,
+                )
+            return False
+        self._connected = True
+        self._reconnect_failures = 0
+        self._prefer_alternate_backend = False
+        self.logger.info("Camera %s: device found - stream started.", self.source)
+        return True
+
     def _reopen_capture(self):
+        self._connected = False
         try:
             cap = getattr(self, "cap", None)
             if cap is not None:
@@ -379,6 +415,7 @@ class Camera:
                 extra_backends=True,
                 prefer_dshow=self._prefer_alternate_backend,
             )
+            self._connected = True
             self.logger.info("Camera %s: capture re-opened.", self.source)
             return True
         except Exception as exc:
@@ -386,7 +423,6 @@ class Camera:
             self.logger.warning(
                 "Camera %s: capture re-open failed (%s); will retry.", self.source, exc
             )
-            time.sleep(2.0)
             return False
 
     def _reader(self):
@@ -406,8 +442,8 @@ class Camera:
                     continue
 
             if self.cap is None:
-                self._reopen_capture()
-                time.sleep(0.5)
+                if not self._attempt_reconnect():
+                    time.sleep(self._RECONNECT_RETRY_DELAY)
                 continue
 
             ret, frame = self.cap.read()
@@ -576,16 +612,23 @@ class Camera:
     def get_raw_frame(self) -> np.ndarray | None:
         if self.is_image:
             return self.image.copy() if self.image is not None else None
+        if not self._connected:
+            return self._placeholder_frame.copy()
         with self.frame_lock:
             return self.frame.copy() if self.frame is not None else None
+
+    # reported frame age while the device is missing (JSON-safe "very stale")
+    _DISCONNECTED_AGE_S = 1e6
 
     def get_frame_age(self) -> float:
         if self.is_image:
             return 0.0
+        if not self._connected:
+            return self._DISCONNECTED_AGE_S
         with self.frame_lock:
             ts = self.frame_timestamp
         return 0.0 if ts is None else time.perf_counter() - ts
-    
+
     def add_frame_processor(self, processor):
         if self.is_image:
             self.logger.warning("Cannot add frame processor to image source.")
@@ -593,6 +636,9 @@ class Camera:
         self._frame_processors.append(processor)
 
     def get_frame(self) -> np.ndarray | None:
+            if not self.is_image and not self._connected:
+                # device missing - serve the placeholder untouched
+                return self._placeholder_frame.copy()
             if self.is_image:
                 frame = self.image.copy() if self.image is not None else None
             else:

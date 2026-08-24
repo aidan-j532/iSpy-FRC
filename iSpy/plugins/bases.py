@@ -7,6 +7,7 @@ the entry value is that add-on's own settings dict. add-ons get a context:
     cameras, flask_app, vision_instance
 """
 
+import logging
 from abc import ABC, abstractmethod
 from iSpy.config.iSpyConfig import iSpyAddonConfig
 
@@ -114,8 +115,63 @@ class UtilityBase(AddonBase):
         """override in the network utility to give pose; defaults to None"""
         return None
 
+    def declared_output_key(self) -> str | None:
+        """this utility's normalized output_key setting, or None if unset/invalid"""
+        key, _err = validate_output_key(self.config.get("output_key"))
+        return key
+
+    def publish_output(self, frame_data: dict, value, output_key: str | None = None) -> bool:
+        """expose a runtime value under frame_data["addon_data"][<output_key>].
+
+        Values are namespaced under "addon_data" so user-configured keys can
+        never clobber core frame_data entries (fps, detections, ...). Returns
+        True if the value was written.
+        """
+        if not isinstance(frame_data, dict):
+            return False
+        key = output_key or self.declared_output_key()
+        if not key:
+            return False
+        addon_data = frame_data.setdefault("addon_data", {})
+        if key in addon_data:
+            logging.getLogger(__name__).debug(
+                "addon_data['%s'] overwritten by %s",
+                key, type(self).__name__,
+            )
+        addon_data[key] = value
+        return True
+
     def stop(self):
         pass
+
+
+def validate_output_key(raw) -> tuple[str | None, str | None]:
+    """validate a utility output_key setting -> (normalized_key, error_message).
+
+    Normalizes surrounding whitespace. Keys must be non-empty strings without
+    dots (dots are reserved for nested source paths like addon_data.<key>).
+    """
+    if raw is None:
+        return None, None
+    if not isinstance(raw, str):
+        return None, f"Output Key must be a string, got {type(raw).__name__}"
+    key = raw.strip()
+    if not key:
+        return None, "Output Key cannot be empty"
+    if "." in key:
+        return None, "Output Key cannot contain dots"
+    return key, None
+
+
+def find_duplicate_output_keys(utilities: dict) -> dict[str, list[str]]:
+    """map conflicting output_key -> [utility names] across enabled utilities."""
+    seen: dict[str, list[str]] = {}
+    for name, inst in utilities.items():
+        declared = getattr(inst, "declared_output_key", lambda: None)()
+        if not declared:
+            continue
+        seen.setdefault(declared, []).append(name)
+    return {key: names for key, names in seen.items() if len(names) > 1}
 
 
 class VisionBase(ABC):

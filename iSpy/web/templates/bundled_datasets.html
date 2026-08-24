@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Bundled Datasets - iSpy{% endblock %}
+{% block content %}
+<h1>Pre-Bundled Datasets</h1>
+<p class="text-dim" style="margin-bottom:16px;">
+  Ready-made quantization datasets from the project's GitHub releases. Each one
+  installs flat into <code>QuantizeDataset/&lt;name&gt;/</code> so it shows up
+  immediately in the Dataset Manager and camera settings.
+</p>
+
+<div class="controls-bar" style="margin-bottom:16px;">
+  <button onclick="window.location.href='/datasets'" style="background:var(--border);">&larr; Dataset Manager</button>
+  <span id="bundled-status" class="upload-status"></span>
+</div>
+
+<div id="bundled-grid" class="dataset-grid"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let bundledDatasets = [];
+
+async function loadBundled() {
+  const data = await fetch('/api/datasets/bundled').then(r => r.json());
+  bundledDatasets = data.datasets || [];
+  const grid = document.getElementById('bundled-grid');
+  if (!bundledDatasets.length) {
+    grid.innerHTML = '<div class="card empty-state">No bundled datasets are configured yet.</div>';
+    return;
+  }
+  grid.innerHTML = bundledDatasets.map(d => `
+    <div class="card dataset-card">
+      <div class="dataset-name">${d.name}</div>
+      <div class="dataset-count">${d.installed ? d.image_count + ' image' + (d.image_count !== 1 ? 's' : '') + ' installed' : 'Not installed'}</div>
+      <p class="form-help" style="margin-top:8px;">${d.description}</p>
+      <button onclick="installBundled('${d.name}', this)">
+        ${d.installed ? 'Re-download' : 'Download'}
+      </button>
+    </div>
+  `).join('');
+}
+
+async function installBundled(name, btn) {
+  const status = document.getElementById('bundled-status');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Downloading...';
+  status.textContent = `Downloading "${name}" - this can take a minute...`;
+  try {
+    const r = await fetch('/api/datasets/bundled/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'Download failed');
+    status.textContent = '';
+    showToast(`Installed ${j.downloaded} images into QuantizeDataset/${name}`, 'success');
+    loadBundled();
+  } catch (e) {
+    status.textContent = '';
+    showToast(e.message || 'Download failed', 'error');
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+loadBundled();
+</script>
+{% endblock %}

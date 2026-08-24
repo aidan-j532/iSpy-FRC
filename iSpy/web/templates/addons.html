@@ -100,6 +100,7 @@ let allAddons = [];
 let loaded = {};
 let pendingDeleteAddon = null;
 let lastSnapshot = null;
+window._publishSources = [];
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
   .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -168,6 +169,24 @@ function settingsFields(schema, current) {
   }).join('');
 }
 
+// select options come from the schema, or from the live publish-sources API
+// for fields marked options_source (declared utility outputs + core sources)
+function fieldOptions(fdef, val) {
+  let opts;
+  if (fdef.options_source === 'publish_sources') {
+    opts = (window._publishSources || []).map(s => ({
+      v: s.source,
+      t: (s.duplicate ? '\u26a0 ' : '') + (s.label || s.source),
+    }));
+  } else {
+    opts = (fdef.options || []).map(o => ({ v: o, t: o }));
+  }
+  if (val && !opts.some(o => o.v === val)) {
+    opts.push({ v: val, t: val + ' (saved)' });
+  }
+  return opts;
+}
+
 function renderListField(key, def, rows) {
   const fields = def.fields || {};
   const fieldKeys = Object.keys(fields);
@@ -183,8 +202,8 @@ function renderListField(key, def, rows) {
       const fdef = fields[fk] || {};
       const val = row[fk] != null ? row[fk] : (fdef.default || '');
       if (fdef.type === 'select') {
-        const opts = (fdef.options || []).map(opt =>
-          `<option value="${esc(opt)}" ${opt === val ? 'selected' : ''}>${esc(opt)}</option>`
+        const opts = fieldOptions(fdef, val).map(o =>
+          `<option value="${esc(o.v)}" ${o.v === val ? 'selected' : ''}>${esc(o.t)}</option>`
         ).join('');
         return `<td><select class="form-input list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="select">${opts}</select></td>`;
       }
@@ -235,8 +254,8 @@ window.addListRow = function(key) {
     const fdef = fields[fk] || {};
     const val = newRow[fk];
     if (fdef.type === 'select') {
-      const opts = (fdef.options || []).map(opt =>
-        `<option value="${esc(opt)}" ${opt === val ? 'selected' : ''}>${esc(opt)}</option>`
+      const opts = fieldOptions(fdef, val).map(o =>
+        `<option value="${esc(o.v)}" ${o.v === val ? 'selected' : ''}>${esc(o.t)}</option>`
       ).join('');
       return `<td><select class="form-input list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="select">${opts}</select></td>`;
     }
@@ -388,11 +407,15 @@ function renderList() {
 
 async function loadStatus(force) {
   try {
-    const [statusResp, availResp] = await Promise.all([
+    const [statusResp, availResp, sourcesResp] = await Promise.all([
       fetch('/api/plugins/status').then(r => r.json()),
       fetch('/api/plugins/available').then(r => r.json()),
+      fetch('/api/plugins/publish-sources').then(r => r.json()).catch(() => ({ sources: [] })),
     ]);
-    const snapshot = JSON.stringify([statusResp.plugins || [], availResp.available || []]);
+    window._publishSources = sourcesResp.sources || [];
+    const snapshot = JSON.stringify([
+      statusResp.plugins || [], availResp.available || [], window._publishSources,
+    ]);
     if (!force && snapshot === lastSnapshot) return;
     lastSnapshot = snapshot;
     loaded = {};
