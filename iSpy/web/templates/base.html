@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0d1117">
+  <meta name="theme-color" content="#07080c">
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <title>{% block title %}iSpy{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/design.css">
@@ -11,38 +11,42 @@
     /* ---- first-run tutorial ---- */
     .ispy-welcome {
       display:flex; align-items:center; gap:14px;
-      background:var(--bg-surface); border:1px solid var(--border-light);
-      border-radius:var(--radius); padding:14px 18px; margin-bottom:16px;
-      box-shadow:var(--shadow);
+      background:var(--bg-surface); border:1px solid var(--accent);
+      clip-path:polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+      padding:14px 18px; margin-bottom:16px;
+      box-shadow: 0 0 20px rgba(0,229,255,0.15);
     }
     .ispy-welcome-mark {
-      flex:none; width:36px; height:36px; border-radius:50%;
+      flex:none; width:36px; height:36px;
+      clip-path:polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
       display:flex; align-items:center; justify-content:center;
       background:var(--accent-dim); color:var(--accent);
     }
-    .ispy-welcome h3 { margin:0; font-size:1rem; }
+    .ispy-welcome h3 { margin:0; font-size:1rem; font-family:var(--font-display); text-transform:uppercase; letter-spacing:0.06em; }
     .ispy-welcome p { margin:2px 0 0; color:var(--text-dim); font-size:0.9rem; }
     .ispy-welcome-actions { margin-left:auto; display:flex; gap:8px; flex:none; }
     .ispy-tour-highlight {
       position:fixed; z-index:9990; display:none;
-      border:2px solid var(--accent); border-radius:var(--radius);
-      box-shadow:0 0 0 9999px rgba(0,0,0,0.55);
+      border:2px solid var(--accent);
+      clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
+      box-shadow:0 0 0 9999px rgba(4,5,10,0.6), 0 0 20px rgba(0,229,255,0.2);
       pointer-events:none; transition:all .18s ease;
     }
     .ispy-tour-card {
       position:fixed; z-index:9991; left:50%; bottom:24px;
       transform:translateX(-50%); width:min(480px, calc(100vw - 32px));
       display:none; flex-direction:column; gap:8px;
-      background:var(--bg-surface); border:1px solid var(--border-light);
-      border-radius:var(--radius); box-shadow:var(--shadow-lg);
+      background:var(--bg-surface); border:1px solid var(--accent);
+      clip-path:polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+      box-shadow: 0 0 20px rgba(0,229,255,0.15), 0 20px 60px rgba(0,0,0,0.5);
       padding:18px 20px;
     }
-    .ispy-tour-card .t-title { font-size:1.05rem; font-weight:600; }
+    .ispy-tour-card .t-title { font-size:1.05rem; font-weight:700; font-family:var(--font-display); text-transform:uppercase; letter-spacing:0.06em; }
     .ispy-tour-card .t-text { color:var(--text-dim); font-size:.9rem; line-height:1.5; }
-    .ispy-tour-bar { height:4px; border-radius:2px; background:var(--border); overflow:hidden; margin:4px 0 8px; }
+    .ispy-tour-bar { height:4px; background:var(--border); overflow:hidden; margin:4px 0 8px; clip-path: polygon(0 0, calc(100% - 2px) 0, 100% 2px, 100% 100%, 2px 100%, 0 calc(100% - 2px)); }
     .ispy-tour-bar i { display:block; height:100%; background:var(--accent); transition:width .2s ease; }
     .ispy-tour-actions { display:flex; align-items:center; gap:8px; }
-    .ispy-tour-actions .t-count { color:var(--text-muted); font-size:.78rem; margin-right:auto; }
+    .ispy-tour-actions .t-count { color:var(--text-muted); font-size:.78rem; margin-right:auto; font-family:var(--font-display); text-transform:uppercase; letter-spacing:0.06em; }
   </style>
   {% block head %}{% endblock %}
   <script>

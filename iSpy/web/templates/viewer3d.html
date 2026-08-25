@@ -2,11 +2,11 @@
 {% block title %}3D Viewer - iSpy{% endblock %}
 {% block head %}
 <style>
-#scene-container { width:100%; height:65vh; background:#0a0a0f; border-radius:var(--radius); position:relative; overflow:hidden; }
+#scene-container { width:100%; height:65vh; background:#05060a; clip-path:polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px)); position:relative; overflow:hidden; border:1px solid var(--border); }
 #scene-container canvas { display:block; }
 .viewer-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
 .viewer-toolbar label { color:var(--text-dim); font-size:0.85rem; display:flex; align-items:center; gap:6px; }
-.viewer-toolbar select { background:var(--bg); color:var(--text); border:1px solid var(--border); padding:4px 8px; border-radius:var(--radius); }
+.viewer-toolbar select { background:var(--bg); color:var(--text); border:1px solid var(--border); padding:4px 8px; clip-path:polygon(0 0, calc(100% - 3px) 0, 100% 3px, 100% 100%, 3px 100%, 0 calc(100% - 3px)); }
 #object-list { max-height:200px; overflow-y:auto; }
 #object-list table { width:100%; }
 .obj-row td { font-size:0.82rem; }
