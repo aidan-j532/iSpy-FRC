@@ -376,12 +376,28 @@ def _wait_for_pipeline_ready(
 def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = False):
     _configure_quiet_logging()
 
+    # in iSpy/boot/boot.py, inside on_boot(), right after setup_files(fresh=True)
+    # and iSpyConfig construction, before cleanup_missing_cameras:
+
     if fresh:
         logger.info("boot -f: forcefully fresh installation state")
         setup_files(fresh=True)
         config_path = str(_PROJECT_ROOT / "Config" / "config.json")
         config = iSpyConfig(config_path, create=True)
         _bootstrap_default_camera(config)
+
+        # fresh install with no prior deps installed - pull in whatever backend
+        # this hardware needs (rknn wheel, onnxruntime-gpu, etc.) so first boot
+        # doesn't fail on a missing import mid-pipeline-construction
+        try:
+            from iSpy.vision.optimizer import install_special_dependencies
+            logger.info("First-boot dependency install starting (auto_install=True)...")
+            install_special_dependencies(auto_install=True)
+        except Exception:
+            logger.exception(
+                "First-boot dependency install failed - continuing boot anyway; "
+                "the relevant pipeline will fall back or error clearly at runtime."
+            )
     else:
         setup_files(fresh=False)
         config_path = search_for_config()

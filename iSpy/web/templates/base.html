@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0d1117">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <title>{% block title %}iSpy{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/design.css">
   <style>
@@ -61,6 +63,10 @@
       <a href="/logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>Logs</a>
       <a href="/addons"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>Add-ons</a>
       <a href="/settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>Settings</a>
+      <div class="sidebar-footer">
+        <span>iSpy</span>
+        <span class="footer-version" id="ispy-version"></span>
+      </div>
     </nav>
     <main class="content">
       {% block content %}{% endblock %}
@@ -86,6 +92,44 @@
         setTimeout(() => toast.remove(), 300);
       }, 3000);
     }
+
+    // ---- connection status banner ----
+    // Pages report poll/SSE failures via connLost()/connOk(); a thin bar at the
+    // top of the content area appears after repeated failures and clears on the
+    // next success. connTracker(threshold) bundles the counting for polling loops.
+    (function () {
+      let el = null;
+      function ensure() {
+        if (!el) {
+          el = document.createElement('div');
+          el.className = 'conn-banner';
+          el.setAttribute('role', 'alert');
+          el.textContent = 'Connection lost - reconnecting\u2026';
+          const content = document.querySelector('main.content');
+          (content || document.body).prepend(el);
+        }
+        return el;
+      }
+      window.connLost = function () { ensure().classList.add('visible'); };
+      window.connOk = function () { if (el) el.classList.remove('visible'); };
+      window.connTracker = function (threshold) {
+        threshold = threshold || 2;
+        let fails = 0;
+        return {
+          fail: function () { if (++fails >= threshold) window.connLost(); },
+          ok: function () { if (fails > 0) { fails = 0; window.connOk(); } },
+        };
+      };
+    })();
+
+    // ---- sidebar version footer ----
+    fetch('/api/version')
+      .then(r => r.json())
+      .then(j => {
+        const el = document.getElementById('ispy-version');
+        if (el && j && j.version) el.textContent = 'v' + j.version;
+      })
+      .catch(() => {});
   </script>
   <script>
     // ---- time warning popup ----

@@ -1,23 +1,26 @@
 {% extends "base.html" %}
 {% block title %}Health - iSpy{% endblock %}
+{% block head %}
+<style>.stat-value.skeleton { display: inline-block; min-width: 64px; }</style>
+{% endblock %}
 {% block content %}
 <h1>System Health</h1>
 <div id="health-banner" class="vision-banner"></div>
 
 <div class="grid stats-grid">
-  <div class="card stat-card"><div class="stat-label">FPS</div><div class="stat-value" id="h-fps">--</div></div>
-  <div class="card stat-card"><div class="stat-label">Vision</div><div class="stat-value" id="h-vis">--<span class="stat-unit">ms</span></div></div>
-  <div class="card stat-card"><div class="stat-label">Detections</div><div class="stat-value" id="h-det">--</div></div>
-  <div class="card stat-card"><div class="stat-label">Loop stale</div><div class="stat-value" id="h-stale">--<span class="stat-unit">s</span></div></div>
-  <div class="card stat-card"><div class="stat-label">Loop count</div><div class="stat-value" id="h-loops">--</div></div>
-  <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value" id="h-up">--</div></div>
+  <div class="card stat-card"><div class="stat-label">FPS</div><div class="stat-value skeleton" id="h-fps">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Vision</div><div class="stat-value skeleton" id="h-vis">--<span class="stat-unit">ms</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Detections</div><div class="stat-value skeleton" id="h-det">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Loop stale</div><div class="stat-value skeleton" id="h-stale">--<span class="stat-unit">s</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Loop count</div><div class="stat-value skeleton" id="h-loops">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value skeleton" id="h-up">--</div></div>
 </div>
 
 <div class="dash-columns">
   <div class="dash-col-left">
     <div class="card">
       <h3>Cameras</h3>
-      <div id="h-cameras" class="camera-grid"></div>
+      <div id="h-cameras" class="camera-grid"><div class="skeleton-block"></div><div class="skeleton-block"></div></div>
     </div>
     <div class="card">
       <h3>NetworkTables</h3>
@@ -28,7 +31,7 @@
   <div class="dash-col-right">
     <div class="card">
       <h3>Plugins</h3>
-      <div id="h-plugins"></div>
+      <div id="h-plugins"><div class="skeleton-block"></div><div class="skeleton-block"></div></div>
     </div>
   </div>
 </div>
@@ -43,10 +46,8 @@ function fmtUptime(s) {
 }
 
 function typeBadge(type) {
-  const colors = { tracker: '#4c8bf5', utility: '#4caf50', frame_processor: '#b07a3c' };
   const label = type === 'frame_processor' ? 'frame processor' : type;
-  const color = colors[type] || '#8b8f9a';
-  return `<span class="plugin-pill" style="color:${color};background:${color}22;border:1px solid ${color}44">${label}</span>`;
+  return `<span class="plugin-pill pill-${type}">${label}</span>`;
 }
 
 function statusDot(status) {
@@ -55,10 +56,14 @@ function statusDot(status) {
   return 'status-dot status-bad';
 }
 
+const healthConn = connTracker(2);
+
 async function refresh() {
   try {
     const data = await fetch('/api/health').then(r => r.json());
+    healthConn.ok();
 
+    document.querySelectorAll('.stat-value.skeleton').forEach(el => el.classList.remove('skeleton'));
     const banner = document.getElementById('health-banner');
     banner.className = 'vision-banner ' + (data.status === 'ok' ? 'vision-ok' : 'vision-bad');
     banner.textContent = data.status === 'ok' ? 'System healthy' : 'System degraded';
@@ -96,6 +101,7 @@ async function refresh() {
         </div>`).join('');
   } catch (e) {
     console.error('Health refresh failed', e);
+    healthConn.fail();
   }
 }
 setInterval(refresh, 1000);

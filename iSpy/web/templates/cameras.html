@@ -48,7 +48,7 @@
     </div>
     <div id="camera-modal-body"></div>
     <div class="modal-actions">
-      <button onclick="closeCameraModal()" style="background:var(--border);">Cancel</button>
+      <button class="btn-secondary" onclick="closeCameraModal()">Cancel</button>
       <button id="camera-modal-submit" onclick="handleCameraSubmit()" class="btn-ok">Save and Continue</button>
     </div>
   </div>
@@ -96,7 +96,7 @@
       <div id="folder-picker-list" class="folder-picker-list"></div>
       <div class="modal-actions">
           <button onclick="window.location.href='/datasets/bundled'">Try Out Our Pre-Bundled Datasets</button>
-        <button onclick="closeFolderPicker()" style="background:var(--border);">Cancel</button>
+        <button class="btn-secondary" onclick="closeFolderPicker()">Cancel</button>
         <button onclick="confirmFolderPick()" class="btn-ok">Select This Folder</button>
       </div>
     </div>
@@ -112,7 +112,7 @@
       </div>
       <div id="dataset-upload-status" class="upload-status" style="margin-top:8px;"></div>
       <div class="modal-actions" style="margin-top:12px;">
-        <button onclick="closeFolderPicker()" style="background:var(--border);">Cancel</button>
+        <button class="btn-secondary" onclick="closeFolderPicker()">Cancel</button>
       </div>
     </div>
   </div>
@@ -139,7 +139,7 @@
     </div>
     <div class="modal-actions">
       <span style="flex:1"></span>
-      <button onclick="closeModelPicker()" style="background:var(--border);">Cancel</button>
+      <button class="btn-secondary" onclick="closeModelPicker()">Cancel</button>
     </div>
   </div>
 </div>
@@ -149,7 +149,7 @@
     max-height: 300px;
     overflow-y: auto;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 8px;
     margin: 8px 0;
   }
@@ -161,7 +161,7 @@
     margin: 2px 0;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .folder-picker-item:hover { border-color: var(--accent); }
@@ -261,8 +261,8 @@
   .settings-section details[open] summary::before { transform: rotate(90deg); }
   .settings-section details summary:hover { color: var(--accent); }
   .settings-section.step-hidden { display: none; }
-  .settings-section.step-active { outline: 1px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
-  .form-field.field-invalid input, .form-field.field-invalid select { border-color: #f66; }
+  .settings-section.step-active { outline: 1px solid var(--accent); outline-offset: 4px; border-radius: var(--radius); }
+  .form-field.field-invalid input, .form-field.field-invalid select { border-color: var(--bad); }
 
   .form-field { margin-bottom: 10px; }
   .form-help {
@@ -296,8 +296,8 @@
   .tune-slider-row input[type="range"] { width: 100%; }
   .tune-slider-row input[type="checkbox"] { width: auto; margin-left: auto; }
   .tune-status { color: var(--text-dim); font-size: 0.8rem; }
-  .tune-status.ok { color: #2c7; }
-  .tune-status.err { color: #f66; }
+  .tune-status.ok { color: var(--ok); }
+  .tune-status.err { color: var(--bad); }
   @media (max-width: 900px) {
     .camera-lightbox-body { flex-direction: column; }
     .camera-lightbox-feed { order: 1; }
@@ -318,6 +318,7 @@
 let refreshTimer = null;
 let currentRate = 1000;
 let knownCameras = new Map();
+const camerasConn = connTracker(2);
 let pipelineSchemas = {};
 
 const camModal = {
@@ -1387,13 +1388,14 @@ async function refreshCameras() {
       fetch('/api/cameras').then(r => r.json()),
       fetch('/api/cameras/discover').then(r => r.json()),
     ]);
+    camerasConn.ok();
     const grid = $id('camera-grid');
     const cameras = camData.cameras || [];
     const discovered = discData.devices || [];
     const streamingNames = new Set(cameras.map(c => c.name));
 
     if (cameras.length === 0 && discovered.length === 0) {
-      grid.innerHTML = '<div class="card empty-state">No cameras detected. Connect a camera and click Refresh.</div>';
+      grid.innerHTML = `<div class="card empty-state has-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>No cameras detected. Connect a camera and click Refresh.</div>`;
       knownCameras.clear();
       return;
     }
@@ -1429,6 +1431,7 @@ async function refreshCameras() {
     discovered.filter(d => !d.active).forEach(d => grid.appendChild(buildDiscoverCard(d)));
   } catch (e) {
     console.error('Camera refresh failed', e);
+    camerasConn.fail();
   }
 }
 
@@ -2162,16 +2165,22 @@ function onCalibMouseUp(e) {
 function drawCalibMeasure() {
   const ctx = calibrationState.ctx;
   if (!ctx) return;
+  // measurement overlay uses the design system's ok color
+  if (!calibrationState.measureColor) {
+    calibrationState.measureColor =
+      getComputedStyle(document.documentElement).getPropertyValue('--ok').trim() || '#3fb950';
+  }
+  const okColor = calibrationState.measureColor;
   if (calibrationState.frame) ctx.putImageData(calibrationState.frame, 0, 0);
   const a = calibrationState.start;
   if (!a) return;
   if (!calibrationState.end) {
-    ctx.fillStyle = '#2c7';
+    ctx.fillStyle = okColor;
     ctx.fillRect(a.x - 3, a.y - 3, 6, 6);
     return;
   }
   const b = calibrationState.end;
-  ctx.strokeStyle = '#2c7';
+  ctx.strokeStyle = okColor;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(a.x, a.y);

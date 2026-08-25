@@ -1,7 +1,8 @@
 import logging
 from pathlib import Path
-from flask import Flask, render_template
+from flask import Flask, jsonify, render_template
 
+from iSpy import __version__
 from iSpy.web.modules.dashboard import DashboardModule
 from iSpy.web.modules.cameras import CamerasModule
 from iSpy.web.modules.models import ModelsModule
@@ -63,6 +64,9 @@ class iSpyWebApp:
 
         self.context["dashboard_module"] = self.modules.get("dashboard")
         self.flask_app.add_url_rule("/", "root", lambda: render_template("dashboard.html"))
+        self.flask_app.add_url_rule(
+            "/api/version", "api_version", lambda: jsonify(version=__version__)
+        )
 
     def update(self, frame_data: dict):
         for name, mod in self.modules.items():

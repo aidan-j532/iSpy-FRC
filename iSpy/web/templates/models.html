@@ -18,7 +18,10 @@
 
 <table id="models-table">
   <thead><tr><th>Name</th><th>Task</th><th>Classes</th><th>Input</th><th>Size</th><th style="text-align:right">Actions</th></tr></thead>
-  <tbody></tbody>
+  <tbody>
+    <tr><td colspan="6"><div class="skeleton-block"></div></td></tr>
+    <tr><td colspan="6"><div class="skeleton-block" style="width:70%;"></div></td></tr>
+  </tbody>
 </table>
 
 <div id="delete-modal" class="modal-overlay" style="display:none;">
@@ -40,7 +43,7 @@
     <input type="text" id="delete-confirm-input" class="form-input" placeholder="" oninput="checkDeleteConfirm()">
     <p class="modal-danger-text">This will permanently delete the model file and its metadata sidecar.</p>
     <div class="modal-actions">
-      <button onclick="closeDeleteModalStep2()">Cancel</button>
+      <button class="btn-secondary" onclick="closeDeleteModalStep2()">Cancel</button>
       <button class="btn-danger" onclick="confirmDelete()" id="confirm-del-btn" disabled>Delete Permanently</button>
     </div>
   </div>
@@ -49,11 +52,21 @@
 <script>
 let pendingDelete = null;
 
+const EMPTY_MODEL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>';
+
 async function loadModels() {
-  const data = await fetch('/api/models').then(r => r.json());
+  let data;
+  try {
+    data = await fetch('/api/models').then(r => r.json());
+  } catch (e) {
+    console.error('Model list failed:', e);
+    document.querySelector('#models-table tbody').innerHTML =
+      '<tr><td colspan="6" class="empty-state">Failed to load models. Is the iSpy server still running?</td></tr>';
+    return;
+  }
   const tbody = document.querySelector('#models-table tbody');
   if (!data.models || data.models.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No models found. Upload a .pt file to get started.</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-state has-icon">${EMPTY_MODEL_ICON}No models found. Upload a .pt file to get started.</td></tr>`;
     return;
   }
   tbody.innerHTML = data.models.map(m => `

@@ -1,15 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Dashboard - iSpy{% endblock %}
+{% block head %}
+<style>.stat-value.skeleton { display: inline-block; min-width: 64px; }</style>
+{% endblock %}
 {% block content %}
 <h1>Mission Control</h1>
 
 <div class="grid stats-grid" id="stats">
-  <div class="card stat-card"><div class="stat-label">FPS</div><div class="stat-value" id="s-fps">--</div></div>
-  <div class="card stat-card"><div class="stat-label">Vision</div><div class="stat-value" id="s-vis">--<span class="stat-unit">ms</span></div></div>
-  <div class="card stat-card"><div class="stat-label">Loop</div><div class="stat-value" id="s-loop">--<span class="stat-unit">ms</span></div></div>
-  <div class="card stat-card"><div class="stat-label">Detections</div><div class="stat-value" id="s-det">--</div></div>
-  <div class="card stat-card"><div class="stat-label">Camera Lag</div><div class="stat-value" id="s-lag">--<span class="stat-unit">ms</span></div></div>
-  <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value" id="s-up">--</div></div>
+  <div class="card stat-card"><div class="stat-label">FPS</div><div class="stat-value skeleton" id="s-fps">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Vision</div><div class="stat-value skeleton" id="s-vis">--<span class="stat-unit">ms</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Loop</div><div class="stat-value skeleton" id="s-loop">--<span class="stat-unit">ms</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Detections</div><div class="stat-value skeleton" id="s-det">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Camera Lag</div><div class="stat-value skeleton" id="s-lag">--<span class="stat-unit">ms</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value skeleton" id="s-up">--</div></div>
 </div>
 <div id="vision-status" class="vision-banner">Connecting&hellip;</div>
 
@@ -102,12 +105,18 @@ function formatUptime(s) {
   return `${sec}s`;
 }
 
+function clearStatSkeletons() {
+  document.querySelectorAll('#stats .stat-value.skeleton').forEach(el => el.classList.remove('skeleton'));
+}
+
 function applyTick(data) {
   document.getElementById('s-fps').textContent = data.fps ?? '--';
   document.getElementById('s-vis').innerHTML = (data.vision_ms ?? '--') + '<span class="stat-unit">ms</span>';
   document.getElementById('s-loop').innerHTML = (data.loop_s ?? '--') + '<span class="stat-unit">ms</span>';
   document.getElementById('s-det').textContent = data.detections ?? '--';
   document.getElementById('s-lag').innerHTML = (data.camera_lag_ms ?? '--') + '<span class="stat-unit">ms</span>';
+  if (data.uptime_s != null) document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
+  clearStatSkeletons();
 
   const classes = data.detection_classes || {};
   const clsEntries = Object.entries(classes);
@@ -116,7 +125,6 @@ function applyTick(data) {
     : clsEntries.map(([name, count]) =>
       `<div class="det-item"><span class="det-class">${name}</span><span class="det-count">${count}</span></div>`
     ).join('');
-  if (data.uptime_s != null) document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
 
   if (data.cameras) {
     const cams = data.cameras;
@@ -191,6 +199,7 @@ function applySystem(sys) {
 function connectSSE() {
   const es = new EventSource('/api/events');
   es.onmessage = (e) => {
+    connOk();
     try {
       const data = JSON.parse(e.data);
       if (data.type === 'tick') applyTick(data);
@@ -198,6 +207,7 @@ function connectSSE() {
     } catch(err) { console.error('SSE parse error:', err); }
   };
   es.onerror = () => {
+    connLost();
     es.close();
     setTimeout(connectSSE, 3000);
   };

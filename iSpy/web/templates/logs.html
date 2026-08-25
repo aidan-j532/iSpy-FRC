@@ -40,11 +40,14 @@ function clearView() {
   lastContent = '';
 }
 
+const logsConn = connTracker(2);
+
 async function refresh() {
   if (paused.checked) return;
   try {
     const n = document.getElementById('line-count').value;
     const data = await fetch(`/api/logs?n_lines=${n}`).then(r => r.json());
+    logsConn.ok();
     const content = data.lines.map(colorize).join('');
     if (content !== lastContent) {
       view.innerHTML = content;
@@ -53,6 +56,7 @@ async function refresh() {
     }
   } catch (e) {
     console.error('Log refresh failed', e);
+    logsConn.fail();
   }
 }
 setInterval(refresh, 2000);

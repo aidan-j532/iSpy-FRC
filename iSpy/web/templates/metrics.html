@@ -3,13 +3,14 @@
 {% block content %}
 <h1>Metrics</h1>
 <div class="grid">
-  <div class="card"><h3>FPS</h3><canvas id="chart-fps"></canvas></div>
-  <div class="card"><h3>Loop Time</h3><canvas id="chart-loop_s"></canvas></div>
-  <div class="card"><h3>Vision Time</h3><canvas id="chart-vision_s"></canvas></div>
-  <div class="card"><h3>Camera Lag</h3><canvas id="chart-camera_lag_s"></canvas></div>
-  <div class="card card-full">
+  <div class="card chart-card"><h3>FPS</h3><canvas id="chart-fps"></canvas><div class="chart-waiting">waiting for data&hellip;</div></div>
+  <div class="card chart-card"><h3>Loop Time</h3><canvas id="chart-loop_s"></canvas><div class="chart-waiting">waiting for data&hellip;</div></div>
+  <div class="card chart-card"><h3>Vision Time</h3><canvas id="chart-vision_s"></canvas><div class="chart-waiting">waiting for data&hellip;</div></div>
+  <div class="card chart-card"><h3>Camera Lag</h3><canvas id="chart-camera_lag_s"></canvas><div class="chart-waiting">waiting for data&hellip;</div></div>
+  <div class="card card-full chart-card">
     <h3>Code Breakdown <span class="part-note"></span></h3>
     <canvas id="chart-code-parts"></canvas>
+    <div class="chart-waiting">waiting for data&hellip;</div>
   </div>
 </div>
 <script src="/static/vendor/chart.umd.min.js"></script>
@@ -44,10 +45,17 @@ function ensureCodeChart() {
   });
   return codeChart;
 }
+function markHasData(canvasId) {
+  const canvas = document.getElementById(`chart-${canvasId}`);
+  const card = canvas && canvas.closest('.chart-card');
+  if (card) card.classList.add('has-data');
+}
+
 function renderCodeParts(cp) {
   const s = cp.series;
   const series = Object.values(s);
   if (!series.length) return;
+  markHasData('code-parts');
   const chart = ensureCodeChart();
   const names = series.map(part => part.label).join('|');
   if (chart.data.datasets.length !== series.length || chart._partNames !== names) {
@@ -68,9 +76,12 @@ function renderCodeParts(cp) {
   series.forEach((part, i) => { chart.data.datasets[i].data = part.y; });
   chart.update('none');
 }
+const metricsConn = connTracker(2);
+
 async function refresh() {
   try {
     const data = await fetch('/api/metrics').then(r => r.json());
+    metricsConn.ok();
     for (const key in data) {
       if (key === 'code_parts') { renderCodeParts(data[key]); continue; }
       const s = data[key];
@@ -78,8 +89,9 @@ async function refresh() {
       c.data.labels = s.x.map(v => v.toFixed(1));
       c.data.datasets[0].data = s.y;
       c.update('none');
+      if ((s.y || []).length > 0) markHasData(key);
     }
-  } catch(e) { console.error('Metrics refresh failed:', e); }
+  } catch(e) { console.error('Metrics refresh failed:', e); metricsConn.fail(); }
 }
 setInterval(refresh, 1000);
 refresh();

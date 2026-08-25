@@ -9,11 +9,16 @@ FIRST_BOOT_SERVICE_NAME = "ispy-first-boot"
 
 MDNS_HOSTNAME = "ispy"
 
-
 def setup_mdns(hostname: str = MDNS_HOSTNAME) -> None:
-    """Make the board reachable at http://<hostname>.local - Linux/avahi only."""
-    if get_platform() not in ("linux_systemd", "linux_other"):
-        print("mDNS setup skipped (only implemented for Linux/avahi).")
+    """Make the board reachable at http://<hostname>.local"""
+    platform_kind = get_platform()
+
+    if platform_kind == "macos":
+        _setup_mdns_macos(hostname)
+        return
+
+    if platform_kind not in ("linux_systemd", "linux_other"):
+        print("mDNS setup skipped (unsupported platform).")
         return
 
     check = run(["systemctl", "list-unit-files", "avahi-daemon.service"], check=False)
@@ -38,11 +43,37 @@ def setup_mdns(hostname: str = MDNS_HOSTNAME) -> None:
     print(f"mDNS ready - board will be reachable at http://{hostname}.local:5000")
     print("(requires a reboot if the hostname just changed)")
 
-    # Best-effort: ask DHCP client to send hostname so routers that publish
-    # DHCP client hostnames into local DNS can resolve "ispy" (no .local).
-    # This is a fallback for Windows machines without Bonjour — not all
-    # environments support it, so failures are logged and ignored.
     _configure_dhcp_hostname(hostname)
+
+
+def _setup_mdns_macos(hostname: str = MDNS_HOSTNAME) -> None:
+    """macOS ships Bonjour natively - just set the Bonjour hostname via scutil.
+
+    No daemon install needed. scutil --set HostName sets the "real" hostname;
+    ComputerName/LocalHostName control what shows up in Finder/Bonjour. We set
+    all three so <hostname>.local resolves consistently and the Sharing prefpane
+    shows something sane.
+    """
+    current = run(["scutil", "--get", "LocalHostName"], check=False).stdout.strip()
+    if current == hostname:
+        print(f"mDNS already set - reachable at http://{hostname}.local:5000")
+        return
+
+    for cmd in (
+        ["sudo", "scutil", "--set", "ComputerName", hostname],
+        ["sudo", "scutil", "--set", "LocalHostName", hostname],
+        ["sudo", "scutil", "--set", "HostName", hostname],
+    ):
+        result = run(cmd, check=False)
+        if result.returncode != 0:
+            print(f"Failed to set {cmd[-2]}: {result.stderr.strip()}")
+            print("Set it manually in System Settings > General > Sharing, "
+                  "or re-run setup_mdns().")
+            return
+
+    # bounce mDNSResponder so the new LocalHostName takes effect immediately
+    run(["sudo", "killall", "-HUP", "mDNSResponder"], check=False)
+    print(f"mDNS ready - board will be reachable at http://{hostname}.local:5000")
 
 def _configure_dhcp_hostname(hostname: str) -> None:
     """Best-effort: configure DHCP client to advertise hostname.

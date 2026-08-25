@@ -7,14 +7,17 @@
   <div class="controls-bar" style="margin-bottom:16px;">
     <input type="text" id="new-dataset-name" placeholder="New dataset name..." style="flex:1; min-width:180px;">
     <button onclick="createDataset()">Create Dataset</button>
-    <button onclick="window.location.href='/datasets/bundled'" style="background:var(--border);">Try Out Our Pre-Bundled Datasets</button>
+    <button class="btn-secondary" onclick="window.location.href='/datasets/bundled'">Try Out Our Pre-Bundled Datasets</button>
   </div>
-  <div id="datasets-grid" class="dataset-grid"></div>
+  <div id="datasets-grid" class="dataset-grid">
+    <div class="card"><div class="skeleton-block"></div><div class="skeleton-block" style="width:60%;"></div></div>
+    <div class="card"><div class="skeleton-block"></div><div class="skeleton-block" style="width:60%;"></div></div>
+  </div>
 </div>
 
 <div id="dataset-detail" style="display:none;">
   <div class="controls-bar" style="margin-bottom:16px;">
-    <button onclick="backToList()" style="background:var(--border);">&larr; Back</button>
+    <button class="btn-secondary" onclick="backToList()">&larr; Back</button>
     <h2 id="detail-title" style="margin:0;"></h2>
     <span id="detail-count" class="text-dim"></span>
   </div>
@@ -32,7 +35,7 @@
     <h3>Delete Image</h3>
     <p>Are you sure you want to delete <strong id="del-img-name"></strong>?</p>
     <div class="modal-actions">
-      <button onclick="closeDelImgModal()">Cancel</button>
+      <button class="btn-secondary" onclick="closeDelImgModal()">Cancel</button>
       <button class="btn-danger" onclick="confirmDelImg()" id="confirm-del-img">Delete</button>
     </div>
   </div>
@@ -42,13 +45,23 @@
 let currentDataset = null;
 let pendingDelImg = null;
 
+const FOLDER_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
+
 async function loadDatasets() {
-  const data = await fetch('/api/datasets').then(r => r.json());
+  let data;
+  try {
+    data = await fetch('/api/datasets').then(r => r.json());
+  } catch (e) {
+    console.error('Dataset list failed:', e);
+    document.getElementById('datasets-grid').innerHTML =
+      '<div class="card empty-state">Failed to load datasets. Is the iSpy server still running?</div>';
+    return;
+  }
   const grid = document.getElementById('datasets-grid');
   const datasets = data.datasets || [];
 
   if (datasets.length === 0) {
-    grid.innerHTML = '<div class="card empty-state">No datasets yet. Create one with the form above.</div>';
+    grid.innerHTML = `<div class="card empty-state has-icon">${FOLDER_ICON}No datasets yet. Create one with the form above.</div>`;
     return;
   }
 
@@ -106,7 +119,7 @@ async function loadImages() {
 
   const grid = document.getElementById('image-grid');
   if (images.length === 0) {
-    grid.innerHTML = '<div class="empty-state">No images in this dataset yet.</div>';
+    grid.innerHTML = `<div class="empty-state has-icon">${FOLDER_ICON}No images in this dataset yet.</div>`;
     return;
   }
 
