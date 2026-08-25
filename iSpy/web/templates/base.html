@@ -45,6 +45,48 @@
     .ispy-tour-actions .t-count { color:var(--text-muted); font-size:.78rem; margin-right:auto; }
   </style>
   {% block head %}{% endblock %}
+  <script>
+    // ---- shared utilities (must be defined before template scripts) ----
+    function showToast(message, type) {
+      type = type || 'info';
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'toast toast-' + type;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    // ---- connection status banner ----
+    (function () {
+      let el = null;
+      function ensure() {
+        if (!el) {
+          el = document.createElement('div');
+          el.className = 'conn-banner';
+          el.setAttribute('role', 'alert');
+          el.textContent = 'Connection lost - reconnecting\u2026';
+          const content = document.querySelector('main.content');
+          (content || document.body).prepend(el);
+        }
+        return el;
+      }
+      window.connLost = function () { ensure().classList.add('visible'); };
+      window.connOk = function () { if (el) el.classList.remove('visible'); };
+      window.connTracker = function (threshold) {
+        threshold = threshold || 2;
+        let fails = 0;
+        return {
+          fail: function () { if (++fails >= threshold) window.connLost(); },
+          ok: function () { if (fails > 0) { fails = 0; window.connOk(); } },
+        };
+      };
+    })();
+  </script>
 </head>
 <body>
   <div class="app-shell">
@@ -78,49 +120,6 @@
     document.querySelectorAll('.sidebar a').forEach(a => {
       if (a.pathname === location.pathname) a.classList.add('active');
     });
-
-    function showToast(message, type) {
-      type = type || 'info';
-      const container = document.getElementById('toast-container');
-      const toast = document.createElement('div');
-      toast.className = 'toast toast-' + type;
-      toast.textContent = message;
-      container.appendChild(toast);
-      setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transition = 'opacity 0.3s';
-        setTimeout(() => toast.remove(), 300);
-      }, 3000);
-    }
-
-    // ---- connection status banner ----
-    // Pages report poll/SSE failures via connLost()/connOk(); a thin bar at the
-    // top of the content area appears after repeated failures and clears on the
-    // next success. connTracker(threshold) bundles the counting for polling loops.
-    (function () {
-      let el = null;
-      function ensure() {
-        if (!el) {
-          el = document.createElement('div');
-          el.className = 'conn-banner';
-          el.setAttribute('role', 'alert');
-          el.textContent = 'Connection lost - reconnecting\u2026';
-          const content = document.querySelector('main.content');
-          (content || document.body).prepend(el);
-        }
-        return el;
-      }
-      window.connLost = function () { ensure().classList.add('visible'); };
-      window.connOk = function () { if (el) el.classList.remove('visible'); };
-      window.connTracker = function (threshold) {
-        threshold = threshold || 2;
-        let fails = 0;
-        return {
-          fail: function () { if (++fails >= threshold) window.connLost(); },
-          ok: function () { if (fails > 0) { fails = 0; window.connOk(); } },
-        };
-      };
-    })();
 
     // ---- sidebar version footer ----
     fetch('/api/version')
