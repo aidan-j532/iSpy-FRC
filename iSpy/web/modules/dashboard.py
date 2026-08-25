@@ -61,9 +61,11 @@ class DashboardModule(WebModule):
             if not self._model_info:
                 self._refresh_model_info_unlocked()
 
+        vision_running = (time.perf_counter() - self._vision_last_tick) < 5.0 if self._vision_last_tick else False
         self._push_sse({
             "type": "tick",
             **tick,
+            "vision_running": vision_running,
             "detection_classes": det_classes,
             "cameras": self._get_camera_status(),
             "system": self._get_system_metrics(),

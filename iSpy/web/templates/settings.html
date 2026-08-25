@@ -8,6 +8,7 @@
   <button class="settings-tab" onclick="switchTab('camera', this)">Camera</button>
   <button class="settings-tab" onclick="switchTab('network', this)">Network</button>
   <button class="settings-tab" onclick="switchTab('advanced', this)">Advanced</button>
+  <button class="settings-tab" onclick="switchTab('about', this)">About</button>
   <button class="settings-tab" onclick="switchTab('raw', this)">Raw JSON</button>
 </div>
 
@@ -15,6 +16,7 @@
   <button class="btn btn-ok" onclick="saveSettings()">Save Settings</button>
   <span id="msg" class="settings-msg"></span>
 </div>
+<div class="settings-auto-note" style="display:none;color:var(--text-muted);font-size:0.78rem;margin-top:4px;">Auto-saving&hellip;</div>
 
 <div id="tab-vision" class="settings-tab-content">
   <div class="settings-section">
@@ -126,6 +128,27 @@
   </div>
 </div>
 
+<div id="tab-about" class="settings-tab-content" style="display:none;">
+  <div class="card" style="position:sticky;bottom:20px;">
+    <div class="settings-section">
+      <h3>About iSpy</h3>
+      <div class="form-row">
+        <span class="form-label">Version</span>
+        <span class="text-dim" id="about-version">loading&hellip;</span>
+      </div>
+      <div class="form-row">
+        <span class="form-label">License</span>
+        <span class="text-dim">Open Source (MIT)</span>
+      </div>
+      <div class="form-row">
+        <span class="form-label">Repository</span>
+        <a href="https://github.com/AidanBatty/iSpy-FRC" target="_blank" rel="noopener" class="text-dim">github.com/AidanBatty/iSpy-FRC</a>
+      </div>
+      <p class="text-dim text-sm" style="margin-top:12px;">iSpy is a real-time vision system for FRC robots. It provides plug-and-play camera pipelines, 3D field visualization, and model-based object detection.</p>
+    </div>
+  </div>
+</div>
+
 <div id="tab-raw" class="settings-tab-content" style="display:none;">
   <div id="raw-gate" class="card">
     <p><strong>Advanced feature.</strong> Editing raw JSON can break your config if done incorrectly. A single restore point is saved automatically before your first edit in this session.</p>
@@ -207,7 +230,37 @@ async function checkRestartNeeded() {
 
 document.querySelectorAll('[data-key]').forEach(el => {
   el.addEventListener('change', checkRestartNeeded);
+  el.addEventListener('change', autoSave);
 });
+
+let autoSaveTimer = null;
+function autoSave() {
+  const note = document.querySelector('.settings-auto-note');
+  if (note) note.style.display = '';
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(async () => {
+    const { data, restartKeys } = collectFormValues();
+    try {
+      const r = await fetch('/api/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ config: data, restart_keys: restartKeys }),
+      });
+      const j = await r.json();
+      if (r.ok) {
+        showToast('Settings saved', 'success');
+        if (j.needs_restart) {
+          showToast('Restart required to apply some changes', 'info');
+        }
+      } else {
+        showToast(j.error || 'Save failed', 'error');
+      }
+    } catch (e) {
+      showToast('Save failed', 'error');
+    }
+    if (note) note.style.display = 'none';
+  }, 400);
+}
 
 function collectFormValues() {
   const data = {};
@@ -249,6 +302,7 @@ function getNestedValue(obj, path) {
 }
 
 function loadFormValues() {
+  document.querySelectorAll('.restart-badge').forEach(b => b.style.display = 'none');
   document.querySelectorAll('[data-key]').forEach(el => {
     const key = el.dataset.key;
     let val = getNestedValue(configData, key);
@@ -260,12 +314,8 @@ function loadFormValues() {
     } else {
       el.value = val;
     }
-
-    if (el.dataset.restart) {
-      const badge = el.parentElement.querySelector('.restart-badge');
-      if (badge) badge.style.display = '';
-    }
   });
+  checkRestartNeeded();
 }
 
 function switchTab(name, btn) {
@@ -328,6 +378,10 @@ async function load() {
   defaultsData = data.defaults || {};
   document.getElementById('cfg').value = JSON.stringify(configData, null, 2);
   loadFormValues();
+  fetch('/api/version').then(r => r.json()).then(j => {
+    const el = document.getElementById('about-version');
+    if (el && j.version) el.textContent = 'v' + j.version;
+  }).catch(() => {});
 }
 
 load();

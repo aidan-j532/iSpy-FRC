@@ -281,7 +281,7 @@ function renderRow(p) {
 
   let statusHtml = '';
   if (status) {
-    statusHtml = `<span class="addon-status">${statusDot(status)}<span>${esc(status)}</span></span>`;
+    statusHtml = `<span class="addon-status"><span class="${statusDot(status)}"></span><span>${esc(status)}</span></span>`;
   } else if (p.enabled) {
     statusHtml = `<span class="addon-status"><span class="status-dot status-warn"></span><span title="Enabled in config - loads after a vision restart">pending restart</span></span>`;
   }

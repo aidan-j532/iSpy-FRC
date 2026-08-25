@@ -117,6 +117,7 @@ function applyTick(data) {
   document.getElementById('s-lag').innerHTML = (data.camera_lag_ms ?? '--') + '<span class="stat-unit">ms</span>';
   if (data.uptime_s != null) document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
   clearStatSkeletons();
+  if (data.vision_running != null) applyVisionBanner(!!data.vision_running);
 
   const classes = data.detection_classes || {};
   const clsEntries = Object.entries(classes);

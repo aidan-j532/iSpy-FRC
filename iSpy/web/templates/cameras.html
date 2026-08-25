@@ -1176,8 +1176,6 @@ async function loadFolderPicker(path) {
     countEl.textContent = count > 0
       ? `${count} usable image${count !== 1 ? 's' : ''} found in this folder`
       : 'No usable images found in this folder';
-    const bundlePanel = $id('bundled-datasets-panel');
-    bundlePanel.style.display = '';
     const list = $id('folder-picker-list');
     list.innerHTML = '';
     if (data.parent) {
