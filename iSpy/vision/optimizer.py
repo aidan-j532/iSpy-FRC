@@ -549,7 +549,10 @@ def install_special_dependencies(auto_install: bool = False):
 def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, device=0):
     import ultralytics  # lazy: this module imports cleanly without ultralytics installed
 
-    model = ultralytics.YOLO(model_file)
+    try:
+        model = ultralytics.YOLO(model_file, weights_only=True)
+    except TypeError:
+        model = ultralytics.YOLO(model_file)
     has_e2e = _model_supports_end2end(model)
     task = getattr(model, "task", None) or "detect"
 

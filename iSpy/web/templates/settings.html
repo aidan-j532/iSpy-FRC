@@ -4,9 +4,8 @@
 <h1>Settings</h1>
 
 <div class="settings-tabs" id="tabs">
-  <button class="settings-tab active" onclick="switchTab('vision', this)">Vision</button>
+  <button class="settings-tab active" onclick="switchTab('general', this)">General</button>
   <button class="settings-tab" onclick="switchTab('camera', this)">Camera</button>
-  <button class="settings-tab" onclick="switchTab('network', this)">Network</button>
   <button class="settings-tab" onclick="switchTab('advanced', this)">Advanced</button>
   <button class="settings-tab" onclick="switchTab('about', this)">About</button>
   <button class="settings-tab" onclick="switchTab('raw', this)">Raw JSON</button>
@@ -18,28 +17,7 @@
 </div>
 <div class="settings-auto-note" style="display:none;color:var(--text-muted);font-size:0.78rem;margin-top:4px;">Auto-saving&hellip;</div>
 
-<div id="tab-vision" class="settings-tab-content">
-  <div class="settings-section">
-    <h3>Model</h3>
-    <div class="form-row">
-      <span class="form-label">Auto Optimize</span>
-      <select class="form-input" data-key="optimize" data-restart="true">
-        <option value="true">Enabled</option>
-        <option value="false">Disabled</option>
-      </select>
-      <span class="restart-badge" style="display:none;">restart required</span>
-    </div>
-  </div>
-
-  <div class="settings-section">
-    <h3>Detection</h3>
-    <p class="text-dim text-sm">Detection and tracking thresholds are add-on
-      settings now - they live on the
-      <a href="/addons">Add-ons page</a> (object_tracker tracker:
-      distance_threshold, stale_threshold; path_planner tracker:
-      DBSCAN epsilon / min_samples).</p>
-  </div>
-
+<div id="tab-general" class="settings-tab-content">
   <div class="settings-section">
     <h3>Units</h3>
     <div class="form-row">
@@ -53,14 +31,20 @@
       </select>
     </div>
   </div>
+
+  <div class="settings-section">
+    <h3>Display</h3>
+    <div class="form-row">
+      <span class="form-label">Max FPS</span>
+      <input class="form-input" type="number" data-key="max_fps"
+             step="1" min="0" placeholder="0 = unlimited">
+    </div>
+  </div>
 </div>
 
 <div id="tab-camera" class="settings-tab-content" style="display:none;">
   <div class="settings-section">
-    <h3>Recording</h3>
-    <p class="text-dim text-sm">Recording is an add-on now - enable it and
-      configure record_dir/fps on the <a href="/addons">Add-ons page</a>
-      (video_recorder utility).</p>
+    <h3>Capture</h3>
     <div class="form-row">
       <span class="form-label">Frame Sync</span>
       <select class="form-input" data-key="frame_sync">
@@ -72,16 +56,8 @@
 
   <div class="settings-section">
     <h3>Camera Configs</h3>
-    <p class="text-dim text-sm">Camera configurations are managed via the raw JSON editor below or through the setup wizard.</p>
-  </div>
-</div>
-
-<div id="tab-network" class="settings-tab-content" style="display:none;">
-  <div class="settings-section">
-    <h3>NetworkTables</h3>
-    <p class="text-dim text-sm">NetworkTables is an add-on now - enable it and
-      set the server IP on the <a href="/addons">Add-ons page</a>
-      (network_table_handler utility).</p>
+    <p class="text-dim text-sm">Individual camera settings (pipeline, model, calibration) are managed
+      via the <a href="/cameras">Cameras page</a>. The raw JSON editor below provides full access.</p>
   </div>
 </div>
 
@@ -116,6 +92,21 @@
       <span class="form-label" title="Seconds without a fresh frame before /health reports degraded.">Health Stale Threshold (s)</span>
       <input class="form-input" type="number" data-key="health_stale_threshold"
              step="0.1" min="0" placeholder="1.0">
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Hardware</h3>
+    <div class="form-row">
+      <span class="form-label" title="Number of GPUs to use. 'auto' detects all available.">GPUs</span>
+      <select class="form-input" data-key="num_gpus" data-restart="true">
+        <option value="auto">Auto</option>
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+      </select>
+      <span class="restart-badge" style="display:none;">restart required</span>
     </div>
   </div>
 
@@ -166,7 +157,7 @@
 <script>
 let configData = {};
 let defaultsData = {};
-const BOOL_KEYS = new Set(["optimize", "frame_sync", "metrics", "debug_mode", "grayscale"]);
+const BOOL_KEYS = new Set(["frame_sync", "metrics", "debug_mode"]);
 
 function parseValue(el) {
   const val = el.value;
@@ -178,11 +169,6 @@ function parseValue(el) {
     return Number.isFinite(n) ? n : val;
   }
   return val;
-}
-
-async function checkCriticalAfterSave() {
-  const { recommendations } = await fetch('/api/recommendations').then(r => r.json());
-  recommendations.filter(r => r.severity === 'critical').forEach(r => showToast(r.message, 'error'));
 }
 
 function unlockRawEditor() {

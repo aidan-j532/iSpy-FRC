@@ -5,7 +5,7 @@ from iSpy.web.Backend.WebModule import WebModule
 from iSpy.validations.recommendations import get_structured_recommendations
 
 _RESTART_REQUIRED_KEYS = {
-    "unit", "debug_mode", "frame_sync", "optimize", "log_level",
+    "unit", "debug_mode", "frame_sync", "log_level",
     "metrics", "plugins", "camera_configs", "device", "num_gpus",
 }
 

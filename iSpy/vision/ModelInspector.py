@@ -736,7 +736,10 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
 def _inspect_ultralytics(model_path: str, task: str) -> dict:
     try:
         from ultralytics import YOLO
-        model = YOLO(model_path, task=task, verbose=False)
+        try:
+            model = YOLO(model_path, task=task, verbose=False, weights_only=True)
+        except TypeError:
+            model = YOLO(model_path, task=task, verbose=False)
         model_task = getattr(model, "task", task) or task
         try:
             num_classes = int(model.model.model[-1].nc)

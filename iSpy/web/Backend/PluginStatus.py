@@ -1,5 +1,8 @@
+import ast
 import logging
+import os
 import re
+from functools import wraps
 from flask import jsonify, render_template, request
 from pathlib import Path
 from iSpy.web.Backend.WebModule import WebModule
@@ -12,6 +15,28 @@ from iSpy.plugins.bases import (
 import iSpy.plugins as _plugins_pkg
 
 logger = logging.getLogger(__name__)
+
+
+def _is_local_request() -> bool:
+    return request.remote_addr in ("127.0.0.1", "::1", "localhost")
+
+
+def require_local_or_token(f):
+    """Decorator: allow the request if it originates from localhost OR carries
+    a valid X-iSpy-Admin-Token header matching the ISPY_ADMIN_TOKEN env var.
+    If ISPY_ADMIN_TOKEN is not set, only local requests are permitted."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if _is_local_request():
+            return f(*args, **kwargs)
+        admin_token = os.environ.get("ISPY_ADMIN_TOKEN")
+        if not admin_token:
+            return jsonify(error="Admin API is local-only. Set ISPY_ADMIN_TOKEN to enable remote access."), 403
+        provided = request.headers.get("X-iSpy-Admin-Token", "")
+        if provided != admin_token:
+            return jsonify(error="Invalid or missing admin token."), 403
+        return f(*args, **kwargs)
+    return wrapper
 
 _PLUGIN_ROOT = Path(_plugins_pkg.__file__).resolve().parent
 
@@ -147,9 +172,9 @@ class PluginStatusModule(WebModule):
         flask_app.add_url_rule("/api/plugins/available", "api_plugins_available", self._available)
         flask_app.add_url_rule("/api/plugins/toggle", "api_plugins_toggle", self._toggle, methods=["POST"])
         flask_app.add_url_rule("/api/plugins/settings", "api_plugins_settings", self._save_settings, methods=["POST"])
-        flask_app.add_url_rule("/api/plugins/upload", "api_plugins_upload", self._upload, methods=["POST"])
-        flask_app.add_url_rule("/api/plugins/create", "api_plugins_create", self._create, methods=["POST"])
-        flask_app.add_url_rule("/api/plugins/<ptype>/<name>", "api_plugins_delete", self._delete, methods=["DELETE"])
+        flask_app.add_url_rule("/api/plugins/upload", "api_plugins_upload", require_local_or_token(self._upload), methods=["POST"])
+        flask_app.add_url_rule("/api/plugins/create", "api_plugins_create", require_local_or_token(self._create), methods=["POST"])
+        flask_app.add_url_rule("/api/plugins/<ptype>/<name>", "api_plugins_delete", require_local_or_token(self._delete), methods=["DELETE"])
         flask_app.add_url_rule("/api/plugins/<ptype>/<name>/source", "api_plugins_source", self._source, methods=["GET"])
         flask_app.add_url_rule(
             "/api/plugins/publish-sources", "api_plugins_publish_sources",
@@ -457,12 +482,66 @@ class PluginStatusModule(WebModule):
 
     def _validate_addon_source(self, ptype: str, code: str, expected_class_name: str | None) -> str | None:
         subdir, base_cls, base_name, _ = _TYPE_MAP[ptype]
-        if base_name not in code:
-            return f"Add-on must subclass {base_name} (import it from iSpy.plugins.bases)."
-        if "plugin_name" not in code:
-            return "Add-on class must define a 'plugin_name' class attribute."
+
         if len(code) > 200_000:
             return "File too large."
+
+        # Reject dangerous builtins before AST parsing
+        _DANGEROUS = ("eval(", "exec(", "__import__(", "subprocess.", "os.system(", "pty.", "socket.")
+        for pat in _DANGEROUS:
+            if pat in code:
+                return f"Add-on source contains forbidden pattern: {pat.rstrip('(')}"
+
+        # Use AST to confirm a class genuinely subclasses the expected base
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as exc:
+            return f"Add-on source has a syntax error: {exc}"
+
+        found_subclass = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for base in node.bases:
+                base_id = ""
+                if isinstance(base, ast.Name):
+                    base_id = base.id
+                elif isinstance(base, ast.Attribute):
+                    base_id = base.attr
+                if base_id == base_name:
+                    found_subclass = True
+                    break
+            if found_subclass:
+                break
+
+        if not found_subclass:
+            return f"Add-on must subclass {base_name} (import it from iSpy.plugins.bases)."
+
+        # Check plugin_name is assigned inside the subclass body
+        has_plugin_name = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for base in node.bases:
+                base_id = ""
+                if isinstance(base, ast.Name):
+                    base_id = base.id
+                elif isinstance(base, ast.Attribute):
+                    base_id = base.attr
+                if base_id == base_name:
+                    for item in node.body:
+                        if isinstance(item, ast.Assign):
+                            for target in item.targets:
+                                if isinstance(target, ast.Name) and target.id == "plugin_name":
+                                    has_plugin_name = True
+                                    break
+                    break
+            if has_plugin_name:
+                break
+
+        if not has_plugin_name:
+            return "Add-on class must define a 'plugin_name' class attribute."
+
         return None
 
     def _create(self):

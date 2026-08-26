@@ -131,12 +131,16 @@ class ModelsModule(WebModule):
             return jsonify(error="Upload a .pt file"), 400
         name = secure_filename(f.filename)
         dest = self.pytorch_dir / name
-        f.save(str(dest))
+        tmp = dest.with_suffix(".pt.uploading")
         try:
-            meta = metadata_from_pt(dest)
+            f.save(str(tmp))
+            meta = metadata_from_pt(tmp)
             write_metadata(metadata_path_for(dest), meta)
+            tmp.rename(dest)
         except Exception as e:
-            return jsonify(error=f"Saved but metadata generation failed: {e}"), 207
+            if tmp.exists():
+                tmp.unlink()
+            return jsonify(error=f"Metadata generation failed: {e}"), 400
         return jsonify(success=True, name=name)
 
     def _select(self):

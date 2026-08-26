@@ -359,7 +359,10 @@ class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
             model = YOLOWorld(weights, verbose=False)
             model.set_classes(self.classes)
             model.save(str(fixed))
-            YOLO(str(fixed), task="detect", verbose=False)
+            try:
+                model = YOLO(str(fixed), task="detect", verbose=False, weights_only=True)
+            except TypeError:
+                model = YOLO(str(fixed), task="detect", verbose=False)
             self.logger.info("Reparameterized YOLO World model -> %s (classes=%s)", fixed, self.classes)
             return str(fixed)
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
@@ -407,7 +410,10 @@ class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 self.model = None
                 return
 
-            self.model = YOLO(fixed, task="detect", verbose=False)
+            try:
+                self.model = YOLO(fixed, task="detect", verbose=False, weights_only=True)
+            except TypeError:
+                self.model = YOLO(fixed, task="detect", verbose=False)
             self._model_path = fixed
             self._quantized = False
             self._load_error = None

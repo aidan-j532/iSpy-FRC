@@ -144,7 +144,10 @@ class _GPUInferencePool:
         import torch
         from ultralytics import YOLO
         torch.cuda.set_device(device)
-        model = YOLO(self._model_file, task=self._task, verbose=False)
+        try:
+            model = YOLO(self._model_file, task=self._task, verbose=False, weights_only=True)
+        except TypeError:
+            model = YOLO(self._model_file, task=self._task, verbose=False)
         if self._model_file.endswith(".pt"):
             model.to(f"cuda:{device}")
 
@@ -485,7 +488,10 @@ class GenericYolo:
         ):
             self.model_type = "yolo"
             from ultralytics import YOLO
-            self.model = YOLO(self.model_file, task=self.task, verbose=False)
+            try:
+                self.model = YOLO(self.model_file, task=self.task, verbose=False, weights_only=True)
+            except TypeError:
+                self.model = YOLO(self.model_file, task=self.task, verbose=False)
             if self.model_file.endswith(".pt"):
                 self.model.to("cpu" if self.device == "cpu" else f"cuda:{self.device}")
 
@@ -774,9 +780,14 @@ class GenericYolo:
     def _load_tpu(self, model_file: str):
         import torch
         import torch_xla.core.xla_model as xm
-        from ultralytics import YOLO
+        try:
+            from ultralytics import YOLO
 
-        yolo = YOLO(model_file, task=self.task, verbose=False)
+            yolo = YOLO(model_file, task=self.task, verbose=False, weights_only=True)
+        except TypeError:
+            from ultralytics import YOLO
+
+            yolo = YOLO(model_file, task=self.task, verbose=False)
         raw_model = yolo.model
         raw_model = raw_model.to(self._tpu_device)
         raw_model.eval()
