@@ -92,7 +92,14 @@ class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
         self.margin = vm_filled.get("margin", vm_cfg.get("margin", 0))
         raw_min_conf = vm_filled.get("min_conf", vm_cfg.get("min_conf", 0.5))
         self.min_confidence = float(raw_min_conf) if raw_min_conf is not None else 0.5
-        self.z_mode = vm_cfg.get("z_mode", "size_based")  # "size_based" | "ground_plane"
+        # "size_based" | "ground_plane". Schema field lives in pipeline
+        # settings; fall back to the legacy vision_model dict value.
+        self.z_mode = str(
+            camera_config.get_pipeline_setting(
+                "z_mode", vm_cfg.get("z_mode", "size_based")
+            )
+        )
+        self.z_mode = "ground_plane" if self.z_mode == "ground_plane" else "size_based"
         self.yolo_model_file = vm_filled.get("file_path", vm_cfg.get("file_path", ""))
         self.input_size = tuple(vm_filled.get("input_size", (640, 640)))
         raw_quantize = vm_filled.get("quantize", vm_cfg.get("quantize"))
@@ -282,6 +289,19 @@ class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
                 "label": "Min confidence",
                 "default": 0.5,
                 "step": 0.05,
+            },
+            "z_mode": {
+                "type": "select",
+                "label": "Depth estimation",
+                "default": "size_based",
+                "options": ["size_based", "ground_plane"],
+                "help": "How distance to a detected object is computed.\n"
+                        "size_based: uses the known object size + calibration "
+                        "distance to go from pixel height to distance.\n"
+                        "ground_plane: casts the detection ray and intersects "
+                        "it with the plane the object sits on (Object heights "
+                        "above ground). If the primary method fails, the other "
+                        "is used as a fallback.",
             },
             "object_heights": {
                 "type": "list",
@@ -600,7 +620,7 @@ class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
 
     def _box_to_robot_point(
         self, box: Box, img_w: int, img_h: int, ground_z: float = 0.0
-    ) -> np.ndarray | None:
+    ):
         # unified depth model: cast the bottom-center ray and intersect it with
         # the horizontal plane the object is assumed to sit on. ground_z=0
         # (ground plane) is the default; per-class heights come from the
@@ -609,10 +629,22 @@ class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
         x1, y1, x2, y2 = box.xyxy
         ray = self._pixel_ray((x1 + x2) / 2.0, y2, img_w, img_h)
         gp = triangulation.ground_plane_intersection(ray, ground_z=ground_z)
+        sb = self._size_based_point(box, img_w, img_h, ground_z=ground_z)
+        scale = self.conversions.get(self.unit, self.conversions["meter"])
+
+        # z_mode picks which method is primary; the other is the fallback.
+        # method string is surfaced as the Object's depth_source.
+        if self.z_mode == "ground_plane":
+            if gp is not None:
+                return gp * scale, "ground_plane"
+            if sb is not None:
+                return sb, "size_based"
+            return None, "none"
+        if sb is not None:
+            return sb, "size_based"
         if gp is not None:
-            scale = self.conversions.get(self.unit, self.conversions["meter"])
-            return gp * scale
-        return self._size_based_point(box, img_w, img_h, ground_z=ground_z)
+            return gp * scale, "ground_plane"
+        return None, "none"
 
     def _size_based_point(
         self, box: Box, img_w: int, img_h: int, ground_z: float = 0.0
@@ -758,15 +790,13 @@ class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
         if box.translation is not None:
             pt = self._pnp_to_robot_coordinates(box.translation)
         else:
-            pt = self._box_to_robot_point(
+            pt, depth_source = self._box_to_robot_point(
                 box, img_w, img_h, ground_z=obj_plane_z
             )
             if pt is None:
                 return None
             # depth model assumes the object sits on its configured plane,
-            # so z is that plane's height. z_mode kept for back-compat
-            if self.z_mode == "ground_plane":
-                depth_source = "ground_plane"
+            # so z is that plane's height
             pt = np.array([pt[0], pt[1], obj_plane_z * scale])
 
         roll, pitch, yaw = 0.0, 0.0, 0.0
