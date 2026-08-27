@@ -99,15 +99,12 @@
     <h3>Hardware</h3>
     <div class="form-row">
       <span class="form-label" title="Number of GPUs to use. 'auto' detects all available.">GPUs</span>
-      <select class="form-input" data-key="num_gpus" data-restart="true">
+      <select class="form-input" data-key="num_gpus" data-restart="true" id="gpu-select">
         <option value="auto">Auto</option>
-        <option value="1">1</option>
-        <option value="2">2</option>
-        <option value="3">3</option>
-        <option value="4">4</option>
       </select>
       <span class="restart-badge" style="display:none;">restart required</span>
     </div>
+    <p class="text-dim text-sm" id="gpu-status" style="display:none;margin-top:4px;"></p>
   </div>
 
   <div class="settings-section">
@@ -133,7 +130,7 @@
       </div>
       <div class="form-row">
         <span class="form-label">Repository</span>
-        <a href="https://github.com/AidanBatty/iSpy-FRC" target="_blank" rel="noopener" class="text-dim">github.com/AidanBatty/iSpy-FRC</a>
+        <a href="https://github.com/aidan-j532/iSpy-FRC" target="_blank" rel="noopener" class="text-dim">github.com/AidanBatty/iSpy-FRC</a>
       </div>
       <p class="text-dim text-sm" style="margin-top:12px;">iSpy is a real-time vision system for FRC robots. It provides plug-and-play camera pipelines, 3D field visualization, and model-based object detection.</p>
     </div>
@@ -363,11 +360,36 @@ async function load() {
   configData = data.config || {};
   defaultsData = data.defaults || {};
   document.getElementById('cfg').value = JSON.stringify(configData, null, 2);
+  populateGpuSelect(data.gpu_count);
   loadFormValues();
   fetch('/api/version').then(r => r.json()).then(j => {
     const el = document.getElementById('about-version');
     if (el && j.version) el.textContent = 'v' + j.version;
   }).catch(() => {});
+}
+
+function populateGpuSelect(count) {
+  const sel = document.getElementById('gpu-select');
+  const status = document.getElementById('gpu-status');
+  if (!sel) return;
+  const n = parseInt(count, 10);
+  if (!(n > 0)) {
+    sel.value = 'auto';
+    sel.disabled = true;
+    status.style.display = '';
+    status.textContent = 'No GPUs detected - running on CPU.';
+    return;
+  }
+  sel.disabled = false;
+  // rebuild numbered options so we never offer more than are present
+  sel.querySelectorAll('option:not([value="auto"])').forEach(o => o.remove());
+  for (let i = 1; i <= n; i++) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = String(i);
+    sel.appendChild(opt);
+  }
+  status.style.display = 'none';
 }
 
 load();

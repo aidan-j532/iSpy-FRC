@@ -10,6 +10,16 @@ _RESTART_REQUIRED_KEYS = {
 }
 
 
+def _detect_gpu_count() -> int:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return int(torch.cuda.device_count())
+        return 0
+    except Exception:
+        return 0
+
+
 class SettingsModule(WebModule):
     plugin_name = "settings"
 
@@ -23,7 +33,11 @@ class SettingsModule(WebModule):
 
     def _get(self):
         config = self.context["config"]
-        return jsonify(config=config.config, defaults=config.default_config)
+        return jsonify(
+            config=config.config,
+            defaults=config.default_config,
+            gpu_count=_detect_gpu_count(),
+        )
 
     def _snapshot(self):
         from iSpy.web.Backend.save_store import write
