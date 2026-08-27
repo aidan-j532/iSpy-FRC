@@ -8,9 +8,9 @@ from wpimath.geometry import Pose2d
 from iSpy.plugins.bases import UtilityBase
 
 
-@wpiutil.wpistruct.make_wpistruct(name="Fuel")
+@wpiutil.wpistruct.make_wpistruct(name="Object")
 @dataclasses.dataclass
-class FuelStruct:
+class ObjectStruct:
     x: float
     y: float
     z: float = 0.0
@@ -19,11 +19,17 @@ class FuelStruct:
     yaw: float = 0.0
 
 
+# vision_data is published as raw JSON (a single string topic holding the full
+# universal Object.to_dict() list). Because every pipeline flattens to the same
+# keys, JSON works for object_detection, april_tag, qr_code, optical_flow,
+# depth, etc. - the robot picks the entries it cares about by "name" and
+# "vis_type". The struct[] form remains available for back-compat via the
+# data_type dropdown.
 DEFAULT_PUBLISH = [
     {"name": "fps",            "data_type": "number",  "source": "fps",             "nt_topic": "fps"},
     {"name": "num_detections", "data_type": "number",  "source": "detection_count",  "nt_topic": "num_detections"},
     {"name": "camera_lag",     "data_type": "number",  "source": "camera_lag_s",     "nt_topic": "camera_lag"},
-    {"name": "vision_data",    "data_type": "struct[]", "source": "detections",      "nt_topic": "vision_data"},
+    {"name": "vision_data",    "data_type": "json",    "source": "detections",       "nt_topic": "vision_data"},
 ]
 
 
@@ -58,7 +64,7 @@ class NetworkTableHandler(UtilityBase):
                     "data_type": {
                         "type": "select",
                         "label": "Type",
-                        "options": ["auto", "number", "boolean", "string", "struct[]"],
+                        "options": ["auto", "number", "boolean", "string", "json", "struct[]"],
                         "default": "auto",
                     },
                     "source": {
@@ -152,6 +158,8 @@ class NetworkTableHandler(UtilityBase):
         try:
             if data_type == "auto":
                 self._publish_auto(value, nt_topic)
+            elif data_type == "json":
+                self._publish_json(value, nt_topic)
             elif data_type == "struct[]":
                 self._send_detections(value)
             elif data_type == "number":
@@ -162,6 +170,23 @@ class NetworkTableHandler(UtilityBase):
                 self._send_data(str(value), nt_topic, "VisionData")
         except Exception as e:
             self.logger.error("Failed to publish '%s': %s", name, e)
+
+    def _publish_json(self, value, nt_topic: str):
+        """Publish arbitrary structured data as a single JSON-string topic.
+
+        Every pipeline flattens its detections to the universal schema, so a
+        list of Objects JSON-serializes cleanly; robot code only needs to parse
+        one string topic. Any value that can't be serialized is dropped with a
+        warning instead of crashing the vision loop.
+        """
+        try:
+            encoded = json.dumps(value, default=str)
+        except (TypeError, ValueError) as e:
+            self.logger.warning(
+                "Could not serialize JSON topic '%s': %s", nt_topic, e,
+            )
+            return
+        self._send_data(encoded, nt_topic, "VisionData")
 
     def _publish_auto(self, value, nt_topic: str):
         """Publish with automatic scalar type detection.
@@ -227,7 +252,7 @@ class NetworkTableHandler(UtilityBase):
             data = entry.to_dict() if hasattr(entry, "to_dict") else entry
             if not isinstance(data, dict):
                 continue
-            structs.append(FuelStruct(
+            structs.append(ObjectStruct(
                 x=float(data.get("x", 0.0)),
                 y=float(data.get("y", 0.0)),
                 z=float(data.get("z", 0.0)),
@@ -237,7 +262,7 @@ class NetworkTableHandler(UtilityBase):
             ))
         if pub_key not in self._subscribers:
             self._subscribers[pub_key] = table.getStructArrayTopic(
-                "vision_data", FuelStruct
+                "vision_data", ObjectStruct
             ).publish()
         self._subscribers[pub_key].set(structs)
 

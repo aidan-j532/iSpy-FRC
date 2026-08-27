@@ -1,88 +1,82 @@
 #!/usr/bin/env python3
-"""Live NetworkTables ball-position monitor for the default v26 Fuel model.
+"""Live NetworkTables monitor for iSpy vision output (any pipeline).
 
 iSpy's network_table_handler runs as an NT *client* that connects to a server
-at a configurable IP (default 10.0.0.2). With no robot around, this script
-becomes that server on 127.0.0.1, so you can watch iSpy's output as if you
-were the robot's drive code.
+at a configurable IP. With no robot around, this script becomes that server so
+you can watch iSpy's output as if you were the robot's drive code.
 
 Setup (once):
-  1. In the web UI -> Addons, enable "network_table_handler" and set
-     Robot IP = 127.0.0.1
-  2. Make sure your camera uses the object_detection pipeline with the
-     _default_v26_detect_for_fuel model (detects class "Fuel").
+  1. Enable the "network_table_handler" addon in iSpy.
+  2. Set its Robot IP to the machine running THIS script (e.g. 127.0.0.1 if
+     both are on the same box, or the server's LAN IP).
 
 Then:
-  python nt_ball_monitor.py          # runs an NT server on 127.0.0.1
+  python nt_ball_monitor.py          # runs an NT server on 0.0.0.0:5810
 
-This subscribes to the same topics the robot would read:
-  VisionData/vision_data     -> FuelStruct array: x (right+), y (forward+), z (up)
-  VisionData/num_detections  -> how many balls seen
-  VisionData/fps / camera_lag
+iSpy publishes the full list of detected objects as a single JSON string topic
+called VisionData/vision_data. Because every pipeline (object_detection,
+april_tag, qr_code, optical_flow, depth, ...) flattens to the same schema, this
+monitor works for all of them - it just prints whatever iSpy is detecting.
 
-Ball-driving hint: steer to make x -> 0, and use y (distance ahead, metres)
-to decide how far to drive forward. +Y is straight ahead of the camera.
+Driving hint: each object has x / y in metres relative to the camera (x = right
++, y = forward +). Steer to bring x -> 0, drive forward proportional to y.
 """
 
-import dataclasses
-import time
+import json
 import ntcore
-import wpiutil.wpistruct
-
-
-@wpiutil.wpistruct.make_wpistruct(name="Fuel")
-@dataclasses.dataclass
-class FuelStruct:
-    x: float
-    y: float
-    z: float = 0.0
-    roll: float = 0.0
-    pitch: float = 0.0
-    yaw: float = 0.0
 
 
 def main():
     inst = ntcore.NetworkTableInstance.getDefault()
     # Act as the NT server so iSpy's client can connect to us. Signature:
     # startServer(persist_filename, listen_address, port3=1735, port4=5810)
-    # Defaults already use 5810 for the main port, but pass it explicitly so
-    # it stays correct regardless of the ntcore default.
     inst.startServer("networktables.json", "", 1735, 5810)
-    print("NT server started on 127.0.0.1:5810 (robot IP for iSpy = 127.0.0.1)")
+    print("NT server started on 0.0.0.0:5810 (iSpy Robot IP = this host)")
     print("Press Ctrl+C to stop.\n")
 
     table = inst.getTable("VisionData")
 
-    ball_sub = table.getStructArrayTopic("vision_data", FuelStruct).subscribe([])
+    vision_sub = table.getStringTopic("vision_data").subscribe(None)
     count_sub = table.getDoubleTopic("num_detections").subscribe(0.0)
     fps_sub = table.getDoubleTopic("fps").subscribe(0.0)
     lag_sub = table.getDoubleTopic("camera_lag").subscribe(0.0)
 
-    last_msg = ""
+    last_line = ""
     try:
         while True:
-            balls = ball_sub.get()
+            raw = vision_sub.get()
             n = count_sub.get()
             fps = fps_sub.get()
             lag = lag_sub.get()
 
-            if balls:
-                # pick the closest ball (smallest y = nearest, since +Y is forward)
-                closest = min(balls, key=lambda b: b.y)
-                steer = closest.x  # metres right(+) / left(-)
-                dist = closest.y   # metres ahead
-                msg = (
-                    f"[{n:.0f} ball(s)] closest -> x={steer:+.3f} m, "
-                    f"y={dist:.3f} m ahead   (fps={fps:.1f}, lag={lag*1000:.0f}ms)"
+            objects = []
+            if raw is not None and raw:
+                try:
+                    objects = json.loads(raw)
+                except (ValueError, TypeError):
+                    objects = []
+
+            if objects:
+                # pick the closest object (smallest y = nearest, +Y is forward)
+                closest = min(objects, key=lambda o: o.get("y", 0.0))
+                name = closest.get("name", "?")
+                steer = closest.get("x", 0.0)
+                dist = closest.get("y", 0.0)
+                conf = closest.get("confidence")
+                conf_s = f", conf={conf:.2f}" if isinstance(conf, (int, float)) else ""
+                line = (
+                    f"[{n:.0f} object(s)] closest='{name}'{conf_s} -> "
+                    f"x={steer:+.3f} m, y={dist:.3f} m ahead   "
+                    f"(fps={fps:.1f}, lag={lag*1000:.0f}ms)"
                 )
-                if msg != last_msg:
-                    print("\033[32m" + msg + "\033[0m")
-                    last_msg = msg
+                if line != last_line:
+                    print("\033[32m" + line + "\033[0m")
+                    last_line = line
             else:
-                if last_msg:
-                    print("\033[90mno ball in view\033[0m")
-                    last_msg = ""
-            time.sleep(0.1)
+                if last_line:
+                    print("\033[90mno objects in view\033[0m")
+                    last_line = ""
+            inst.waitForListenerQueue(0.1)
     except KeyboardInterrupt:
         print("\nStopping monitor.")
     finally:
