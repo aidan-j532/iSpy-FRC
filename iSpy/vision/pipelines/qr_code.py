@@ -11,6 +11,8 @@ from iSpy.vision import calibration as cam_calibration
 
 class QRCodeCamera(VisionPipeline):
     plugin_name = "qr_code"
+    # QR pose uses the camera matrix -> ChArUco board intrinsics.
+    calibration_sections = ["charuco"]
 
     @classmethod
     def config_schema(cls) -> dict:

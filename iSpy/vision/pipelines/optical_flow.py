@@ -12,6 +12,8 @@ from iSpy.vision.Object import Object
 class OpticalFlowCamera(VisionPipeline):
     plugin_name = "optical_flow"
     beta = True
+    # reads camera FOV directly - no board/intrinsics calibration needed
+    calibration_sections = []
 
     @classmethod
     def config_schema(cls) -> dict:

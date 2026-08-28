@@ -23,6 +23,8 @@ _WORLD_MODEL_URLS = {
 
 class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
     plugin_name = "yolo_world"
+    # zero-shot detection needs no intrinsics calibration - disable the default tab
+    calibration_sections = []
 
     _OPT_OPTIONS_EXTRA = ("input_size",)
 

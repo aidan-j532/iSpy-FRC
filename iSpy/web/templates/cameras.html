@@ -1308,8 +1308,9 @@ function statusDotClass(cam) {
 function cameraHeaderDotClass(isStreaming, cam) {
   if (!isStreaming) return 'status-warn';
   if (!cam) return 'status-ok';
-  const mode = calibrationModeFor(cam.pipeline || '');
-  if ((mode === 'focal' || mode === 'charuco') && !cam.calibrated) return 'status-warn';
+  const sections = calibrationSectionsFor(cam.pipeline || '');
+  const needsCalib = sections.some(s => s === 'charuco' || s === 'focal' || s === 'pnp');
+  if (needsCalib && !cam.calibrated) return 'status-warn';
   return 'status-ok';
 }
 
@@ -1613,8 +1614,9 @@ function setRefreshRate() {
 
 const calibrationState = {
   camera: null,      // camera key (name) used for the API and the raw feed
-  pipeline: null,    // camera's pipeline name - decides which wizard mode to run
-  mode: null,        // 'focal' | 'charuco' | 'beta' | 'none'
+  pipeline: null,    // camera's pipeline name - decides which wizard sections to run
+  sections: [],      // ['charuco' | 'focal' | 'pnp' | ...] enabled calibration tabs
+  activeSection: null, // currently visible tab in the wizard
   frozen: false,
   frame: null,       // ImageData of the frozen frame (focal mode)
   canvas: null,
@@ -1625,18 +1627,28 @@ const calibrationState = {
   captured: 0,
   overlayPattern: null,    // [cols, rows] used by the live charuco overlay feed
   overlayDict: null,      // aruco dictionary id for the live charuco overlay feed
-  intrinsicsActive: false, // focal wizard: feed shows the ChArUco board overlay
-  focalActive: false,      // focal wizard: freeze & measure tab is open
-  focalTab: null,          // focal wizard: 'intrinsics' | 'known' page
 };
 
 let calibrationHeartbeatTimer = null;
 
-function calibrationModeFor(pipeline) {
-  if (pipeline === 'object_detection') return 'focal';
-  if (pipeline === 'april_tag' || pipeline === 'qr_code') return 'charuco';
-  if (pipeline === 'optical_flow') return 'beta';
-  return 'none';
+function calibrationSectionsFor(pipeline) {
+  // Each pipeline declares which calibration sections (tabs) it needs via
+  // calibration_sections in its config_schema payload. Default is the
+  // universal ChArUco board, so older / unknown pipelines still get it.
+  const declared = pipelineSchemas[pipeline]
+    ? pipelineSchemas[pipeline].calibration_sections
+    : undefined;
+  if (Array.isArray(declared)) return declared.slice();
+  if (declared) return [declared];
+  return ['charuco'];
+}
+
+function calibrationSectionLabel(s) {
+  return {
+    charuco: 'ChArUco Intrinsics',
+    focal: 'Focal / FOV',
+    pnp: 'Pose Keypoints',
+  }[s] || String(s);
 }
 
 function calibrationFeedUrl(overlay, pattern, dict) {
@@ -1923,7 +1935,21 @@ async function openCalibrationWizardFor(name) {
     if (pipeline && typeof pipeline === 'object') pipeline = pipeline.name;
     calibrationState.camera = name;
     calibrationState.pipeline = pipeline || 'object_detection';
-    calibrationState.mode = calibrationModeFor(calibrationState.pipeline);
+    let sections = calibrationSectionsFor(calibrationState.pipeline);
+    // object_detection can run either a detector or a pose model. Pose models
+    // need the keypoint xyz (PnP) tab instead of the focal/FOV tab - ask the
+    // backend which one applies so the right tabs are offered.
+    if (sections.includes('focal') || sections.includes('pnp')) {
+      try {
+        const p = await fetch(`/api/cameras/calibration/${encodeURIComponent(name)}/pnp`).then(r => r.json());
+        if (!p.model_error && p.num_keypoints) {
+          sections = sections.filter(s => s !== 'focal');
+          if (!sections.includes('pnp')) sections.push('pnp');
+        }
+      } catch (e) {}
+    }
+    calibrationState.sections = sections;
+    calibrationState.activeSection = sections[0] || null;
     openCalibrationWizard();
   } catch (e) {
     showToast('Failed to load the camera', 'error');
@@ -1950,22 +1976,60 @@ function openCalibrationWizard() {
   const body = $id('calibration-body');
   body.innerHTML = '';
 
-  if (calibrationState.mode === 'focal') {
-    calibrationState.focalTab = 'intrinsics';
-    renderFocalCalibration(body);
-    renderPnpSectionIfApplicable(body);
-    startAutoCapture('charuco');
-  } else if (calibrationState.mode === 'charuco') {
-    renderCharucoCalibration(body);
-    startAutoCapture('charuco');
-  } else if (calibrationState.mode === 'beta') {
-    body.innerHTML = '<div class="calib-section"><div class="calib-section-title">Optical Flow</div><div class="calib-status">The optical_flow pipeline is in beta. Its motion estimation reads camera FOV directly, so calibration is not needed.</div></div>';
+  const sections = calibrationState.sections || [];
+  if (!sections.length) {
+    body.innerHTML = '<div class="calib-section"><div class="calib-section-title">Not Applicable</div><div class="calib-status">This pipeline does not use distance calibration (no depth-from-size, intrinsics or PnP), so there is nothing to calibrate.</div></div>';
   } else {
-    body.innerHTML = '<div class="calib-section"><div class="calib-section-title">Not Applicable</div><div class="calib-status">This pipeline does not use distance calibration (no depth-from-size or PnP), so there is nothing to calibrate.</div></div>';
+    if (!calibrationState.activeSection || !sections.includes(calibrationState.activeSection)) {
+      calibrationState.activeSection = sections[0];
+    }
+    // tab bar
+    const tabsWrap = document.createElement('div');
+    tabsWrap.className = 'settings-tabs';
+    tabsWrap.id = 'calibration-tabs';
+    sections.forEach(s => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'settings-tab' + (s === calibrationState.activeSection ? ' active' : '');
+      b.textContent = calibrationSectionLabel(s);
+      b.onclick = () => switchCalibrationSection(s);
+      tabsWrap.appendChild(b);
+    });
+    body.appendChild(tabsWrap);
+    // panel
+    const panel = document.createElement('div');
+    panel.id = 'calibration-panel';
+    body.appendChild(panel);
+    renderCalibrationSection(calibrationState.activeSection, panel);
   }
-  
+
   $id('calibration-modal').style.display = 'flex';
   startCalibrationMode(calibrationState.camera);
+}
+
+function switchCalibrationSection(s) {
+  calibrationState.activeSection = s;
+  document.querySelectorAll('#calibration-tabs .settings-tab').forEach(b => {
+    b.classList.toggle('active', b.textContent === calibrationSectionLabel(s));
+  });
+  // leaving the charuco tab - stop auto capture of that section
+  stopAutoPolling();
+  const panel = $id('calibration-panel');
+  if (panel) renderCalibrationSection(s, panel);
+}
+
+function renderCalibrationSection(s, panel) {
+  panel.innerHTML = '';
+  if (s === 'charuco') {
+    renderCharucoCalibration(panel);
+    startAutoCapture('charuco');
+  } else if (s === 'focal') {
+    renderFocalCalibration(panel);
+  } else if (s === 'pnp') {
+    renderPnpSectionIfApplicable(panel);
+  } else {
+    panel.innerHTML = '<div class="calib-section"><div class="calib-section-title">Not Applicable</div><div class="calib-status">This calibration section is not available.</div></div>';
+  }
 }
 
 function closeCalibrationWizard() {
@@ -1975,13 +2039,12 @@ function closeCalibrationWizard() {
   $id('calibration-pipeline-badge').classList.remove('visible');
   calibrationState.camera = null;
   calibrationState.pipeline = null;
+  calibrationState.sections = [];
+  calibrationState.activeSection = null;
   calibrationState.canvas = null;
   calibrationState.ctx = null;
   calibrationState.frame = null;
   calibrationState.overlayPattern = null;
-  calibrationState.intrinsicsActive = false;
-  calibrationState.focalActive = false;
-  calibrationState.focalTab = null;
   stopAutoPolling();
   endCalibrationMode(camera);
   resumeCameraGridFeeds();
@@ -1989,26 +2052,7 @@ function closeCalibrationWizard() {
 }
 
 function renderFocalCalibration(body) {
-  if (!calibrationState.focalTab) calibrationState.focalTab = 'intrinsics';
-  calibrationState.overlayPattern = [7, 9];
-  calibrationState.overlayDict = 0;
-  const isIntrinsics = calibrationState.focalTab === 'intrinsics';
-  calibrationState.intrinsicsActive = isIntrinsics;
-  calibrationState.focalActive = !isIntrinsics;
-  body.innerHTML = isIntrinsics ? focalIntrinsicsBody() : focalKnownBody();
-}
-
-function focalIntrinsicsBody() {
-  return `
-    <div class="calib-section">
-      <div class="calib-section-title">Live View</div>
-      <div class="calib-stage">
-        <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict)}" alt="live feed" onerror="calibrationFeedError()">
-      </div>
-      <div class="calib-auto-msg" id="charuco-note">Hold the printed ChArUco board in view. Auto capture is on - just move the board around through varied angles. Every capture is drawn on the live view. Press Pause when you have enough, then calibrate.</div>
-    </div>
-    ${charucoCaptureSectionHtml()}
-  `;
+  body.innerHTML = focalKnownBody();
 }
 
 function focalKnownBody() {
@@ -2298,7 +2342,6 @@ function charucoCaptureSectionHtml() {
 function renderCharucoCalibration(body) {
   calibrationState.overlayPattern = [7, 9];
   calibrationState.overlayDict = 0;
-  calibrationState.intrinsicsActive = false;
   body.innerHTML = `
     <div class="calib-section">
       <div class="calib-section-title">Live View</div>
@@ -2324,9 +2367,7 @@ function reconnectCalibrationFeed() {
   if (!img || calibrationState.frozen) return;
   // MJPEG streams don't reconnect on an identical src - re-open with a cache-bust
   let base;
-  if (calibrationState.mode === 'focal' && calibrationState.intrinsicsActive) {
-    base = calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict);
-  } else if (calibrationState.mode === 'charuco') {
+  if (calibrationState.activeSection === 'charuco') {
     base = calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict);
   } else {
     base = calibrationFeedUrl();
@@ -2395,11 +2436,11 @@ async function resetCalibration() {
     if (resultContainers) resultContainers.innerHTML = '';
     const charucoResult = $id('charuco-result');
     if (charucoResult) charucoResult.innerHTML = '';
-    if (calibrationState.mode === 'charuco' || calibrationState.mode === 'focal') {
+    if (calibrationState.sections.includes('charuco')) {
       clearCalibrationSession('charuco');
-      startAutoCapture('charuco');
+      if (calibrationState.activeSection === 'charuco') startAutoCapture('charuco');
     }
-    if (calibrationState.mode === 'focal') {
+    if (calibrationState.activeSection === 'focal') {
       unfreezeCalibrationFrame();
     }
   } catch (e) {

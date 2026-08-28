@@ -12,6 +12,9 @@ from iSpy.vision import calibration as cam_calibration
 
 class AprilTagCamera(VisionPipeline):
     plugin_name = "april_tag"
+    # AprilTag pose is derived from the camera matrix, so the ChArUco board
+    # intrinsics calibration is all that's needed.
+    calibration_sections = ["charuco"]
 
     @classmethod
     def config_schema(cls) -> dict:

@@ -137,6 +137,16 @@ class VisionPipeline(Camera, VisionBase):
     def show_calibration(cls) -> bool:
         return True
 
+    # Declares which calibration sections the calibration wizard should offer
+    # (each section becomes a tab). Subclasses override to opt in/out. The
+    # default is the universal ChArUco board intrinsics calibration - every
+    # pipeline gets it unless it explicitly sets calibration_sections = [].
+    # Valid tokens:
+    #   "charuco" -> ChArUco board intrinsics (camera_matrix + dist_coeffs)
+    #   "focal"   -> known-object focal/FOV measurement
+    #   "pnp"     -> pose keypoint 3D positions (for pose models)
+    calibration_sections: list[str] = ["charuco"]
+
 
 class BackgroundPreparedPipeline(VisionPipeline):
     def __init__(self, camera_config, input_size, grayscale):

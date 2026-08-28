@@ -23,6 +23,8 @@ _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 
 
 class DepthAnythingCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
     plugin_name = "depth_anything"
+    # monocular depth maps need no calibration - disable the default ChArUco tab
+    calibration_sections = []
 
     _OPT_OPTIONS_EXTRA = ("input_size", "model_size")
 

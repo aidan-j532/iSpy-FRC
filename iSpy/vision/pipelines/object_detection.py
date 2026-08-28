@@ -17,6 +17,10 @@ from iSpy.vision import calibration as cam_calibration
 
 class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
     plugin_name = "object_detection"
+    # detector / pose models share the ChArUco intrinsics calibration by
+    # default. The frontend swaps the "focal" tab for the "pnp" keypoint tab
+    # when the configured model is a pose model - see cameras.html.
+    calibration_sections = ["charuco"]
 
     def __init__(
         self,
