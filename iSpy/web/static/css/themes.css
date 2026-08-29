@@ -1,0 +1,481 @@
+/* iSpy themes - five distinct visual identities. The default "carbon"
+   theme is the one already defined in design.css :root; the others are
+   kicked in by setting <html data-theme="...">. */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Chivo+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap');
+
+/* =====================================================================
+   No JS/theme not loaded yet: stay on the default carbon look.
+   ===================================================================== */
+html:not([data-theme]) {
+  --bg: #0a0a0a;
+  --bg-elevated: #121212;
+  --bg-surface: #1a1a1a;
+  --border: #222222;
+  --border-light: #2a2a2a;
+  --text: #e8e8e8;
+  --text-dim: #888888;
+  --text-muted: #555555;
+  --accent: #c8c8c8;
+  --accent-hover: #ffffff;
+  --accent-dim: rgba(200,200,200,0.06);
+  --accent-glow: rgba(200,200,200,0.08);
+  --ok: #34c759;
+  --ok-dim: rgba(52,199,89,0.08);
+  --ok-glow: rgba(52,199,89,0.12);
+  --bad: #ff3b30;
+  --bad-dim: rgba(255,59,48,0.08);
+  --warn: #e8a317;
+  --warn-dim: rgba(232,163,23,0.08);
+  --cut: 6px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  --radius: 0px;
+  --radius-sm: 0px;
+  --font-display: 'Inter', sans-serif;
+}
+
+/* =====================================================================
+   1. CARBON - industrial machine shop. Flat, sharp, monochrome.
+      The default. Defined here so the theme system owns all of it.
+   ===================================================================== */
+html[data-theme="carbon"] {
+  --bg: #0a0a0a;
+  --bg-elevated: #121212;
+  --bg-surface: #1a1a1a;
+  --border: #222222;
+  --border-light: #333333;
+  --text: #e8e8e8;
+  --text-dim: #8b8b8b;
+  --text-muted: #555555;
+  --accent: #c8c8c8;
+  --accent-hover: #ffffff;
+  --accent-dim: rgba(200,200,200,0.06);
+  --accent-glow: rgba(200,200,200,0.08);
+  --ok: #34c759;
+  --ok-dim: rgba(52,199,89,0.08);
+  --ok-glow: rgba(52,199,89,0.12);
+  --bad: #ff453a;
+  --bad-dim: rgba(255,69,58,0.08);
+  --bad-glow: rgba(255,69,58,0.12);
+  --warn: #ffd60a;
+  --warn-dim: rgba(255,214,10,0.10);
+  --warn-glow: rgba(255,214,10,0.12);
+  --cut: 4px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  --radius: 2px;
+  --radius-sm: 1px;
+  --font-display: 'Inter', sans-serif;
+  color-scheme: dark;
+}
+
+/* =====================================================================
+   2. PHOSPHOR - CRT terminal / retro-computing. SCADA monitor glow,
+      scanline halftone, blocky chunky controls.
+   ===================================================================== */
+html[data-theme="phosphor"] {
+  --bg: #0d0f05;
+  --bg-elevated: #101207;
+  --bg-surface: #161a07;
+  --border: #2b2f14;
+  --border-light: #40461d;
+  --text: #b8f26b;
+  --text-dim: #79a53f;
+  --text-muted: #4c6629;
+  --accent: #d0ff8a;
+  --accent-hover: #e8ffb0;
+  --accent-dim: rgba(184,242,107,0.08);
+  --accent-glow: rgba(184,242,107,0.14);
+  --ok: #5cf26b;
+  --ok-dim: rgba(92,242,107,0.10);
+  --ok-glow: rgba(92,242,107,0.16);
+  --bad: #ff5c4d;
+  --bad-dim: rgba(255,92,77,0.10);
+  --bad-glow: rgba(255,92,77,0.14);
+  --warn: #ffd23f;
+  --warn-dim: rgba(255,210,63,0.10);
+  --warn-glow: rgba(255,210,63,0.14);
+  --cut: 0px;
+  --font: 'IBM Plex Mono', 'Courier New', monospace;
+  --mono: 'IBM Plex Mono', 'Courier New', 'Cascadia Code', monospace;
+  --radius: 0px;
+  --radius-sm: 0px;
+  --font-display: 'IBM Plex Mono', monospace;
+  color-scheme: dark;
+}
+html[data-theme="phosphor"] body {
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.015) 0px,
+      rgba(255,255,255,0.015) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+}
+html[data-theme="phosphor"] .sidebar {
+  border-right: 2px solid var(--border-light);
+}
+html[data-theme="phosphor"] .card,
+html[data-theme="phosphor"] .cam-item,
+html[data-theme="phosphor"] .det-item,
+html[data-theme="phosphor"] .addon-settings-inner,
+html[data-theme="phosphor"] .log-view,
+html[data-theme="phosphor"] .raw-editor,
+html[data-theme="phosphor"] .source-view {
+  border: 1px solid var(--border-light);
+  box-shadow: 3px 3px 0 0 rgba(0,0,0,0.55);
+}
+html[data-theme="phosphor"] button, html[data-theme="phosphor"] .btn {
+  border: 1px solid var(--text-dim);
+  border-radius: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+}
+html[data-theme="phosphor"] button:hover, html[data-theme="phosphor"] .btn:hover {
+  transform: none;
+  box-shadow: none;
+  background: var(--accent);
+  color: var(--bg);
+}
+html[data-theme="phosphor"] .settings-tab.active {
+  border-bottom: 2px solid var(--accent);
+}
+html[data-theme="phosphor"] th {
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(208,255,138,0.4);
+}
+
+/* =====================================================================
+   3. FIELD MANUAL - warm engineering paper / Swiss. Editorial,
+      off-white, one loud accent (international orange). Hairline rules,
+      no floating cards, asymmetric rhythm.
+   ===================================================================== */
+html[data-theme="fieldmanual"] {
+  --bg: #f2eee4;
+  --bg-elevated: #faf8f1;
+  --bg-surface: #ffffff;
+  --border: #d8d2c2;
+  --border-light: #c4bca8;
+  --text: #1b1a16;
+  --text-dim: #6b665a;
+  --text-muted: #9c9686;
+  --accent: #ff4d17;
+  --accent-hover: #e64310;
+  --accent-dim: rgba(255,77,23,0.09);
+  --accent-glow: rgba(255,77,23,0.14);
+  --ok: #238636;
+  --ok-dim: rgba(35,134,54,0.10);
+  --ok-glow: rgba(35,134,54,0.12);
+  --bad: #cc2f21;
+  --bad-dim: rgba(204,47,33,0.09);
+  --bad-glow: rgba(204,47,33,0.12);
+  --warn: #b87900;
+  --warn-dim: rgba(184,121,0,0.10);
+  --warn-glow: rgba(184,121,0,0.12);
+  --cut: 8px;
+  --font: 'Space Grotesk', system-ui, sans-serif;
+  --mono: 'Spline Sans Mono', 'SF Mono', monospace;
+  --radius: 4px;
+  --radius-sm: 2px;
+  --font-display: 'Source Serif 4', Georgia, serif;
+  color-scheme: light;
+}
+html[data-theme="fieldmanual"] body {
+  background-image:
+    linear-gradient(rgba(27,26,22,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(27,26,22,0.035) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+html[data-theme="fieldmanual"] .sidebar {
+  border-right: 2px solid var(--text);
+  background: var(--bg);
+}
+html[data-theme="fieldmanual"] .sidebar a.active {
+  background: var(--accent);
+  color: #fff;
+}
+html[data-theme="fieldmanual"] .sidebar a.active svg { color: #fff; opacity: 1; }
+html[data-theme="fieldmanual"] .card {
+  border: none;
+  border-top: 3px solid var(--text);
+  background: transparent;
+  box-shadow: none;
+  padding: 16px 4px 16px 0;
+}
+html[data-theme="fieldmanual"] .card:hover { border-color: var(--text); }
+html[data-theme="fieldmanual"] .card h3 {
+  color: var(--text);
+  letter-spacing: 0.12em;
+}
+html[data-theme="fieldmanual"] .cam-item,
+html[data-theme="fieldmanual"] .det-item,
+html[data-theme="fieldmanual"] .addon-settings-inner {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+html[data-theme="fieldmanual"] button, html[data-theme="fieldmanual"] .btn {
+  border-radius: 2px;
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+html[data-theme="fieldmanual"] button:hover, html[data-theme="fieldmanual"] .btn:hover {
+  background: var(--accent);
+  color: #fff;
+  transform: none;
+  box-shadow: none;
+}
+html[data-theme="fieldmanual"] .btn-ok { background: var(--text); color: var(--bg); }
+html[data-theme="fieldmanual"] .btn-ok:hover { background: var(--accent); color: #fff; }
+html[data-theme="fieldmanual"] h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+html[data-theme="fieldmanual"] input, html[data-theme="fieldmanual"] select, html[data-theme="fieldmanual"] textarea {
+  background: var(--bg-elevated);
+  border: 1px solid var(--text);
+  border-radius: 2px;
+}
+html[data-theme="fieldmanual"] input:focus, html[data-theme="fieldmanual"] select:focus, html[data-theme="fieldmanual"] textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+/* =====================================================================
+   4. INSTRUMENT - deep navy oscilloscope / spacecraft telemetry.
+      Dense, data-first, thin teal & amber trace lines on near-black.
+   ===================================================================== */
+html[data-theme="instrument"] {
+  --bg: #08131f;
+  --bg-elevated: #0b1a2b;
+  --bg-surface: #10233a;
+  --border: #1b3148;
+  --border-light: #27435f;
+  --text: #cfe6f5;
+  --text-dim: #7fa0ba;
+  --text-muted: #4c6a82;
+  --accent: #33d6c0;
+  --accent-hover: #5ff0dc;
+  --accent-dim: rgba(51,214,192,0.09);
+  --accent-glow: rgba(51,214,192,0.14);
+  --ok: #35d07f;
+  --ok-dim: rgba(53,208,127,0.10);
+  --ok-glow: rgba(53,208,127,0.14);
+  --bad: #ff6b6b;
+  --bad-dim: rgba(255,107,107,0.10);
+  --bad-glow: rgba(255,107,107,0.14);
+  --warn: #f5b942;
+  --warn-dim: rgba(245,185,66,0.10);
+  --warn-glow: rgba(245,185,66,0.14);
+  --cut: 6px;
+  --font: 'Chivo Mono', 'IBM Plex Mono', monospace;
+  --mono: 'Chivo Mono', 'IBM Plex Mono', monospace;
+  --radius: 0px;
+  --radius-sm: 0px;
+  --font-display: 'Archivo Narrow', 'Inter', sans-serif;
+  color-scheme: dark;
+}
+html[data-theme="instrument"] body {
+  background-image:
+    linear-gradient(rgba(51,214,192,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(51,214,192,0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+html[data-theme="instrument"] .sidebar {
+  border-right: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+html[data-theme="instrument"] .card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: inset 0 0 0 1px rgba(51,214,192,0.05);
+}
+html[data-theme="instrument"] .card h3 {
+  color: var(--accent);
+  letter-spacing: 0.1em;
+}
+html[data-theme="instrument"] button, html[data-theme="instrument"] .btn {
+  background: var(--bg-surface);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.72rem;
+}
+html[data-theme="instrument"] button:hover, html[data-theme="instrument"] .btn:hover {
+  background: var(--accent);
+  color: var(--bg);
+  transform: none;
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+html[data-theme="instrument"] .btn-ok { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+html[data-theme="instrument"] .btn-ok:hover { background: var(--accent-hover); color: var(--bg); }
+html[data-theme="instrument"] .stat-value { color: var(--accent); }
+html[data-theme="instrument"] th { color: var(--accent); }
+html[data-theme="instrument"] .status-ok { background: var(--ok); box-shadow: 0 0 6px var(--ok-glow); }
+
+/* =====================================================================
+   5. BLUEPRINT - engineering drawing on tracing paper. Light, navy
+      ink, dashed construction lines, tight mono annotations.
+   ===================================================================== */
+html[data-theme="blueprint"] {
+  --bg: #e8f0f7;
+  --bg-elevated: #f4f8fc;
+  --bg-surface: #ffffff;
+  --border: #a9c0d4;
+  --border-light: #bfd3e3;
+  --text: #122c47;
+  --text-dim: #3e5f7f;
+  --text-muted: #7d97ad;
+  --accent: #0f4c81;
+  --accent-hover: #0b3d68;
+  --accent-dim: rgba(15,76,129,0.08);
+  --accent-glow: rgba(15,76,129,0.12);
+  --ok: #157a3b;
+  --ok-dim: rgba(21,122,59,0.09);
+  --ok-glow: rgba(21,122,59,0.12);
+  --bad: #b3261e;
+  --bad-dim: rgba(179,38,30,0.09);
+  --bad-glow: rgba(179,38,30,0.12);
+  --warn: #b9781a;
+  --warn-dim: rgba(185,120,26,0.10);
+  --warn-glow: rgba(185,120,26,0.12);
+  --cut: 6px;
+  --font: 'Archivo Narrow', system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', 'SF Mono', monospace;
+  --radius: 2px;
+  --radius-sm: 1px;
+  --font-display: 'Archivo Narrow', 'Inter', sans-serif;
+  color-scheme: light;
+}
+html[data-theme="blueprint"] .app-shell { background: var(--bg); }
+html[data-theme="blueprint"] body::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image:
+    linear-gradient(rgba(18,44,71,0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(18,44,71,0.06) 1px, transparent 1px),
+    linear-gradient(rgba(18,44,71,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(18,44,71,0.05) 1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
+}
+html[data-theme="blueprint"] main.content { position: relative; z-index: 1; }
+html[data-theme="blueprint"] .sidebar {
+  border-right: 2px solid var(--accent);
+  background: rgba(244,248,252,0.6);
+}
+html[data-theme="blueprint"] .sidebar a.active {
+  background: var(--accent);
+  color: #fff;
+}
+html[data-theme="blueprint"] .sidebar a.active svg { color: #fff; opacity: 1; }
+html[data-theme="blueprint"] .card {
+  background: rgba(255,255,255,0.65);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+}
+html[data-theme="blueprint"] .card h3 { color: var(--accent); }
+html[data-theme="blueprint"] .cam-item,
+html[data-theme="blueprint"] .det-item,
+html[data-theme="blueprint"] .addon-settings-inner {
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border-light);
+}
+html[data-theme="blueprint"] button, html[data-theme="blueprint"] .btn {
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.74rem;
+}
+html[data-theme="blueprint"] button:hover, html[data-theme="blueprint"] .btn:hover {
+  background: var(--accent-hover);
+  color: #fff;
+  transform: none;
+  box-shadow: none;
+}
+html[data-theme="blueprint"] .btn-secondary, html[data-theme="blueprint"] .btn-refresh {
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+html[data-theme="blueprint"] th { color: var(--accent); }
+html[data-theme="blueprint"] input, html[data-theme="blueprint"] select, html[data-theme="blueprint"] textarea {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 0;
+}
+html[data-theme="blueprint"] .settings-tab.active { border-bottom-color: var(--accent); color: var(--accent); }
+html[data-theme="blueprint"] .progress-bar { background: var(--accent); }
+
+/* =====================================================================
+   Theme picker (Appearance tab). Written to work in every theme.
+   ===================================================================== */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color var(--transition), transform var(--transition), box-shadow var(--transition);
+}
+.theme-option:hover {
+  border-color: var(--border-light);
+  transform: translateY(-2px);
+}
+.theme-option.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+.theme-swatch {
+  width: 100%;
+  height: 48px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  display: block;
+  background:
+    linear-gradient(135deg, var(--sw-1) 0%, var(--sw-1) 50%, var(--sw-2) 50%, var(--sw-2) 100%);
+  position: relative;
+}
+.theme-swatch::after {
+  content: '';
+  position: absolute;
+  left: 50%; bottom: 6px; transform: translateX(-50%);
+  width: 34px; height: 10px;
+  background: linear-gradient(90deg, var(--sw-3) 0%, var(--sw-3) 45%, var(--sw-4) 45%, var(--sw-4) 100%);
+  border-radius: 2px;
+}
+.theme-name {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: var(--text);
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.theme-desc {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+}

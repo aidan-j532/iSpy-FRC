@@ -7,6 +7,7 @@
   <button class="settings-tab active" onclick="switchTab('vision', this)">Vision</button>
   <button class="settings-tab" onclick="switchTab('camera', this)">Camera</button>
   <button class="settings-tab" onclick="switchTab('network', this)">Network</button>
+  <button class="settings-tab" onclick="switchTab('appearance', this)">Appearance</button>
   <button class="settings-tab" onclick="switchTab('advanced', this)">Advanced</button>
   <button class="settings-tab" onclick="switchTab('about', this)">About</button>
   <button class="settings-tab" onclick="switchTab('raw', this)">Raw JSON</button>
@@ -82,6 +83,41 @@
     <p class="text-dim text-sm">NetworkTables is an add-on now - enable it and
       set the server IP on the <a href="/addons">Add-ons page</a>
       (network_table_handler utility).</p>
+  </div>
+</div>
+
+<div id="tab-appearance" class="settings-tab-content" style="display:none;">
+  <div class="settings-section">
+    <h3>Theme</h3>
+    <p class="text-dim text-sm">Pick a visual identity for the whole web UI. It applies instantly and is remembered across pages.</p>
+    <select id="theme-select" class="form-input" data-key="theme" style="display:none;"></select>
+    <div class="theme-grid" id="theme-grid">
+      <button type="button" class="theme-option" data-theme-val="carbon">
+        <span class="theme-swatch" style="--sw-1:#0a0a0a;--sw-2:#1a1a1a;--sw-3:#c8c8c8;--sw-4:#34c759;"></span>
+        <span class="theme-name">Carbon</span>
+        <span class="theme-desc">Industrial machine shop - flat, sharp, monochrome.</span>
+      </button>
+      <button type="button" class="theme-option" data-theme-val="phosphor">
+        <span class="theme-swatch" style="--sw-1:#0d0f05;--sw-2:#161a07;--sw-3:#b8f26b;--sw-4:#5cf26b;"></span>
+        <span class="theme-name">Phosphor</span>
+        <span class="theme-desc">CRT terminal / retro-computing with phosphor glow.</span>
+      </button>
+      <button type="button" class="theme-option" data-theme-val="fieldmanual">
+        <span class="theme-swatch" style="--sw-1:#f2eee4;--sw-2:#ffffff;--sw-3:#ff4d17;--sw-4:#1b1a16;"></span>
+        <span class="theme-name">Field Manual</span>
+        <span class="theme-desc">Warm engineering paper, editorial serif, loud orange.</span>
+      </button>
+      <button type="button" class="theme-option" data-theme-val="instrument">
+        <span class="theme-swatch" style="--sw-1:#08131f;--sw-2:#10233a;--sw-3:#33d6c0;--sw-4:#f5b942;"></span>
+        <span class="theme-name">Instrument</span>
+        <span class="theme-desc">Deep-navy oscilloscope telemetry, teal &amp; amber traces.</span>
+      </button>
+      <button type="button" class="theme-option" data-theme-val="blueprint">
+        <span class="theme-swatch" style="--sw-1:#e8f0f7;--sw-2:#ffffff;--sw-3:#0f4c81;--sw-4:#157a3b;"></span>
+        <span class="theme-name">Blueprint</span>
+        <span class="theme-desc">Engineering drawing on tracing paper, navy ink.</span>
+      </button>
+    </div>
   </div>
 </div>
 
@@ -315,7 +351,43 @@ function loadFormValues() {
       el.value = val;
     }
   });
+  syncThemePicker();
   checkRestartNeeded();
+}
+
+const THEME_VALUES = ['carbon', 'phosphor', 'fieldmanual', 'instrument', 'blueprint'];
+
+function syncThemePicker() {
+  const sel = document.getElementById('theme-select');
+  if (!sel) return;
+  let current = sel.value;
+  if (THEME_VALUES.indexOf(current) === -1) {
+    current = getNestedValue(configData, 'theme');
+  }
+  if (THEME_VALUES.indexOf(current) === -1) current = 'carbon';
+  document.querySelectorAll('#theme-grid .theme-option').forEach(o => {
+    o.classList.toggle('active', o.dataset.themeVal === current);
+  });
+}
+
+function initThemePicker() {
+  const sel = document.getElementById('theme-select');
+  if (!sel) return;
+  THEME_VALUES.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    sel.appendChild(o);
+  });
+  document.querySelectorAll('#theme-grid .theme-option').forEach(btn => {
+    btn.addEventListener('click', function () {
+      const v = this.dataset.themeVal;
+      sel.value = v;
+      syncThemePicker();
+      if (window.applyTheme) window.applyTheme(v);
+      autoSave();
+    });
+  });
 }
 
 function switchTab(name, btn) {
@@ -384,6 +456,7 @@ async function load() {
   }).catch(() => {});
 }
 
+initThemePicker();
 load();
 </script>
 {% endblock %}

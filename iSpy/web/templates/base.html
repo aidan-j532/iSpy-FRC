@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <title>{% block title %}iSpy{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/design.css">
+  <link rel="stylesheet" href="/static/css/themes.css">
   <style>
     /* ---- first-run tutorial ---- */
     .ispy-welcome {
@@ -61,6 +62,30 @@
         setTimeout(() => toast.remove(), 300);
       }, 3000);
     }
+
+    // ---- apply saved theme from config (no-flash best effort) ----
+    const THEMES = ['carbon', 'phosphor', 'fieldmanual', 'instrument', 'blueprint'];
+    function applyTheme(name) {
+      const el = document.documentElement;
+      if (THEMES.indexOf(name) === -1) name = 'carbon';
+      el.dataset.theme = name;
+      el.style.colorScheme = (name === 'fieldmanual' || name === 'blueprint') ? 'light' : 'dark';
+      try { localStorage.setItem('ispy_theme', name); } catch (e) {}
+    }
+    (function () {
+      try {
+        const saved = localStorage.getItem('ispy_theme');
+        if (saved) { applyTheme(saved); return; }
+      } catch (e) {}
+      const override = document.documentElement.dataset.presetTheme;
+      if (override) { applyTheme(override); return; }
+      fetch('/api/settings')
+        .then(r => r.json())
+        .then(j => { if (j && j.config) applyTheme(j.config.theme); })
+        .catch(() => {});
+    })();
+    window.applyTheme = applyTheme;
+    window.setTheme = function (name) { applyTheme(name); };
 
     // ---- connection status banner ----
     (function () {

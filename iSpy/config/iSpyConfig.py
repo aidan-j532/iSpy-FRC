@@ -198,6 +198,7 @@ class iSpyConfig:
             # "frc" = FRC/WPILib convention: outputs in meters (what robot code
             # expects, matches Limelight/PhotonVision), calibration inputs in inches.
             "unit": "frc",
+            "theme": "carbon",
             "debug_mode": True,
             "frame_sync": False,
             "optimize": False,
