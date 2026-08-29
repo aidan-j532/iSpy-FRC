@@ -92,30 +92,30 @@
     <p class="text-dim text-sm">Pick a visual identity for the whole web UI. It applies instantly and is remembered across pages.</p>
     <select id="theme-select" class="form-input" data-key="theme" style="display:none;"></select>
     <div class="theme-grid" id="theme-grid">
-      <button type="button" class="theme-option" data-theme-val="carbon">
-        <span class="theme-swatch" style="--sw-1:#0a0a0a;--sw-2:#1a1a1a;--sw-3:#c8c8c8;--sw-4:#34c759;"></span>
-        <span class="theme-name">Carbon</span>
-        <span class="theme-desc">Industrial machine shop - flat, sharp, monochrome.</span>
+      <button type="button" class="theme-option" data-theme-val="slate">
+        <span class="theme-swatch" style="--sw-1:#16181d;--sw-2:#1c1f26;--sw-3:#4f8ff7;--sw-4:#34c46b;"></span>
+        <span class="theme-name">Slate</span>
+        <span class="theme-desc">Neutral dark graphite. Balanced and calm.</span>
       </button>
-      <button type="button" class="theme-option" data-theme-val="phosphor">
-        <span class="theme-swatch" style="--sw-1:#0d0f05;--sw-2:#161a07;--sw-3:#b8f26b;--sw-4:#5cf26b;"></span>
-        <span class="theme-name">Phosphor</span>
-        <span class="theme-desc">CRT terminal / retro-computing with phosphor glow.</span>
+      <button type="button" class="theme-option" data-theme-val="midnight">
+        <span class="theme-swatch" style="--sw-1:#111a30;--sw-2:#182239;--sw-3:#7aa2ff;--sw-4:#41d27a;"></span>
+        <span class="theme-name">Midnight</span>
+        <span class="theme-desc">Deep navy dark for a technical dev-tool feel.</span>
       </button>
-      <button type="button" class="theme-option" data-theme-val="fieldmanual">
-        <span class="theme-swatch" style="--sw-1:#f2eee4;--sw-2:#ffffff;--sw-3:#ff4d17;--sw-4:#1b1a16;"></span>
-        <span class="theme-name">Field Manual</span>
-        <span class="theme-desc">Warm engineering paper, editorial serif, loud orange.</span>
+      <button type="button" class="theme-option" data-theme-val="porcelain">
+        <span class="theme-swatch" style="--sw-1:#ffffff;--sw-2:#f7f8fa;--sw-3:#2563eb;--sw-4:#16a34a;"></span>
+        <span class="theme-name">Porcelain</span>
+        <span class="theme-desc">Clean white light. Crisp and contemporary.</span>
       </button>
-      <button type="button" class="theme-option" data-theme-val="instrument">
-        <span class="theme-swatch" style="--sw-1:#08131f;--sw-2:#10233a;--sw-3:#33d6c0;--sw-4:#f5b942;"></span>
-        <span class="theme-name">Instrument</span>
-        <span class="theme-desc">Deep-navy oscilloscope telemetry, teal &amp; amber traces.</span>
+      <button type="button" class="theme-option" data-theme-val="bone">
+        <span class="theme-swatch" style="--sw-1:#f2ede3;--sw-2:#fffdf9;--sw-3:#a8542c;--sw-4:#2f7d46;"></span>
+        <span class="theme-name">Bone</span>
+        <span class="theme-desc">Warm ivory light. Soft, readable, human.</span>
       </button>
-      <button type="button" class="theme-option" data-theme-val="blueprint">
-        <span class="theme-swatch" style="--sw-1:#e8f0f7;--sw-2:#ffffff;--sw-3:#0f4c81;--sw-4:#157a3b;"></span>
-        <span class="theme-name">Blueprint</span>
-        <span class="theme-desc">Engineering drawing on tracing paper, navy ink.</span>
+      <button type="button" class="theme-option" data-theme-val="frost">
+        <span class="theme-swatch" style="--sw-1:#e9edf2;--sw-2:#ffffff;--sw-3:#0f806f;--sw-4:#157a3c;"></span>
+        <span class="theme-name">Frost</span>
+        <span class="theme-desc">Cool desaturated light gray. Minimal, precise.</span>
       </button>
     </div>
   </div>
@@ -355,7 +355,7 @@ function loadFormValues() {
   checkRestartNeeded();
 }
 
-const THEME_VALUES = ['carbon', 'phosphor', 'fieldmanual', 'instrument', 'blueprint'];
+const THEME_VALUES = ['slate', 'midnight', 'porcelain', 'bone', 'frost'];
 
 function syncThemePicker() {
   const sel = document.getElementById('theme-select');
@@ -364,7 +364,7 @@ function syncThemePicker() {
   if (THEME_VALUES.indexOf(current) === -1) {
     current = getNestedValue(configData, 'theme');
   }
-  if (THEME_VALUES.indexOf(current) === -1) current = 'carbon';
+  if (THEME_VALUES.indexOf(current) === -1) current = 'slate';
   document.querySelectorAll('#theme-grid .theme-option').forEach(o => {
     o.classList.toggle('active', o.dataset.themeVal === current);
   });

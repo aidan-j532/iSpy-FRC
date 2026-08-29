@@ -64,12 +64,12 @@
     }
 
     // ---- apply saved theme from config (no-flash best effort) ----
-    const THEMES = ['carbon', 'phosphor', 'fieldmanual', 'instrument', 'blueprint'];
+    const THEMES = ['slate', 'midnight', 'porcelain', 'bone', 'frost'];
     function applyTheme(name) {
       const el = document.documentElement;
-      if (THEMES.indexOf(name) === -1) name = 'carbon';
+      if (THEMES.indexOf(name) === -1) name = 'slate';
       el.dataset.theme = name;
-      el.style.colorScheme = (name === 'fieldmanual' || name === 'blueprint') ? 'light' : 'dark';
+      el.style.colorScheme = (name === 'porcelain' || name === 'bone' || name === 'frost') ? 'light' : 'dark';
       try { localStorage.setItem('ispy_theme', name); } catch (e) {}
     }
     (function () {
