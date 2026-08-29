@@ -20,6 +20,15 @@ except AttributeError:
 class CameraOpenTimeout(ValueError):
     pass
 
+# Bound on concurrently-live driver-open threads across all cameras. A missing
+# or wedged camera re-opens every few seconds; without a cap each abandoned
+# retry spawns a thread that lingers until the driver returns, leaking threads
+# unboundedly. The slot is only released when the worker actually exits, so
+# once the cap is hit further opens fail fast and resume when a slot frees.
+_OPEN_WORKER_MAX = 4
+_open_worker_guard = threading.Lock()
+_open_worker_live = 0
+
 class Camera:
     _PLACEHOLDER_W = 640
     _PLACEHOLDER_H = 480
@@ -223,32 +232,51 @@ class Camera:
         raise ValueError(f"Camera failed to open: {self.source} ({last_error})")
 
     def _open_capture_bounded(self, backend):
+        global _open_worker_live
         holder = {"cap": None, "error": None, "abandoned": False}
 
-        def _worker():
-            try:
-                cap = (
-                    cv2.VideoCapture(self.source)
-                    if backend is None
-                    else cv2.VideoCapture(self.source, backend)
+        with _open_worker_guard:
+            if _open_worker_live >= _OPEN_WORKER_MAX:
+                raise CameraOpenTimeout(
+                    f"Camera {self.source}: too many capture opens are hung "
+                    "(driver wedged?) - deferring this retry until one exits."
                 )
-            except Exception as exc:
-                holder["error"] = exc
-                return
-            if holder["abandoned"]:
+            _open_worker_live += 1
+
+        def _worker():
+            global _open_worker_live
+            try:
                 try:
-                    cap.release()
-                except Exception:
-                    pass
-                return
-            holder["cap"] = cap
+                    cap = (
+                        cv2.VideoCapture(self.source)
+                        if backend is None
+                        else cv2.VideoCapture(self.source, backend)
+                    )
+                except Exception as exc:
+                    holder["error"] = exc
+                    return
+                if holder["abandoned"]:
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    return
+                holder["cap"] = cap
+            finally:
+                with _open_worker_guard:
+                    _open_worker_live -= 1
 
         opener = threading.Thread(
             target=_worker,
             daemon=True,
             name=f"CapOpen-{self.source}-{backend}",
         )
-        opener.start()
+        try:
+            opener.start()
+        except Exception:
+            with _open_worker_guard:
+                _open_worker_live -= 1
+            raise
         opener.join(timeout=self._CAP_OPEN_TIMEOUT)
         if opener.is_alive():
             holder["abandoned"] = True

@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from flask import jsonify, render_template, request, send_from_directory
-from iSpy.web.Backend.WebModule import WebModule
+from iSpy.web.Backend.WebModule import WebModule, ensure_disk_space
 from iSpy.dataset.dataset import (
     _rebuild_dataset_txt,
     add_image_to_dataset_txt,
@@ -198,6 +198,9 @@ class DatasetsModule(WebModule):
         d = self._images_dir(name)
         if not _is_safe_path(self.dataset_root, d):
             return jsonify(error="Invalid path"), 400
+        space_err = ensure_disk_space(d, request.content_length or 0)
+        if space_err:
+            return jsonify(error=space_err), 503
         d.mkdir(parents=True, exist_ok=True)
         dest = d / safe_name
         f.save(str(dest))

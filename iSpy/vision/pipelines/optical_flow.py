@@ -12,8 +12,10 @@ from iSpy.vision.Object import Object
 class OpticalFlowCamera(VisionPipeline):
     plugin_name = "optical_flow"
     beta = True
-    # reads camera FOV directly - no board/intrinsics calibration needed
-    calibration_sections = []
+    # velocity scale comes from the camera FOV (self.fov). The known-object
+    # focal/FOV wizard writes it directly, and the ChArUco intrinsics step also
+    # derives it (derive_fov_from_intrinsics), so both calibration tabs apply.
+    calibration_sections = ["charuco", "focal"]
 
     @classmethod
     def config_schema(cls) -> dict:
@@ -237,6 +239,9 @@ class OpticalFlowCamera(VisionPipeline):
         frame = self.get_frame()
         if frame is None:
             return [], None
+        gated = self._gate_uncalibrated(frame)
+        if gated is not None:
+            return gated
 
         now = time.perf_counter()
         fps = 1.0 / max(now - self._last_ts, 1e-6)

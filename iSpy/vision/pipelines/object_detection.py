@@ -17,10 +17,12 @@ from iSpy.vision import calibration as cam_calibration
 
 class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
     plugin_name = "object_detection"
-    # detector / pose models share the ChArUco intrinsics calibration by
-    # default. The frontend swaps the "focal" tab for the "pnp" keypoint tab
-    # when the configured model is a pose model - see cameras.html.
-    calibration_sections = ["charuco"]
+    # detector models get the known-object focal/FOV wizard (freeze a frame,
+    # drag to measure a known-size object) on top of the universal ChArUco
+    # intrinsics. Pose models instead get the "pnp" keypoint tab: the frontend
+    # swaps the "focal" tab for "pnp" (3D xyz per keypoint) when the configured
+    # model reports pose keypoints - see cameras.html openCalibrationWizardFor.
+    calibration_sections = ["charuco", "focal"]
 
     def __init__(
         self,
@@ -846,6 +848,8 @@ class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
         if frame is None:
             return [], None
         if not self._is_processable():
+            if not self._calibration_processable():
+                self._set_status("ready (uncalibrated - passthrough)")
             return [], frame
 
         data, annotated = self.get_yolo_data()

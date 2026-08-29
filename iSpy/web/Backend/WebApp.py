@@ -31,6 +31,10 @@ class iSpyWebApp:
             template_folder=str(_WEB_ROOT / "templates"),
             static_folder=str(_WEB_ROOT / "static"),
         )
+        # Bound upload/request bodies so an oversized payload (model, dataset
+        # images, plugin) can't be buffered unboundedly into process memory.
+        # Model weights (.pt) can approach 1 GB, hence the generous ceiling.
+        self.flask_app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
         context = {
             "config": config,
             "cameras": cameras or [],

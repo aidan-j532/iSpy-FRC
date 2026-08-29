@@ -132,6 +132,10 @@ class ModelsModule(WebModule):
         name = secure_filename(f.filename)
         dest = self.pytorch_dir / name
         tmp = dest.with_suffix(".pt.uploading")
+        from iSpy.web.Backend.WebModule import ensure_disk_space
+        space_err = ensure_disk_space(tmp, request.content_length or 0)
+        if space_err:
+            return jsonify(error=space_err), 503
         try:
             f.save(str(tmp))
             meta = metadata_from_pt(tmp)

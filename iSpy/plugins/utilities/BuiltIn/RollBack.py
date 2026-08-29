@@ -158,22 +158,31 @@ class RollBack(UtilityBase):
         self._started = True
         self._stopped = False
 
+        # never stack workers: if a previous stop() failed to reap its thread,
+        # join it before starting a replacement (guard against the sentinel
+        # never having been delivered)
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2)
+
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
         logger.info("Recording started: %s", filename)
 
     def _worker(self):
-        while True:
-            try:
+        try:
+            while True:
                 frame = self._queue.get()
                 if frame is None:
                     break
                 if self._writer:
                     self._writer.write(frame)
                 self._queue.task_done()
-            except Exception as e:
-                logger.error(f"Error in video worker: {e}")
+        except Exception as e:
+            logger.error(f"Error in video worker: {e}")
+        finally:
+            if self._thread is threading.current_thread():
+                self._thread = None
 
     def _write(self, frame):
         if not self._started or self._stopped:
@@ -198,31 +207,40 @@ class RollBack(UtilityBase):
             self._dropped += 1
 
     def _stop_recorder(self):
-        if not self._started:
-            return
-
+        _thread = self._thread
+        was_started = self._started
         self._stopped = True
 
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
-
-        if self._thread:
-            self._thread.join(timeout=15)
+        # Leak-proof shutdown: the sentinel can only be read once, so if the
+        # queue is full a put_nowait(None) silently fails and the worker stays
+        # blocked forever (leaking a thread + an open VideoWriter). Drain the
+        # queued frames first so the sentinel is guaranteed to land.
+        if _thread is not None and _thread.is_alive():
+            try:
+                while True:
+                    self._queue.get_nowait()
+                    self._queue.task_done()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:  # queue is empty - sentinel always fits
+                pass
+            if _thread is not threading.current_thread():
+                _thread.join(timeout=15)
 
         time.sleep(1.0)
 
-        if self._writer:
+        if was_started and self._writer:
             self._writer.release()
             self._writer = None
 
-        time.sleep(1.0)
-
         self._started = False
+        self._thread = None
 
-        logger.info(
-            "Recording stopped. Frames=%d Dropped=%d",
-            self._frame_counter,
-            self._dropped,
-        )
+        if was_started:
+            logger.info(
+                "Recording stopped. Frames=%d Dropped=%d",
+                self._frame_counter,
+                self._dropped,
+            )

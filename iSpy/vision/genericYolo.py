@@ -42,7 +42,11 @@ try:
         _lib = None
         # Search rknnlite package directory for librknnrt.so
         _pkg_dir = _os.path.dirname(__import__("rknnlite").__file__)
-        for _f in _os.listdir(_pkg_dir):
+        try:
+            _rknn_pkg_files = _os.listdir(_pkg_dir)
+        except OSError:
+            _rknn_pkg_files = []
+        for _f in _rknn_pkg_files:
             if "librknnrt" in _f and (_f.endswith(".so") or ".so." in _f):
                 try:
                     _lib = ctypes.CDLL(_os.path.join(_pkg_dir, _f), use_errno=False)

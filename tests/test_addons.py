@@ -340,11 +340,13 @@ class NetworkTableHandlerTests(unittest.TestCase):
         handler = self._handler({})
         self._fake_inst.setServer.assert_called_with("10.0.0.2")
 
-    def test_connection_retries_when_disconnected(self):
+    def test_connection_retries_are_non_blocking(self):
+        # connecting must never stall boot: startClient4 resolves in the
+        # background and __init__ returns immediately with not-connected state.
         mod = self._fresh_module(is_connected=False)
         with mock.patch("time.sleep") as sleep:
             handler = mod.NetworkTableHandler(addon_context(mod.NetworkTableHandler))
-            self.assertEqual(sleep.call_count, 15)  # 15 retries, then error
+            self.assertEqual(sleep.call_count, 0)  # no polling sleep anywhere
             self.assertFalse(handler.isConnected())
 
     def test_update_publishes_vision_data_when_connected(self):

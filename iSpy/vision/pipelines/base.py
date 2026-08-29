@@ -147,6 +147,69 @@ class VisionPipeline(Camera, VisionBase):
     #   "pnp"     -> pose keypoint 3D positions (for pose models)
     calibration_sections: list[str] = ["charuco"]
 
+    @classmethod
+    def requires_calibration(cls) -> bool:
+        """Whether this pipeline needs calibration configured before it will
+        emit (3D) detections. Defaults to 'any calibration_sections declared';
+        subclasses can override for finer control."""
+        return bool(cls.calibration_sections)
+
+    @staticmethod
+    def _section_satisfied(section: str, calibration: dict) -> bool:
+        if section == "charuco":
+            return bool(
+                calibration.get("camera_matrix")
+                and calibration.get("dist_coeffs") is not None
+            )
+        if section == "focal":
+            try:
+                return float(calibration.get("focal_length_pixels") or 0) > 0 or float(
+                    calibration.get("fov") or 0
+                ) > 0
+            except (TypeError, ValueError):
+                return False
+        if section == "pnp":
+            return bool(calibration.get("pnp"))
+        return True
+
+    def calibration_ready(self) -> bool:
+        """True when the pipeline may run: either it needs no calibration, or at
+        least one of its declared calibration sections is fully configured."""
+        if not self.requires_calibration():
+            return True
+        config = getattr(self, "config", None)
+        if config is None:
+            # never a real pipeline instance (e.g. tests built via __new__) -
+            # don't gate
+            return True
+        try:
+            calibration = config.get("calibration") or {}
+        except Exception:
+            return True
+        return any(
+            self._section_satisfied(section, calibration)
+            for section in self.calibration_sections
+        )
+
+    def _calibration_processable(self) -> bool:
+        """Gate used at the top of run(): False means the camera goes back to a
+        plain frame feed until its required calibration exists. The calibration
+        wizard's live feed is always allowed through."""
+        try:
+            if self.in_calibration_mode():
+                return True
+        except Exception:
+            pass
+        return self.calibration_ready()
+
+    def _gate_uncalibrated(self, frame):
+        """run() top helper: returns ([], frame) passthrough when the pipeline
+        needs calibration that is not configured yet, else None."""
+        if self._calibration_processable():
+            return None
+        self._set_status("ready (uncalibrated - passthrough)")
+        return [], frame
+
 
 class BackgroundPreparedPipeline(VisionPipeline):
     def __init__(self, camera_config, input_size, grayscale):

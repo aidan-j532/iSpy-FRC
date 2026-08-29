@@ -1,7 +1,6 @@
 import logging
 import math
 import os
-import warnings
 from pathlib import Path
 import shutil
 
@@ -18,6 +17,12 @@ _VALIDATION_KEYWORDS = [
     "machine vision calibration",
 ]
 
+# Search-engine HTML scraping (DuckDuckGo/Bing/Google) is isolated behind an
+# explicit opt-in so the project never depends on scraping search engines at
+# build time - and never routes builds through barely-configured third-party
+# HTML crawlers. Set ISPY_ALLOW_SEARCH_FALLBACK=1 to re-enable the old fallback.
+_SEARCH_FALLBACK_ENV = "ISPY_ALLOW_SEARCH_FALLBACK"
+
 _FORMAT_CALIB_COUNTS = {
     "rknn": 20,      # KL-divergence wants broader coverage
     "tflite": 100,     # simpler min/max calibration, converges faster
@@ -25,8 +30,6 @@ _FORMAT_CALIB_COUNTS = {
     "engine": 500,     # tensorrt entropy calibration wants more samples
     "coreml": 0,       # float16, no calibration needed
 }
-
-warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 def calib_count_for_format(target_format: str, default: int = _CALIB_COUNT) -> int:
     return _FORMAT_CALIB_COUNTS.get(target_format, default)
@@ -86,7 +89,8 @@ def _extract_release_url(keywords: list[str] | None) -> str | None:
 def _session():
     import requests as _requests
     sess = _requests.Session()
-    sess.verify = False
+    # TLS verification stays ON (requests default) - downloads come from
+    # GitHub/NuGet-style HTTPS endpoints we have no reason to distrust.
     for scheme in ("http://", "https://"):
         adapter = sess.get_adapter(scheme)
         adapter.max_retries = _requests.adapters.Retry(total=1, backoff_factor=0.5, raise_on_status=False)
@@ -269,8 +273,23 @@ def _is_host_reachable(host: str, timeout: int = 3) -> bool:
         logger.debug("Host %s unreachable: %s", host, e)
         return False
 
+def _search_fallback_allowed() -> bool:
+    """Search-engine HTML scraping is opt-in (ISPY_ALLOW_SEARCH_FALLBACK=1)."""
+    return os.environ.get(_SEARCH_FALLBACK_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def _collect_urls(keywords: list[str], count: int) -> tuple[list[str], dict, object]:
     sess = _session()
+
+    if not _search_fallback_allowed():
+        logger.warning(
+            "Search-engine image scraping is disabled by default (set "
+            "%s=1 to allow it). Falling back to synthetic images.",
+            _SEARCH_FALLBACK_ENV,
+        )
+        return [], {}, sess
 
     search_headers = {
         "User-Agent": (

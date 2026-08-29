@@ -1,11 +1,13 @@
-import json
+﻿import json
 import logging
+import os
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import cv2
 import flask
 
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
@@ -29,6 +31,25 @@ class ConcretePipeline(VisionPipeline):
 
     def destroy(self):
         pass
+
+
+class _FakeCamConfig:
+    def __init__(self, calibration=None):
+        self._calibration = calibration or {}
+
+    def get(self, key, default=None):
+        if key == "calibration":
+            return self._calibration
+        return default
+
+
+class _SpyDetector:
+    def __init__(self):
+        self.called = False
+
+    def detectMarkers(self, gray):
+        self.called = True
+        return [], None, []
 
 
 # ---------------------------------------------------------------------------
@@ -126,22 +147,33 @@ class PipelineConfigTests(unittest.TestCase):
             cam_cfg.get_pipeline_setting("tag_size_inches"), 6.5
         )
 
-    def test_no_legacy_migration_happens(self):
-        # legacy top-level vision_model gets rejected loudly w/ a 'boot -f' hint, never migrated
+    def test_legacy_top_level_vision_model_migrates_to_cameras(self):
+        # legacy top-level vision_model folds into model-backed cameras (no
+        # boot -f required, no data loss); the top-level key is dropped.
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             data = {
-                "vision_model": {"file_path": "YoloModels/pytorch/legacy.pt"},
+                "vision_model": {"file_path": "YoloModels/pytorch/legacy.pt",
+                                 "source_pt": "YoloModels/pytorch/legacy.pt",
+                                 "min_conf": 0.7},
                 "camera_configs": {
+                    "cam_detect": {"name": "cam_detect", "source": 0,
+                                   "pipeline": "object_detection"},
                     "cam_tags": {"name": "cam_tags", "source": 1,
                                  "pipeline": "april_tag"},
                 },
             }
             path.write_text(json.dumps(data))
-            with self.assertRaises(RuntimeError) as ctx:
-                iSpyConfig(str(path), create=False)
-            self.assertIn("boot -f", str(ctx.exception))
-            self.assertFalse(hasattr(iSpyConfig(), "_migrate_legacy_vision_model"))
+            cfg = iSpyConfig(str(path), create=False)
+            self.assertIsNone(cfg.get("vision_model"))
+            detect = cfg.camera_config("cam_detect")
+            self.assertEqual(detect.pipeline_name(), "object_detection")
+            vm = detect.get_pipeline_setting("vision_model")
+            self.assertEqual(vm["file_path"], "YoloModels/pytorch/legacy.pt")
+            self.assertEqual(vm["min_conf"], 0.7)
+            # Non-model-backed cameras never receive a vision_model block.
+            tags = cfg.camera_config("cam_tags")
+            self.assertNotIn("vision_model", tags.pipeline_settings())
 
     def test_missing_config_raises_instead_of_silent_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -156,6 +188,39 @@ class PipelineConfigTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 iSpyConfig(str(path), create=False)
             self.assertIn("boot -f", str(ctx.exception))
+
+    def test_save_is_atomic_and_thread_safe(self):
+        # concurrent savers (web handlers + bg optimizer thread) must never be
+        # able to corrupt config.json; temp file + os.replace guarantees every
+        # on-disk state is a complete, valid JSON document.
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            cfg = iSpyConfig(str(path))
+            errors = []
+
+            def writer(n):
+                try:
+                    for _ in range(15):
+                        cfg.set("camera_configs", {
+                            "cam": {"name": "cam", "source": n,
+                                    "pipeline": "april_tag"},
+                        })
+                        cfg.save()
+                except Exception as e:
+                    errors.append(e)
+
+            threads = [threading.Thread(target=writer, args=(n,)) for n in range(3)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(errors, [])
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIn("camera_configs", data)
+            # no temp-file leftovers after a successful atomic write
+            self.assertEqual(list(path.parent.glob("*.tmp")), [])
 
     def test_pipeline_own_optimization_config(self):
         # optimization settings live in the pipeline config now, opt-in -
@@ -429,6 +494,59 @@ class BootTests(unittest.TestCase):
 
         _wait_for_pipeline_ready(self._fake_config(), {"fake": FakeReadyPipeline})
 
+    def test_broken_camera_does_not_block_healthy_cameras(self):
+        # a single camera whose pipeline fails to construct is skipped w/ a log;
+        # the healthy cameras still boot (Day 2 resilience).
+        from unittest import mock
+        import iSpy.iSpy as ispy_module
+        from iSpy.config.iSpyConfig import iSpyConfig
+
+        class BrokenPipeline:
+            def __init__(self, *a, **k):
+                raise RuntimeError("model weights missing")
+
+        class GoodPipeline:
+            def __init__(self, *a, **k):
+                self.ok = True
+
+        def fake_classes():
+            return {"broken": BrokenPipeline, "good": GoodPipeline}
+
+        cfg = iSpyConfig()
+        cfg.config["camera_configs"] = {
+            "bad": {"name": "bad", "source": 0, "pipeline": "broken"},
+            "ok": {"name": "ok", "source": 1, "pipeline": "good"},
+        }
+        cfg._rebuild_camera_configs()
+        with mock.patch(
+            "iSpy.vision.pipelines.get_pipeline_classes", fake_classes
+        ):
+            cams = ispy_module.iSpy._build_cameras_from_config(cfg)
+        self.assertEqual(len(cams), 1)
+        self.assertTrue(cams[0].ok)
+
+    def test_missing_model_degrades_gracefully(self):
+        # Day 5: a camera pointing at a missing model still constructs and
+        # runs. GenericYolo's ModelFileError is caught at boot, the pipeline
+        # reports model=None / no detection, and the whole boot survives.
+        with tempfile.TemporaryDirectory() as tmp:
+            config = iSpyConfig(file_path=str(Path(tmp) / "config.json"))
+            config.config["app_mode"] = False
+            missing = str(Path(tmp) / "does_not_exist.rknn")
+            cam_cfg = iSpyCameraConfig({
+                "name": "cam", "source": 99, "fps_cap": 1000,
+                "yaw": 0, "pitch": 0, "height": 1.0, "x": 0, "y": 0,
+                "grayscale": False, "subsystem": "bench",
+                "calibration": {"distance": 1.0, "game_piece_size": 1.0,
+                                "size": 100, "fov": 90},
+                "pipeline": {"name": "object_detection", "settings": {
+                    "vision_model": {"file_path": missing,
+                                     "source_pt": missing}}},
+            })
+            cam = ObjectDetectionCamera(cam_cfg, config)
+        self.assertIsNone(cam.model)
+        self.assertFalse(cam._use_pipeline)
+
     def test_boot_flag_is_fresh_not_first_boot(self):
         import inspect
         import iSpy.boot.boot as boot
@@ -498,5 +616,294 @@ class QuantizeDatasetTests(unittest.TestCase):
                     self.assertEqual(resp[1], 409)
 
 
+# ---------------------------------------------------------------------------
+# Day 6: cross-platform discovery / runtime checks
+# ---------------------------------------------------------------------------
+
+class CaptureBackendDetectionTests(unittest.TestCase):
+    def test_windows_prefers_msmf(self):
+        from iSpy.vision.Camera import Camera
+
+        self.assertEqual(
+            Camera._get_capture_backend_candidates("Windows"), [cv2.CAP_MSMF]
+        )
+
+    def test_linux_prefers_v4l2_then_any(self):
+        from iSpy.vision.Camera import Camera
+
+        self.assertEqual(
+            Camera._get_capture_backend_candidates("Linux"), [cv2.CAP_V4L2, cv2.CAP_ANY]
+        )
+
+    def test_other_platforms_fall_back_to_any(self):
+        from iSpy.vision.Camera import Camera
+
+        self.assertEqual(
+            Camera._get_capture_backend_candidates("Darwin"), [cv2.CAP_ANY]
+        )
+
+
+class CameraOpenBoundedTests(unittest.TestCase):
+    """Regression: _open_capture_bounded must use the module global properly
+    (UnboundLocalError on first real open) and always release its slot."""
+
+    class _FakeCap:
+        def __init__(self, *a, **k):
+            self._opened = True
+
+        def isOpened(self):
+            return self._opened
+
+        def release(self):
+            self._opened = False
+
+    def _mk_cam(self):
+        from iSpy.vision.Camera import Camera
+
+        return Camera({"name": "open_test", "source": "missing_frame_test.png"},
+                      (640, 480), False)
+
+    def test_live_slot_released_after_success(self):
+        from iSpy.vision import Camera as cam_mod
+
+        cam = self._mk_cam()
+        with mock.patch.object(cam_mod.cv2, "VideoCapture", side_effect=self._FakeCap):
+            cap = cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
+        self.assertTrue(cap.isOpened())
+        self.assertEqual(cam_mod._open_worker_live, 0)
+
+    def test_live_slot_released_after_failure(self):
+        from iSpy.vision import Camera as cam_mod
+
+        cam = self._mk_cam()
+
+        def boom(*a, **k):
+            raise RuntimeError("driver wedged")
+
+        with mock.patch.object(cam_mod.cv2, "VideoCapture", side_effect=boom):
+            with self.assertRaises(RuntimeError):
+                cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
+        self.assertEqual(cam_mod._open_worker_live, 0)
+
+    def test_cap_blocks_oversubscription_and_releases_slot(self):
+        from iSpy.vision import Camera as cam_mod
+
+        cam = self._mk_cam()
+        with cam_mod._open_worker_guard:
+            cam_mod._open_worker_live = cam_mod._OPEN_WORKER_MAX
+        try:
+            with self.assertRaises(cam_mod.CameraOpenTimeout):
+                cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
+        finally:
+            with cam_mod._open_worker_guard:
+                cam_mod._open_worker_live = 0
+        self.assertEqual(cam_mod._open_worker_live, 0)
+
+
+class MDNSHostnameTests(unittest.TestCase):
+    def test_default_hostname_has_ispy_prefix_and_stable_suffix(self):
+        from iSpy.boot.setup_service import default_mdns_hostname
+
+        name = default_mdns_hostname()
+        self.assertTrue(name.startswith("ispy-"))
+        self.assertEqual(len(name), len("ispy-") + 6)
+        self.assertEqual(default_mdns_hostname(), name)
+
+    def test_env_override_wins(self):
+        from iSpy.boot.setup_service import MDNS_HOSTNAME_ENV
+        from iSpy.boot.setup_service import default_mdns_hostname
+
+        with mock.patch.dict("os.environ", {MDNS_HOSTNAME_ENV: "my-coproc"}, clear=False):
+            self.assertEqual(default_mdns_hostname(), "my-coproc")
+
+
+class ServiceUserTests(unittest.TestCase):
+    def test_sudo_invocation_uses_sudo_user(self):
+        from iSpy.boot.setup_service import _service_user
+
+        with mock.patch("iSpy.boot.setup_service.os.geteuid", return_value=0, create=True):
+            with mock.patch.dict(os.environ, {"SUDO_USER": "orangepi"}, clear=False):
+                self.assertEqual(_service_user(), "orangepi")
+
+    def test_root_without_sudo_user_runs_as_root(self):
+        from iSpy.boot.setup_service import _service_user
+
+        with mock.patch("iSpy.boot.setup_service.os.geteuid", return_value=0, create=True):
+            with mock.patch.dict(os.environ, {}, clear=False):
+                self.assertEqual(_service_user(), "root")
+
+    def test_non_root_uses_invoking_user(self):
+        from iSpy.boot.setup_service import _service_user
+
+        with mock.patch("iSpy.boot.setup_service.os.geteuid", side_effect=OSError("n/a"), create=True):
+            with mock.patch("iSpy.boot.setup_service.getpass.getuser", return_value="aidan"):
+                self.assertEqual(_service_user(), "aidan")
+
+
+class RKNNPlatformTests(unittest.TestCase):
+    def test_undetected_platform_falls_back_with_warning_stamp(self):
+        from iSpy.vision import optimizer as opt
+
+        with mock.patch.dict("os.environ", {}, clear=False):
+            with mock.patch.object(opt, "_detect_rknn_target_platform", return_value=None):
+                target, detected = opt._resolve_rknn_target_platform()
+        self.assertEqual(target, "rk3588")
+        self.assertFalse(detected)
+
+    def test_env_override_is_visible_and_authoritative(self):
+        from iSpy.vision import optimizer as opt
+
+        with mock.patch.dict(
+            "os.environ", {"ISPY_RKNN_TARGET_PLATFORM": "rk3576"}, clear=False
+        ):
+            target, detected = opt._resolve_rknn_target_platform()
+        self.assertEqual(target, "rk3576")
+        self.assertTrue(detected)
+
+
+class RKNNWheelUrlTests(unittest.TestCase):
+    def test_full_wheel_base_points_at_live_release_tag(self):
+        from iSpy.vision import optimizer as opt
+
+        base = opt._RKNN_FULL_BASE
+        self.assertEqual(
+            base,
+            "https://github.com/aidan-j532/iSpy-FRC/releases/download/RKNN_Wheels",
+        )
+        for (arch, tag), fn in opt._RKNN_FULL_WHEELS.items():
+            self.assertTrue(fn.endswith(".whl"), fn)
+            self.assertIn(arch, fn)
+            self.assertIn(tag, fn)
+            self.assertIn("rknn_toolkit2-2.3.2", fn)
+        for (arch, tag), fn in opt._RKNN_LITE_FILENAMES.items():
+            self.assertEqual(arch, "aarch64")
+            self.assertIn(tag, fn)
+            self.assertIn("rknn_toolkit_lite2-2.3.2", fn)
+
+
+class UserCalibrationDataYamlTests(unittest.TestCase):
+    def test_data_yaml_written_with_metadata_classes(self):
+        from iSpy.vision.optimizer import _user_calibration_data_yaml
+        import iSpy.vision.metadata as meta
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ds = Path(tmp) / "userds"
+            ds.mkdir()
+            pt_meta = Path(tmp) / "model.pt"
+            pt_meta.write_bytes(b"fake-model")
+            with mock.patch.object(
+                meta, "read_metadata", return_value={"nc": 3, "names": {0: "a", 1: "b", 2: "c"}}
+            ):
+                yaml_path = Path(_user_calibration_data_yaml(str(pt_meta), ds))
+            content = yaml_path.read_text()
+            self.assertIn(f"nc: 3", content)
+            self.assertIn('"a"', content)
+            self.assertTrue(yaml_path.exists())
+
+
+class PipelineCalibrationGateTests(unittest.TestCase):
+    """Pipelines declare whether they need calibration to run via
+    requires_calibration()/calibration_sections; while uncalibrated their run()
+    degrades to a plain frame pass-through (the same [], frame pattern used
+    while optimizing / when the model is unavailable)."""
+
+    def _april_cam(self, calibration):
+        cam = AprilTagCamera.__new__(AprilTagCamera)
+        cam.config = _FakeCamConfig(calibration)
+        cam.detector = _SpyDetector()
+        cam.get_frame = lambda: __import__("numpy").zeros((40, 40, 3), dtype=__import__("numpy").uint8)
+        cam.logger = None
+        return cam
+
+    def test_requires_calibration_reflects_declared_sections(self):
+        self.assertTrue(ObjectDetectionCamera.requires_calibration())
+        self.assertTrue(AprilTagCamera.requires_calibration())
+        self.assertTrue(QRCodeCamera.requires_calibration())
+        self.assertFalse(DepthAnythingCamera.requires_calibration())
+        self.assertFalse(YoloWorldCamera.requires_calibration())
+
+    def test_section_satisfied_rules(self):
+        self.assertTrue(VisionPipeline._section_satisfied("charuco", {
+            "camera_matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            "dist_coeffs": [0, 0, 0, 0, 0],
+        }))
+        self.assertFalse(VisionPipeline._section_satisfied("charuco", {"fov": 68.0}))
+        self.assertFalse(VisionPipeline._section_satisfied("charuco", {}))
+        self.assertTrue(VisionPipeline._section_satisfied("focal", {"focal_length_pixels": 500.0}))
+        self.assertTrue(VisionPipeline._section_satisfied("focal", {"fov": 68.0}))
+        self.assertFalse(VisionPipeline._section_satisfied("focal", {}))
+        self.assertTrue(VisionPipeline._section_satisfied("pnp", {"pnp": {"objects": []}}))
+        self.assertFalse(VisionPipeline._section_satisfied("pnp", {}))
+
+    def test_any_declared_section_satisfies_pipeline(self):
+        class MultiSectionPipeline(VisionPipeline):
+            calibration_sections = ["charuco", "focal"]
+
+            def run(self):
+                return [], None
+
+            def destroy(self):
+                pass
+
+        cam = MultiSectionPipeline.__new__(MultiSectionPipeline)
+        cam.config = _FakeCamConfig({"fov": 68.0})
+        self.assertTrue(cam.calibration_ready())
+        cam.config = _FakeCamConfig({})
+        self.assertFalse(cam.calibration_ready())
+
+    def test_uncalibrated_april_tag_returns_raw_frame_without_detection(self):
+        cam = self._april_cam({})
+        objects, frame = cam.run()
+        self.assertEqual(objects, [])
+        self.assertIsNotNone(frame)
+        self.assertFalse(cam.detector.called, "detector must not run uncalibrated")
+
+    def test_focal_only_does_not_satisfy_charuco_pipeline(self):
+        cam = self._april_cam({"fov": 68.0})
+        objects, frame = cam.run()
+        self.assertEqual(objects, [])
+        self.assertFalse(cam.detector.called)
+
+    def test_charuco_calibrated_april_tag_runs_detection(self):
+        cam = self._april_cam({
+            "camera_matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            "dist_coeffs": [0, 0, 0, 0, 0],
+        })
+        objects, frame = cam.run()
+        self.assertEqual(objects, [])  # no markers present
+        self.assertTrue(cam.detector.called)
+
+    def test_calibration_mode_bypasses_gate(self):
+        import time
+        cam = self._april_cam({})
+        cam.calibration_active = True
+        cam.calibration_last_seen = time.monotonic()
+        cam._CALIBRATION_HEARTBEAT_TIMEOUT = 10.0
+        self.assertTrue(cam._calibration_processable())
+
+    def test_object_detection_gate_via_is_processable(self):
+        cam = ObjectDetectionCamera.__new__(ObjectDetectionCamera)
+        cam.config = _FakeCamConfig({})
+        cam._optimizing = False
+        cam._optimization_requested = lambda: False
+        cam.model = object()
+        self.assertFalse(cam._is_processable())
+
+        cam.config = _FakeCamConfig({
+            "camera_matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            "dist_coeffs": [0, 0, 0, 0, 0],
+        })
+        self.assertTrue(cam._is_processable())
+
+    def test_pipeline_payload_exposes_requires_calibration(self):
+        from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
+
+        by_name = {p["name"]: p for p in _build_vision_pipeline_payloads()}
+        self.assertTrue(by_name["object_detection"]["requires_calibration"])
+        self.assertFalse(by_name["yolo_world"]["requires_calibration"])
+        self.assertIn("calibration_sections", by_name["object_detection"])
+
+
 if __name__ == "__main__":
     unittest.main()
+

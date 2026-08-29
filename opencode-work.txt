@@ -1,0 +1,149 @@
+iSpy-FRC pre-release work log
+Session scope: Days 4-7 of docs/iSpy_7_Day_Pre_Release_Plan.pdf (regenerated with
+strikethrough on closed items + one Day-1 blocker found and fixed this session).
+Repo root = C:\Users\Aidan\Documents\Vscode\iSpy-FRC\iSpy-FRC, branch Restructure.
+
+SUMMARY
+=======
+Day 4 (concurrency + resource leaks) - COMPLETE
+  - RollBack worker-thread leak: _stop_recorder now drains the full queue with
+    get_nowait()/task_done() then queues the sentinel, joins the thread, and reaps
+    leftover live threads even when not started; _worker nulls self._thread in
+    finally; _start_recorder joins stale threads. Verified with a full-queue smoke test.
+    File: iSpy/plugins/utilities/BuiltIn/RollBack.py
+  - Camera open bounded: _OPEN_WORKER_MAX=4 with module lock/counter; cap exceeded
+    raises CameraOpenTimeout; counter decremented in worker finally and on opener
+    failure. A wedged driver can no longer spawn unbounded retry threads.
+    File: iSpy/vision/Camera.py
+  - NetworkTables non-blocking: removed the 15s sleep retry loop from __init__;
+    added _conn_state + _log_connection_state() (transition-only logging) called at
+    top of update(). Added test test_connection_retries_are_non_blocking.
+    File: iSpy/plugins/utilities/BuiltIn/NetworkHandler.py
+  - Config write lock: already in place (serialized atomic saves).
+
+Day 5 (automated + manual testing) - COMPLETE (hardware items deferred)
+  - Restored iSpy/validations/unit_tests.py: 25 tests (AutoOpt recommendations
+    incl. hef/engine/onnx, Box/Results, GenericYolo model selection incl.
+    ModelFileError, metadata round-trips) under ez.unit_tests() / run_unit_tests().
+    Fake rknnlite/tflite/ultralytics/torch/scipy at import. 25/25 pass.
+  - Fixed real bug during restore: genericYolo._set_rknn_log_level now guards
+    _os.listdir() with try/except OSError.
+  - tests/test_architecture.py:
+      + test_missing_model_degrades_gracefully (missing .pt -> model None, no
+        detection) -> added Day 5.
+  - Config migration, broken-camera skip, power-cut (atomic save), upgrade path:
+    covered by existing test_architecture cases.
+  - Deferred (needs hardware): fresh boot -f on RPi/OPi, E2E manual matrix.
+
+Day 6 (multi-board + field conditions) - COMPLETE (hardware/load deferred)
+  - Unique per-board mDNS hostname: iSpy/boot/setup_service.py gains
+    _board_identifier(), default_mdns_hostname() -> "ispy-<6hex>" (machine-id, else
+    MAC, else hostname; stable across reboots), override via ISPY_MDNS_HOSTNAME or
+    setup_mdns(hostname=...). setup_mdns/default now use it. Tests:
+    default hostname shape/stability + env override.
+  - RKNN target-platform detection is now visible: _detect_rknn_target_platform()
+    returns str | None and honors ISPY_RKNN_TARGET_PLATFORM; new
+    _resolve_rknn_target_platform() prints a loud warning to _REAL_STDOUT + logs a
+    warning and falls back to ("rk3588", False). _export_rknn_metadata() accepts
+    target_platform / target_platform_detected and stamps meta["target_platform"],
+    meta["target_platform_detected"], and meta["warning"] when undetected;
+    _convert_rknn uses _resolve_rknn_target_platform(). (lru_cache removed.
+    File: iSpy/vision/optimizer.py.)
+  - Fixed dead RKNN wheel URL: base pointed at the non-existent v1.0.2 release
+    tag; the live asset set sits under the "RKNN_Wheels" tag. Verified via GitHub
+    API (6 rknn_toolkit2 2.3.2 wheels, aarch64+x86_64 for cp310/311/312) and a
+    HEAD request (200, size matches asset). _RKNN_LITE_FILENAMES (3 aarch64) are
+    resolved only from the local rknn_wheels/ package dir as designed.
+  - Windows camera discovery / conversion dataset autodetection represented by
+    unit tests: Camera._get_capture_backend_candidates (Windows/MSMF,
+    Linux/V4L2+ANY, other/ANY), _user_calibration_data_yaml (writes correct
+    data.yaml from metadata), wheel-URL/wheel-name structural checks.
+  - tests/test_architecture.py Day-6 classes: CaptureBackendDetectionTests (3),
+    MDNSHostnameTests (2), RKNNPlatformTests (2), RKNNWheelUrlTests (1),
+    UserCalibrationDataYamlTests (1).
+  - Deferred (needs hardware/network): MJPEG multi-viewer load test, SBC field
+    stability, real camera-open smoke on the bench.
+
+Day 7 (docs + packaging + release gate) - COMPLETE except fresh-machine installs
+  - readme.md: removed "outdated, will be updated soon"; Model Setup section now
+    matches the real YoloModels layout (pytorch/onnx/openvino/engine/tflite/coreml/
+    huggingface, metadata sidecars); fixed config-example model path; manual
+    convert example now points at iSpy.vision.optimizer.convert_model (the old
+    iSpy.utilities.laptop.AllInOneConvert path does not exist anymore); NetworkTables
+    section updated to the JSON-string default (struct[] still present via the
+    data_type dropdown); added "Known Limitations & Security" (verified claims
+    against code - no TLS, admin routes local-only + ISPY_ADMIN_TOKEN);
+    License section documents the final decision.
+  - DOCS.d/09-boot.md: mDNS section updated for the unique hostname; DHCP hint
+    section clarified.
+  - DOCS.d/10-algorithms.md: _detect_rknn_target_platform doc updated (str | None,
+    env override, metadata stamps).
+  - CHANGELOG.md created: added/changed/fixed/security/license + upgrade
+    requirements for 1.2.15-track.
+  - install_windows.ps1 parsed (AST OK); install.py/service_daemon.py compile;
+    root install.sh reviewed. NOT run end-to-end on fresh machines (deferred).
+  - Final audit review: all release-blocking items closed except knowingly-
+    deferred hardware/load items; see Release Gate below.
+  - docs/iSpy_7_Day_Pre_Release_Plan.pdf regenerated (fpdf2, system python) with
+    grey strikethrough = fully completed, orange strikethrough = closed by
+    documented decision, unstruck + "(deferred: ...)" note = not verifiable here.
+
+Day-1 BLOCKER found & fixed this session (new)
+  - setup_systemd() still hardcoded User=pi -> now _service_user() (SUDO_USER when
+    root, else invoking user, root as last resort). Fixes Orange Pi / Ubuntu installs.
+    Tests: ServiceUserTests (3) - root+SUDO_USER, root-only, non-root.
+    (Fresh-install on RPi/OPi still deferred - needs hardware.)
+
+VERIFICATION (Windows, env\Scripts\python.exe)
+  - unit_tests.py: 25 OK.
+  - tests/test_architecture.py: 44 passed.
+  - Full suite tests/: 311 passed, 9 failed - ALL 9 confirmed pre-existing
+    on pristine HEAD (git stash):
+      4 x NetworkHandler struct[] (JSON-default publishing) - test_addons /
+        test_addon_output_system
+      2 x settings-page key drift - test_settings_page_keys
+      3 x camera geometry triangulation - test_camera_geometry (MountHeight/
+        ElevatedObject)
+
+RELEASE GATE
+  - All release blockers closed or deliberately accepted WITH documentation:
+    licensing (GPL-3.0 code; bundled default .pt models keep Ultralytics
+    AGPL-3.0 - documented in CHANGELOG + README), service user (fixed), config
+    durability/security/concurrency (done), unit tests restored, mDNS/RKNN
+    platform handling (done).
+  - Known-deferred (hardware/field only, not software-verifiable in this env):
+    boot -f on real RPi/OPi, MJPEG load test, SBC field stability, Windows
+    real-camera open, fresh-machine install.sh / install_windows.ps1 E2E runs.
+  - Pre-existing test failures (9) are flagged; none introduced by this work.
+  - Do NOT tag until the 3 geometry + 2 settings + 4 NT-struct failures are
+    adjudicated (or explicitly accepted) and the deferred hardware items are
+    either run or consciously waived.
+FOLLOW-UP (same session, after hardware-crash report)
+=====================================================
+- Camera open UnboundLocalError FIXED: added 'global _open_worker_live' to
+  _open_capture_bounded + nested _worker in iSpy/vision/Camera.py. 3 new
+  CameraOpenBoundedTests (success/failure/oversubscription, slot returns to 0).
+  Arch file now 56 tests, all passing.
+
+- Calibrate-tab regression FIXED (cameras.html): Focal/FOV tab only appeared if
+  the Edit/Add modal had been opened first (pipelineSchemas was loaded only
+  there). openCalibrationWizardFor now awaits loadPipelines() when schemas are
+  empty; the offline fallback carries calibration_sections; loadPipelines() also
+  runs at page init (which also correctly hides Calibrate for
+  calibration_sections=[] pipelines).
+
+- NEW: per-pipeline "needs calibration to run" contract (base.py):
+    requires_calibration()  classmethod (default = bool(calibration_sections))
+    calibration_ready()     any declared section satisfied
+    _calibration_processable() (+ in_calibration_mode bypass)
+    _gate_uncalibrated(frame) -> ([], frame) passthrough + status hint
+    Section rules: charuco = camera_matrix+dist_coeffs; focal =
+    focal_length_pixels/fov>0; pnp = calibration[pnp].
+  Wired into optimizable._is_processable (object_detection) and april_tag,
+  qr_code, optical_flow run() tops (via _gate_uncalibrated). Status becomes
+  "ready (uncalibrated - passthrough)" while gated. yolo_world/depth_anything
+  opt out. requires_calibration exposed in /api/vision_pipelines payload.
+  9 new PipelineCalibrationGateTests added.
+
+  Full suite: 326 passed / 9 failed (identical pre-existing failures: 4 NT
+  struct, 2 settings keys, 3 camera geometry).

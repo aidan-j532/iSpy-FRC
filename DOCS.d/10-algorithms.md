@@ -773,20 +773,19 @@ inference formats.
 ### Hardware Detection (line 186)
 
 ```python
-@lru_cache()
-def _detect_rknn_target_platform() -> str:
-    for path in ("/proc/device-tree/compatible", "/proc/device-tree/model",
-                 "/sys/firmware/devicetree/base/model"):
-        try:
-            content = open(path, "rb").read().decode(errors="ignore").lower()
-            for chip in _RKNN_KNOWN_CHIPS:
-                if chip in content:
-                    return chip
-        except Exception:
-            continue
+def _detect_rknn_target_platform() -> str | None:
+    # env override ISPY_RKNN_TARGET_PLATFORM wins; otherwise reads
+    # /proc/device-tree/compatible, /proc/device-tree/model and
+    # /sys/firmware/devicetree/base/model for a known Rockchip SoC.
+    # Returns None when nothing can be detected.
 ```
 
-Reads device tree files to detect Rockchip SoC型号 (rk3588, rk3576, etc.).
+Reached via `_resolve_rknn_target_platform()` → `(target, detected)`. When
+detection fails the conversion prints a loud warning and falls back to
+`rk3588`, and `ISPY_RKNN_TARGET_PLATFORM` overrides the heuristic; every wrong
+-target or overridden artifact is stamped in its metadata sidecar
+(`target_platform`, `target_platform_detected`, plus a `warning` when
+undetected) so a silently-wrong artifact is impossible.
 
 ### Output Management
 

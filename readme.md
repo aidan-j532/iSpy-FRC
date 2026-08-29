@@ -1,7 +1,5 @@
 # iSpy
 
-This is outdated, will be updated soon.
-
 > FRC vision pipeline for object detection and field mapping - runs on Orange Pi with Rockchip NPU, supports RKNN, ONNX, OpenVINO, TFLite, and CoreML backends.
 
 ---
@@ -121,7 +119,7 @@ The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on dep
 ```json
 {
     "vision_model": {
-        "file_path": "YoloModels/pytorch/nano/your_model.pt",
+        "file_path": "YoloModels/pytorch/your_model.pt",
         "input_size": [640, 640],
         "min_conf": 0.5,
         "margin": 10
@@ -219,23 +217,39 @@ To get accurate distances, measure these values with your actual camera and game
 
 ## Model Setup
 
-Models live in `YoloModels/[format]/[size]/`. Example structure:
+Models live in `YoloModels/<format>/`, one folder per backend format. A `[size]`
+subfolder (e.g. `pytorch/nano/`) is optional and useful when you keep many
+models of one format. Actual build-tree layout:
 
 ```
 YoloModels/
-  pytorch/nano/my_model.pt
-  rknn/nano/my_model.rknn
-  openvino/nano/my_model_openvino_model/
+  pytorch/_default_detect.pt            # bundled default models + metadata sidecars
+  pytorch/_default_pose.pt
+  pytorch/_default_pose_metadata.yaml
+  pytorch/world/yolov8s-worldv2.pt
+  onnx/depth_anything_v2_small.onnx
+  openvino/<model>_openvino_model/      # IR: <name>.xml + <name>.bin + metadata.yaml
+  tflite/
+  engine/                               # TensorRT .engine
+  coreml/
+  huggingface/                          # HuggingFace model cache (depth_anything, ...)
 ```
 
-With `auto_opt: true`, iSpy converts your `.pt` model at boot time and caches the result. Supported formats: `rknn`, `onnx`, `openvino`, `tflite`, `coreml`.
+Converted artifacts and calibration data automatically land in these folders and
+are described by a small YAML **metadata sidecar** next to the file
+(`_default_pose_metadata.yaml`) - iSpy reads the output format, task, class
+names and input size from that sidecar instead of guessing from the extension.
+
+With `auto_opt: true`, iSpy converts your `.pt` model at boot time and caches
+the result. Supported formats: `rknn`, `onnx`, `openvino`, `tflite`, `coreml`,
+`engine` (TensorRT), `hef` (Hailo).
 
 To convert manually on a dev machine:
 
 ```python
-from iSpy.utilities.laptop.AllInOneConvert import convert_model
+from iSpy.vision.optimizer import convert_model
 
-convert_model("my_model.pt", format="rknn", task="detect")
+convert_model("my_model.pt", target_format="rknn", input_size=(640, 640))
 ```
 
 ---
@@ -258,15 +272,27 @@ The health endpoint returns `200 OK` when everything is healthy, `503` when degr
 
 ## NetworkTables Output
 
-iSpy publishes to the `VisionData` table:
+iSpy publishes to the `VisionData` table with a single universal detection
+schema: every pipeline (object_detection, april_tag, qr_code, optical_flow,
+depth, ...) flattens to the same per-detection dict keys, handed to the robot
+as one compact JSON string so the format works across all pipelines:
 
-| Key | Type | Description |
+```json
+[{"name":"object","vis_type":"box","x":1.2,"y":0.4,"confidence":0.93}, ...]
+```
+
+| Default topic | Type | Description |
 |---|---|---|
-| `VisionData/vision_data` | `FuelStruct[]` | Array of detected object positions (x, y) in field coordinates |
-| `VisionData/fps` | `double` | Current pipeline FPS |
-| `VisionData/num_detections` | `double` | Number of active tracked objects |
-| `VisionData/camera_lag` | `double` | Camera frame age in seconds |
-| `VisionData/timestamp_ms` | `double` | Unix timestamp of last update |
+| `VisionData/vision_data` | string (JSON) | Array of detected object entries (field x, y in `unit`) |
+| `VisionData/fps` | double | Current pipeline FPS |
+| `VisionData/num_detections` | double | Number of active tracked objects |
+| `VisionData/camera_lag` | double | Camera frame age in seconds |
+
+The legacy `FuelStruct[]` struct-array form is still available through the
+add-on's `data_type` dropdown (`struct[]`) on the Add-ons page for
+back-compatibility; the JSON string is the default and is pipeline-agnostic.
+Robot-side consumers that hardcoded the old `FuelStruct` schema must switch to
+parsing the JSON topic.
 
 ---
 
@@ -383,6 +409,48 @@ Colab v5e1 Yolov8 nano pose 47 fps, detect is 48, and fuel is
 
 ---
 
+## Known Limitations & Security
+
+- **Field-network assumptions.** iSpy is designed for an isolated FRC field
+  LAN (robot + coprocessor + DS). It is not a hardened multi-tenant server and
+  serves HTTP (no TLS).
+- **Admin routes are local-only by default.** The mutating admin endpoints
+  (plugin upload/create/delete, service control in `service_daemon.py`) reject
+  non-local requests unless you set `ISPY_ADMIN_TOKEN` environment on the board;
+  when set, remote callers must present the matching `X-iSpy-Admin-Token` header
+  (see `require_local_or_token` in `iSpy/web/Backend/PluginStatus.py`). Live
+  feeds and health endpoints are open - do not expose port 5000 to an
+  untrusted network (i.e. the internet).
+- **Camera pressure.** Opening cameras is bounded: at most 4 concurrent open
+  attempts at once; a wedged driver cannot spawn unbounded retry threads.
+- **NetworkTables startup is non-blocking.** The handler connects in the
+  background and publishes JSON to `VisionData` once connected; a missing
+  robot/table never stalls the vision loop.
+- **Model resolution is graceful.** A missing/truncated model file falls back
+  to "no detection" instead of crashing the pipeline.
+- **RKNN conversion needs a known target platform.** When the SoC cannot be
+  detected the converter prints a loud warning, defaults to `rk3588`, and
+  stamps `target_platform` / `target_platform_detected` (plus `warning`) in the
+  artifact metadata sidecar. Override with `ISPY_RKNN_TARGET_PLATFORM=<chip>`.
+- **RKNN wheels are distributed via GitHub releases** (not PyPI) because the
+  hardware-specific wheels are large. The converter downloads the matching
+  `rknn_toolkit2` wheel for your arch/Python from the `RKNN_Wheels` release;
+  `rknn_toolkit_lite2` wheels come from a local `rknn_wheels/` folder if present.
+- **Tested hardware coverage.** The team tests on Orange Pi 5/5 Pro and x86
+  Linux/Windows. Other boards (Jetson, macOS) work from the same code paths but
+  see less field time.
+
+---
+
 ## License
 
-GPL-3.0 - see [LICENSE](LICENSE).
+**GPL-3.0** - see [LICENSE](LICENSE).
+
+Licensing status (final): iSpy stays under GPL-3.0; the draft plan's AGPL
+option was **not** adopted. If you distribute iSpy (modified or not) in binary
+form (e.g. a pre-flashed SD image), GPL-3.0 section 6 applies: you must provide
+the corresponding source and the install scripts' license notice. The bundled
+default `.pt` models are distributed under their original Ultralytics AGPL-3.0
+terms - if your team ships them as part of a product bound by AGPL you must meet
+AGPL-3.0 obligations for those model files or retrain/replace them. All code
+authored for iSpy itself remains GPL-3.0.

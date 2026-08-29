@@ -173,7 +173,15 @@ class iSpy:
                     "Unknown pipeline '%s' for camera '%s'", pipeline, cam_name
                 )
                 continue
-            cameras.append(cls(cam_config, config))
+            try:
+                cameras.append(cls(cam_config, config))
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Camera '%s' (pipeline '%s') failed to initialize - "
+                    "skipping it. Fix its config or model, then restart. "
+                    "The remaining cameras are still starting.",
+                    cam_name, pipeline,
+                )
 
         if not cameras:
             logging.getLogger(__name__).error("No cameras configured or detected.")

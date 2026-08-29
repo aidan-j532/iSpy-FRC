@@ -138,29 +138,42 @@ class VisionSupervisor:
 
 def create_service_app(entry_point: str) -> Flask:
     app = Flask(__name__)
+    # service control endpoints take no request body - a tight ceiling rejects
+    # junk payloads outright
+    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
     sup = VisionSupervisor(entry_point)
+
+    # start/stop/restart/pause/resume can kill the vision pipeline or the whole
+    # boot: only allow them from localhost, or from a remote client presenting
+    # ISPY_ADMIN_TOKEN (same trust model as /api/plugins/* admin endpoints).
+    from iSpy.web.Backend.PluginStatus import require_local_or_token
 
     @app.route("/service/status")
     def status():
         return jsonify(sup.get_status())
 
     @app.route("/service/start", methods=["POST"])
+    @require_local_or_token
     def start():
         return jsonify(sup.start())
 
     @app.route("/service/stop", methods=["POST"])
+    @require_local_or_token
     def stop():
         return jsonify(sup.stop())
 
     @app.route("/service/restart", methods=["POST"])
+    @require_local_or_token
     def restart():
         return jsonify(sup.restart())
 
     @app.route("/service/pause", methods=["POST"])
+    @require_local_or_token
     def pause():
         return jsonify(sup.pause())
 
     @app.route("/service/resume", methods=["POST"])
+    @require_local_or_token
     def resume():
         return jsonify(sup.resume())
 

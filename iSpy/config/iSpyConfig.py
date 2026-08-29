@@ -1,9 +1,18 @@
 import json
 import logging
+import os
+import tempfile
+import threading
 from pathlib import Path
 
 _BOOT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = Path.cwd()
+
+# Serializes config file writes. Background threads (e.g. the optimizer build
+# thread persisting quantization settings) and web handlers share one iSpyConfig
+# instance - interleaved open("w")/write/close from two threads could corrupt
+# config.json, so every save is funneled through this one lock.
+_CONFIG_WRITE_LOCK = threading.RLock()
 
 _MODEL_BACKED_PIPELINES = ("object_detection",)
 
@@ -377,6 +386,43 @@ class iSpyConfig:
         ):
             self.config.pop(legacy_key, None)
 
+    def _migrate_legacy_vision_model(self, data: dict) -> None:
+        """Fold the legacy top-level 'vision_model' key into camera entries.
+
+        Old configs (pre restructure) kept model settings in a single top-level
+        ``vision_model`` dict which every model-backed camera consumed. The new
+        layout stores them per camera under ``pipeline.settings.vision_model``.
+        This is a one-way, idempotent migration: the top-level key is removed so
+        the next ``save()`` persists the new layout and the load never fails.
+        """
+        vm = data.pop("vision_model", None)
+        if not isinstance(vm, dict):
+            return
+        cams = data.get("camera_configs")
+        if not isinstance(cams, dict):
+            return
+        consumed = False
+        for name, cam_cfg in cams.items():
+            if not isinstance(cam_cfg, dict):
+                continue
+            normalize_camera_entry(cam_cfg)
+            if not is_model_backed_pipeline(get_pipeline_name(cam_cfg)):
+                continue
+            settings = get_pipeline_settings(cam_cfg)
+            if isinstance(settings.get("vision_model"), dict):
+                continue  # camera already has its own model - leave it alone
+            self.logger.info(
+                "Migrating legacy top-level vision_model into camera '%s'.", name
+            )
+            settings["vision_model"] = json.loads(json.dumps(vm))
+            consumed = True
+        if not consumed:
+            self.logger.warning(
+                "Legacy top-level vision_model was found but no camera consumed "
+                "it (empty camera_configs?); removing the key. Re-add the model "
+                "from the Camera Settings page if it is still needed."
+            )
+
     def _migrate_camera_configs(self):
         cams = self.config.get("camera_configs", {})
         if not isinstance(cams, dict):
@@ -424,12 +470,7 @@ class iSpyConfig:
             with open(file_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if isinstance(data, dict) and "vision_model" in data:
-                raise RuntimeError(
-                    f"Config at {file_path} uses the legacy top-level "
-                    "'vision_model' layout, which is no longer supported - "
-                    "vision model settings now live inside each camera entry. "
-                    "Run 'boot -f' to start from a fresh default configuration."
-                )
+                self._migrate_legacy_vision_model(data)
             self._update_config(data)
         except json.JSONDecodeError as e:
             # bad config is an error - boot never silently regenerates it.
@@ -457,9 +498,29 @@ class iSpyConfig:
                 self.logger.info("No config file path set; saving to Config/config.json")
                 self.file_path = str(_REPO_ROOT / "Config" / "config.json")
 
-            Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(self.file_path, "w") as f:
-                json.dump(self.config, f, indent=4)
+            target = Path(self.file_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps(self.config, indent=4).encode("utf-8")
+
+            # Atomic write: dump to a temp file in the same directory, fsync it,
+            # then os.replace() over the real config so a power cut mid-write can
+            # never leave a truncated/corrupt config.json behind. Everything runs
+            # under the module-wide lock so concurrent savers can't interleave.
+            with _CONFIG_WRITE_LOCK:
+                fd, tmp_name = tempfile.mkstemp(
+                    dir=str(target.parent), prefix=target.name + ".", suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(payload)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp_name, target)
+                finally:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
         except Exception as e:
             self.logger.error("Failed to save config to %s: %s", self.file_path, e)
     def get(self, key, default=None):

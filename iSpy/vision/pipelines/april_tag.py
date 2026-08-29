@@ -133,6 +133,9 @@ class AprilTagCamera(VisionPipeline):
         frame = self.get_frame()
         if frame is None:
             return [], None
+        gated = self._gate_uncalibrated(frame)
+        if gated is not None:
+            return gated
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 

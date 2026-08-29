@@ -134,6 +134,7 @@ def _build_vision_pipeline_payloads():
             "show_common_fields": bool(getattr(cls, "show_common_fields", lambda: True)()),
             "show_calibration": bool(getattr(cls, "show_calibration", lambda: True)()),
             "calibration_sections": getattr(cls, "calibration_sections", ["charuco"]),
+            "requires_calibration": bool(cls.requires_calibration()),
             "beta": bool(getattr(cls, "beta", False)),
         }
         if hasattr(cls, "recommended_format"):
@@ -573,6 +574,10 @@ class PluginStatusModule(WebModule):
             return jsonify(error="Invalid filename"), 400
         if path.exists():
             return jsonify(error=f"'{path.name}' already exists"), 409
+        from iSpy.web.Backend.WebModule import ensure_disk_space
+        space_err = ensure_disk_space(path, len(code.encode("utf-8")))
+        if space_err:
+            return jsonify(error=space_err), 503
 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(code)
@@ -608,6 +613,10 @@ class PluginStatusModule(WebModule):
             return jsonify(error="Invalid filename"), 400
         if path.exists():
             return jsonify(error=f"'{path.name}' already exists. Delete it first or rename your file."), 409
+        from iSpy.web.Backend.WebModule import ensure_disk_space
+        space_err = ensure_disk_space(path, len(code.encode("utf-8")))
+        if space_err:
+            return jsonify(error=space_err), 503
 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(code)

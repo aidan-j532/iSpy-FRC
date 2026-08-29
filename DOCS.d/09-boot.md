@@ -426,11 +426,17 @@ written via `sudo tee` to handle the privilege escalation. After writing,
 `daemon-reload`, `enable`, and `start` are called.
 
 **mDNS setup (line 13):** `setup_mdns()` installs and configures avahi-daemon
-so the board is reachable at `http://ispy.local:5000`. Sets hostname to
-`"ispy"`, updates `/etc/hosts`, enables avahi.
+so the board is reachable at `http://<hostname>.local:5000`. The hostname
+defaults to a unique per-board name from `default_mdns_hostname()` —
+`ispy-<6 hex>` derived from the machine-id (or first physical MAC, or OS
+hostname hash). This prevents two coprocessors on the same field network from
+colliding over `ispy.local`. Set `ISPY_MDNS_HOSTNAME` (or pass `hostname=`) to
+force a specific name. Updates `/etc/hosts`, enables avahi.
 
 **DHCP hostname hints (line 47):** `_configure_dhcp_hostname()` is a best-effort
-fallback for Windows machines without Bonjour. It tries three approaches:
+fallback for Windows machines without Bonjour (and a parallel discovery path on
+Linux). It hints the same unique per-board hostname derived by
+`default_mdns_hostname()`. It tries three approaches:
 1. **dhcpcd** (Raspberry Pi OS / Armbian) — appends `hostname ispy` to
    `/etc/dhcpcd.conf`.
 2. **NetworkManager** — uses `nmcli connection modify` to set DHCP hostname.

@@ -61,6 +61,36 @@ class VisionPipelineSchemaTests(unittest.TestCase):
                 f"{name} should hide calibration settings",
             )
 
+    def test_calibration_sections_declared_per_pipeline(self):
+        by_name = {p["name"]: p for p in _build_vision_pipeline_payloads()}
+
+        # object_detection offers the known-object focal/FOV wizard for
+        # detector models; the frontend swaps that tab for the "pnp" keypoint
+        # tab when the configured model is a pose model
+        ood = by_name["object_detection"]["calibration_sections"]
+        self.assertIn("charuco", ood)
+        self.assertIn("focal", ood)
+
+        # planar PnP feeds need only the ChArUco intrinsics (camera matrix)
+        for name in ("april_tag", "qr_code"):
+            self.assertEqual(
+                by_name[name]["calibration_sections"], ["charuco"],
+                f"{name} should declare exactly the ChArUco calibration",
+            )
+
+        # optical flow scales velocity from the camera FOV - the focal/FOV
+        # wizard writes it and ChArUco derives it, so both tabs apply
+        self.assertEqual(
+            by_name["optical_flow"]["calibration_sections"], ["charuco", "focal"]
+        )
+
+        # monocular depth and zero-shot detection use no camera calibration
+        for name in ("depth_anything", "yolo_world"):
+            self.assertEqual(
+                by_name[name]["calibration_sections"], [],
+                f"{name} should declare no calibration sections",
+            )
+
     def test_vision_base_exposes_debug_contract(self):
         class DummyVision(VisionBase):
             def run(self):

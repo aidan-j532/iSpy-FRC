@@ -2,6 +2,9 @@ import subprocess
 import sys
 import os
 import platform
+import socket
+import hashlib
+import getpass
 from pathlib import Path
 
 SERVICE_NAME = "iSpy"
@@ -9,8 +12,65 @@ FIRST_BOOT_SERVICE_NAME = "ispy-first-boot"
 
 MDNS_HOSTNAME = "ispy"
 
-def setup_mdns(hostname: str = MDNS_HOSTNAME) -> None:
-    """Make the board reachable at http://<hostname>.local"""
+# If set, use exactly this value instead of the derived per-board name.
+MDNS_HOSTNAME_ENV = "ISPY_MDNS_HOSTNAME"
+
+
+def _board_identifier() -> str:
+    """Stable string unique to this physical board.
+
+    Prefers /etc/machine-id (persists across reboots); falls back to the
+    first physical MAC address from sysfs, then the OS hostname. Used only to
+    salt the mDNS hostname, never for anything security-sensitive.
+    """
+    for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            with open(path) as f:
+                ident = f.read().strip()
+            if ident:
+                return ident
+        except OSError:
+            continue
+
+    try:
+        for iface in sorted(os.listdir("/sys/class/net")):
+            if iface == "lo" or "docker" in iface or iface.startswith("br-"):
+                continue
+            try:
+                with open(f"/sys/class/net/{iface}/address") as f:
+                    mac = f.read().strip().lower()
+            except OSError:
+                continue
+            if mac and mac != "00:00:00:00:00:00":
+                return mac.replace(":", "")
+    except OSError:
+        pass
+
+    return socket.gethostname()
+
+
+def default_mdns_hostname() -> str:
+    """Unique per-board mDNS hostname: ``ispy-<id>``.
+
+    Two coprocessors on the same field network must not both claim
+    ``ispy.local``; the suffix is stable across reboots and OS re-installs
+    (MAC-derived when machine-id is absent), so every board advertises its
+    own ``ispy-<hex>.local``. Override with ISPY_MDNS_HOSTNAME to force a
+    specific name.
+    """
+    override = os.environ.get(MDNS_HOSTNAME_ENV, "").strip()
+    if override:
+        return override
+    digest = hashlib.sha256(_board_identifier().encode()).hexdigest()[:6]
+    return f"{MDNS_HOSTNAME}-{digest}"
+
+
+def setup_mdns(hostname: str | None = None) -> None:
+    """Make the board reachable at http://<hostname>.local
+
+    Defaults to a unique per-board name (default_mdns_hostname()).
+    """
+    hostname = hostname or default_mdns_hostname()
     platform_kind = get_platform()
 
     if platform_kind == "macos":
@@ -46,7 +106,7 @@ def setup_mdns(hostname: str = MDNS_HOSTNAME) -> None:
     _configure_dhcp_hostname(hostname)
 
 
-def _setup_mdns_macos(hostname: str = MDNS_HOSTNAME) -> None:
+def _setup_mdns_macos(hostname: str | None = None) -> None:
     """macOS ships Bonjour natively - just set the Bonjour hostname via scutil.
 
     No daemon install needed. scutil --set HostName sets the "real" hostname;
@@ -54,6 +114,7 @@ def _setup_mdns_macos(hostname: str = MDNS_HOSTNAME) -> None:
     all three so <hostname>.local resolves consistently and the Sharing prefpane
     shows something sane.
     """
+    hostname = hostname or default_mdns_hostname()
     current = run(["scutil", "--get", "LocalHostName"], check=False).stdout.strip()
     if current == hostname:
         print(f"mDNS already set - reachable at http://{hostname}.local:5000")
@@ -189,8 +250,36 @@ WantedBy=multi-user.target
     print(f"Service '{FIRST_BOOT_SERVICE_NAME}' installed, enabled, and started.")
 
 
+def _service_user() -> str:
+    """Pick the user the iSpy.service unit should run as.
+
+    iSpy used to hardcode user='pi', which broke on Orange Pi ('orangepi'),
+    Ubuntu ('ubuntu'), and any other SBC image. Resolution order:
+      1. root + SUDO_USER set (installer ran under sudo) -> that user
+      2. root (no sudo wrapper) -> "root"
+      3. the invoking user
+      4. "pi" as a last resort
+    """
+    if hasattr(os, "geteuid"):
+        try:
+            if os.geteuid() == 0:
+                sudo_user = os.environ.get("SUDO_USER", "").strip()
+                if sudo_user and sudo_user != "root":
+                    return sudo_user
+                return "root"
+        except OSError:
+            pass
+    try:
+        user = getpass.getuser()
+        if user:
+            return user
+    except Exception:
+        pass
+    return "pi"
+
+
 def setup_systemd(script_path, project_root: str | None = None):
-    user = "pi"
+    user = _service_user()
     python = sys.executable
     workdir = project_root or os.getcwd()
 

@@ -2,7 +2,6 @@ import json
 import logging
 import ntcore
 import dataclasses
-import time
 import wpiutil.wpistruct
 from wpimath.geometry import Pose2d
 from iSpy.plugins.bases import UtilityBase
@@ -88,16 +87,14 @@ class NetworkTableHandler(UtilityBase):
         self.inst = ntcore.NetworkTableInstance.getDefault()
         self.inst.setServer(ip)
         self.inst.startClient4("iSpy")
-
-        for i in range(15):
-            if self.inst.isConnected():
-                break
-            self.logger.warning(
-                "NetworkTables not connected, retrying... (%d/15)", i + 1
-            )
-            time.sleep(1)
-        else:
-            self.logger.error("NetworkTables could not connect after 15s.")
+        # startClient4 connects asynchronously in the background - never block
+        # boot for up to 15s waiting on a robot that may be off. connect state
+        # is reported transitionally from update() instead.
+        self._conn_state = None
+        self.logger.info(
+            "NetworkTables client started (server %s) - connecting in the "
+            "background.", ip
+        )
 
         self._subscribers: dict = {}
         self._tables: dict = {}
@@ -105,6 +102,18 @@ class NetworkTableHandler(UtilityBase):
 
     def isConnected(self) -> bool:
         return self.inst.isConnected()
+
+    def _log_connection_state(self):
+        connected = self.inst.isConnected()
+        if connected and self._conn_state != "up":
+            self._conn_state = "up"
+            self.logger.info("NetworkTables connected.")
+        elif not connected and self._conn_state != "down":
+            self._conn_state = "down"
+            self.logger.warning(
+                "NetworkTables not connected yet - client is retrying in the "
+                "background. Robot server may be off or the IP may be wrong."
+            )
 
     def get_robot_pose(self) -> Pose2d:
         if not self.isConnected():
@@ -122,6 +131,7 @@ class NetworkTableHandler(UtilityBase):
             return Pose2d()
 
     def update(self, frame_data: dict):
+        self._log_connection_state()
         if not self.isConnected():
             return
 

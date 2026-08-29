@@ -136,7 +136,7 @@ def _find_lite_wheel_dir() -> Path:
 _RKNN_LITE_DIR = _find_lite_wheel_dir()
 
 _RKNN_FULL_BASE = (
-    "https://github.com/aidan-j532/iSpy-FRC/releases/download/v1.0.2"
+    "https://github.com/aidan-j532/iSpy-FRC/releases/download/RKNN_Wheels"
 ).rstrip("/")
 
 _RKNN_FULL_WHEELS: dict[tuple[str, str], str] = {
@@ -182,8 +182,23 @@ _RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
 }
 
 
-@lru_cache()
-def _detect_rknn_target_platform() -> str:
+def _detect_rknn_target_platform() -> str | None:
+    """Return the detected Rockchip SoC, or None when it cannot be determined.
+
+    An explicit override via ISPY_RKNN_TARGET_PLATFORM always wins (users
+    who know the board do not have to rely on device-tree heuristics).
+    Returning None instead of a silent 'rk3588' default is deliberate: the
+    caller stamps a visible warning and puts it in the metadata sidecar so a
+    wrong-target artifact can never be produced unnoticed (Day 6).
+    """
+    override = os.environ.get("ISPY_RKNN_TARGET_PLATFORM", "").strip().lower()
+    if override:
+        logger.info(
+            "RKNN target_platform override (ISPY_RKNN_TARGET_PLATFORM): %s",
+            override,
+        )
+        return override
+
     for path in (
         "/proc/device-tree/compatible",
         "/proc/device-tree/model",
@@ -209,13 +224,34 @@ def _detect_rknn_target_platform() -> str:
 
     logger.warning(
         "Could not detect Rockchip SoC from device-tree or /proc/cpuinfo - "
-        "defaulting RKNN target_platform to 'rk3588'. If converting for a "
-        "different board (rk3566, rk3576, etc.), run boot.py directly on "
-        "that board so detection can find it - conversion on non-Rockchip "
-        "hardware (e.g. your dev laptop) can't determine the real target "
-        "and will silently default."
+        "RKNN target_platform is unknown on this host."
     )
-    return "rk3588"
+    return None
+
+
+def _resolve_rknn_target_platform() -> tuple[str, bool]:
+    """(target_platform, detected) for RKNN builds.
+
+    When the SoC cannot be detected the build falls back to 'rk3588' but the
+    failure is made unmissable: a hard print (surfaces in the conversion log
+    the UI streams), a logger warning, and a metadata sidecar stamp via
+    _export_rknn_metadata. Set ISPY_RKNN_TARGET_PLATFORM to opt out."""
+    target = _detect_rknn_target_platform()
+    if target:
+        return target, True
+
+    message = (
+        "\n"
+        "WARNING: could not detect the Rockchip SoC for RKNN conversion.\n"
+        "Defaulting target_platform to 'rk3588' - this is a GUESS.\n"
+        "Wrong target = rknn-toolkit2 build errors or a silently broken "
+        "artifact.\n"
+        "Fix: set ISPY_RKNN_TARGET_PLATFORM=<chip> (rk3588/rk3566/rk3576/...)\n"
+        "     or run boot.py directly on the target board.\n"
+    )
+    print(message, file=_REAL_STDOUT)
+    logger.warning(message.strip())
+    return "rk3588", False
 
 
 _CALIB_DOWNSCALE_SIZE = 320
@@ -633,6 +669,8 @@ def _export_rknn_metadata(
     quantize=None,
     box_coord_scale=None,
     kpt_coord_scale=None,
+    target_platform=None,
+    target_platform_detected=None,
 ) -> None:
     from iSpy.vision.metadata import (
         read_metadata,
@@ -668,6 +706,17 @@ def _export_rknn_metadata(
                 meta["input_size"] = [int(x) for x in input_size]
             else:
                 meta["input_size"] = [int(input_size), int(input_size)]
+
+        if target_platform:
+            meta["target_platform"] = target_platform
+        meta["target_platform_detected"] = bool(target_platform_detected)
+        if not target_platform_detected:
+            meta["warning"] = (
+                "RKNN target_platform was NOT detected on the converting "
+                f"host - artifact built for '{target_platform or 'rk3588'}' "
+                "by default. Set ISPY_RKNN_TARGET_PLATFORM=<chip> or convert "
+                "on the target board if this is wrong."
+            )
 
         meta_path = metadata_path_for(rknn_path)
         write_metadata(meta_path, meta)
@@ -1120,11 +1169,12 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
             detected_format = None
             detected_layout = None
             detected_box_format = None
+            target_platform, target_platform_detected = _resolve_rknn_target_platform()
             try:
                 config_kwargs = dict(
                     mean_values=[[0, 0, 0]],
                     std_values=[[255, 255, 255]],
-                    target_platform=_detect_rknn_target_platform(),
+                    target_platform=target_platform,
                     disable_rules=[
                         "fuse_exmatmul_add_mul_exsoftmax13_exmatmul_to_sdpa"
                     ],
@@ -1196,6 +1246,8 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
         quantize=quantize,
         box_coord_scale=box_coord_scale,
         kpt_coord_scale=kpt_coord_scale,
+        target_platform=target_platform,
+        target_platform_detected=target_platform_detected,
     )
     return str(rknn_output)
 

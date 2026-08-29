@@ -715,10 +715,10 @@ async function loadPipelines() {
     (data.pipelines || []).forEach(p => { pipelineSchemas[p.name] = p; });
   } catch (e) {
     console.warn('Failed to load pipeline schemas', e);
-    pipelineSchemas = { object_detection: { name: 'object_detection', config_schema: {}, show_common_fields: true, show_calibration: true } };
+    pipelineSchemas = { object_detection: { name: 'object_detection', config_schema: {}, show_common_fields: true, show_calibration: true, calibration_sections: ['charuco', 'focal'] } };
   }
   if (!Object.keys(pipelineSchemas).length) {
-    pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {}, show_common_fields: true, show_calibration: true };
+    pipelineSchemas.object_detection = { name: 'object_detection', config_schema: {}, show_common_fields: true, show_calibration: true, calibration_sections: ['charuco', 'focal'] };
   }
 }
 
@@ -1045,7 +1045,8 @@ async function submitCameraModal() {
   if (r.ok) {
     showToast(j.note || 'Settings saved', 'success');
     closeCameraModal();
-    refreshCameras();
+loadPipelines();
+refreshCameras();
   } else {
     showToast(j.error, 'error');
   }
@@ -1935,6 +1936,9 @@ async function openCalibrationWizardFor(name) {
     if (pipeline && typeof pipeline === 'object') pipeline = pipeline.name;
     calibrationState.camera = name;
     calibrationState.pipeline = pipeline || 'object_detection';
+    // pipelineSchemas only loads when the Add/Edit modal opens - make sure we
+    // have the calibration_sections declared by the pipeline before building tabs.
+    if (!Object.keys(pipelineSchemas).length) await loadPipelines();
     let sections = calibrationSectionsFor(calibrationState.pipeline);
     // object_detection can run either a detector or a pose model. Pose models
     // need the keypoint xyz (PnP) tab instead of the focal/FOV tab - ask the

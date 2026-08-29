@@ -162,6 +162,10 @@ class QRCodeCamera(VisionPipeline):
             self._last_objects = self.get_demo_objects(frame)
             return self._last_objects, frame
 
+        if not self._calibration_processable():
+            self._set_status("ready (uncalibrated - passthrough)")
+            return [], frame
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
         objects = []
