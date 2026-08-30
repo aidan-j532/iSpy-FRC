@@ -67,27 +67,35 @@ def set_calibration_keywords(pt_path: Path, keywords: list[str]) -> None:
     write_metadata(metadata_path_for(pt_path), meta)
 
 def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
-    from ultralytics import YOLO
-    try:
-        model = YOLO(str(pt_path), verbose=False, weights_only=True)
-    except TypeError:
-        # Older ultralytics builds don't accept weights_only (torch>=2.6's
-        # safe-load flag wasn't wired through to YOLO.__init__ yet).
-        model = YOLO(str(pt_path), verbose=False)
+    import torch
+    from iSpy.vision.genericYolo import torch_load
+
+    ckpt = torch_load(pt_path)
+    if isinstance(ckpt, dict) and "model" in ckpt:
+        model = ckpt["model"]
+    elif isinstance(ckpt, torch.nn.Module):
+        model = ckpt
+    else:
+        model = ckpt
+
+    if hasattr(model, "eval"):
+        model.eval()
     task = getattr(model, "task", "detect") or "detect"
 
     try:
-        nc = int(model.model.model[-1].nc)
+        nc = int(getattr(model, "nc", 1))
     except Exception:
         nc = 1
 
     try:
-        names = dict(model.names) if getattr(model, "names", None) else {0: "object"}
+        names = dict(getattr(model, "names", {0: "object"}))
     except Exception:
         names = {0: "object"}
 
     try:
-        imgsz = model.model.args.get("imgsz", 640)
+        imgsz = 640
+        if hasattr(model, "model") and hasattr(model.model, "args"):
+            imgsz = model.model.args.get("imgsz", 640)
         input_size = [imgsz, imgsz] if isinstance(imgsz, int) else list(imgsz[:2])
     except Exception:
         input_size = [640, 640]
@@ -105,6 +113,7 @@ def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
         "score_mode": "objectness" if nc == 1 else "multi_class",
         "apply_software_nms": False,
         "quantization": "none",
+        "quant_scale": 255.0,
         "input_layout": "nhwc",
         "input_dtype": "uint8",
         "input_letterbox": True,
@@ -114,8 +123,13 @@ def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
 
     if task == "pose":
         try:
-            kpt = model.model.model[-1].kpt_shape
-            meta["kpt_shape"] = [int(kpt[0]), int(kpt[1])]
+            kpt = getattr(model, "kpt_shape", None)
+            if kpt is None and hasattr(model, "model"):
+                kpt = getattr(model.model, "kpt_shape", None) if hasattr(model.model, "__getitem__") else None
+            if kpt is not None:
+                meta["kpt_shape"] = [int(kpt[0]), int(kpt[1])]
+            else:
+                meta["kpt_shape"] = [17, 3]
         except Exception:
             meta["kpt_shape"] = [17, 3]
 

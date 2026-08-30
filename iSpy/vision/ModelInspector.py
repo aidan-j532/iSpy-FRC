@@ -735,14 +735,12 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
 
 def _inspect_ultralytics(model_path: str, task: str) -> dict:
     try:
-        from ultralytics import YOLO
+        from .yolo_pt import load_yolo_pt
+        # load_yolo_pt handles its own inference; here we only read metadata.
+        model = load_yolo_pt(str(model_path), task=task)
+        model_task = model.task or task
         try:
-            model = YOLO(model_path, task=task, verbose=False, weights_only=True)
-        except TypeError:
-            model = YOLO(model_path, task=task, verbose=False)
-        model_task = getattr(model, "task", task) or task
-        try:
-            num_classes = int(model.model.model[-1].nc)
+            num_classes = int(model.nc)
         except Exception:
             num_classes = 1
 
@@ -757,12 +755,6 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
             num_keypoints, keypoint_dims = None, None
 
         input_size = [640, 640]
-        try:
-            if hasattr(model, "model") and hasattr(model.model, "args"):
-                imgsz = model.model.args.get("imgsz", 640)
-                input_size = [imgsz, imgsz] if isinstance(imgsz, int) else list(imgsz[:2])
-        except Exception:
-            pass
 
     except Exception:
         model_task = task
@@ -770,7 +762,7 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
         num_keypoints, keypoint_dims = None, None
         input_size = [640, 640]
 
-    # Ultralytics handles its own inference - all of these are reliable
+    # The dependency-free loader handles its own inference - all of these are reliable
     certain = [
         "task",
         "num_classes",
@@ -820,7 +812,7 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
     base["_detected_fields"] = []
     base["_manual_fields"] = []
     base["_warnings"] = [
-        ".pt / OpenVINO / CoreML models are handled by Ultralytics directly - "
+        ".pt models are handled by the dependency-free loader directly - "
         "input/output config fields are informational only and not used at runtime."
     ]
     return base

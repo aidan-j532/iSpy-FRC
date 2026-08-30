@@ -5,8 +5,10 @@ are covered by `tests/` in the pytest suite; this file keeps a real,
 fast, dependency-light subset runnable in the `iSpy.validations`
 discovery used by `ez.unit_tests()` and `validate_system.run_unit_tests()`.
 
-Hardware backends (rknnlite, tflite_runtime, ultralytics, torch, scipy)
-are faked at import time so tests behave identically on any machine.
+Hardware backends (rknnlite, tflite_runtime, torch, scipy) are faked at
+import time so tests behave identically on any machine. Ultralytics is
+not faked: it is never a runtime dependency (only an optional build-time
+exporter), so nothing imports it at module load.
 """
 import os
 import sys
@@ -58,22 +60,6 @@ tflite_interp.load_delegate = MagicMock(return_value=[])
 tflite_mod.interpreter = tflite_interp
 sys.modules["tflite_runtime"] = tflite_mod
 sys.modules["tflite_runtime.interpreter"] = tflite_interp
-
-# Fake ultralytics
-ultralytics_mod = types.ModuleType("ultralytics")
-class FakeYOLO:
-    def __init__(self, *a, **kw):
-        pass
-
-    def __call__(self, frame, **kw):
-        return []
-
-    def export(self, **kw):
-        return "model_converted"
-
-
-ultralytics_mod.YOLO = FakeYOLO
-sys.modules["ultralytics"] = ultralytics_mod
 
 # Fake torch (pulled in transitively by some imports)
 torch_mod = types.ModuleType("torch")

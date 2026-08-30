@@ -345,10 +345,21 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         return self._ensure_world_model(self.model_size)
 
     def _reparameterize_world(self, weights: str) -> str | None:
+        # NOTE: This is an optional *build-time* step (like the optimizer's
+        # exporter). It bakes the text prompt's class vocabulary into a
+        # fixed-vocab .pt using Ultralytics (AGPL-3.0). The produced .pt is a
+        # plain fixed-vocab detector that the on-device loader (load_yolo_pt)
+        # consumes at runtime WITHOUT any Ultralytics dependency. Ultralytics
+        # is therefore only required in a build environment to produce the
+        # bundled/fixed weights, never for iSpy runtime inference.
         try:
-            from ultralytics import YOLOWorld, YOLO
+            from ultralytics import YOLOWorld, YOLO  # optional build-time tool (AGPL)
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
-            self.logger.error("Ultralytics is required to reparameterize YOLO World: %s", exc)
+            self.logger.error(
+                "Ultralytics is required to reparameterize YOLO World weights "
+                "(build-time step; install the 'optimizer' extra or pre-bake "
+                "the classes into a .pt and bundle it as an asset): %s", exc,
+            )
             return None
 
         classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[:8]
@@ -384,15 +395,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         self._load_full_precision()
 
     def _load_full_precision(self):
-        try:
-            from ultralytics import YOLO
-        except Exception as exc:  # pragma: no cover - runtime dependency fallback
-            self._set_load_error(
-                f"ultralytics is required for YOLO World inference: {exc}"
-            )
-            self.model = None
-            return
-
         weights = self._resolve_weights()
         if not weights:
             self._set_load_error(
@@ -403,22 +405,37 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return
 
         try:
-            # bake classes into the weights and run the result as a plain
-            # fixed-vocab detector. running the world head directly after
-            # set_classes() hits an ultralytics channel mismatch -> RuntimeError
+            # bake classes into the weights and load the result as a plain
+            # fixed-vocab detector. the on-device loader (load_yolo_pt) never
+            # touches Ultralytics - only the optional build-time
+            # _reparameterize_world step does.
             fixed = self._reparameterize_world(weights)
             if not fixed:
                 self._set_load_error("failed to reparameterize YOLO World model")
                 self.model = None
                 return
 
-            try:
-                self.model = YOLO(fixed, task="detect", verbose=False, weights_only=True)
-            except TypeError:
-                self.model = YOLO(fixed, task="detect", verbose=False)
+            from iSpy.vision.genericYolo import GenericYolo
+            self.model = GenericYolo(
+                {
+                    "file_path": fixed,
+                    "task": "detect",
+                    "input_size": [self._model_input_size, self._model_input_size],
+                    "min_conf": 0.25,
+                },
+                self.core_mask,
+                iSpy_config=self._ispy_config,
+            )
             self._model_path = fixed
             self._quantized = False
             self._load_error = None
+
+            from iSpy.vision.metadata import read_metadata
+            meta = read_metadata(Path(fixed))
+            if meta and isinstance(meta.get("names"), dict):
+                self._class_names = {int(k): str(v) for k, v in meta["names"].items()}
+            else:
+                self._class_names = {i: name for i, name in enumerate(self.classes)}
             self.logger.info(
                 "Loaded YOLO World model from %s (classes=%s)",
                 fixed, self.classes,
@@ -498,9 +515,13 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return [], frame
 
         try:
-            if self._quantized:
-                results = self.model.predict(frame, orig_shape=frame.shape)
-                objects: list[Object] = []
+            # self.model is always a GenericYolo (both full-precision and
+            # quantized paths) whose predict() returns Results with iterable
+            # boxes + plot(); no Ultralytics objects are ever involved.
+            results = self.model.predict(frame, orig_shape=frame.shape)
+            objects: list[Object] = []
+            annotated = frame.copy()
+            if results is not None:
                 for box in results.boxes:
                     x1, y1, x2, y2 = [float(v) for v in box.xyxy]
                     conf = float(box.conf)
@@ -518,51 +539,14 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                                 "prompt": self.prompt,
                                 "classes": self.classes,
                                 "kind": "detection",
-                                "quantized": True,
+                                "quantized": self._quantized,
                             },
                         )
                     )
-                annotated = results.plot(frame.copy())
-                return objects, annotated
-
-            results = self.model(frame, stream=False, conf=0.25, imgsz=640, verbose=False)
-            objects: list[Object] = []
-            annotated = frame.copy()
-
-            for result in results:
-                boxes = getattr(result, "boxes", None)
-                if boxes is None:
-                    continue
-                for box in boxes:
-                    x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
-                    conf = float(box.conf[0])
-                    cls_id = int(box.cls[0])
-                    names = getattr(result, "names", None)
-                    if isinstance(names, dict):
-                        name = names.get(cls_id, names.get(str(cls_id), str(cls_id)))
-                    elif isinstance(names, (list, tuple)) and 0 <= cls_id < len(names):
-                        name = names[cls_id]
-                    else:
-                        name = str(cls_id)
-                    objects.append(
-                        Object(
-                            x=float((x1 + x2) / 2.0),
-                            y=float((y1 + y2) / 2.0),
-                            z=0.0,
-                            name=name,
-                            confidence=conf,
-                            vis_type="generic",
-                            vis_meta={"prompt": self.prompt, "classes": self.classes, "kind": "detection"},
-                        )
-                    )
-
-            if isinstance(results, list) and results:
-                annotated = results[0].plot() if hasattr(results[0], "plot") else annotated
-            elif hasattr(results, "plot"):
-                annotated = results.plot()
-
-            if annotated is None:
-                annotated = frame
+                if getattr(results, "boxes", None) is not None and len(results.boxes) > 0:
+                    drawn = results.plot(frame.copy())
+                    if drawn is not None:
+                        annotated = drawn
             return objects, annotated
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
             self.logger.exception("YOLO World inference failed: %s", exc)

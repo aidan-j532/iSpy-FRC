@@ -8,7 +8,7 @@ version = "1.2.15"
 description = "FRC vision pipeline for custom, hardware accelerated object detection."
 readme = "readme.md"
 requires-python = ">=3.10"
-license = "GPL-3.0"
+license = { text = "PolyForm Noncommercial License 1.0.0" }
 
 authors = [
     { name = "iSpy FRC Author Team", email = "aidanrjensen@gmail.com" }
@@ -32,7 +32,6 @@ dependencies = [
     "Pillow>=12.0.0",
     "flask>=3.0",
     "scikit-learn>=1.3.0",
-    "ultralytics>=8.3.0",
     "pyntcore>=2024.0.0",
     "robotpy>=2024.0.0",
     "plotly>=5.0",
@@ -56,6 +55,18 @@ dev = [
     "jupyter",
     "tensorboard",
     "tensorrt>=10.0.0"
+]
+
+# Build-time model export / YOLO-World reparameterization tooling.
+# These steps shell out to Ultralytics (AGPL-3.0) to produce build artifacts
+# (ONNX/TensorRT/RKNN/etc. and class-baked .pt files) that the runtime then
+# consumes via the on-device loader (iSpy.vision.yolo_pt) - Ultralytics is
+# NEVER needed for iSpy runtime inference. Install only in a build env:
+#   pip install ".[optimizer]"
+optimizer = [
+    "ultralytics>=8.3.0",
+    "onnx>=1.16.0,<1.17",
+    "onnxslim>=0.1.87",
 ]
 
 [project.scripts]

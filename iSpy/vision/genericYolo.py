@@ -10,6 +10,20 @@ import torch
 import warnings
 from pathlib import Path
 
+
+def torch_load(path):
+    """Load an Ultralytics-style ``.pt`` checkpoint without Ultralytics.
+
+    Registers the dependency-free namespace shim (see :mod:`iSpy.vision.yolo_pt`)
+    so ``torch.load`` can reconstruct the model graph from our re-implemented
+    blocks, then returns the raw loaded object (dict or ``nn.Module``) exactly as
+    :func:`load_yolo_pt` does internally.
+    """
+    from iSpy.vision.yolo_pt import register_shim
+    register_shim()
+    return torch.load(str(path), map_location="cpu", weights_only=False)
+
+
 class ModelFileError(RuntimeError):
     pass
 
@@ -146,12 +160,9 @@ class _GPUInferencePool:
     def _worker(self, device):
         # Load model INSIDE the worker thread so TensorRT creates a context on this GPU
         import torch
-        from ultralytics import YOLO
+        from .yolo_pt import load_yolo_pt
         torch.cuda.set_device(device)
-        try:
-            model = YOLO(self._model_file, task=self._task, verbose=False, weights_only=True)
-        except TypeError:
-            model = YOLO(self._model_file, task=self._task, verbose=False)
+        model = load_yolo_pt(self._model_file, task=self._task)
         if self._model_file.endswith(".pt"):
             model.to(f"cuda:{device}")
 
@@ -491,11 +502,14 @@ class GenericYolo:
             or self.model_file.endswith(".engine")
         ):
             self.model_type = "yolo"
-            from ultralytics import YOLO
-            try:
-                self.model = YOLO(self.model_file, task=self.task, verbose=False, weights_only=True)
-            except TypeError:
-                self.model = YOLO(self.model_file, task=self.task, verbose=False)
+            from .yolo_pt import load_yolo_pt
+            if not self.model_file.endswith(".pt"):
+                raise ValueError(
+                    "Runtime loading of compiled formats (.engine/.mlpackage/OpenVINO) "
+                    "requires export tooling; use a .pt model (loaded via the dependency-free "
+                    "yolo_pt loader) for runtime inference."
+                )
+            self.model = load_yolo_pt(self.model_file, task=self.task)
             if self.model_file.endswith(".pt"):
                 self.model.to("cpu" if self.device == "cpu" else f"cuda:{self.device}")
 
@@ -784,15 +798,8 @@ class GenericYolo:
     def _load_tpu(self, model_file: str):
         import torch
         import torch_xla.core.xla_model as xm
-        try:
-            from ultralytics import YOLO
-
-            yolo = YOLO(model_file, task=self.task, verbose=False, weights_only=True)
-        except TypeError:
-            from ultralytics import YOLO
-
-            yolo = YOLO(model_file, task=self.task, verbose=False)
-        raw_model = yolo.model
+        from .yolo_pt import load_yolo_pt
+        raw_model = load_yolo_pt(model_file, task=self.task).model
         raw_model = raw_model.to(self._tpu_device)
         raw_model.eval()
 

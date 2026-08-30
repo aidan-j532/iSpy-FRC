@@ -357,8 +357,8 @@ def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset")
         result = validate_quantization_dataset(dataset_path)
         if result["valid"]:
             logger.info(
-                "Quantization dataset valid: %d images, rknn=%s, ultralytics=%s",
-                result["image_count"], result["rknn_ready"], result["ultralytics_ready"],
+                "Quantization dataset valid: %d images, rknn=%s, yolo_data=%s",
+                result["image_count"], result["rknn_ready"], result["yolo_data_ready"],
             )
         else:
             logger.warning("Quantization dataset issues (%s):", dataset_path)
@@ -371,8 +371,8 @@ def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset")
         result = validate_quantization_dataset(str(model_dir))
         if result["valid"]:
             logger.info(
-                "Quantization dataset valid for %s: %d images, rknn=%s, ultralytics=%s",
-                model_dir.name, result["image_count"], result["rknn_ready"], result["ultralytics_ready"],
+                "Quantization dataset valid for %s: %d images, rknn=%s, yolo_data=%s",
+                model_dir.name, result["image_count"], result["rknn_ready"], result["yolo_data_ready"],
             )
         else:
             logger.warning("Quantization dataset issues (%s):", model_dir)

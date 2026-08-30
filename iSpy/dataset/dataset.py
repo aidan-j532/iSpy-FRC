@@ -724,7 +724,7 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
         "issues": [],
         "image_count": 0,
         "rknn_ready": False,
-        "ultralytics_ready": False,
+        "yolo_data_ready": False,
         "dataset_path": str(ds.resolve()),
     }
 
@@ -790,7 +790,7 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
                     if not img_val:
                         issues.append(f"data.yaml path '{train_path}' has no images")
                     else:
-                        result["ultralytics_ready"] = True
+                        result["yolo_data_ready"] = True
             else:
                 issues.append("data.yaml missing 'train' or 'val' key")
         except Exception as e:
