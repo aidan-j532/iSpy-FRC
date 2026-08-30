@@ -351,8 +351,12 @@ async function _syncUnit() {
 const COMMON_FIELDS = {
   device: { label: 'Device', type: 'device', required: true, help: 'A physical camera detected on this machine.' },
   source: { label: 'Source', type: 'text', required: true, help: 'Camera index (e.g. 0), a /dev/video path, or an RTSP / MJPEG URL.' },
+  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: ['opencv', 'tello'], help: 'Select the camera source type.' },
   name: { label: 'Name', type: 'text', required: true, default: '', help: 'Short unique name used on the dashboard and in code (e.g. front_cam).' },
   pipeline: { label: 'Pipeline', type: 'pipeline', required: true },
+  tello_ip: { label: 'Tello IP', type: 'text', default: '192.168.10.1', help: 'IP address of the Tello drone access point.' },
+  tello_command_port: { label: 'Command Port', type: 'number', default: 8889, help: 'UDP port for Tello AT commands.' },
+  tello_video_port: { label: 'Video Port', type: 'number', default: 11111, help: 'Local UDP port for Tello H.264 video stream.' },
   x: { label: 'X offset', type: 'number', step: 0.01, unit: _posUnit(), default: 0 },
   y: { label: 'Y offset', type: 'number', step: 0.01, unit: _posUnit(), default: 0 },
   height: { label: 'Mount height', type: 'number', step: 0.01, unit: _posUnit(), default: 0, help: 'Height of the camera above the ground plane. Feeds the triangulation ray origin - this is the field pipelines actually use.' },
@@ -804,9 +808,24 @@ async function openCameraModal(mode, arg) {
 
   // Identity (always visible).
   const identity = renderSection('Camera', {});
-  const idKeys = mode === 'add' ? ['device', 'name', 'pipeline'] : ['source', 'name', 'pipeline'];
+  const idKeys = mode === 'add' ? ['camera_type', 'device', 'name', 'pipeline'] : ['camera_type', 'source', 'name', 'pipeline'];
   renderSectionBody(identity.body, idKeys.map(k => [k, COMMON_FIELDS[k]]), 'common');
   body.appendChild(identity.holder);
+
+  // Camera type change handler - re-renders source/device field
+  const camTypeSel = $id(fieldId('camera_type'));
+  if (camTypeSel) {
+    camTypeSel.onchange = () => {
+      const newType = camTypeSel.value;
+      renderSourceSection(newType);
+    };
+    // Set initial value from data if editing
+    if (mode === 'edit' && camModal.data && camModal.data.camera_type) {
+      camTypeSel.value = camModal.data.camera_type;
+    }
+    // Trigger initial render
+    renderSourceSection(camTypeSel.value);
+  }
 
   // Anchor where pipeline / optimization sections are (re)inserted.
   const anchor = document.createElement('div');
@@ -835,7 +854,7 @@ async function openCameraModal(mode, arg) {
   // device profile (add mode) fills on top so saved mount values dont get clobbered
   renderPipelineSections();
   fillCommonValues();
-  if (mode === 'add') { await populateDevices(arg); prefillFirstModel(); }
+  if (mode === 'add') { prefillFirstModel(); }
   initSettingsFlow();
   $id('camera-modal').style.display = 'flex';
 }
@@ -855,6 +874,54 @@ function flowSections() {
 function initSettingsFlow() {
   camModal.flow.index = 0;
   const sections = flowSections();
+  sections.forEach(s => s.classList.remove('step-hidden', 'step-active'));
+  showFlowSection(sections[0]);
+  updateSubmitLabel();
+}
+
+/* Render the source/device field based on camera_type */
+function renderSourceSection(cameraType) {
+  const body = $id('camera-modal-body');
+  // Find the existing source/device field row
+  const existingRow = body.querySelector('[data-field-key="source"], [data-field-key="device"]');
+  if (existingRow) existingRow.remove();
+
+  // Find the camera_type row to insert after it
+  const camTypeRow = body.querySelector('[data-field-key="camera_type"]');
+  if (!camTypeRow) return;
+
+  const holder = camTypeRow.parentElement; // form-field row's parent is the section body
+  const newRow = document.createElement('div');
+  newRow.className = 'form-field';
+
+  if (cameraType === 'opencv') {
+    // Device selector for OpenCV cameras
+    const field = buildField('device', COMMON_FIELDS.device, 'common');
+    newRow.appendChild(field);
+    newRow.dataset.fieldKey = 'device';
+    // Populate devices after insertion
+    populateDevices().then(() => initSettingsFlow());
+  } else if (cameraType === 'tello') {
+    // Text input for Tello UDP source
+    const field = buildField('source', COMMON_FIELDS.source, 'common');
+    newRow.appendChild(field);
+    newRow.dataset.fieldKey = 'source';
+    // Pre-fill the Tello source URL
+    const sourceInput = $id(fieldId('source'));
+    if (sourceInput && !sourceInput.value) {
+      const videoPort = (camModal.data && camModal.data.tello_video_port) || 11111;
+      sourceInput.value = `udp://0.0.0.0:${videoPort}`;
+    }
+  }
+  holder.insertBefore(newRow, camTypeRow.nextElementSibling);
+}
+
+/* Stepped settings flow: one section at a time, "Save and Continue" advances,
+   the last section's button is "Save and Quit". Every visible field must be
+   filled before a section counts as done (nullable numbers and toggles/selects
+   always count as filled). */
+
+function flowSections() {
   sections.forEach(s => s.classList.remove('step-hidden', 'step-active'));
   showFlowSection(sections[0]);
   updateSubmitLabel();
@@ -1005,15 +1072,23 @@ async function submitCameraModal() {
   const mode = camModal.mode;
   const payload = {};
 
-  if (mode === 'add') {
-    const sel = $id(fieldId('device'));
-    const opt = sel.selectedOptions[0];
-    if (!opt || opt.value === '') { showToast('Select a device first', 'error'); return; }
-    payload.source = isNaN(Number(opt.value)) ? opt.value : Number(opt.value);
-    payload.device_id = opt.dataset.deviceId || null;
-  } else {
+  const camType = readField('camera_type') || 'opencv';
+  payload.camera_type = camType;
+
+  if (camType === 'opencv') {
+    if (mode === 'add') {
+      const sel = $id(fieldId('device'));
+      const opt = sel.selectedOptions[0];
+      if (!opt || opt.value === '') { showToast('Select a device first', 'error'); return; }
+      payload.source = isNaN(Number(opt.value)) ? opt.value : Number(opt.value);
+      payload.device_id = opt.dataset.deviceId || null;
+    } else {
+      const src = readField('source');
+      payload.source = (src !== '' && !isNaN(Number(src))) ? Number(src) : src;
+    }
+  } else if (camType === 'tello') {
     const src = readField('source');
-    payload.source = (src !== '' && !isNaN(Number(src))) ? Number(src) : src;
+    payload.source = src || '';
   }
 
   const name = String(readField('name') || '').trim();

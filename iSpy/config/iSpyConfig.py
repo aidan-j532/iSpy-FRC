@@ -23,7 +23,14 @@ _CAMERA_CORE_KEYS = {
     "brightness", "contrast", "saturation", "gamma",
     "white_balance", "tint",
     "csi", "path",
+    "camera_type", "tello_ip", "tello_command_port", "tello_video_port",
 }
+
+# Camera-source config keys that are valid at the top level for every
+# camera type, no matter which Cameras/ class is running.
+_CAMERA_TYPE_KEYS = (
+    "camera_type", "tello_ip", "tello_command_port", "tello_video_port",
+)
 
 _VISION_MODEL_SETTINGS_KEYS = (
     "min_conf", "quantize", "quantization_dataset", "optimize",
@@ -225,6 +232,7 @@ class iSpyConfig:
             "camera_configs": {
                 "default_cam": {
                     "name": "default_cam",
+                    "camera_type": "opencv",
                     "source": 0,
                     "subsystem": "field",
                     "grayscale": False,

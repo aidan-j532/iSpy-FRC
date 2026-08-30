@@ -154,6 +154,30 @@ class VisionPipeline(Camera, VisionBase):
         subclasses can override for finer control."""
         return bool(cls.calibration_sections)
 
+    # ------------------------------------------------------------------
+    # Hardware / compute backend
+    # ------------------------------------------------------------------
+    # Each pipeline declares every hardware target it can run inference on
+    # (e.g. ("npu", "tpu", "gpu", "cpu") for a model-backed detector). A pure
+    # CV pipeline like AprilTag runs on the CPU, which is already reported as
+    # the CPU load, so it declares the empty tuple and gets no label.
+    #
+    # active_hardware() resolves (per instance, at runtime) which one the
+    # pipeline's loaded backend is actually using. Subclasses override it;
+    # the base reports None.
+    hardware: tuple[str, ...] = ()
+
+    @classmethod
+    def hardware_options(cls) -> tuple[str, ...]:
+        """Every hardware target this pipeline can run on (empty = none)."""
+        return cls.hardware
+
+    def active_hardware(self) -> str | None:
+        """The hardware this pipeline's inference is currently using, or None
+        when it has no dedicated accelerator (its CPU usage is already shown
+        by the system CPU reading)."""
+        return None
+
     @staticmethod
     def _section_satisfied(section: str, calibration: dict) -> bool:
         if section == "charuco":

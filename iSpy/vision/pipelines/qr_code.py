@@ -9,7 +9,7 @@ from iSpy.vision.Object import Object
 from iSpy.vision import triangulation
 from iSpy.vision import calibration as cam_calibration
 
-class QRCodeCamera(VisionPipeline):
+class QRCodePipeline(VisionPipeline):
     plugin_name = "qr_code"
     # QR pose uses the camera matrix -> ChArUco board intrinsics.
     calibration_sections = ["charuco"]
@@ -271,3 +271,7 @@ class QRCodeCamera(VisionPipeline):
 
     def destroy(self):
         super().destroy()
+
+
+# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
+QRCodeCamera = QRCodePipeline

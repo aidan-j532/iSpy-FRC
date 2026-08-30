@@ -32,9 +32,73 @@ class OptimizableModelPipeline:
     #: extra config-schema keys surfaced by get_optimization_options()
     _OPT_OPTIONS_EXTRA: tuple[str, ...] = ()
 
+    #: hardware targets a model-backed pipeline can route its inference onto.
+    #: The active one is resolved from the loaded model at runtime by
+    #: active_hardware() (RKNN->NPU, TPU->TPU, TensorRT/CoreML/OpenVINO->GPU,
+    #: ONNX/TFLite/pytorch->CPU or GPU).
+    hardware: tuple[str, ...] = ("cpu", "gpu", "npu", "tpu")
+
+    #: resolved-format -> hardware label. 'format' is the _path_format() token
+    #: for the active model artifact/file.
+    _HARDWARE_BY_FORMAT = {
+        "rknn": "npu",
+        "tpu": "tpu",
+        "engine": "gpu",    # NVIDIA TensorRT
+        "coreml": "gpu",    # Apple GPU
+        "openvino": "gpu",  # Intel GPU/VPU
+        "tflite": "cpu",
+        "onnx": "cpu",
+        "pytorch": "cpu",
+    }
+
     @classmethod
     def needs_model_backend(cls) -> bool:
         return True
+
+    def active_hardware(self) -> str | None:
+        """Resolve the hardware this pipeline's loaded model is running on.
+
+        Priority:
+          1. unambiguous runtime descriptors (model_type tpu/rknn)
+          2. the active model file's format (engine/coreml/openvino/tflite/
+             onnx/pytorch)
+          3. the raw-model device (yolo / bare torch model on CUDA -> gpu)
+
+        Returns None when no dedicated accelerator is identifiable (its CPU
+        usage is already reported by the system CPU reading).
+        """
+        model = getattr(self, "model", None)
+        mt = getattr(model, "model_type", None)
+        if mt == "tpu":
+            return "tpu"
+        if mt == "rknn":
+            return "npu"
+
+        path = None
+        for attr in ("yolo_model_file", "_model_path", "model_file"):
+            value = getattr(self, attr, None)
+            if not value:
+                value = getattr(model, attr, None)
+            if value:
+                path = value
+                break
+        if path:
+            fmt = self._path_format(str(path))
+            # pytorch/onnx can run on either CPU or CUDA - check the loaded
+            # model's device rather than hard-coding CPU.
+            if fmt in ("pytorch", "onnx"):
+                device = getattr(model, "device", "cpu")
+                return "gpu" if (device is not None and str(device) != "cpu") else "cpu"
+            hw = self._HARDWARE_BY_FORMAT.get(fmt)
+            if hw:
+                return hw
+
+        device = getattr(model, "device", "cpu")
+        if device is not None and str(device) != "cpu":
+            return "gpu"
+        if mt == "yolo":
+            return "cpu"
+        return None
 
     # ------------------------------------------------------------------
     # config schema

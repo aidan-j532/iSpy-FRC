@@ -136,6 +136,7 @@ def _build_vision_pipeline_payloads():
             "calibration_sections": getattr(cls, "calibration_sections", ["charuco"]),
             "requires_calibration": bool(cls.requires_calibration()),
             "beta": bool(getattr(cls, "beta", False)),
+            "hardware": list(getattr(cls, "hardware_options", lambda: ())()),
         }
         if hasattr(cls, "recommended_format"):
             try:

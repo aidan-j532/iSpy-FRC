@@ -664,7 +664,7 @@ class CameraOpenBoundedTests(unittest.TestCase):
                       (640, 480), False)
 
     def test_live_slot_released_after_success(self):
-        from iSpy.vision import Camera as cam_mod
+        from iSpy.vision.Cameras import base as cam_mod
 
         cam = self._mk_cam()
         with mock.patch.object(cam_mod.cv2, "VideoCapture", side_effect=self._FakeCap):
@@ -673,7 +673,7 @@ class CameraOpenBoundedTests(unittest.TestCase):
         self.assertEqual(cam_mod._open_worker_live, 0)
 
     def test_live_slot_released_after_failure(self):
-        from iSpy.vision import Camera as cam_mod
+        from iSpy.vision.Cameras import base as cam_mod
 
         cam = self._mk_cam()
 
@@ -686,7 +686,7 @@ class CameraOpenBoundedTests(unittest.TestCase):
         self.assertEqual(cam_mod._open_worker_live, 0)
 
     def test_cap_blocks_oversubscription_and_releases_slot(self):
-        from iSpy.vision import Camera as cam_mod
+        from iSpy.vision.Cameras import base as cam_mod
 
         cam = self._mk_cam()
         with cam_mod._open_worker_guard:

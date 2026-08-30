@@ -25,6 +25,8 @@ from iSpy.config.iSpyConfig import (
     ensure_camera_entries_ready,
 )
 from iSpy.vision import calibration as cam_calibration
+from iSpy.vision.Cameras import OpenCVCamera, TelloCamera
+from iSpy.vision.Cameras.base import CameraOpenTimeout
 
 COCO17_OBJECT_POINTS = [
     [ 0.00,  0.62,  0.00],  # 0  nose
@@ -467,6 +469,7 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/cameras", "cameras_page", lambda: render_template("cameras.html"))
         flask_app.add_url_rule("/api/cameras", "api_cameras", self._api_cameras)
         flask_app.add_url_rule("/api/cameras/discover", "api_cameras_discover", self._discover)
+        flask_app.add_url_rule("/api/cameras/sources", "api_cameras_sources", self._sources)
         flask_app.add_url_rule("/video/<camera_name>", "video_feed", self._video_feed)
         flask_app.add_url_rule("/api/cameras/config", "api_cameras_config_add", self._add_camera, methods=["POST"])
         flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_get", self._get_camera, methods=["GET"])
@@ -1426,6 +1429,13 @@ class CamerasModule(WebModule):
         name = data.get("name")
         device_id = data.get("device_id")
         source = data.get("source")
+        camera_type = data.get("camera_type", "opencv")
+
+        # Auto-fill source for Tello cameras
+        if camera_type == "tello" and (source is None or source == ""):
+            video_port = data.get("tello_video_port", 11111)
+            source = f"udp://0.0.0.0:{video_port}"
+
         if not name or source is None:
             return jsonify(error="name and source required"), 400
 
@@ -1457,16 +1467,19 @@ class CamerasModule(WebModule):
             if isinstance(profile, dict) and isinstance(profile.get("calibration"), dict):
                 calibration = profile["calibration"]
 
+        # Build cam_entry from ALL core keys provided in data
         cam_entry = {
-            "name": name, "source": source, "device_id": device_id,
-            "yaw": data.get("yaw", 0), "pitch": data.get("pitch", 0),
-            "height": data.get("height", 0), "x": data.get("x", 0),
-            "y": data.get("y", 0), "z": data.get("z", 0),
-            "grayscale": data.get("grayscale", False),
-            "subsystem": data.get("subsystem", "field"),
+            "name": name,
+            "source": source,
+            "camera_type": camera_type,
+            "device_id": device_id,
             "calibration": calibration or {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
             "pipeline": {"name": pipeline_name, "settings": pipeline_settings},
         }
+        # Copy all _CAMERA_CORE_KEYS from data if present (explicitly provided)
+        for k in _CAMERA_CORE_KEYS:
+            if k in data and data[k] is not None:
+                cam_entry[k] = data[k]
 
         # model-backed pipelines crash at construction without a vision_model
         # block - accept the picker dict, a raw path, or let ensure_camera_entries_ready drop one in
@@ -1476,7 +1489,8 @@ class CamerasModule(WebModule):
         elif isinstance(vm, str) and vm:
             pipeline_settings["vision_model"] = {"file_path": vm, "source_pt": vm}
 
-        handled = _CAMERA_CORE_KEYS | {"pipeline", "vision_model"}
+        # Anything not in core keys goes to pipeline settings
+        handled = _CAMERA_CORE_KEYS | {"pipeline", "vision_model", "camera_type"}
         for k, v in data.items():
             if k not in handled:
                 pipeline_settings[k] = v
@@ -1704,115 +1718,34 @@ class CamerasModule(WebModule):
 
         return jsonify(devices=devices)
 
+    def _sources(self):
+        """Return all discoverable camera sources, grouped by camera_type."""
+        claimed = set()
+        config = self.context.get("config")
+        if config:
+            for cam_cfg in config.get("camera_configs", {}).values():
+                source = cam_cfg.get("source")
+                if source is not None:
+                    claimed.add(str(source))
+                if source is None and cam_cfg.get("path") is not None:
+                    claimed.add(str(cam_cfg.get("path")))
+
+        opencv_sources = OpenCVCamera.discover(claimed_sources=claimed)
+        tello_sources = TelloCamera.discover(claimed_sources=claimed)
+
+        return jsonify(
+            sources={
+                "opencv": opencv_sources,
+                "tello": tello_sources,
+            }
+        )
+
     def _probe_devices(self):
-        devices = []
-        system_name = platform.system()
-
-        if system_name == "Linux":
-            # one entry per physical device, not per node: uvc cams have a
-            # metadata companion node (video0+video1) and codec/radio nodes
-            # pollute the glob - QUERYCAP filters + sysfs identity dedupes
-            seen_keys = set()
-            for label, nodes in _linux_device_groups():
-                capture = [n for n in nodes if _linux_is_capture_node(n)]
-                if not capture:
-                    # nodes where caps couldn't be read - include only if sysfs
-                    # name doesn't scream "not a camera" (codec/encoder/decoder)
-                    capture = [
-                        n for n in nodes
-                        if _linux_is_capture_node(n) is None
-                        and not _linux_is_known_non_camera(n)
-                    ]
-                if not capture:
-                    # all nodes confirmed non-capture (encoder/codec/radio...) - skip the group
-                    continue
-                node = sorted(capture)[0]
-                key = _linux_device_key(node) or _linux_sysfs_name(node) or node
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                devices.append({
-                    "path": node,
-                    "name": label or _linux_sysfs_name(node) or node,
-                    "device_id": key,
-                })
-
-            # catch whatever grouping missed - still drop non-capture nodes + dupes
-            for path in sorted(glob.glob("/dev/video*")):
-                is_capture = _linux_is_capture_node(path)
-                if is_capture is False:
-                    continue
-                if is_capture is None and _linux_is_known_non_camera(path):
-                    continue
-                key = _linux_device_key(path) or _linux_sysfs_name(path) or path
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                devices.append({
-                    "path": path,
-                    "name": _linux_sysfs_name(path) or path,
-                    "device_id": key,
-                })
-
-        elif system_name == "Windows":
-            # no index probing - MSMF cant open by index, every attempt spams
-            # "VIDEOIO(MSMF)..." to stderr, and discover reruns on refresh so
-            # it'd spam forever. registry key order == CAP_MSMF index order
-            with self.lock:
-                claimed = {s for s in self.sources.values() if s}
-            seen_interfaces = set()
-            for cam in _windows_cameras_from_registry():
-                dedup = cam.get("dedup_key") or cam.get("hw_id")
-                if dedup in seen_interfaces:
-                    continue
-                seen_interfaces.add(dedup)
-                index = str(cam["index"])
-                if index in claimed:
-                    continue
-                devices.append({
-                    "path": index,
-                    "name": cam["name"],
-                    "device_id": cam.get("hw_id"),
-                })
-
-        else:
-            # macos / other: best-effort /dev/video glob + index probing
-            with self.lock:
-                claimed = {s for s in self.sources.values() if s}
-
-            for path in sorted(glob.glob("/dev/video*")):
-                devices.append({
-                    "path": path, "name": path,
-                    "device_id": None,
-                })
-
-            if not devices:
-                for i in range(0, 10):
-                    if str(i) in claimed:
-                        devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
-                        continue
-                    try:
-                        cap = cv2.VideoCapture(i, cv2.CAP_ANY)
-                        if cap is not None and cap.isOpened():
-                            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                            devices.append({
-                                "path": str(i), "name": f"Camera {i}",
-                                "resolution": f"{w}x{h}" if w and h else None,
-                                "device_id": None,
-                            })
-                            cap.release()
-                    except Exception:
-                        continue
-
-        # dedupe
-        seen = {}
-        for dev in devices:
-            key = dev.get("device_id") or dev.get("path")
-            if key in seen:
-                continue
-            seen[key] = dev
-        return list(seen.values())
+        """Delegate to the OpenCVCamera discovery logic so the module-level
+        test mock in test_boot_camera_cleanup.py continues to work."""
+        with self.lock:
+            claimed = {s for s in self.sources.values() if s}
+        return OpenCVCamera.discover(claimed_sources=claimed)
 
     def _video_feed(self, camera_name):
         return Response(

@@ -114,7 +114,7 @@ class DashboardModule(WebModule):
     def _get_system_metrics(self) -> dict:
         if not PSUTIL_AVAILABLE:
             return {"cpu_percent": None, "memory_percent": None, "memory_used_mb": None,
-                    "memory_total_mb": None, "temperature": None}
+                    "memory_total_mb": None, "temperature": None, "hardware": self._get_hardware()}
 
         try:
             cpu = psutil.cpu_percent(interval=None)
@@ -150,7 +150,36 @@ class DashboardModule(WebModule):
             "memory_used_mb": mem_used,
             "memory_total_mb": mem_total,
             "temperature": temp,
+            "hardware": self._get_hardware(),
         }
+
+    def _get_hardware(self) -> list[dict]:
+        """Aggregate each camera/pipeline's active hardware accelerator.
+
+        Pipelines with no dedicated accelerator (or not yet loaded) are
+        omitted so we don't double-report the CPU. Returns
+        [{"camera": name, "hardware": "npu"|"tpu"|"gpu"|"cpu", ...}].
+        """
+        cams = self.context.get("cameras") or []
+        out: list[dict] = []
+        for cam in cams:
+            try:
+                if hasattr(cam, "config"):
+                    name = str(cam.config.get("name", str(getattr(cam, "source", "?"))))
+                else:
+                    name = str(getattr(cam, "source", "?"))
+                resolver = getattr(cam, "active_hardware", None)
+                if resolver is None:
+                    continue
+                hardware = resolver()
+            except Exception:
+                continue
+            if not hardware:
+                continue
+            entry = {"camera": name, "hardware": str(hardware)}
+            if entry not in out:
+                out.append(entry)
+        return out
 
     def _get_camera_status(self) -> list[dict]:
         cameras = self.context.get("cameras") or []

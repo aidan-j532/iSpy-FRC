@@ -10,7 +10,7 @@ from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, unit_to_inches
 from iSpy.vision import triangulation
 from iSpy.vision import calibration as cam_calibration
 
-class AprilTagCamera(VisionPipeline):
+class AprilTagPipeline(VisionPipeline):
     plugin_name = "april_tag"
     # AprilTag pose is derived from the camera matrix, so the ChArUco board
     # intrinsics calibration is all that's needed.
@@ -238,3 +238,7 @@ class AprilTagCamera(VisionPipeline):
 
     def destroy(self):
         super().destroy()
+
+
+# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
+AprilTagCamera = AprilTagPipeline

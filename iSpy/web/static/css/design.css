@@ -286,8 +286,20 @@ pre {
 /* System metrics */
 .sys-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px; }
 .sys-item { display: flex; flex-direction: column; gap: 2px; }
+.sys-item-wide { grid-column: 1 / -1; }
 .sys-label { color: var(--text-dim); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .sys-val { font-family: var(--mono); font-size: 0.9rem; }
+
+/* Hardware chips */
+.hw-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.hw-chip {
+  display: inline-flex; align-items: center;
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 2px 8px; border-radius: 10px;
+  color: var(--text); background: var(--border);
+  border: 1px solid var(--accent);
+}
+.hw-chip:hover { background: var(--accent); color: var(--bg); }
 
 /* Progress bars */
 .progress-bar-wrap { height: 4px; background: var(--border); border-radius: 2px; margin-top: 6px; overflow: hidden; }

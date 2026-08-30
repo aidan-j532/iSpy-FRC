@@ -15,7 +15,7 @@ from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, get_pipeline_se
 from iSpy.vision import triangulation
 from iSpy.vision import calibration as cam_calibration
 
-class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
+class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
     plugin_name = "object_detection"
     # detector models get the known-object focal/FOV wizard (freeze a frame,
     # drag to measure a known-size object) on top of the universal ChArUco
@@ -919,3 +919,7 @@ class ObjectDetectionCamera(OptimizableModelPipeline, VisionPipeline):
 
     def release(self):
         self.destroy()
+
+
+# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
+ObjectDetectionCamera = ObjectDetectionPipeline

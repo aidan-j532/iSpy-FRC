@@ -29,7 +29,9 @@
         <div class="sys-item"><span class="sys-label">CPU</span><span class="sys-val" id="sys-cpu">--</span></div>
         <div class="sys-item"><span class="sys-label">Memory</span><span class="sys-val" id="sys-mem">--</span></div>
         <div class="sys-item"><span class="sys-label">Temp</span><span class="sys-val" id="sys-temp">--</span></div>
+        <div class="sys-item sys-item-wide"><span class="sys-label">Hardware</span><span class="sys-val" id="sys-hw">--</span></div>
       </div>
+      <div class="hw-chips" id="hw-chips"></div>
       <div class="progress-bar-wrap" id="cpu-bar-wrap" style="display:none;">
         <div class="progress-bar" id="cpu-bar"></div>
       </div>
@@ -195,6 +197,26 @@ function applySystem(sys) {
     memBar.style.width = sys.memory_percent + '%';
     memBar.className = 'progress-bar' + (sys.memory_percent > 90 ? ' bar-bad' : sys.memory_percent > 70 ? ' bar-warn' : '');
   }
+  applyHardware(sys.hardware);
+}
+
+const HW_LABELS = { cpu: 'CPU', gpu: 'GPU', npu: 'NPU', tpu: 'TPU' };
+
+function applyHardware(hwList) {
+  const chips = document.getElementById('hw-chips');
+  const summary = document.getElementById('sys-hw');
+  if (!chips || !summary) return;
+  const hw = Array.isArray(hwList) ? hwList.filter(h => h && h.hardware) : [];
+  if (hw.length === 0) {
+    summary.textContent = '--';
+    chips.innerHTML = '<span class="empty-state">No dedicated accelerator in use</span>';
+    return;
+  }
+  summary.textContent = '';
+  chips.innerHTML = hw.map(h => {
+    const label = HW_LABELS[(h.hardware || '').toLowerCase()] || h.hardware;
+    return `<span class="hw-chip" title="${h.camera}">${label}</span>`;
+  }).join('');
 }
 
 function connectSSE() {

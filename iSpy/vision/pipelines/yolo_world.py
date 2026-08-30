@@ -21,7 +21,7 @@ _WORLD_MODEL_URLS = {
 }
 
 
-class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
+class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
     plugin_name = "yolo_world"
     # zero-shot detection needs no intrinsics calibration - disable the default tab
     calibration_sections = []
@@ -583,3 +583,7 @@ class YoloWorldCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
         if hasattr(self, "cap") and self.cap:
             self.cap.release()
         cv2.destroyAllWindows()
+
+
+# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
+YoloWorldCamera = YoloWorldPipeline

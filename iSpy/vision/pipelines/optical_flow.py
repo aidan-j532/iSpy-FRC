@@ -9,7 +9,7 @@ from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 
 
-class OpticalFlowCamera(VisionPipeline):
+class OpticalFlowPipeline(VisionPipeline):
     plugin_name = "optical_flow"
     beta = True
     # velocity scale comes from the camera FOV (self.fov). The known-object
@@ -407,3 +407,7 @@ class OpticalFlowCamera(VisionPipeline):
 
     def destroy(self):
         super().destroy()
+
+
+# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
+OpticalFlowCamera = OpticalFlowPipeline

@@ -21,7 +21,7 @@ _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1,
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
 
-class DepthAnythingCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
+class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
     plugin_name = "depth_anything"
     # monocular depth maps need no calibration - disable the default ChArUco tab
     calibration_sections = []
@@ -1203,3 +1203,7 @@ class DepthAnythingCamera(OptimizableModelPipeline, BackgroundPreparedPipeline):
 
         if hasattr(super(), "destroy"):
             super().destroy()
+
+
+# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
+DepthAnythingCamera = DepthAnythingPipeline
