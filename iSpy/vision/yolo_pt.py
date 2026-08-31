@@ -28,6 +28,7 @@ of it is copied from the AGPL library.
 
 from __future__ import annotations
 
+import math
 import sys
 import types
 from typing import Any
@@ -124,6 +125,103 @@ class C3k(nn.Module):
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+
+class DWConv(Conv):
+    """Depth-wise convolution."""
+
+    def __init__(self, c1, c2, k=1, s=1, d=1, act=True):
+        super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), d=d, act=act)
+
+
+class C3k2(C2f):
+    """CSP bottleneck used by YOLO11/v26-family checkpoints."""
+
+    def __init__(
+        self,
+        c1,
+        c2,
+        n=1,
+        c3k=False,
+        e=0.5,
+        attn=False,
+        g=1,
+        shortcut=True,
+    ):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(
+            nn.Sequential(
+                Bottleneck(self.c, self.c, shortcut, g),
+                PSABlock(self.c, attn_ratio=0.5, num_heads=max(self.c // 64, 1)),
+            )
+            if attn
+            else C3k(self.c, self.c, 2, shortcut, g)
+            if c3k
+            else Bottleneck(self.c, self.c, shortcut, g)
+            for _ in range(n)
+        )
+
+
+class Attention(nn.Module):
+    """Multi-head self-attention for PSABlock."""
+
+    def __init__(self, dim, num_heads=8, attn_ratio=0.5):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.key_dim = int(self.head_dim * attn_ratio)
+        self.scale = self.key_dim**-0.5
+        nh_kd = self.key_dim * num_heads
+        h = dim + nh_kd * 2
+        self.qkv = Conv(dim, h, 1, act=False)
+        self.proj = Conv(dim, dim, 1, act=False)
+        self.pe = Conv(dim, dim, 3, 1, g=dim, act=False)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        N = H * W
+        qkv = self.qkv(x)
+        q, k, v = qkv.view(B, self.num_heads, self.key_dim * 2 + self.head_dim, N).split(
+            [self.key_dim, self.key_dim, self.head_dim], dim=2
+        )
+        attn = (q.transpose(-2, -1) @ k) * self.scale
+        attn = attn.softmax(dim=-1)
+        x = (v @ attn.transpose(-2, -1)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
+        return self.proj(x)
+
+
+class PSABlock(nn.Module):
+    """Position-sensitive attention block."""
+
+    def __init__(self, c, attn_ratio=0.5, num_heads=4, shortcut=True):
+        super().__init__()
+        self.attn = Attention(c, attn_ratio=attn_ratio, num_heads=num_heads)
+        self.ffn = nn.Sequential(Conv(c, c * 2, 1), Conv(c * 2, c, 1, act=False))
+        self.add = shortcut
+
+    def forward(self, x):
+        x = x + self.attn(x) if self.add else self.attn(x)
+        x = x + self.ffn(x) if self.add else self.ffn(x)
+        return x
+
+
+class C2PSA(nn.Module):
+    """C2PSA block with stacked PSABlock modules."""
+
+    def __init__(self, c1, c2, n=1, e=0.5):
+        super().__init__()
+        assert c1 == c2
+        self.c = int(c1 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv(2 * self.c, c1, 1)
+        self.m = nn.Sequential(
+            *(PSABlock(self.c, attn_ratio=0.5, num_heads=self.c // 64) for _ in range(n))
+        )
+
+    def forward(self, x):
+        a, b = self.cv1(x).split((self.c, self.c), dim=1)
+        b = self.m(b)
+        return self.cv2(torch.cat((a, b), 1))
 
 
 class SPPF(nn.Module):
@@ -442,6 +540,54 @@ class Detect(nn.Module):
         return dist2bbox(bboxes, anchors, xywh=xywh and not self.end2end and not self.xyxy, dim=1)
 
 
+class Pose(Detect):
+    """YOLO Pose head for keypoint models."""
+
+    def __init__(self, nc=80, kpt_shape=(17, 3), reg_max=16, end2end=False, ch=()):
+        super().__init__(nc, reg_max, end2end, ch)
+        self.kpt_shape = kpt_shape
+        self.nk = kpt_shape[0] * kpt_shape[1]
+        c4 = max(ch[0] // 4, self.nk)
+        self.cv4 = nn.ModuleList(
+            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nk, 1)) for x in ch
+        )
+
+    @property
+    def one2many(self):
+        return dict(box_head=self.cv2, cls_head=self.cv3, pose_head=self.cv4)
+
+    @property
+    def one2one(self):
+        return dict(box_head=self.cv2, cls_head=self.cv3, pose_head=self.cv4)
+
+    def forward_head(self, x, box_head=None, cls_head=None, pose_head=None):
+        preds = super().forward_head(x, box_head, cls_head)
+        if pose_head is not None:
+            bs = x[0].shape[0]
+            preds["kpts"] = torch.cat(
+                [pose_head[i](x[i]).view(bs, self.nk, -1) for i in range(self.nl)], 2
+            )
+        return preds
+
+    def _inference(self, x):
+        preds = super()._inference(x)
+        return torch.cat([preds, self.kpts_decode(x["kpts"])], dim=1)
+
+    def kpts_decode(self, kpts):
+        ndim = self.kpt_shape[1]
+        bs = kpts.shape[0]
+        if self.export:
+            y = kpts.view(bs, *self.kpt_shape, -1)
+            a = (y[:, :, :2] * 2.0 + (self.anchors - 0.5)) * self.strides
+            if ndim == 3:
+                a = torch.cat((a, y[:, :, 2:3].sigmoid()), 2)
+            return a.view(bs, self.nk, -1)
+        y = kpts.clone()
+        y[:, 0::ndim] = (y[:, 0::ndim] * 2.0 + (self.anchors[0] - 0.5)) * self.strides
+        y[:, 1::ndim] = (y[:, 1::ndim] * 2.0 + (self.anchors[1] - 0.5)) * self.strides
+        return y
+
+
 class DetectionModel(nn.Module):
     """Marker class: the pickle reconstructs the whole graph into this type.
 
@@ -475,7 +621,7 @@ def _register_shim():
     head_ns = types.ModuleType("ultralytics.nn.modules.head")
     tasks_ns = types.ModuleType("ultralytics.nn.tasks")
 
-for ns in (conv_ns, block_ns, head_ns, tasks_ns):
+    for ns in (conv_ns, block_ns, head_ns, tasks_ns):
         ns.Conv = Conv
         ns.C2f = C2f
         ns.SPPF = SPPF
@@ -484,14 +630,32 @@ for ns in (conv_ns, block_ns, head_ns, tasks_ns):
         ns.DFL = DFL
         ns.Detect = Detect
         ns.PoseModel = PoseModel
-        ns.C3k = C3k  # ADD: register C3k block shim
+        ns.Pose = Pose
+        ns.C3k = C3k
+        ns.C3k2 = C3k2
+        ns.C2PSA = C2PSA
+        ns.PSABlock = PSABlock
+        ns.Attention = Attention
+        ns.DWConv = DWConv
+    conv_ns.DWConv = DWConv
+    block_ns.C3k2 = C3k2
+    block_ns.C2PSA = C2PSA
+    block_ns.PSABlock = PSABlock
+    block_ns.Attention = Attention
+    head_ns.Pose = Pose
     modules_ns.Conv = Conv
     modules_ns.C2f = C2f
     modules_ns.SPPF = SPPF
     modules_ns.Concat = Concat
     modules_ns.Detect = Detect
     modules_ns.PoseModel = PoseModel
-    modules_ns.C3k = C3k  # ADD: register C3k block shim in parent pkg
+    modules_ns.Pose = Pose
+    modules_ns.C3k = C3k
+    modules_ns.C3k2 = C3k2
+    modules_ns.C2PSA = C2PSA
+    modules_ns.PSABlock = PSABlock
+    modules_ns.Attention = Attention
+    modules_ns.DWConv = DWConv
     tasks_ns.DetectionModel = DetectionModel
 
     # Ultralytics nn.Module re-exports each class under the same name in both
