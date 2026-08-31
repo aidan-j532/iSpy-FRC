@@ -58,7 +58,7 @@
     </div>
   </div>
 </div>
-<div class="dash-service-bar">
+<!-- <div class="dash-service-bar">
   <span class="service-status" id="svc-status">Checking service…</span>
   <div class="service-controls">
     <button onclick="serviceCmd('start')">Start</button>
@@ -67,20 +67,20 @@
     <button onclick="serviceCmd('restart')">Restart</button>
     <button class="btn-bad" onclick="serviceCmd('stop')">Stop</button>
   </div>
-</div>
+</div> -->
 <script>
-async function pollServiceStatus() {
-  try {
-    const r = await fetch(`http://${location.hostname}:5050/service/status`);
-    const j = await r.json();
-    document.getElementById('svc-status').textContent =
-      `Vision: ${j.status}${j.pid ? ' (pid ' + j.pid + ')' : ''}`;
-  } catch (e) {
-    document.getElementById('svc-status').textContent = 'Service daemon unreachable';
-  }
-}
-setInterval(pollServiceStatus, 2000);
-pollServiceStatus();
+async // function pollServiceStatus() {
+//   try {
+//     const r = await fetch(`http://${location.hostname}:5050/service/status`);
+//     const j = await r.json();
+//     document.getElementById('svc-status').textContent =
+//       `Vision: ${j.status}${j.pid ? ' (pid ' + j.pid + ')' : ''}`;
+// } catch (e) {
+//   document.getElementById('svc-status').textContent = 'Service daemon unreachable';
+// }
+// }
+// setInterval(pollServiceStatus, 2000);
+// pollServiceStatus();
 </script>
 
 <script>
@@ -214,8 +214,9 @@ function applyHardware(hwList) {
   }
   summary.textContent = '';
   chips.innerHTML = hw.map(h => {
-    const label = HW_LABELS[(h.hardware || '').toLowerCase()] || h.hardware;
-    return `<span class="hw-chip" title="${h.camera}">${label}</span>`;
+    const hwType = HW_LABELS[(h.hardware || '').toLowerCase()] || h.hardware;
+    const camera = h.camera || 'unknown';
+    return `<span class="hw-chip" title="${camera}: ${hwType}">${hwType} (${camera.split('_')[0]})</span>`;
   }).join('');
 }
 

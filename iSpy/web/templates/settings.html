@@ -1,487 +1,486 @@
-{% extends "base.html" %}
-{% block title %}Settings - iSpy{% endblock %}
-{% block content %}
-<h1>Settings</h1>
-
-<div class="settings-tabs" id="tabs">
-  <button class="settings-tab active" onclick="switchTab('general', this)">General</button>
-  <button class="settings-tab" onclick="switchTab('camera', this)">Camera</button>
-  <button class="settings-tab" onclick="switchTab('advanced', this)">Advanced</button>
-  <button class="settings-tab" onclick="switchTab('about', this)">About</button>
-  <button class="settings-tab" onclick="switchTab('raw', this)">Raw JSON</button>
-</div>
-
-<div class="settings-actions">
-  <button class="btn btn-ok" onclick="saveSettings()">Save Settings</button>
-  <span id="msg" class="settings-msg"></span>
-</div>
-<div class="settings-auto-note" style="display:none;color:var(--text-muted);font-size:0.78rem;margin-top:4px;">Auto-saving&hellip;</div>
-
-<div id="frame-sync-warning" class="text-dim" style="margin-top:8px; color:var(--text-dim); font-size:0.85rem; display:none;"></div>
-
-<div id="tab-general" class="settings-tab-content">
-  <div class="settings-section">
-    <h3>Units</h3>
-<div class="form-row">
-      <span class="form-label">Unit</span>
-      <select class="form-input" data-key="unit">
-        <option value="frc">FRC (meters)</option>
-        <option value="meter">Meters</option>
-        <option value="foot">Feet</option>
-        <option value="inch">Inches</option>
-        <option value="centimeter">Centimeters</option>
-      </select>
-      <span id="unit-warning" class="text-dim" style="margin-left:8px; font-size:0.8rem;"> </span>
-</div>
-  </div>
-
-  <div class="settings-section">
-    <h3>Display</h3>
-    <div class="form-row">
-      <span class="form-label">Max FPS</span>
-      <input class="form-input" type="number" data-key="max_fps"
-             step="1" min="0" placeholder="0 = unlimited">
-    </div>
-  </div>
-</div>
-
-<div id="tab-camera" class="settings-tab-content" style="display:none;">
-  <div class="settings-section">
-    <h3>Capture</h3>
-    <div class="form-row">
-      <span class="form-label">Frame Sync</span>
-      <select class="form-input" data-key="frame_sync">
-        <option value="true">Enabled</option>
-        <option value="false">Disabled</option>
-      </select>
-    </div>
-  </div>
-
-  <div class="settings-section">
-    <h3>Camera Configs</h3>
-    <p class="text-dim text-sm">Individual camera settings (pipeline, model, calibration) are managed
-      via the <a href="/cameras">Cameras page</a>. The raw JSON editor below provides full access.</p>
-  </div>
-</div>
-
-<div id="tab-advanced" class="settings-tab-content" style="display:none;">
-  <div class="settings-section">
-    <h3>System</h3>
-    <div class="form-row">
-      <span class="form-label">Metrics</span>
-      <select class="form-input" data-key="metrics">
-        <option value="true">Enabled</option>
-        <option value="false">Disabled</option>
-      </select>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Debug Mode</span>
-      <select class="form-input" data-key="debug_mode">
-        <option value="true">Enabled</option>
-        <option value="false">Disabled</option>
-      </select>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Log Level</span>
-      <select class="form-input" data-key="log_level" data-restart="true">
-        <option value="DEBUG">Debug</option>
-        <option value="INFO">Info</option>
-        <option value="WARNING">Warning</option>
-        <option value="ERROR">Error</option>
-      </select>
-      <span class="restart-badge" style="display:none;">restart required</span>
-    </div>
-    <div class="form-row">
-      <span class="form-label" title="Seconds without a fresh frame before /health reports degraded.">Health Stale Threshold (s)</span>
-      <input class="form-input" type="number" data-key="health_stale_threshold"
-             step="0.1" min="0" placeholder="1.0">
-    </div>
-  </div>
-
-  <div class="settings-section">
-    <h3>Hardware</h3>
-    <div class="form-row">
-      <span class="form-label" title="Number of GPUs to use. 'auto' detects all available.">GPUs</span>
-      <select class="form-input" data-key="num_gpus" data-restart="true" id="gpu-select">
-        <option value="auto">Auto</option>
-      </select>
-      <span class="restart-badge" style="display:none;">restart required</span>
-    </div>
-    <p class="text-dim text-sm" id="gpu-status" style="display:none;margin-top:4px;"></p>
-  </div>
-
-  <div class="settings-section">
-    <h3>Help</h3>
-    <div class="form-row">
-      <span class="form-label">First-run tutorial</span>
-      <button class="btn btn-ok" onclick="startTutorial()">Show tutorial</button>
-    </div>
-  </div>
-</div>
-
-<div id="tab-about" class="settings-tab-content" style="display:none;">
-  <div class="card" style="position:sticky;bottom:20px;">
-    <div class="settings-section">
-      <h3>About iSpy</h3>
-      <div class="form-row">
-        <span class="form-label">Version</span>
-        <span class="text-dim" id="about-version">loading&hellip;</span>
-      </div>
-      <div class="form-row">
-        <span class="form-label">License</span>
-        <span class="text-dim" id="about-license">loading&hellip;</span>
-      </div>
-      <div class="form-row">
-        <span class="form-label">Repository</span>
-        <a href="https://github.com/aidan-j532/iSpy-FRC" target="_blank" rel="noopener" class="text-dim">https://github.com/aidan-j532/iSpy-FRC</a>
-      </div>
-      <p class="text-dim text-sm" style="margin-top:12px;">iSpy is a real-time vision system for FRC robots. It provides plug-and-play camera pipelines, 3D field visualization, and model-based object detection.</p>
-    </div>
-  </div>
-</div>
-<script>
-async function loadAbout() {
-  try {
-    const r = await fetch('/api/version');
-    const j = await r.json();
-    const verEl = document.getElementById('about-version');
-    const licEl = document.getElementById('about-license');
-    if (verEl && j && j.version) {
-      verEl.textContent = 'v' + j.version;
-    }
-    // Fetch license from PyPI
-    try {
-      const lr = await fetch('https://pypi.org/pypi/ispy-frc/json');
-      const lj = await lr.json();
-      if (licEl && lj && lj.info && lj.info.license) {
-        licEl.textContent = lj.info.license;
-      }
-    } catch(e) {
-      licEl.textContent = 'MIT';
-    }
-  } catch(e) {
-    console.error('Failed to load about info', e);
-    document.getElementById('about-version').textContent = 'loading failed';
-    document.getElementById('about-license').textContent = 'MIT';
-  }
-}
-</script>
-{% endblock %}
-
-<div id="tab-raw" class="settings-tab-content" style="display:none;">
-<div id="raw-gate" class="card">
-    <p><strong>Advanced feature.</strong> Editing raw JSON can break your config if done incorrectly. A single restore point is saved automatically before your first edit in this session.</p>
-    <div id="risk-timer" class="text-dim" style="margin-top:8px; font-size:0.85rem; display:none;"></div>
-    <label><input type="checkbox" id="raw-ack"> I understand the risk</label>
-    <button id="continue-risky" onclick="startRiskTimer()">Continue (Risky)</button>
-</div>
-  <div id="raw-editor-wrap" class="card" style="display:none;">
-    <div class="controls-bar">
-      <button onclick="restoreSnapshot()" id="restore-btn">Restore last snapshot</button>
-    </div>
-    <textarea id="cfg" class="raw-editor"></textarea>
-  </div>
-</div>
-
-<script>
-let configData = {};
-let defaultsData = {};
-const BOOL_KEYS = new Set(["frame_sync", "metrics", "debug_mode"]);
-
-function parseValue(el) {
-  const val = el.value;
-  if (val === "true") return true;
-  if (val === "false") return false;
-  if (val === "null" || val === "") return null;
-  if (el.type === "number") {
-    const n = Number(val);
-    return Number.isFinite(n) ? n : val;
-  }
-  return val;
-}
-
-function unlockRawEditor() {
-  if (!document.getElementById('raw-ack').checked) return;
-  document.getElementById('raw-gate').style.display = 'none';
-  document.getElementById('raw-editor-wrap').style.display = '';
-  snapshotBeforeFirstEdit();
-}
-
-function startRiskTimer() {
-  const timerEl = document.getElementById('risk-timer');
-  const continueBtn = document.getElementById('continue-risky');
-  if (!timerEl || !continueBtn) return;
-  let seconds = 10;
-  timerEl.style.display = 'block';
-  timerEl.textContent = 'Warning: Editing raw JSON can break your configuration. You have ' + seconds + 's to reconsider.';
-  continueBtn.disabled = true;
-  const interval = setInterval(() => {
-    seconds--;
-    timerEl.textContent = 'Warning: Editing raw JSON can break your configuration. You have ' + seconds + 's to reconsider.';
-    if (seconds <= 0) {
-      clearInterval(interval);
-      timerEl.style.display = 'none';
-      timerEl.textContent = '';
-      continueBtn.disabled = false;
-      continueBtn.textContent = 'Continue (Risky)';
-    }
-  }, 1000);
-}
-
-let snapshotTaken = false;
-async function snapshotBeforeFirstEdit() {
-  if (snapshotTaken) return;
-  snapshotTaken = true;
-  await fetch('/api/settings/snapshot', { method: 'POST' });
-  document.getElementById('restore-btn').disabled = false;
-}
-
-async function restoreSnapshot() {
-  if (!confirm('Restore the pre-edit snapshot? This overwrites your current raw JSON edits and can only be used once.')) return;
-  const r = await fetch('/api/settings/restore', { method: 'POST' });
-  const j = await r.json();
-  if (j.success) { configData = j.config; document.getElementById('cfg').value = JSON.stringify(configData, null, 2); showToast('Restored', 'success'); }
-  else showToast(j.error || 'No snapshot available', 'error');
-}
-
-async function checkRestartNeeded() {
-  const { data } = collectFormValues();
-  try {
-    const r = await fetch('/api/settings/compare', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ config: data }),
-    });
-    const j = await r.json();
-    document.querySelectorAll('.restart-badge').forEach(b => b.style.display = 'none');
-    if (j.needs_restart) {
-      (j.changed || []).forEach(key => {
-        const el = document.querySelector(`[data-key="${key}"]`);
-        const badge = el && el.parentElement.querySelector('.restart-badge');
-        if (badge) badge.style.display = '';
-      });
-    }
-  } catch (e) { /* non-fatal */ }
-}
-
-document.querySelectorAll('[data-key]').forEach(el => {
-  el.addEventListener('change', checkRestartNeeded);
-  el.addEventListener('change', autoSave);
-});
-
-let autoSaveTimer = null;
-function autoSave() {
-  const note = document.querySelector('.settings-auto-note');
-  if (note) note.style.display = '';
-  clearTimeout(autoSaveTimer);
-  autoSaveTimer = setTimeout(async () => {
-    const { data, restartKeys } = collectFormValues();
-    try {
-      const r = await fetch('/api/settings', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ config: data, restart_keys: restartKeys }),
-      });
-      const j = await r.json();
-      if (r.ok) {
-        showToast('Settings saved', 'success');
-        if (j.needs_restart) {
-          showToast('Restart required to apply some changes', 'info');
-        }
-      } else {
-        showToast(j.error || 'Save failed', 'error');
-      }
-    } catch (e) {
-      showToast('Save failed', 'error');
-    }
-    if (note) note.style.display = 'none';
-  }, 400);
-}
-
-function collectFormValues() {
-  const data = {};
-  const restartKeys = [];
-  document.querySelectorAll('[data-key]').forEach(el => {
-    const key = el.dataset.key;
-    let val = parseValue(el);
-    if (BOOL_KEYS.has(key.split('.').pop())) {
-      val = val === true || val === "true";
-    }
-    setNestedValue(data, key, val);
-    if (el.dataset.restart) {
-      restartKeys.push(key);
-    }
-  });
-  return { data, restartKeys };
-}
-
-function setNestedValue(obj, path, value) {
-  const parts = path.split(".");
-  let target = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (!(parts[i] in target) || typeof target[parts[i]] !== 'object') {
-      target[parts[i]] = {};
-    }
-    target = target[parts[i]];
-  }
-  target[parts[parts.length - 1]] = value;
-}
-
-function getNestedValue(obj, path) {
-  const parts = path.split(".");
-  let target = obj;
-  for (const p of parts) {
-    if (target == null || typeof target !== 'object') return undefined;
-    target = target[p];
-  }
-  return target;
-}
-
-function loadFormValues() {
-  document.querySelectorAll('.restart-badge').forEach(b => b.style.display = 'none');
-  document.querySelectorAll('[data-key]').forEach(el => {
-    const key = el.dataset.key;
-    let val = getNestedValue(configData, key);
-    if (val === undefined) val = getNestedValue(defaultsData, key);
-    if (val === undefined) return;
-
-    if (el.tagName === 'SELECT') {
-      el.value = String(val);
-    } else {
-      el.value = val;
-    }
-  });
-  checkRestartNeeded();
-}
-
-function switchTab(name, btn) {
-  document.querySelectorAll('.settings-tab-content').forEach(el => el.style.display = 'none');
-  document.querySelectorAll('.settings-tab').forEach(el => el.classList.remove('active'));
-  document.getElementById('tab-' + name).style.display = '';
-  btn.classList.add('active');
-
-  if (name !== 'raw') {
-    document.getElementById('raw-gate').style.display = '';
-    document.getElementById('raw-editor-wrap').style.display = 'none';
-    document.getElementById('raw-ack').checked = false;
-  }
-}
-
-async function saveSettings() {
-  const msg = document.getElementById('msg');
-  const tabRaw = document.getElementById('tab-raw');
-  let data;
-  let restartKeys = [];
-
-  if (!tabRaw.style.display || tabRaw.style.display === '') {
-    try {
-      data = JSON.parse(document.getElementById('cfg').value);
-    } catch(e) {
-      msg.textContent = 'Invalid JSON: ' + e.message;
-      msg.className = 'settings-msg msg-error';
-      return;
-    }
-  } else {
-    const result = collectFormValues();
-    data = result.data;
-    restartKeys = result.restartKeys;
-  }
-
-  try {
-    const r = await fetch('/api/settings', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({config: data, restart_keys: restartKeys}),
-    });
-    const j = await r.json();
-    if (r.ok) {
-      msg.textContent = j.needs_restart ? 'Saved. Restart required to apply changes.' : 'Saved successfully.';
-      msg.className = j.needs_restart ? 'settings-msg msg-warn' : 'settings-msg msg-ok';
-      // Show unit change warning
-      const unitWarn = document.getElementById('unit-warning');
-      if (data.unit && data.unit !== j.old_unit) {
-        unitWarn.textContent = 'Unit changed - you must update how your code processes measurements';
-        setTimeout(() => unitWarn.textContent = '', 8000);
-      }
-      // Show frame sync warning
-      const frameSyncWarn = document.getElementById('frame-sync-warning');
-      if (data.frame_sync !== j.old_frame_sync) {
-        frameSyncWarn.style.display = 'block';
-        frameSyncWarn.textContent = j.frame_sync
-          ? 'Frame sync enabled - cameras will wait for synchronized frames'
-          : 'Frame sync disabled - cameras run independently';
-        setTimeout(() => { frameSyncWarn.style.display = 'none'; frameSyncWarn.textContent = ''; }, 8000);
-      }
-      showToast('Settings saved', 'success');
-    } else {
-      msg.textContent = 'Error: ' + (j.error || 'Unknown error');
-      msg.className = 'settings-msg msg-error';
-    }
-  } catch(e) {
-    msg.textContent = 'Save failed: ' + e.message;
-    msg.className = 'settings-msg msg-error';
-  }
-}
-
-async function load() {
-  const data = await fetch('/api/settings').then(r => r.json());
-  configData = data.config || {};
-  defaultsData = data.defaults || {};
-  // ... rest of load function
-  document.getElementById('cfg').value = JSON.stringify(configData, null, 2);
-  populateGpuSelect(data.gpu_count);
-  loadFormValues();
-  fetch('/api/version').then(r => r.json()).then(j => {
-    const el = document.getElementById('about-version');
-    if (el && j.version) el.textContent = 'v' + j.version;
-  }).catch(() => {});
-}
-
-function populateGpuSelect(count) {
-  const sel = document.getElementById('gpu-select');
-  const status = document.getElementById('gpu-status');
-  if (!sel) return;
-  const n = parseInt(count, 10);
-  if (!(n > 0)) {
-    sel.value = 'auto';
-    sel.disabled = true;
-    status.style.display = '';
-    status.textContent = 'No GPUs detected - running on CPU.';
-    return;
-  }
-  sel.disabled = false;
-  // rebuild numbered options so we never offer more than are present
-  sel.querySelectorAll('option:not([value="auto"])').forEach(o => o.remove());
-  for (let i = 1; i <= n; i++) {
-    const opt = document.createElement('option');
-    opt.value = String(i);
-    opt.textContent = String(i);
-    sel.appendChild(opt);
-  }
-  status.style.display = 'none';
-}
-
-// Unit change warning
-const unitSelect = document.querySelector('select[data-key="unit"]');
-if (unitSelect) {
-  unitSelect.onchange = () => {
-    const unitWarning = document.getElementById('unit-warning');
-    unitWarning.textContent = 'Unit changed - you must update how your code processes measurements';
-    setTimeout(() => unitWarning.textContent = '', 8000);
-  };
-}
-
-// Frame sync initial state
-const frameSyncWarn = document.getElementById('frame-sync-warning');
-fetch('/api/settings', {method: 'GET'}).then(r => r.json()).then(j => {
-  if (j.config && j.config.frame_sync !== undefined) {
-    const frameSyncWarn = document.getElementById('frame-sync-warning');
-    frameSyncWarn.style.display = 'block';
-    frameSyncWarn.textContent = j.config.frame_sync
-      ? 'Frame sync enabled - cameras will wait for synchronized frames'
-      : 'Frame sync disabled - cameras run independently';
-    setTimeout(() => { frameSyncWarn.style.display = 'none'; frameSyncWarn.textContent = ''; }, 5000);
-  }
-});
-</script>
-{% endblock %}
+{% extends "base.html" %}
+{% block title %}Settings - iSpy{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<div class="settings-tabs" id="tabs">
+  <button class="settings-tab active" onclick="switchTab('general', this)">General</button>
+  <button class="settings-tab" onclick="switchTab('camera', this)">Camera</button>
+  <button class="settings-tab" onclick="switchTab('advanced', this)">Advanced</button>
+  <button class="settings-tab" onclick="switchTab('about', this)">About</button>
+  <button class="settings-tab" onclick="switchTab('raw', this)">Raw JSON</button>
+</div>
+
+<div class="settings-actions">
+  <button class="btn btn-ok" onclick="saveSettings()">Save Settings</button>
+  <span id="msg" class="settings-msg"></span>
+</div>
+<div class="settings-auto-note" style="display:none;color:var(--text-muted);font-size:0.78rem;margin-top:4px;">Auto-saving&hellip;</div>
+
+<div id="frame-sync-warning" class="text-dim" style="margin-top:8px; color:var(--text-dim); font-size:0.85rem; display:none;"></div>
+
+<div id="tab-general" class="settings-tab-content">
+  <div class="settings-section">
+    <h3>Units</h3>
+<div class="form-row">
+      <span class="form-label">Unit</span>
+      <select class="form-input" data-key="unit">
+        <option value="frc">FRC (meters)</option>
+        <option value="meter">Meters</option>
+        <option value="foot">Feet</option>
+        <option value="inch">Inches</option>
+        <option value="centimeter">Centimeters</option>
+      </select>
+      <span id="unit-warning" class="text-dim" style="margin-left:8px; font-size:0.8rem;"> </span>
+</div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Display</h3>
+    <div class="form-row">
+      <span class="form-label">Max FPS</span>
+      <input class="form-input" type="number" data-key="max_fps"
+             step="1" min="0" placeholder="0 = unlimited">
+    </div>
+  </div>
+</div>
+
+<div id="tab-camera" class="settings-tab-content" style="display:none;">
+  <div class="settings-section">
+    <h3>Capture</h3>
+    <div class="form-row">
+      <span class="form-label">Frame Sync</span>
+      <select class="form-input" data-key="frame_sync">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Camera Configs</h3>
+    <p class="text-dim text-sm">Individual camera settings (pipeline, model, calibration) are managed
+      via the <a href="/cameras">Cameras page</a>. The raw JSON editor below provides full access.</p>
+  </div>
+</div>
+
+<div id="tab-advanced" class="settings-tab-content" style="display:none;">
+  <div class="settings-section">
+    <h3>System</h3>
+    <div class="form-row">
+      <span class="form-label">Metrics</span>
+      <select class="form-input" data-key="metrics">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Debug Mode</span>
+      <select class="form-input" data-key="debug_mode">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Log Level</span>
+      <select class="form-input" data-key="log_level" data-restart="true">
+        <option value="DEBUG">Debug</option>
+        <option value="INFO">Info</option>
+        <option value="WARNING">Warning</option>
+        <option value="ERROR">Error</option>
+      </select>
+      <span class="restart-badge" style="display:none;">restart required</span>
+    </div>
+    <div class="form-row">
+      <span class="form-label" title="Seconds without a fresh frame before /health reports degraded.">Health Stale Threshold (s)</span>
+      <input class="form-input" type="number" data-key="health_stale_threshold"
+             step="0.1" min="0" placeholder="1.0">
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Hardware</h3>
+    <div class="form-row">
+      <span class="form-label" title="Number of GPUs to use. 'auto' detects all available.">GPUs</span>
+      <select class="form-input" data-key="num_gpus" data-restart="true" id="gpu-select">
+        <option value="auto">Auto</option>
+      </select>
+      <span class="restart-badge" style="display:none;">restart required</span>
+    </div>
+    <p class="text-dim text-sm" id="gpu-status" style="display:none;margin-top:4px;"></p>
+  </div>
+
+  <div class="settings-section">
+    <h3>Help</h3>
+    <div class="form-row">
+      <span class="form-label">First-run tutorial</span>
+      <button class="btn btn-ok" onclick="startTutorial()">Show tutorial</button>
+    </div>
+  </div>
+</div>
+
+<div id="tab-about" class="settings-tab-content" style="display:none;">
+  <div class="card" style="position:sticky;bottom:20px;">
+    <div class="settings-section">
+      <h3>About iSpy</h3>
+      <div class="form-row">
+        <span class="form-label">Version</span>
+        <span class="text-dim" id="about-version">loading&hellip;</span>
+      </div>
+      <div class="form-row">
+        <span class="form-label">License</span>
+        <span class="text-dim" id="about-license">loading&hellip;</span>
+      </div>
+      <div class="form-row">
+        <span class="form-label">Repository</span>
+        <a href="https://github.com/aidan-j532/iSpy-FRC" target="_blank" rel="noopener" class="text-dim">https://github.com/aidan-j532/iSpy-FRC</a>
+      </div>
+      <p class="text-dim text-sm" style="margin-top:12px;">iSpy is a real-time vision system for FRC robots. It provides plug-and-play camera pipelines, 3D field visualization, and model-based object detection.</p>
+    </div>
+  </div>
+</div>
+<script>
+async function loadAbout() {
+  try {
+    const r = await fetch('/api/version');
+    const j = await r.json();
+    const verEl = document.getElementById('about-version');
+    const licEl = document.getElementById('about-license');
+    if (verEl && j && j.version) {
+      verEl.textContent = 'v' + j.version;
+    }
+    // Fetch license from PyPI
+    try {
+      const lr = await fetch('https://pypi.org/pypi/ispy-frc/json');
+      const lj = await lr.json();
+      if (licEl && lj && lj.info && lj.info.license) {
+        licEl.textContent = lj.info.license;
+      }
+    } catch(e) {
+      licEl.textContent = 'MIT';
+    }
+  } catch(e) {
+    console.error('Failed to load about info', e);
+    document.getElementById('about-version').textContent = 'loading failed';
+    document.getElementById('about-license').textContent = 'MIT';
+  }
+}
+</script>
+{% endblock %}
+
+<div id="tab-raw" class="settings-tab-content" style="display:none;">
+<div id="raw-gate" class="card">
+    <p><strong>Advanced feature.</strong> Editing raw JSON can break your config if done incorrectly. A single restore point is saved automatically before your first edit in this session.</p>
+    <div id="risk-timer" class="text-dim" style="margin-top:8px; font-size:0.85rem; display:none;"></div>
+    <label><input type="checkbox" id="raw-ack"> I understand the risk</label>
+    <button id="continue-risky" onclick="startRiskTimer()">Continue (Risky)</button>
+</div>
+  <div id="raw-editor-wrap" class="card" style="display:none;">
+    <div class="controls-bar">
+      <button onclick="restoreSnapshot()" id="restore-btn">Restore last snapshot</button>
+    </div>
+    <textarea id="cfg" class="raw-editor"></textarea>
+  </div>
+</div>
+
+<script>
+let configData = {};
+let defaultsData = {};
+const BOOL_KEYS = new Set(["frame_sync", "metrics", "debug_mode"]);
+
+function parseValue(el) {
+  const val = el.value;
+  if (val === "true") return true;
+  if (val === "false") return false;
+  if (val === "null" || val === "") return null;
+  if (el.type === "number") {
+    const n = Number(val);
+    return Number.isFinite(n) ? n : val;
+  }
+  return val;
+}
+
+function unlockRawEditor() {
+  if (!document.getElementById('raw-ack').checked) return;
+  document.getElementById('raw-gate').style.display = 'none';
+  document.getElementById('raw-editor-wrap').style.display = '';
+  snapshotBeforeFirstEdit();
+}
+
+function startRiskTimer() {
+  const timerEl = document.getElementById('risk-timer');
+  const continueBtn = document.getElementById('continue-risky');
+  if (!timerEl || !continueBtn) return;
+  let seconds = 10;
+  timerEl.style.display = 'block';
+  timerEl.textContent = 'Warning: Editing raw JSON can break your configuration. You have ' + seconds + 's to reconsider.';
+  continueBtn.disabled = true;
+  const interval = setInterval(() => {
+    seconds--;
+    timerEl.textContent = 'Warning: Editing raw JSON can break your configuration. You have ' + seconds + 's to reconsider.';
+    if (seconds <= 0) {
+      clearInterval(interval);
+      timerEl.style.display = 'none';
+      timerEl.textContent = '';
+      continueBtn.disabled = false;
+      continueBtn.textContent = 'Continue (Risky)';
+    }
+  }, 1000);
+}
+
+let snapshotTaken = false;
+async function snapshotBeforeFirstEdit() {
+  if (snapshotTaken) return;
+  snapshotTaken = true;
+  await fetch('/api/settings/snapshot', { method: 'POST' });
+  document.getElementById('restore-btn').disabled = false;
+}
+
+async function restoreSnapshot() {
+  if (!confirm('Restore the pre-edit snapshot? This overwrites your current raw JSON edits and can only be used once.')) return;
+  const r = await fetch('/api/settings/restore', { method: 'POST' });
+  const j = await r.json();
+  if (j.success) { configData = j.config; document.getElementById('cfg').value = JSON.stringify(configData, null, 2); showToast('Restored', 'success'); }
+  else showToast(j.error || 'No snapshot available', 'error');
+}
+
+async function checkRestartNeeded() {
+  const { data } = collectFormValues();
+  try {
+    const r = await fetch('/api/settings/compare', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ config: data }),
+    });
+    const j = await r.json();
+    document.querySelectorAll('.restart-badge').forEach(b => b.style.display = 'none');
+    if (j.needs_restart) {
+      (j.changed || []).forEach(key => {
+        const el = document.querySelector(`[data-key="${key}"]`);
+        const badge = el && el.parentElement.querySelector('.restart-badge');
+        if (badge) badge.style.display = '';
+      });
+    }
+  } catch (e) { /* non-fatal */ }
+}
+
+document.querySelectorAll('[data-key]').forEach(el => {
+  el.addEventListener('change', checkRestartNeeded);
+  el.addEventListener('change', autoSave);
+});
+
+let autoSaveTimer = null;
+function autoSave() {
+  const note = document.querySelector('.settings-auto-note');
+  if (note) note.style.display = '';
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(async () => {
+    const { data, restartKeys } = collectFormValues();
+    try {
+      const r = await fetch('/api/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ config: data, restart_keys: restartKeys }),
+      });
+      const j = await r.json();
+      if (r.ok) {
+        showToast('Settings saved', 'success');
+        if (j.needs_restart) {
+          showToast('Restart required to apply some changes', 'info');
+        }
+      } else {
+        showToast(j.error || 'Save failed', 'error');
+      }
+    } catch (e) {
+      showToast('Save failed', 'error');
+    }
+    if (note) note.style.display = 'none';
+  }, 400);
+}
+
+function collectFormValues() {
+  const data = {};
+  const restartKeys = [];
+  document.querySelectorAll('[data-key]').forEach(el => {
+    const key = el.dataset.key;
+    let val = parseValue(el);
+    if (BOOL_KEYS.has(key.split('.').pop())) {
+      val = val === true || val === "true";
+    }
+    setNestedValue(data, key, val);
+    if (el.dataset.restart) {
+      restartKeys.push(key);
+    }
+  });
+  return { data, restartKeys };
+}
+
+function setNestedValue(obj, path, value) {
+  const parts = path.split(".");
+  let target = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!(parts[i] in target) || typeof target[parts[i]] !== 'object') {
+      target[parts[i]] = {};
+    }
+    target = target[parts[i]];
+  }
+  target[parts[parts.length - 1]] = value;
+}
+
+function getNestedValue(obj, path) {
+  const parts = path.split(".");
+  let target = obj;
+  for (const p of parts) {
+    if (target == null || typeof target !== 'object') return undefined;
+    target = target[p];
+  }
+  return target;
+}
+
+function loadFormValues() {
+  document.querySelectorAll('.restart-badge').forEach(b => b.style.display = 'none');
+  document.querySelectorAll('[data-key]').forEach(el => {
+    const key = el.dataset.key;
+    let val = getNestedValue(configData, key);
+    if (val === undefined) val = getNestedValue(defaultsData, key);
+    if (val === undefined) return;
+
+    if (el.tagName === 'SELECT') {
+      el.value = String(val);
+    } else {
+      el.value = val;
+    }
+  });
+  checkRestartNeeded();
+}
+
+function switchTab(name, btn) {
+  document.querySelectorAll('.settings-tab-content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.settings-tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).style.display = '';
+  btn.classList.add('active');
+
+  if (name !== 'raw') {
+    document.getElementById('raw-gate').style.display = '';
+    document.getElementById('raw-editor-wrap').style.display = 'none';
+    document.getElementById('raw-ack').checked = false;
+  }
+}
+
+async function saveSettings() {
+  const msg = document.getElementById('msg');
+  const tabRaw = document.getElementById('tab-raw');
+  let data;
+  let restartKeys = [];
+
+  if (!tabRaw.style.display || tabRaw.style.display === '') {
+    try {
+      data = JSON.parse(document.getElementById('cfg').value);
+    } catch(e) {
+      msg.textContent = 'Invalid JSON: ' + e.message;
+      msg.className = 'settings-msg msg-error';
+      return;
+    }
+  } else {
+    const result = collectFormValues();
+    data = result.data;
+    restartKeys = result.restartKeys;
+  }
+
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({config: data, restart_keys: restartKeys}),
+    });
+    const j = await r.json();
+    if (r.ok) {
+      msg.textContent = j.needs_restart ? 'Saved. Restart required to apply changes.' : 'Saved successfully.';
+      msg.className = j.needs_restart ? 'settings-msg msg-warn' : 'settings-msg msg-ok';
+      // Show unit change warning
+      const unitWarn = document.getElementById('unit-warning');
+      if (data.unit && data.unit !== j.old_unit) {
+        unitWarn.textContent = 'Unit changed - you must update how your code processes measurements';
+        setTimeout(() => unitWarn.textContent = '', 8000);
+      }
+      // Show frame sync warning
+      const frameSyncWarn = document.getElementById('frame-sync-warning');
+      if (data.frame_sync !== j.old_frame_sync) {
+        frameSyncWarn.style.display = 'block';
+        frameSyncWarn.textContent = j.frame_sync
+          ? 'Frame sync enabled - cameras will wait for synchronized frames'
+          : 'Frame sync disabled - cameras run independently';
+        setTimeout(() => { frameSyncWarn.style.display = 'none'; frameSyncWarn.textContent = ''; }, 8000);
+      }
+      showToast('Settings saved', 'success');
+    } else {
+      msg.textContent = 'Error: ' + (j.error || 'Unknown error');
+      msg.className = 'settings-msg msg-error';
+    }
+  } catch(e) {
+    msg.textContent = 'Save failed: ' + e.message;
+    msg.className = 'settings-msg msg-error';
+  }
+}
+
+async function load() {
+  const data = await fetch('/api/settings').then(r => r.json());
+  configData = data.config || {};
+  defaultsData = data.defaults || {};
+  // ... rest of load function
+  document.getElementById('cfg').value = JSON.stringify(configData, null, 2);
+  populateGpuSelect(data.gpu_count);
+  loadFormValues();
+  fetch('/api/version').then(r => r.json()).then(j => {
+    const el = document.getElementById('about-version');
+    if (el && j.version) el.textContent = 'v' + j.version;
+  }).catch(() => {});
+}
+
+function populateGpuSelect(count) {
+  const sel = document.getElementById('gpu-select');
+  const status = document.getElementById('gpu-status');
+  if (!sel) return;
+  const n = parseInt(count, 10);
+  if (!(n > 0)) {
+    sel.value = 'auto';
+    sel.disabled = true;
+    status.style.display = '';
+    status.textContent = 'No GPUs detected - running on CPU.';
+    return;
+  }
+  sel.disabled = false;
+  // rebuild numbered options so we never offer more than are present
+  sel.querySelectorAll('option:not([value="auto"])').forEach(o => o.remove());
+  for (let i = 1; i <= n; i++) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = String(i);
+    sel.appendChild(opt);
+  }
+  status.style.display = 'none';
+}
+
+// Unit change warning
+const unitSelect = document.querySelector('select[data-key="unit"]');
+if (unitSelect) {
+  unitSelect.onchange = () => {
+    const unitWarning = document.getElementById('unit-warning');
+    unitWarning.textContent = 'Unit changed - you must update how your code processes measurements';
+    setTimeout(() => unitWarning.textContent = '', 8000);
+  };
+}
+
+// Frame sync initial state
+const frameSyncWarn = document.getElementById('frame-sync-warning');
+fetch('/api/settings', {method: 'GET'}).then(r => r.json()).then(j => {
+  if (j.config && j.config.frame_sync !== undefined) {
+    const frameSyncWarn = document.getElementById('frame-sync-warning');
+    frameSyncWarn.style.display = 'block';
+    frameSyncWarn.textContent = j.config.frame_sync
+      ? 'Frame sync enabled - cameras will wait for synchronized frames'
+      : 'Frame sync disabled - cameras run independently';
+    setTimeout(() => { frameSyncWarn.style.display = 'none'; frameSyncWarn.textContent = ''; }, 5000);
+  }
+});
+</script>

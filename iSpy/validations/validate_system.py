@@ -53,15 +53,23 @@ def run_unit_tests() -> bool:
         sys.path.insert(0, str(repo_root))
 
     import unittest
-    loader = unittest.TestLoader()
-    suite = loader.discover(
-        start_dir=str(Path(__file__).parent),
-        pattern="unit_tests.py",
-    )
-    with open(os.devnull, "w") as devnull:
-        runner = unittest.TextTestRunner(verbosity=2, stream=devnull)
-        result = runner.run(suite)
-    return result.wasSuccessful()
+    import logging
+    # Suppress logging during unit tests to avoid spam in boot output
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.ERROR)
+    try:
+        loader = unittest.TestLoader()
+        suite = loader.discover(
+            start_dir=str(Path(__file__).parent),
+            pattern="unit_tests.py",
+        )
+        with open(os.devnull, "w") as devnull:
+            runner = unittest.TextTestRunner(verbosity=2, stream=devnull)
+            result = runner.run(suite)
+        return result.wasSuccessful()
+    finally:
+        root_logger.setLevel(original_level)
 
 def get_addon_setting(config: dict, addon_type: str, addon_name: str,
                       key: str, default=None):

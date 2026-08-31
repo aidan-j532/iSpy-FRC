@@ -131,7 +131,7 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         if raw_optimize is None:
             raw_optimize = camera_config.get_pipeline_setting("auto_opt")  # legacy key
         if raw_optimize is None:
-            raw_optimize = config.get("optimize", config.get("auto_opt", False)) if config is not None else False
+            raw_optimize = False
         self._auto_opt = self._normalize_auto_opt(raw_optimize)
         self.model = None
         self._model_path = None

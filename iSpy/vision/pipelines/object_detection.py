@@ -118,11 +118,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         if cam_auto_opt is None:
             cam_auto_opt = vm_cfg.get("auto_opt")  # legacy key
         if cam_auto_opt is None:
-            cam_auto_opt = (
-                config.get("optimize", config.get("auto_opt", False))
-                if config is not None
-                else False
-            )
+            cam_auto_opt = False
         self._auto_opt = self._normalize_auto_opt(cam_auto_opt)
         self._requested_format = str(vm_cfg.get("target_format") or "auto")
         self.quantization_dataset = vm_cfg.get("quantization_dataset") or None

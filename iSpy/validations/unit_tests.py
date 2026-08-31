@@ -213,15 +213,18 @@ class TestBoxResults(unittest.TestCase):
 class TestGenericYoloModelSelection(unittest.TestCase):
 
     def setUp(self):
-        # Patch genericYolo.RKNNLite directly so tests work regardless of import order
+        # Patch genericYolo.RKNNLite and RKNN_FOUND directly so tests work regardless of import order
         from iSpy import vision
         self._original_rknnlite = vision.genericYolo.RKNNLite
+        self._original_rknn_found = vision.genericYolo.RKNN_FOUND
         vision.genericYolo.RKNNLite = FakeRKNNLite
+        vision.genericYolo.RKNN_FOUND = True
 
     def tearDown(self):
-        # Restore original RKNNLite
+        # Restore original RKNNLite and RKNN_FOUND
         from iSpy import vision
         vision.genericYolo.RKNNLite = self._original_rknnlite
+        vision.genericYolo.RKNN_FOUND = self._original_rknn_found
 
     def _dummy_model(self, suffix=".rknn", size=4096):
         tmp = tempfile.TemporaryDirectory()

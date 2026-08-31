@@ -221,7 +221,6 @@ class iSpyConfig:
             "unit": "frc",
             "debug_mode": True,
             "frame_sync": False,
-            "optimize": False,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
             # seconds without a fresh frame before /health reports degraded
@@ -266,7 +265,8 @@ class iSpyConfig:
                                 # machine (onnx/openvino/rknn/...). Done in the background
                                 # so boot/run stay non-blocking; the .pt runs until the
                                 # optimized artifact is ready.
-                                "optimize": False,
+                                # Values: "off" (disabled), "auto" (auto-detect), "onnx", "rknn", "openvino", "tflite", "hef", "engine", "coreml"
+                                "optimize": "off",
                                 "quantize": False,
                                 # Optional PnP for pose (translation stored on
                                 # Box; rotation stored as roll/pitch/yaw on

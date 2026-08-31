@@ -86,6 +86,12 @@ try:
 except ImportError:
     RKNN_FOUND = False
 
+    class RKNNLite:
+        """Dummy RKNNLite class for when rknnlite is not installed.
+        Allows tests to mock this attribute."""
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("RKNNLite not available - rknnlite not installed")
+
     def _set_rknn_log_level(level: int) -> None:
         pass
 

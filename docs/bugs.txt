@@ -1,161 +1,45 @@
-(env) ubuntu@ispy:~/iSpy-FRC$ ispy-boot -f
-2026-08-31 14:40:37,588 [iSpy.boot.boot] I: boot -f: forcefully fresh installation state
-2026-08-31 14:40:37,593 [iSpy.boot.boot] I: boot -f: deleted generated /home/ubuntu/iSpy-FRC/YoloModels
-2026-08-31 14:40:37,594 [iSpy.boot.boot] I: boot -f: deleted generated /home/ubuntu/iSpy-FRC/Config
-2026-08-31 14:40:37,594 [iSpy.boot.boot] I: boot -f: deleted generated /home/ubuntu/iSpy-FRC/Outputs
-2026-08-31 14:40:37,594 [iSpy.boot.boot] I: boot -f: deleted generated /home/ubuntu/iSpy-FRC/QuantizeDataset
-2026-08-31 14:40:37,605 [iSpy.boot.boot] I: Staged bundled model _default_pose.pt -> /home/ubuntu/iSpy-FRC/YoloModels/pytorch/_default_pose.pt
-2026-08-31 14:40:37,614 [iSpy.boot.boot] I: Staged bundled model _default_v26_detect_for_fuel.pt -> /home/ubuntu/iSpy-FRC/YoloModels/pytorch/_default_v26_detect_for_fuel.pt
-2026-08-31 14:40:37,624 [iSpy.boot.boot] I: Staged bundled model _default_detect.pt -> /home/ubuntu/iSpy-FRC/YoloModels/pytorch/_default_detect.pt
-2026-08-31 14:40:37,624 [iSpy.boot.boot] I: Generating metadata for _default_pose.pt
-2026-08-31 14:40:37,757 [iSpy.boot.boot] I: Wrote metadata _default_pose_metadata.yaml
-2026-08-31 14:40:37,758 [iSpy.boot.boot] I: Generating metadata for _default_v26_detect_for_fuel.pt
-2026-08-31 14:40:37,840 [iSpy.boot.boot] I: Wrote metadata _default_v26_detect_for_fuel_metadata.yaml
-2026-08-31 14:40:37,840 [iSpy.boot.boot] I: Generating metadata for _default_detect.pt
-2026-08-31 14:40:37,893 [iSpy.boot.boot] I: Wrote metadata _default_detect_metadata.yaml
-2026-08-31 14:40:37,894 [iSpy.config.iSpyConfig] I: Config saved to /home/ubuntu/iSpy-FRC/Config/config.json
-2026-08-31 14:40:37,982 [iSpy] I:iSpy.boot.boot: First-boot dependency install starting (auto_install=True)...
-2026-08-31 14:40:37,999 [iSpy] I:iSpy.config.AutoOpt: Rockchip NPU detected - using RKNN format for hardware acceleration.
-2026-08-31 14:40:38,000 [iSpy] I:iSpy.vision.optimizer: Recommended backend: rknn
-2026-08-31 14:40:38,006 [iSpy] I:iSpy.vision.optimizer: All pip-installable dependencies already satisfied for rknn
-2026-08-31 14:40:38,007 [iSpy] I:iSpy.validations.validate_system: All model file paths are valid.
-2026-08-31 14:40:38,007 [iSpy] I:iSpy.validations.validate_system: All config files are valid.
-2026-08-31 14:40:38,008 [iSpy] W:iSpy.validations.validate_system: No quantization dataset found at QuantizeDataset - skipping (only needed for RKNN conversion, which runs on demand, not at boot).
-2026-08-31 14:40:38,008 [iSpy] I:iSpy.validations.validate_system: Running unit tests...
-2026-08-31 14:40:38,015 [iSpy] I:iSpy.config.AutoOpt: AMD GPU detected - using ONNX format for hardware acceleration.
-2026-08-31 14:40:38,017 [iSpy] I:iSpy.config.AutoOpt: ARM edge device detected - using TFLite format for hardware acceleration.
-2026-08-31 14:40:38,018 [iSpy] I:iSpy.config.AutoOpt: Edge TPU detected - using TFLite format for hardware acceleration.
-2026-08-31 14:40:38,020 [iSpy] I:iSpy.config.AutoOpt: Hailo NPU detected - using HEF format for hardware acceleration.
-2026-08-31 14:40:38,021 [iSpy] I:iSpy.config.AutoOpt: Intel GPU detected - using OpenVINO format for hardware acceleration.
-2026-08-31 14:40:38,023 [iSpy] I:iSpy.config.AutoOpt: No specialised hardware detected - defaulting to ONNX (CPU).
-2026-08-31 14:40:38,025 [iSpy] I:iSpy.config.AutoOpt: NVIDIA GPU detected - using .engine format for maximum FPS.
-2026-08-31 14:40:38,026 [iSpy] I:iSpy.config.AutoOpt: NVIDIA GPU detected but TensorRT not found - falling back to ONNX (install tensorrt for a significant FPS boost).
-2026-08-31 14:40:38,028 [iSpy] I:iSpy.config.AutoOpt: No specialised hardware detected - defaulting to ONNX (CPU).
-2026-08-31 14:40:38,031 [iSpy] I:iSpy.config.AutoOpt: No specialised hardware detected - defaulting to ONNX (CPU).
-2026-08-31 14:40:38,032 [iSpy] I:iSpy.config.AutoOpt: No specialised hardware detected - defaulting to ONNX (CPU).
-2026-08-31 14:40:38,034 [iSpy] I:iSpy.config.AutoOpt: Rockchip NPU detected - using RKNN format for hardware acceleration.
-2026-08-31 14:40:38,038 [iSpy] I:iSpy.vision.ModelInspector: No metadata file for model.rknn - falling back to tensor inspection
-2026-08-31 14:40:38,038 [iSpy] W:iSpy.vision.ModelInspector: --------------------------------------------------------------
-  RKNN model loaded WITHOUT metadata: model.rknn
-  Expected: /tmp/tmp44fixbk4/model_metadata.yaml
-  All output config fields are educated guesses.
-  Fields you MUST verify before deploying:
---------------------------------------------------------------
-2026-08-31 14:40:38,038 [iSpy] W:iSpy.vision.ModelInspector:   input_size                    Not readable from .rknn binary. Verify it matches the imgsz used during ONNX export (likely [640,640]).
-2026-08-31 14:40:38,038 [iSpy] W:iSpy.vision.ModelInspector:   output.format                 CRITICAL - defaulted to 'raw' (correct for RKNN Toolkit). Wrong value processes all 8400 raw anchors unfiltered every frame.
-2026-08-31 14:40:38,038 [iSpy] W:iSpy.vision.ModelInspector:   output.layout                 Defaulted to 'features_first' (Ultralytics ONNX -> Toolkit). Verify against your actual ONNX export.
-2026-08-31 14:40:38,038 [iSpy] W:iSpy.vision.ModelInspector:   output.quantization           Defaulted to 'int8'. Change to 'none' if do_quantization=False was used.
-2026-08-31 14:40:38,038 [iSpy] W:iSpy.vision.ModelInspector:   output.quant_scale            Defaulted to 255.0 (std_values=[[255,255,255]]). Update if your rknn.config() used different std_values.
-2026-08-31 14:40:38,038 [iSpy] W:iSpy.vision.ModelInspector: --------------------------------------------------------------
-2026-08-31 14:40:38,038 [iSpy] W:iSpy.vision.ModelInspector: RKNN model (model.rknn) - fields to verify manually:
-2026-08-31 14:40:38,038 [iSpy] W:iSpy.vision.ModelInspector:   • input_size  -  Not readable from .rknn binary. Verify it matches the imgsz used during ONNX export (likely [640,640]).
-2026-08-31 14:40:38,039 [iSpy] W:iSpy.vision.ModelInspector:   • output.format  -  CRITICAL - defaulted to 'raw' (correct for RKNN Toolkit). Wrong value processes all 8400 raw anchors unfiltered every frame.
-2026-08-31 14:40:38,039 [iSpy] W:iSpy.vision.ModelInspector:   • output.layout  -  Defaulted to 'features_first' (Ultralytics ONNX -> Toolkit). Verify against your actual ONNX export.
-2026-08-31 14:40:38,039 [iSpy] W:iSpy.vision.ModelInspector:   • output.quantization  -  Defaulted to 'int8'. Change to 'none' if do_quantization=False was used.
-2026-08-31 14:40:38,039 [iSpy] W:iSpy.vision.ModelInspector:   • output.quant_scale  -  Defaulted to 255.0 (std_values=[[255,255,255]]). Update if your rknn.config() used different std_values.
-2026-08-31 14:40:38,039 [iSpy] W:iSpy.vision.ModelInspector:   • input_size  -  defaulted to [640,640]. Verify it matches your training/export resolution. (Re-run boot.py conversion to save this automatically.)
-2026-08-31 14:40:38,039 [iSpy] I:iSpy.vision.ModelInspector: Auto-filled  input.dtype                         = 'uint8'
-2026-08-31 14:40:38,039 [iSpy] I:iSpy.vision.ModelInspector: Auto-filled  input.layout                        = 'nhwc'
-2026-08-31 14:40:38,039 [iSpy] I:iSpy.vision.ModelInspector: Auto-filled  input.normalize                     = False
-2026-08-31 14:40:38,039 [iSpy] I:iSpy.vision.genericYolo: Device 0 not available (CUDA=False, count=0) - falling back to CPU
-2026-08-31 14:40:38,042 [iSpy] I:iSpy.vision.genericYolo: GenericYolo loaded:
-+===============================================+
-|Model             : /tmp/tmp44fixbk4/model.rknn|
-|Type              : rknn                       |
-|Task              : detect                     |
-|Classes           : 1                          |
-|Input size        : 640x640                    |
-|Min confidence    : 0.5                        |
-|Device            : cpu                        |
-|Output format     : raw                        |
-|Output layout     : features_first             |
-|Frame batches     : 1                          |
-|Input layout      : nhwc                       |
-|Input dtype       : uint8                      |
-|Letterbox         : True                       |
-|Box format        : cxcywh                     |
-|Score mode        : objectness                 |
-|Software NMS      : True                       |
-|NMS IoU           : 0.45                       |
-+===============================================+
-2026-08-31 14:40:38,043 [iSpy] I:iSpy.vision.ModelInspector: No metadata file for model.rknn - falling back to tensor inspection
-2026-08-31 14:40:38,043 [iSpy] W:iSpy.vision.ModelInspector: --------------------------------------------------------------
-  RKNN model loaded WITHOUT metadata: model.rknn
-  Expected: /tmp/tmp0gnv2k7t/model_metadata.yaml
-  All output config fields are educated guesses.
-  Fields you MUST verify before deploying:
---------------------------------------------------------------
-2026-08-31 14:40:38,043 [iSpy] W:iSpy.vision.ModelInspector:   input_size                    Not readable from .rknn binary. Verify it matches the imgsz used during ONNX export (likely [640,640]).
-2026-08-31 14:40:38,043 [iSpy] W:iSpy.vision.ModelInspector:   output.format                 CRITICAL - defaulted to 'raw' (correct for RKNN Toolkit). Wrong value processes all 8400 raw anchors unfiltered every frame.
-2026-08-31 14:40:38,043 [iSpy] W:iSpy.vision.ModelInspector:   output.layout                 Defaulted to 'features_first' (Ultralytics ONNX -> Toolkit). Verify against your actual ONNX export.
-2026-08-31 14:40:38,043 [iSpy] W:iSpy.vision.ModelInspector:   output.quantization           Defaulted to 'int8'. Change to 'none' if do_quantization=False was used.
-2026-08-31 14:40:38,044 [iSpy] W:iSpy.vision.ModelInspector:   output.quant_scale            Defaulted to 255.0 (std_values=[[255,255,255]]). Update if your rknn.config() used different std_values.
-2026-08-31 14:40:38,044 [iSpy] W:iSpy.vision.ModelInspector: --------------------------------------------------------------
-2026-08-31 14:40:38,044 [iSpy] W:iSpy.vision.ModelInspector: RKNN model (model.rknn) - fields to verify manually:
-2026-08-31 14:40:38,044 [iSpy] W:iSpy.vision.ModelInspector:   • input_size  -  Not readable from .rknn binary. Verify it matches the imgsz used during ONNX export (likely [640,640]).
-2026-08-31 14:40:38,044 [iSpy] W:iSpy.vision.ModelInspector:   • output.format  -  CRITICAL - defaulted to 'raw' (correct for RKNN Toolkit). Wrong value processes all 8400 raw anchors unfiltered every frame.
-2026-08-31 14:40:38,044 [iSpy] W:iSpy.vision.ModelInspector:   • output.layout  -  Defaulted to 'features_first' (Ultralytics ONNX -> Toolkit). Verify against your actual ONNX export.
-2026-08-31 14:40:38,044 [iSpy] W:iSpy.vision.ModelInspector:   • output.quantization  -  Defaulted to 'int8'. Change to 'none' if do_quantization=False was used.
-2026-08-31 14:40:38,044 [iSpy] W:iSpy.vision.ModelInspector:   • output.quant_scale  -  Defaulted to 255.0 (std_values=[[255,255,255]]). Update if your rknn.config() used different std_values.
-2026-08-31 14:40:38,044 [iSpy] W:iSpy.vision.ModelInspector:   • input_size  -  defaulted to [640,640]. Verify it matches your training/export resolution. (Re-run boot.py conversion to save this automatically.)
-2026-08-31 14:40:38,044 [iSpy] I:iSpy.vision.ModelInspector: Auto-filled  input.dtype                         = 'uint8'
-2026-08-31 14:40:38,044 [iSpy] I:iSpy.vision.ModelInspector: Auto-filled  input.layout                        = 'nhwc'
-2026-08-31 14:40:38,044 [iSpy] I:iSpy.vision.ModelInspector: Auto-filled  input.normalize                     = False
-2026-08-31 14:40:38,044 [iSpy] I:iSpy.vision.genericYolo: Device 0 not available (CUDA=False, count=0) - falling back to CPU
-2026-08-31 14:40:38,045 [iSpy] I:iSpy.vision.genericYolo: GenericYolo loaded:
-+===============================================+
-|Model             : /tmp/tmp0gnv2k7t/model.rknn|
-|Type              : rknn                       |
-|Task              : detect                     |
-|Classes           : 1                          |
-|Input size        : 640x640                    |
-|Min confidence    : 0.5                        |
-|Device            : cpu                        |
-|Output format     : raw                        |
-|Output layout     : features_first             |
-|Frame batches     : 1                          |
-|Input layout      : nhwc                       |
-|Input dtype       : uint8                      |
-|Letterbox         : True                       |
-|Box format        : cxcywh                     |
-|Score mode        : objectness                 |
-|Software NMS      : True                       |
-|NMS IoU           : 0.45                       |
-+===============================================+
-2026-08-31 14:40:38,051 [iSpy] I:iSpy.validations.validate_system: System validation successful.
-2026-08-31 14:40:38,071 [iSpy] I:iSpy.boot.boot: Boot sequence complete.
-2026-08-31 14:40:38,072 [iSpy] I:iSpy.boot.boot: UDP announce beacon started.
-2026-08-31 14:40:38,072 [iSpy] I:iSpy.boot.boot: Skipping service installation. Run with -s to install.
-(env) ubuntu@ispy:~/iSpy-FRC$ ispy-run
-2026-08-31 14:40:56,993 [iSpy.core.game_loop] I: Using config file: /home/ubuntu/iSpy-FRC/Config/config.json
- * Serving Flask app 'iSpy.web.Backend.WebApp'
- * Debug mode: off
-2026-08-31 14:40:57,038 [iSpy] I:iSpy.validations.model_validator: [OK] Valid model: YoloModels/pytorch/_default_pose.pt
-2026-08-31 14:40:57,038 [iSpy] I:iSpy.validations.model_validator: [OK] Valid model: YoloModels/pytorch/_default_v26_detect_for_fuel.pt
-2026-08-31 14:40:57,038 [iSpy] I:iSpy.validations.model_validator: [OK] Valid model: YoloModels/pytorch/_default_detect.pt
-2026-08-31 14:40:57,039 [iSpy] I:iSpy.validations.model_validator: Valid: 3
-2026-08-31 14:40:57,044 [iSpy] I:iSpy.vision.ModelInspector: Loaded metadata from _default_pose_metadata.yaml
-2026-08-31 14:40:57,044 [iSpy] I:iSpy.vision.pipelines.object_detection: Calibration values must be positive, defaulting focal length to 1
-2026-08-31 14:40:57,900 [iSpy] I:iSpy.vision.Cameras.base: Camera 0: capture 640x480 @ 30.0 FPS (format MJPG)
-2026-08-31 14:40:57,900 [iSpy] W:iSpy.vision.Cameras.base: Requested 640x640 but camera vetoed to 640x480
-2026-08-31 14:40:57,904 [iSpy] I:iSpy.vision.ModelInspector: Loaded metadata from _default_pose_metadata.yaml
-2026-08-31 14:40:57,904 [iSpy] I:iSpy.vision.genericYolo: Device 0 not available (CUDA=False, count=0) - falling back to CPU
-2026-08-31 14:40:58,016 [iSpy] I:iSpy.vision.genericYolo: GenericYolo loaded:
-+=======================================================+
-|Model             : YoloModels/pytorch/_default_pose.pt|
-|Type              : yolo                               |
-|Task              : pose                               |
-|Classes           : 1                                  |
-|Input size        : 640x640                            |
-|Min confidence    : 0.5                                |
-|Device            : cpu                                |
-|Output format     : hardware_nms                       |
-|Output layout     : anchors_first                      |
-|Frame batches     : 1                                  |
-|Input layout      : nhwc                               |
-|Input dtype       : uint8                              |
-|Letterbox         : True                               |
-+=======================================================+
-2026-08-31 14:40:58,020 [iSpy] I:iSpy.iSpy: Single camera mode.
-2026-08-31 14:40:59,922 [iSpy] I:iSpy.core.control_channel: Control channel listening on 127.0.0.1:36523
-FPS: 493.7
+ore mode        : objectness                                                             |
+|Software NMS      : True                                                                   |
+|NMS IoU           : 0.45                                                                   |
++===========================================================================================+
+FPS: 351.5   2026-08-31 22:13:59,488 [iSpy] I:iSpy.vision.pipelines.object_detection: Camera 'default_cam': optimized model active at /home/ubuntu/iSpy-FRC/YoloModels/rknn/_default_v26_detect_for_fuel.rknn
+FPS: 375.9   2026-08-31 22:14:04,252 [iSpy] E:iSpy.web.Backend.WebApp: Exception on /settings [GET]
+Traceback (most recent call last):
+  File "/home/ubuntu/env/lib/python3.12/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/env/lib/python3.12/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/env/lib/python3.12/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/env/lib/python3.12/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/iSpy-FRC/iSpy/web/Backend/Settings.py", line 27, in <lambda>
+    flask_app.add_url_rule("/settings", "settings_page", lambda: render_template("settings.html"))
+                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/env/lib/python3.12/site-packages/flask/templating.py", line 150, in render_template
+    template = app.jinja_env.get_or_select_template(template_name_or_list)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/env/lib/python3.12/site-packages/jinja2/environment.py", line 1087, in get_or_select_template
+    return self.get_template(template_name_or_list, parent, globals)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/env/lib/python3.12/site-packages/jinja2/environment.py", line 1016, in get_template
+    return self._load_template(name, globals)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/env/lib/python3.12/site-packages/jinja2/environment.py", line 975, in _load_template
+    template = self.loader.load(self, name, self.make_globals(globals))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/env/lib/python3.12/site-packages/jinja2/loaders.py", line 138, in load
+    code = environment.compile(source, name, filename)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/env/lib/python3.12/site-packages/jinja2/environment.py", line 771, in compile
+    self.handle_exception(source=source_hint)
+  File "/home/ubuntu/env/lib/python3.12/site-packages/jinja2/environment.py", line 942, in handle_exception
+    raise rewrite_traceback_stack(source=source)
+  File "/home/ubuntu/iSpy-FRC/iSpy/web/templates/settings.html", line 487, in template
+    {% endblock %}
+jinja2.exceptions.TemplateSyntaxError: Encountered unknown tag 'endblock'.
+FPS: 446.6

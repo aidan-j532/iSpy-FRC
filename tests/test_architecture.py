@@ -69,7 +69,8 @@ class PipelineConfigTests(unittest.TestCase):
             cam["pipeline"]["settings"]["vision_model"]["source_pt"],
             "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
         )
-        self.assertIs(cam["pipeline"]["settings"]["vision_model"]["optimize"], True)
+        # optimize is a string: "off" (disabled by default, opt-in via web UI)
+        self.assertEqual(cam["pipeline"]["settings"]["vision_model"]["optimize"], "off")
 
     def test_legacy_flat_camera_config_migrates_to_nested_pipeline(self):
         # old configs kept settings flat on the camera entry - fold every
@@ -229,10 +230,13 @@ class PipelineConfigTests(unittest.TestCase):
         cfg = iSpyConfig()
         self.assertIsNone(cfg.get("vision_model"))
         cam = cfg.camera_config("default_cam")
-        self.assertFalse(
-            cam.get_pipeline_setting("vision_model")["quantize"]
-        )
-        self.assertFalse(cfg.get("optimize", True))
+        vm = cam.get_pipeline_setting("vision_model")
+        self.assertFalse(vm["quantize"])
+        # No global optimize key - per-pipeline only
+        self.assertNotIn("optimize", cfg.config)
+        # Per-pipeline optimize is a string (e.g., "auto", "onnx", "rknn", "off")
+        self.assertIn("optimize", vm)
+        self.assertIsInstance(vm["optimize"], (bool, str))
 
 
 # ---------------------------------------------------------------------------
