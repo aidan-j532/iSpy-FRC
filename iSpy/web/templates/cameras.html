@@ -42,10 +42,11 @@
 <!-- shared add/edit modal, every field renders from the same schema so the two modes can never drift apart lol -->
 <div id="camera-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeCameraModal()">
   <div class="modal camera-modal">
-    <div id="camera-modal-header">
+<div id="camera-modal-header">
       <h3 id="camera-modal-title">Camera</h3>
       <span id="camera-modal-note" class="restart-badge">Restart vision to apply</span>
-    </div>
+      <span id="pipeline-warning" class="pill warning-pill hidden"></span>
+</div>
     <div id="camera-modal-body"></div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeCameraModal()">Cancel</button>
@@ -849,7 +850,23 @@ async function openCameraModal(mode, arg) {
     renderPipelineSections();
     if (mode === 'add') prefillFirstModel();
     initSettingsFlow();
+    showPipelineWarning();
   };
+
+  function showPipelineWarning() {
+    const pipeline = camModal.pipeline || '';
+    const warnEl = document.getElementById('pipeline-warning');
+    if (pipeline === 'yolo_world') {
+      warnEl.className = 'pill warning-pill';
+      warnEl.textContent = 'YoloWorld not recommended for gameplay - inference latency may be high';
+      setTimeout(() => {
+        warnEl.textContent = '';
+        warnEl.className = 'pill warning-pill hidden';
+      }, 5000);
+    } else {
+      warnEl.className = 'pill warning-pill hidden';
+    }
+  }
 
   // device profile (add mode) fills on top so saved mount values dont get clobbered
   renderPipelineSections();

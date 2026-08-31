@@ -17,10 +17,12 @@
 </div>
 <div class="settings-auto-note" style="display:none;color:var(--text-muted);font-size:0.78rem;margin-top:4px;">Auto-saving&hellip;</div>
 
+<div id="frame-sync-warning" class="text-dim" style="margin-top:8px; color:var(--text-dim); font-size:0.85rem; display:none;"></div>
+
 <div id="tab-general" class="settings-tab-content">
   <div class="settings-section">
     <h3>Units</h3>
-    <div class="form-row">
+<div class="form-row">
       <span class="form-label">Unit</span>
       <select class="form-input" data-key="unit">
         <option value="frc">FRC (meters)</option>
@@ -29,7 +31,8 @@
         <option value="inch">Inches</option>
         <option value="centimeter">Centimeters</option>
       </select>
-    </div>
+      <span id="unit-warning" class="text-dim" style="margin-left:8px; font-size:0.8rem;"> </span>
+</div>
   </div>
 
   <div class="settings-section">
@@ -126,7 +129,7 @@
       </div>
       <div class="form-row">
         <span class="form-label">License</span>
-        <span class="text-dim">Open Source (MIT)</span>
+        <span class="text-dim" id="about-license">loading&hellip;</span>
       </div>
       <div class="form-row">
         <span class="form-label">Repository</span>
@@ -136,13 +139,42 @@
     </div>
   </div>
 </div>
+<script>
+async function loadAbout() {
+  try {
+    const r = await fetch('/api/version');
+    const j = await r.json();
+    const verEl = document.getElementById('about-version');
+    const licEl = document.getElementById('about-license');
+    if (verEl && j && j.version) {
+      verEl.textContent = 'v' + j.version;
+    }
+    // Fetch license from PyPI
+    try {
+      const lr = await fetch('https://pypi.org/pypi/ispy-frc/json');
+      const lj = await lr.json();
+      if (licEl && lj && lj.info && lj.info.license) {
+        licEl.textContent = lj.info.license;
+      }
+    } catch(e) {
+      licEl.textContent = 'MIT';
+    }
+  } catch(e) {
+    console.error('Failed to load about info', e);
+    document.getElementById('about-version').textContent = 'loading failed';
+    document.getElementById('about-license').textContent = 'MIT';
+  }
+}
+</script>
+{% endblock %}
 
 <div id="tab-raw" class="settings-tab-content" style="display:none;">
-  <div id="raw-gate" class="card">
+<div id="raw-gate" class="card">
     <p><strong>Advanced feature.</strong> Editing raw JSON can break your config if done incorrectly. A single restore point is saved automatically before your first edit in this session.</p>
+    <div id="risk-timer" class="text-dim" style="margin-top:8px; font-size:0.85rem; display:none;"></div>
     <label><input type="checkbox" id="raw-ack"> I understand the risk</label>
-    <button onclick="unlockRawEditor()">Continue</button>
-  </div>
+    <button id="continue-risky" onclick="startRiskTimer()">Continue (Risky)</button>
+</div>
   <div id="raw-editor-wrap" class="card" style="display:none;">
     <div class="controls-bar">
       <button onclick="restoreSnapshot()" id="restore-btn">Restore last snapshot</button>
@@ -173,6 +205,27 @@ function unlockRawEditor() {
   document.getElementById('raw-gate').style.display = 'none';
   document.getElementById('raw-editor-wrap').style.display = '';
   snapshotBeforeFirstEdit();
+}
+
+function startRiskTimer() {
+  const timerEl = document.getElementById('risk-timer');
+  const continueBtn = document.getElementById('continue-risky');
+  if (!timerEl || !continueBtn) return;
+  let seconds = 10;
+  timerEl.style.display = 'block';
+  timerEl.textContent = 'Warning: Editing raw JSON can break your configuration. You have ' + seconds + 's to reconsider.';
+  continueBtn.disabled = true;
+  const interval = setInterval(() => {
+    seconds--;
+    timerEl.textContent = 'Warning: Editing raw JSON can break your configuration. You have ' + seconds + 's to reconsider.';
+    if (seconds <= 0) {
+      clearInterval(interval);
+      timerEl.style.display = 'none';
+      timerEl.textContent = '';
+      continueBtn.disabled = false;
+      continueBtn.textContent = 'Continue (Risky)';
+    }
+  }, 1000);
 }
 
 let snapshotTaken = false;
@@ -344,6 +397,21 @@ async function saveSettings() {
     if (r.ok) {
       msg.textContent = j.needs_restart ? 'Saved. Restart required to apply changes.' : 'Saved successfully.';
       msg.className = j.needs_restart ? 'settings-msg msg-warn' : 'settings-msg msg-ok';
+      // Show unit change warning
+      const unitWarn = document.getElementById('unit-warning');
+      if (data.unit && data.unit !== j.old_unit) {
+        unitWarn.textContent = 'Unit changed - you must update how your code processes measurements';
+        setTimeout(() => unitWarn.textContent = '', 8000);
+      }
+      // Show frame sync warning
+      const frameSyncWarn = document.getElementById('frame-sync-warning');
+      if (data.frame_sync !== j.old_frame_sync) {
+        frameSyncWarn.style.display = 'block';
+        frameSyncWarn.textContent = j.frame_sync
+          ? 'Frame sync enabled - cameras will wait for synchronized frames'
+          : 'Frame sync disabled - cameras run independently';
+        setTimeout(() => { frameSyncWarn.style.display = 'none'; frameSyncWarn.textContent = ''; }, 8000);
+      }
       showToast('Settings saved', 'success');
     } else {
       msg.textContent = 'Error: ' + (j.error || 'Unknown error');
@@ -359,6 +427,7 @@ async function load() {
   const data = await fetch('/api/settings').then(r => r.json());
   configData = data.config || {};
   defaultsData = data.defaults || {};
+  // ... rest of load function
   document.getElementById('cfg').value = JSON.stringify(configData, null, 2);
   populateGpuSelect(data.gpu_count);
   loadFormValues();
@@ -392,6 +461,27 @@ function populateGpuSelect(count) {
   status.style.display = 'none';
 }
 
-load();
+// Unit change warning
+const unitSelect = document.querySelector('select[data-key="unit"]');
+if (unitSelect) {
+  unitSelect.onchange = () => {
+    const unitWarning = document.getElementById('unit-warning');
+    unitWarning.textContent = 'Unit changed - you must update how your code processes measurements';
+    setTimeout(() => unitWarning.textContent = '', 8000);
+  };
+}
+
+// Frame sync initial state
+const frameSyncWarn = document.getElementById('frame-sync-warning');
+fetch('/api/settings', {method: 'GET'}).then(r => r.json()).then(j => {
+  if (j.config && j.config.frame_sync !== undefined) {
+    const frameSyncWarn = document.getElementById('frame-sync-warning');
+    frameSyncWarn.style.display = 'block';
+    frameSyncWarn.textContent = j.config.frame_sync
+      ? 'Frame sync enabled - cameras will wait for synchronized frames'
+      : 'Frame sync disabled - cameras run independently';
+    setTimeout(() => { frameSyncWarn.style.display = 'none'; frameSyncWarn.textContent = ''; }, 5000);
+  }
+});
 </script>
 {% endblock %}

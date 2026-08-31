@@ -1253,7 +1253,7 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
             finally:
                 rknn.release()
     finally:
-        if calib_dir != Path(dataset_path):
+        if dataset_path is not None and calib_dir != Path(dataset_path):
             shutil.rmtree(str(calib_dir), ignore_errors=True)
         if surgery_path.exists():
             surgery_path.unlink()

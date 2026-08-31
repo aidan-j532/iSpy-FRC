@@ -266,7 +266,7 @@ class iSpyConfig:
                                 # machine (onnx/openvino/rknn/...). Done in the background
                                 # so boot/run stay non-blocking; the .pt runs until the
                                 # optimized artifact is ready.
-                                "optimize": True,
+                                "optimize": False,
                                 "quantize": False,
                                 # Optional PnP for pose (translation stored on
                                 # Box; rotation stored as roll/pitch/yaw on
