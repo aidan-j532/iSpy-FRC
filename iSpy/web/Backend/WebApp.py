@@ -23,7 +23,7 @@ _WEB_ROOT = Path(__file__).resolve().parent.parent
 
 def _get_version() -> str:
     try:
-        pb = Path(__WEB_ROOT / "pyproject.toml").read_text()
+        pb = Path(_WEB_ROOT / "pyproject.toml").read_text()
         import re
         m = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', pb, re.MULTILINE)
         if m:
