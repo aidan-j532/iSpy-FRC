@@ -123,7 +123,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 if config is not None
                 else False
             )
-        self._auto_opt = bool(cam_auto_opt)
+        self._auto_opt = self._normalize_auto_opt(cam_auto_opt)
         self._requested_format = str(vm_cfg.get("target_format") or "auto")
         self.quantization_dataset = vm_cfg.get("quantization_dataset") or None
         self._target_format: str | None = None
@@ -919,7 +919,3 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
     def release(self):
         self.destroy()
-
-
-# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
-ObjectDetectionCamera = ObjectDetectionPipeline

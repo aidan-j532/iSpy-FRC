@@ -132,9 +132,7 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             raw_optimize = camera_config.get_pipeline_setting("auto_opt")  # legacy key
         if raw_optimize is None:
             raw_optimize = config.get("optimize", config.get("auto_opt", False)) if config is not None else False
-        if isinstance(raw_optimize, str):
-            raw_optimize = raw_optimize.strip().lower() in ("1", "true", "yes", "on")
-        self._auto_opt = bool(raw_optimize)
+        self._auto_opt = self._normalize_auto_opt(raw_optimize)
         self.model = None
         self._model_path = None
         self._quantized = False
@@ -225,8 +223,11 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
 
     def _resolve_target_format(self) -> str:
         explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
+        auto_opt_fmt = self._auto_opt_to_target_format()
         if explicit and explicit != "auto":
             target = explicit
+        elif auto_opt_fmt:
+            target = auto_opt_fmt
         else:
             # same resolution ensure_quantized_model uses so readiness
             # agrees with the artifact that actually gets built
@@ -568,6 +569,3 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             self.cap.release()
         cv2.destroyAllWindows()
 
-
-# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
-YoloWorldCamera = YoloWorldPipeline

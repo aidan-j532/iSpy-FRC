@@ -8,7 +8,7 @@ from unittest import mock
 import flask
 
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
-from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
+from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
 from iSpy.vision.optimizer import existing_artifact_for
 from iSpy.web.modules.cameras import _resolve_vision_model_files
 from iSpy.web.modules.models import ModelsModule
@@ -209,7 +209,7 @@ class OptimizedActiveTests(unittest.TestCase):
                 "file_path": file_path, "source_pt": source_pt}}},
             "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
         })
-        cam = ObjectDetectionCamera.__new__(ObjectDetectionCamera)
+        cam = ObjectDetectionPipeline.__new__(ObjectDetectionPipeline)
         cam.config = cam_cfg
         cam.model = SimpleNamespace(model_type="rknn")
         cam.yolo_model_file = file_path
@@ -268,8 +268,8 @@ class BootLoadTests(unittest.TestCase):
         })
         with mock.patch("iSpy.vision.pipelines.object_detection.GenericYolo", return_value=_FakeModel()), \
              mock.patch("iSpy.vision.ModelInspector.fill_missing_config", side_effect=lambda m: dict(m)), \
-             mock.patch.object(ObjectDetectionCamera, "_optimize_runner", lambda self: None):
-            cam = ObjectDetectionCamera(cam_cfg, config)
+             mock.patch.object(ObjectDetectionPipeline, "_optimize_runner", lambda self: None):
+            cam = ObjectDetectionPipeline(cam_cfg, config)
             return cam
 
     def test_prefers_existing_artifact_over_stale_file_path(self):

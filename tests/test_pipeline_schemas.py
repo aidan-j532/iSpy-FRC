@@ -3,9 +3,9 @@ import unittest
 import cv2
 
 from iSpy.plugins.bases import VisionBase
-from iSpy.vision.pipelines.april_tag import AprilTagCamera
-from iSpy.vision.pipelines.qr_code import QRCodeCamera
-from iSpy.vision.pipelines.depth_anything import DepthAnythingCamera
+from iSpy.vision.pipelines.april_tag import AprilTagPipeline
+from iSpy.vision.pipelines.qr_code import QRCodePipeline
+from iSpy.vision.pipelines.depth_anything import DepthAnythingPipeline
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 from iSpy.vision.Camera import Camera
 
@@ -15,7 +15,7 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         self.assertEqual(VisionBase.config_schema(), {})
 
     def test_april_tag_schema_exposes_tag_size_inches(self):
-        schema = AprilTagCamera.config_schema()
+        schema = AprilTagPipeline.config_schema()
         self.assertIn("tag_size_inches", schema)
         self.assertEqual(schema["tag_size_inches"]["type"], "number")
         self.assertEqual(schema["tag_size_inches"]["label"], "Tag Size (in)")
@@ -38,10 +38,10 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         self.assertIn("qr_code", pipeline_names)
         self.assertIn("depth_anything", pipeline_names)
 
-        qr_schema = QRCodeCamera.config_schema()
+        qr_schema = QRCodePipeline.config_schema()
         self.assertIn("decode_mode", qr_schema)
 
-        depth_schema = DepthAnythingCamera.config_schema()
+        depth_schema = DepthAnythingPipeline.config_schema()
         self.assertIn("estimate_depth", depth_schema)
 
     def test_calibration_fields_hidden_when_pipeline_does_not_use_them(self):
@@ -108,7 +108,7 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         import numpy as np
 
         frame = np.zeros((10, 10, 3), dtype=np.uint8)
-        annotated = AprilTagCamera.__new__(AprilTagCamera).plot(frame)
+        annotated = AprilTagPipeline.__new__(AprilTagPipeline).plot(frame)
         self.assertIsNotNone(annotated)
         self.assertTrue(np.array_equal(annotated, frame) or annotated.shape == frame.shape)
 
@@ -136,7 +136,7 @@ class VisionPipelineSchemaTests(unittest.TestCase):
             def detectMarkers(self, gray):
                 return [], None, []
 
-        camera = AprilTagCamera.__new__(AprilTagCamera)
+        camera = AprilTagPipeline.__new__(AprilTagPipeline)
         camera.get_frame = lambda: np.zeros((20, 20, 3), dtype=np.uint8)
         camera.detector = DummyDetector()
         camera.get_demo_objects = lambda frame: [Object(0.0, 0.0, 0.0, name="demo", vis_type="planar")]
@@ -148,12 +148,12 @@ class VisionPipelineSchemaTests(unittest.TestCase):
     def test_builtin_plugins_emit_visible_objects_and_annotations(self):
         import numpy as np
 
-        camera = QRCodeCamera.__new__(QRCodeCamera)
+        camera = QRCodePipeline.__new__(QRCodePipeline)
         camera.get_frame = lambda: np.zeros((80, 80, 3), dtype=np.uint8)
         camera.logger = None
         camera._last_frame = None
         objects, frame = camera.run()
-        self.assertTrue(objects, "QRCodeCamera should emit at least one object")
+        self.assertTrue(objects, "QRCodePipeline should emit at least one object")
         self.assertIsNotNone(frame)
         annotated = camera.plot(frame)
         self.assertIsNotNone(annotated)
@@ -162,7 +162,7 @@ class VisionPipelineSchemaTests(unittest.TestCase):
     def test_depth_plugin_unloaded_returns_raw_frame(self):
         import numpy as np
 
-        camera = DepthAnythingCamera.__new__(DepthAnythingCamera)
+        camera = DepthAnythingPipeline.__new__(DepthAnythingPipeline)
         camera.get_frame = lambda: np.zeros((80, 80, 3), dtype=np.uint8)
         camera.logger = None
         camera._last_frame = None

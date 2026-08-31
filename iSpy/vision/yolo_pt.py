@@ -278,54 +278,28 @@ def _make_keypoint_conv(c1, c2, k=1):
 
 
 class PoseModel(nn.Module):
-    """Pose detection head for YOLOv8 - outputs keypoints alongside boxes."""
+    """YOLO pose *model* wrapper (mirrors Ultralytics' ``nn.tasks.PoseModel``).
 
-    def __init__(self, nc, reg_max=16, num_keypoints=17, keypoint_dims=2, end2end=False, ch=()):
+    The pickle reconstructs the whole pose model into this type. Like
+    ``DetectionModel``, the real graph lives in ``self.model`` (an
+    ``nn.Sequential`` whose last entry is a :class:`Pose` head). ``forward``
+    runs the layer ladder exactly like Ultralytics' ``_predict_once``; the
+    head decodes boxes + keypoints. Pose metadata (``names``, ``nc``,
+    ``kpt_shape``, ``task``) is carried through from the checkpoint.
+    """
+
+    def __init__(self, *args, **kwargs):
         super().__init__()
-        self.nc = nc
-        self.nl = len(ch) if ch else 3
-        self.reg_max = reg_max
-        self.num_keypoints = num_keypoints
-        self.keypoint_dims = keypoint_dims
-        self.no = nc + self.reg_max * 4 + num_keypoints * keypoint_dims
-        self.stride = torch.zeros(self.nl)
-        c2, c3 = max((16, ch[0] // 4, self.no * 4)) if ch else 64, (max(ch[0], min(self.nc, 100)) if ch else 80)
-        self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
-        )
-        self.cv3 = nn.ModuleList(
-            nn.Sequential(
-                _make_keypoint_conv(c2, c3, 3),
-                _make_keypoint_conv(c3, c3, 3),
-                nn.Conv2d(c3, num_keypoints * keypoint_dims, 1),
-            )
-            for _ in ch
-        )
-        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
 
-    def forward(self, x):
-        preds = self.forward_head(x, **self.one2many)
-        if self.training:
-            return preds
-        y = self._inference(preds)
-        return (y,) if self.export else (y, preds)
-
-    def forward_head(self, x, box_head=None, cls_head=None):
-        if box_head is None or cls_head is None:
-            return dict()
-        bs = x[0].shape[0]
-        boxes = torch.cat([box_head[i](x[i]).view(bs, 4 * self.reg_max, -1) for i in range(self.nl)], dim=-1)
-        keypoints = torch.cat([kp_head[i](x[i]).view(bs, self.num_keypoints * self.keypoint_dims, -1) for i, kp_head in enumerate(self.cv3)], dim=-1)
-        scores = torch.cat([cls_head[i](x[i]).view(bs, self.nc, -1) for i in range(self.nl)], dim=-1)
-        return dict(boxes=boxes, scores=scores, keypoints=keypoints, feats=x)
-
-    @property
-    def one2many(self):
-        return dict(box_head=self.cv2, cls_head=self.cv3[:1] if hasattr(self, 'cv3') else self.cv3, kpt_head=self.cv3[1:] if len(self.cv3) > 1 else [])
-
-    @property
-    def one2one(self):
-        return dict(box_head=self.cv2, cls_head=self.cv3, kpt_head=self.cv3)
+    def forward(self, x, *args, **kwargs):
+        y = []
+        module_list = self.model
+        for m in module_list:
+            if m.f != -1:
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]
+            x = m(x)
+            y.append(x if m.i in self.save else None)
+        return x
 
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
@@ -462,6 +436,66 @@ def _torch_nms(boxes, scores, iou_thres):
         iou = inter / (areas[i] + areas[rest] - inter + 1e-9)
         order = rest[iou <= iou_thres]
     return torch.tensor(keep, device=device, dtype=torch.long)
+
+
+def _pose_nms(prediction, kpts, conf_thres, nc, num_keypoints, keypoint_dims):
+    """Pose NMS returning detections and per-box keypoint arrays aligned in index.
+
+    ``prediction`` is [B, N, 4+nc] with xyxy boxes and class scores; ``kpts`` is
+    [B, nk, N] where nk = num_keypoints * keypoint_dims (already decoded, in
+    input-space coordinates). Returns ``(dets, kp_out)`` where each ``kp_out[xi]``
+    is [N_keep, num_keypoints, keypoint_dims] in input-space, index-aligned with
+    ``dets[xi]``.
+    """
+    bs = prediction.shape[0]
+    max_det = 300
+    dets = [torch.zeros((0, 6), device=prediction.device) for _ in range(bs)]
+    kp_out = [torch.zeros((0, num_keypoints, keypoint_dims), device=prediction.device) for _ in range(bs)]
+
+    for xi in range(bs):
+        x = prediction[xi]
+        scores, cls = x[:, 4:4 + nc].max(1)
+        cand = scores > conf_thres
+        idx = torch.nonzero(cand).flatten()
+        if not idx.numel():
+            continue
+        bx = x[idx, :4]
+        bscores = scores[idx]
+        bcls = cls[idx]
+        out_idx = []
+        for c in bcls.unique():
+            m = bcls == c
+            cx = bx[m]
+            cs = bscores[m]
+            ci = idx[m]
+            if cx.shape[0] == 1:
+                out_idx.append(ci)
+            else:
+                keep = _torch_nms(cx, cs, 0.45)
+                out_idx.append(ci[keep])
+        if not out_idx:
+            continue
+        keep_idx = torch.cat(out_idx, 0)
+        if keep_idx.shape[0] > max_det:
+            keep_order = scores[keep_idx].sort(descending=True)[1][:max_det]
+            keep_idx = keep_idx[keep_order]
+        det = torch.cat([x[keep_idx, :4], scores[keep_idx, None], cls[keep_idx, None]], 1)
+        kp = kpts[xi, :, keep_idx]  # [nk, N_keep]
+        kp = kp.view(num_keypoints, keypoint_dims, -1).transpose(0, 2)  # [N_keep, K, dims]
+        dets[xi] = det
+        kp_out[xi] = kp
+
+    return dets, kp_out
+
+
+def _scale_keypoints(kpts, img0_shape, ratio, pad):
+    """Rescale keypoints [N, K, dims] from letterbox input-space to original."""
+    gain = ratio
+    pad_x, pad_y = pad
+    kpts = kpts.clone()
+    kpts[..., 0] = (kpts[..., 0] - pad_x) / gain
+    kpts[..., 1] = (kpts[..., 1] - pad_y) / gain
+    return kpts
 
 
 class Detect(nn.Module):
@@ -774,6 +808,19 @@ class YoloPT:
         self.nc = int(nc)
         self._device = next(model.parameters()).device if next(model.parameters(), None) is not None else "cpu"
         model.eval()
+        if task == "pose":
+            kpt_shape = getattr(model, "kpt_shape", None) or None
+            if kpt_shape and len(kpt_shape) == 2:
+                self.num_keypoints = int(kpt_shape[0])
+                self.keypoint_dims = int(kpt_shape[1])
+            else:
+                self.num_keypoints = 17
+                self.keypoint_dims = 3
+            self._nk = self.num_keypoints * self.keypoint_dims
+        else:
+            self.num_keypoints = None
+            self.keypoint_dims = None
+            self._nk = 0
 
     def to(self, device):
         self.model = self.model.to(device)
@@ -811,16 +858,25 @@ class YoloPT:
         return torch.cat(tensors, 0)
 
     def _postprocess(self, pred, frame_shape, conf):
-        # pred: [B, 4+nc, N] (decode yields xywh in input-space); convert and scale.
-        boxes_xywh = pred[:, :4, :].transpose(1, 2)  # [B, N, 4]
-        scores = pred[:, 4:, :].transpose(1, 2)  # [B, N, nc]
-        boxes_xyxy = xywh2xyxy(boxes_xywh)
-
-        full = torch.cat([boxes_xyxy, scores], 2)  # [B, N, 4+nc]
-        dets = non_max_suppression(full, conf_thres=conf, nc=self.nc)
+        # pred: [B, 4+nc(+nk), N] (decode yields xywh in input-space); convert and scale.
+        if self.task == "pose":
+            boxes_xyxy = xywh2xyxy(pred[:, :4, :]).transpose(1, 2)  # [B, N, 4]
+            scores = pred[:, 4:4 + self.nc, :].transpose(1, 2)  # [B, N, nc]
+            kpts = pred[:, 4 + self.nc:, :]  # [B, nk, N]
+            full = torch.cat([boxes_xyxy, scores], 2)  # [B, N, 4+nc]
+            dets, kpts_all = _pose_nms(full, kpts, conf_thres=conf, nc=self.nc,
+                                       num_keypoints=self.num_keypoints, keypoint_dims=self.keypoint_dims)
+        else:
+            boxes_xywh = pred[:, :4, :].transpose(1, 2)
+            scores = pred[:, 4:4 + self.nc, :].transpose(1, 2)
+            boxes_xyxy = xywh2xyxy(boxes_xywh)
+            full = torch.cat([boxes_xyxy, scores], 2)
+            dets = non_max_suppression(full, conf_thres=conf, nc=self.nc)
+            kpts_all = [None] * len(dets)
 
         results = []
         for xi, det in enumerate(dets):
+            kpts_i = None
             if det.numel():
                 det[:, :4] = _scale_boxes(
                     (self._input_size, self._input_size),
@@ -829,8 +885,10 @@ class YoloPT:
                     ratio_pad=(self._ratio, self._pad),
                 )
                 det[:, :4].clamp_(min=0)
+                if kpts_all[xi] is not None:
+                    kpts_i = _scale_keypoints(kpts_all[xi], frame_shape, self._ratio, self._pad)
             orig = (int(frame_shape[0]), int(frame_shape[1]))
-            results.append(_Result(_Boxes(det), None, orig))
+            results.append(_Result(_Boxes(det), _Keypoints(kpts_i) if kpts_i is not None else None, orig))
         return results
 
     def __call__(self, frames, imgsz=None, conf=0.25, device=None, verbose=False, show=False, **kwargs):

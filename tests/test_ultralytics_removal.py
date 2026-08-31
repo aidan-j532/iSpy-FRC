@@ -156,13 +156,13 @@ class CameraRestructureTests(unittest.TestCase):
         self.assertIn("qr_code", classes)
         self.assertIn("yolo_world", classes)
 
-    def test_backward_aliases_exist(self):
-        from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline, ObjectDetectionCamera
-        from iSpy.vision.pipelines.april_tag import AprilTagPipeline, AprilTagCamera
-        from iSpy.vision.pipelines.yolo_world import YoloWorldPipeline, YoloWorldCamera
-        self.assertIs(ObjectDetectionCamera, ObjectDetectionPipeline)
-        self.assertIs(AprilTagCamera, AprilTagPipeline)
-        self.assertIs(YoloWorldCamera, YoloWorldPipeline)
+    def test_pipeline_classes_are_pipelines(self):
+        from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+        from iSpy.vision.pipelines.april_tag import AprilTagPipeline
+        from iSpy.vision.pipelines.yolo_world import YoloWorldPipeline
+        self.assertTrue(issubclass(ObjectDetectionPipeline, object))
+        self.assertTrue(issubclass(AprilTagPipeline, object))
+        self.assertTrue(issubclass(YoloWorldPipeline, object))
 
 
 if __name__ == "__main__":

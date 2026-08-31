@@ -25,8 +25,7 @@ else
     git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
-pip3 install "$INSTALL_DIR" \
-    --break-system-packages
+pip3 install "$INSTALL_DIR"
 
 if ! id "$SERVICE_USER" &>/dev/null; then
     useradd -r -s /bin/false -d "$INSTALL_DIR" "$SERVICE_USER"

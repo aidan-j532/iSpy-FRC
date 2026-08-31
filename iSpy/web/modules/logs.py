@@ -1,7 +1,10 @@
 import io
+import logging
 from pathlib import Path
 from flask import jsonify, render_template, request
 from iSpy.web.Backend.WebModule import WebModule
+
+logger = logging.getLogger(__name__)
 
 
 class LogsModule(WebModule):
@@ -23,26 +26,16 @@ class LogsModule(WebModule):
         try:
             lines = self._efficient_tail(self.log_path, n_lines)
             return jsonify(lines=lines)
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error tailing logs: {e}")
             return jsonify(lines=[])
 
     @staticmethod
     def _efficient_tail(path: Path, n: int) -> list[str]:
-        block_size = 8192
-        lines_found: list[str] = []
-        with open(path, "rb") as f:
-            f.seek(0, io.SEEK_END)
-            file_size = f.tell()
-            if file_size == 0:
-                return []
-            block_start = max(0, file_size - block_size)
-            while block_start >= 0 and len(lines_found) <= n:
-                f.seek(block_start)
-                block = f.read(min(block_size, file_size - block_start))
-                lines_found = block.decode("utf-8", errors="replace").splitlines(keepends=True) + lines_found
-                if len(lines_found) > n:
-                    break
-                block_start -= block_size
-        if len(lines_found) > n:
-            lines_found = lines_found[-n:]
-        return [line.rstrip("\n\r") for line in lines_found]
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                all_lines = f.readlines()
+            return [line.rstrip("\n\r") for line in all_lines[-n:]]
+        except Exception as e:
+            logger.error(f"Error reading log file: {e}")
+            return []

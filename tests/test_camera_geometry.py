@@ -16,7 +16,7 @@ import numpy as np
 from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig, unit_to_inches
 from iSpy.vision import triangulation
 from iSpy.vision.genericYolo import Box
-from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
+from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
 
 
 IMG_W, IMG_H = 640, 480
@@ -49,7 +49,7 @@ def make_camera(height_in: float = 48.0, object_heights=None):
             },
         },
     })
-    return ObjectDetectionCamera(cam_cfg, iSpyConfig())
+    return ObjectDetectionPipeline(cam_cfg, iSpyConfig())
 
 
 class MountHeightTriangulationTests(unittest.TestCase):
@@ -176,7 +176,7 @@ class ElevatedObjectTests(unittest.TestCase):
         self.assertEqual(from_junk.object_heights, {})
 
     def test_schema_exposes_object_heights_list_field(self):
-        schema = ObjectDetectionCamera.config_schema()
+        schema = ObjectDetectionPipeline.config_schema()
         field = schema["object_heights"]
         self.assertEqual(field["type"], "list")
         self.assertIn("class_name", field["fields"])
@@ -201,9 +201,9 @@ class OtherPipelinesUseMountHeightTests(unittest.TestCase):
         return iSpyCameraConfig(cfg)
 
     def test_april_tag_uses_height_and_ignores_legacy_z(self):
-        from iSpy.vision.pipelines.april_tag import AprilTagCamera
+        from iSpy.vision.pipelines.april_tag import AprilTagPipeline
 
-        cam = AprilTagCamera(self._cam_cfg(z=99.0), iSpyConfig())
+        cam = AprilTagPipeline(self._cam_cfg(z=99.0), iSpyConfig())
         self.assertFalse(hasattr(cam, "camera_z"))
         self.assertAlmostEqual(cam.camera_height, 36.0)
         # a camera-frame point at the optical centre sits 36in up in robot frame
@@ -211,17 +211,17 @@ class OtherPipelinesUseMountHeightTests(unittest.TestCase):
         self.assertAlmostEqual(float(pt[2]), 36.0 * cam.conversions[cam.unit], places=9)
 
     def test_qr_code_uses_height_and_ignores_legacy_z(self):
-        from iSpy.vision.pipelines.qr_code import QRCodeCamera
+        from iSpy.vision.pipelines.qr_code import QRCodePipeline
 
-        cam = QRCodeCamera(self._cam_cfg(z=99.0), iSpyConfig())
+        cam = QRCodePipeline(self._cam_cfg(z=99.0), iSpyConfig())
         self.assertFalse(hasattr(cam, "camera_z"))
         pt = cam._camera_point_to_robot((0.0, 0.0, 0.0))
         self.assertAlmostEqual(float(pt[2]), 36.0 * cam.conversions[cam.unit], places=9)
 
     def test_optical_flow_range_uses_mount_height(self):
-        from iSpy.vision.pipelines.optical_flow import OpticalFlowCamera
+        from iSpy.vision.pipelines.optical_flow import OpticalFlowPipeline
 
-        cam = OpticalFlowCamera(self._cam_cfg(), iSpyConfig())
+        cam = OpticalFlowPipeline(self._cam_cfg(), iSpyConfig())
         self.assertFalse(hasattr(cam, "camera_z"))
         self.assertAlmostEqual(
             cam.camera_height, unit_to_inches(36.0, "frc"), places=9

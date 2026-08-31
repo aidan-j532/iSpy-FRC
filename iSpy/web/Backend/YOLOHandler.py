@@ -26,8 +26,8 @@ def _target_format(settings: dict) -> str:
     if fmt and fmt != "auto":
         return fmt
     try:
-        from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
-        return ObjectDetectionCamera.recommended_format()
+        from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+        return ObjectDetectionPipeline.recommended_format()
     except Exception:
         return "onnx"
 

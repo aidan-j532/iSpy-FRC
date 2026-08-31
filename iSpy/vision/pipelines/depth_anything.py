@@ -164,9 +164,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             raw_optimize = camera_config.get_pipeline_setting("auto_opt")  # legacy key
         if raw_optimize is None:
             raw_optimize = config.get("optimize", config.get("auto_opt", False)) if config is not None else False
-        if isinstance(raw_optimize, str):
-            raw_optimize = raw_optimize.strip().lower() in ("1", "true", "yes", "on")
-        self._auto_opt = bool(raw_optimize)
+        self._auto_opt = self._normalize_auto_opt(raw_optimize)
 
         try:
             self._every = max(1, int(camera_config.get_pipeline_setting("process_every", 5)))
@@ -1204,6 +1202,3 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         if hasattr(super(), "destroy"):
             super().destroy()
 
-
-# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
-DepthAnythingCamera = DepthAnythingPipeline

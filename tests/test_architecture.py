@@ -15,11 +15,11 @@ from iSpy.vision.pipelines.base import (
     VisionPipeline,
     BackgroundPreparedPipeline,
 )
-from iSpy.vision.pipelines.april_tag import AprilTagCamera
-from iSpy.vision.pipelines.qr_code import QRCodeCamera
-from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
-from iSpy.vision.pipelines.depth_anything import DepthAnythingCamera
-from iSpy.vision.pipelines.yolo_world import YoloWorldCamera
+from iSpy.vision.pipelines.april_tag import AprilTagPipeline
+from iSpy.vision.pipelines.qr_code import QRCodePipeline
+from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+from iSpy.vision.pipelines.depth_anything import DepthAnythingPipeline
+from iSpy.vision.pipelines.yolo_world import YoloWorldPipeline
 from iSpy.vision.pipelines import get_pipeline_classes
 from iSpy.vision.optimizer import default_quantization_dataset_dir
 from iSpy.web.modules.datasets import DatasetsModule
@@ -315,13 +315,13 @@ class PipelineLifecycleTests(unittest.TestCase):
         self.assertIn("something broke", status)
 
     def test_user_model_selection_is_pipeline_driven(self):
-        self.assertTrue(ObjectDetectionCamera.uses_user_model())
-        for cls in (AprilTagCamera, QRCodeCamera,
-                    DepthAnythingCamera, YoloWorldCamera):
+        self.assertTrue(ObjectDetectionPipeline.uses_user_model())
+        for cls in (AprilTagPipeline, QRCodePipeline,
+                    DepthAnythingPipeline, YoloWorldPipeline):
             self.assertFalse(cls.uses_user_model(), cls.__name__)
 
     def test_only_object_detection_offers_optimization_options(self):
-        pipeline = ObjectDetectionCamera.__new__(ObjectDetectionCamera)
+        pipeline = ObjectDetectionPipeline.__new__(ObjectDetectionPipeline)
         options = pipeline.get_optimization_options()
         self.assertIn("optimize", options)
         self.assertIn("target_format", options)
@@ -333,8 +333,8 @@ class PipelineLifecycleTests(unittest.TestCase):
     def test_model_backed_pipelines_offer_optimization_options(self):
         # yolo world + depth anything are optimizable too - optimize() mustnt be od-only
         for cls, keys in (
-            (YoloWorldCamera, ("optimize", "quantize", "target_format", "quantization_dataset", "input_size")),
-            (DepthAnythingCamera, ("optimize", "quantize", "target_format", "quantization_dataset", "input_size", "model_size")),
+            (YoloWorldPipeline, ("optimize", "quantize", "target_format", "quantization_dataset", "input_size")),
+            (DepthAnythingPipeline, ("optimize", "quantize", "target_format", "quantization_dataset", "input_size", "model_size")),
         ):
             options = cls.__new__(cls).get_optimization_options()
             for key in keys:
@@ -348,7 +348,7 @@ class PipelineLifecycleTests(unittest.TestCase):
         from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
 
         hooks = ("_source_model_path", "_resolve_model_path", "_persist_file_path")
-        for cls in (ObjectDetectionCamera, YoloWorldCamera, DepthAnythingCamera):
+        for cls in (ObjectDetectionPipeline, YoloWorldPipeline, DepthAnythingPipeline):
             self.assertTrue(issubclass(cls, OptimizableModelPipeline), cls.__name__)
             for hook in hooks:
                 owner = next(
@@ -363,17 +363,17 @@ class PipelineLifecycleTests(unittest.TestCase):
     def test_resync_stale_model_file_path_is_safe_on_every_model_backed_pipeline(self):
         # calling the guard on a bare instance must never raise - pipelines
         # without persisted model state exit cleanly via their hooks
-        yw = YoloWorldCamera.__new__(YoloWorldCamera)
+        yw = YoloWorldPipeline.__new__(YoloWorldPipeline)
         yw.logger = logging.getLogger("test.yw")
         yw.model_size = "s"
         yw.classes = ["object"]
         yw._resync_stale_model_file_path(None)
 
-        da = DepthAnythingCamera.__new__(DepthAnythingCamera)
+        da = DepthAnythingPipeline.__new__(DepthAnythingPipeline)
         da.logger = logging.getLogger("test.da")
         da._resync_stale_model_file_path(None)  # fixed checkpoint -> no-op
 
-        od = ObjectDetectionCamera.__new__(ObjectDetectionCamera)
+        od = ObjectDetectionPipeline.__new__(ObjectDetectionPipeline)
         od.logger = logging.getLogger("test.od")
 
         def _no_vm():
@@ -392,12 +392,12 @@ class PipelineLifecycleTests(unittest.TestCase):
 
     def test_optimize_disabled_returns_explanation(self):
         # optimize disabled in config -> explain instead of pretending to build
-        yw = YoloWorldCamera.__new__(YoloWorldCamera)
+        yw = YoloWorldPipeline.__new__(YoloWorldPipeline)
         yw.quantize = False
         yw._optimizing = False
         self.assertIn("disabled", yw.optimize())
 
-        da = DepthAnythingCamera.__new__(DepthAnythingCamera)
+        da = DepthAnythingPipeline.__new__(DepthAnythingPipeline)
         da._auto_opt = False
         da.estimate_depth = True
         da._optimizing = False
@@ -405,7 +405,7 @@ class PipelineLifecycleTests(unittest.TestCase):
 
     def test_optimize_runs_synchronously_and_gates_readiness(self):
         # failed build -> not-ready + gated to raw feed; success -> ready
-        da = DepthAnythingCamera.__new__(DepthAnythingCamera)
+        da = DepthAnythingPipeline.__new__(DepthAnythingPipeline)
         da._auto_opt = True
         da.estimate_depth = True
         da._optimizing = False
@@ -424,7 +424,7 @@ class PipelineLifecycleTests(unittest.TestCase):
         self.assertIn("error", status)
         self.assertFalse(da._is_processable())
 
-        ok = DepthAnythingCamera.__new__(DepthAnythingCamera)
+        ok = DepthAnythingPipeline.__new__(DepthAnythingPipeline)
         ok._auto_opt = True
         ok.estimate_depth = True
         ok._optimizing = False
@@ -441,7 +441,7 @@ class PipelineLifecycleTests(unittest.TestCase):
         self.assertTrue(ok._is_processable())
 
     def test_no_prep_pipelines_report_ready_immediately(self):
-        for cls in (AprilTagCamera, QRCodeCamera):
+        for cls in (AprilTagPipeline, QRCodePipeline):
             pipeline = cls.__new__(cls)
             ready, status = pipeline.is_ready()
             self.assertTrue(ready, f"{cls.__name__}: {status}")
@@ -543,7 +543,7 @@ class BootTests(unittest.TestCase):
                     "vision_model": {"file_path": missing,
                                      "source_pt": missing}}},
             })
-            cam = ObjectDetectionCamera(cam_cfg, config)
+            cam = ObjectDetectionPipeline(cam_cfg, config)
         self.assertIsNone(cam.model)
         self.assertFalse(cam._use_pipeline)
 
@@ -808,7 +808,7 @@ class PipelineCalibrationGateTests(unittest.TestCase):
     while optimizing / when the model is unavailable)."""
 
     def _april_cam(self, calibration):
-        cam = AprilTagCamera.__new__(AprilTagCamera)
+        cam = AprilTagPipeline.__new__(AprilTagPipeline)
         cam.config = _FakeCamConfig(calibration)
         cam.detector = _SpyDetector()
         cam.get_frame = lambda: __import__("numpy").zeros((40, 40, 3), dtype=__import__("numpy").uint8)
@@ -816,11 +816,11 @@ class PipelineCalibrationGateTests(unittest.TestCase):
         return cam
 
     def test_requires_calibration_reflects_declared_sections(self):
-        self.assertTrue(ObjectDetectionCamera.requires_calibration())
-        self.assertTrue(AprilTagCamera.requires_calibration())
-        self.assertTrue(QRCodeCamera.requires_calibration())
-        self.assertFalse(DepthAnythingCamera.requires_calibration())
-        self.assertFalse(YoloWorldCamera.requires_calibration())
+        self.assertTrue(ObjectDetectionPipeline.requires_calibration())
+        self.assertTrue(AprilTagPipeline.requires_calibration())
+        self.assertTrue(QRCodePipeline.requires_calibration())
+        self.assertFalse(DepthAnythingPipeline.requires_calibration())
+        self.assertFalse(YoloWorldPipeline.requires_calibration())
 
     def test_section_satisfied_rules(self):
         self.assertTrue(VisionPipeline._section_satisfied("charuco", {
@@ -882,7 +882,7 @@ class PipelineCalibrationGateTests(unittest.TestCase):
         self.assertTrue(cam._calibration_processable())
 
     def test_object_detection_gate_via_is_processable(self):
-        cam = ObjectDetectionCamera.__new__(ObjectDetectionCamera)
+        cam = ObjectDetectionPipeline.__new__(ObjectDetectionPipeline)
         cam.config = _FakeCamConfig({})
         cam._optimizing = False
         cam._optimization_requested = lambda: False

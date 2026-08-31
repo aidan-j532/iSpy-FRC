@@ -130,13 +130,12 @@ class CameraBackwardCompatTests(unittest.TestCase):
         from iSpy.vision.TelloEduCamera import TelloEduCamera
         self.assertIs(TelloEduCamera, TelloCamera)
 
-    def test_pipeline_camera_aliases_preserved(self):
-        from iSpy.vision.pipelines import (
-            ObjectDetectionCamera, AprilTagCamera, QRCodeCamera,
-            YoloWorldCamera, DepthAnythingCamera, OpticalFlowCamera,
-            ObjectDetectionPipeline,
-        )
-        self.assertIs(ObjectDetectionCamera, ObjectDetectionPipeline)
+    def test_pipeline_camera_aliases_removed(self):
+        from iSpy.vision.pipelines import get_pipeline_classes
+        classes = get_pipeline_classes()
+        self.assertIn("object_detection", classes)
+        self.assertIn("april_tag", classes)
+        self.assertIn("yolo_world", classes)
 
     def test_pipeline_registry_points_at_pipelines(self):
         from iSpy.vision.pipelines import PIPELINES

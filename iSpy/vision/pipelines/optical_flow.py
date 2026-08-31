@@ -408,6 +408,3 @@ class OpticalFlowPipeline(VisionPipeline):
     def destroy(self):
         super().destroy()
 
-
-# Backward-compatible alias: iSpy pre-restructure called pipelines '*Camera'.
-OpticalFlowCamera = OpticalFlowPipeline

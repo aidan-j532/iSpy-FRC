@@ -11,8 +11,11 @@ if len(sys.argv) < 2:
 
 script = sys.argv[1]
 
-while True:
-    logger.info(f"Starting {script}...")
+MAX_RESTARTS = 5
+restarts = 0
+
+while restarts < MAX_RESTARTS:
+    logger.info(f"Starting {script}... (attempt {restarts + 1}/{MAX_RESTARTS})")
     result = subprocess.run([sys.executable, script])
 
     if result.returncode == 0:
@@ -20,4 +23,6 @@ while True:
         break
 
     logger.warning(f"Script crashed (code {result.returncode}), restarting in 5s...")
-    time.sleep(5)
+    restarts += 1
+    if restarts < MAX_RESTARTS:
+        time.sleep(5)

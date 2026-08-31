@@ -298,11 +298,11 @@ def make_base_config(pt_path, model_path, device):
 
 
 def benchmark(model_config, core_mask, duration=5.0):
-    from iSpy.vision.pipelines.object_detection import ObjectDetectionCamera
+    from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
     from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 
     config = iSpyConfig()
-    # model config lives in the camera's pipeline settings, never the config root - that's all ObjectDetectionCamera reads
+    # model config lives in the camera's pipeline settings, never the config root - that's all ObjectDetectionPipeline reads
     cam_entry = {
         "name": "bench",
         "source": 99,  # won't open -> placeholder
@@ -319,7 +319,7 @@ def benchmark(model_config, core_mask, duration=5.0):
     cam_cfg = iSpyCameraConfig(cam_entry)
 
     with _quiet():
-        camera = ObjectDetectionCamera(cam_cfg, config, core_mask=core_mask)
+        camera = ObjectDetectionPipeline(cam_cfg, config, core_mask=core_mask)
 
     # warm up
     for _ in range(5):

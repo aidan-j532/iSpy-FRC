@@ -11,7 +11,9 @@ Subclasses set these attributes in __init__ BEFORE calling anything here:
 
     self.logger            logging.Logger
     self.quantize          bool   - int8 quantization requested
-    self._auto_opt         bool   - optimize requested (legacy auto_opt folded in)
+    self._auto_opt         bool|str - optimize requested; a str may be a
+                              concrete target format ("onnx"/"hef"/...) or a
+                              truthy/falsy word (legacy auto_opt folded in)
     self._requested_format str    - explicit target format or "auto"
     self._target_format    str|None    - resolved lazily, leave None
     self._optimizing       bool        - build in flight, leave False
@@ -23,7 +25,7 @@ from pathlib import Path
 
 #: every backend any model-backed pipeline can build; 'auto' resolution must
 #: pick from this set or fall back to onnx
-SUPPORTED_TARGET_FORMATS = ("onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu")
+SUPPORTED_TARGET_FORMATS = ("onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu", "hef")
 
 
 class OptimizableModelPipeline:
@@ -42,6 +44,7 @@ class OptimizableModelPipeline:
     #: for the active model artifact/file.
     _HARDWARE_BY_FORMAT = {
         "rknn": "npu",
+        "hef": "npu",      # Hailo NPU
         "tpu": "tpu",
         "engine": "gpu",    # NVIDIA TensorRT
         "coreml": "gpu",    # Apple GPU
@@ -119,13 +122,17 @@ class OptimizableModelPipeline:
         """
         schema = {
             "optimize": {
-                "type": "toggle",
+                "type": "select",
                 "label": "Optimize/Convert",
-                "default": False,
+                "options": ["auto", "onnx", "hef", "off"],
+                "default": "off",
                 "optimize_toggle": True,
-                "help": "Build the best optimized backend artifact for this device "
-                        "(rknn on Rockchip NPU, engine on NVIDIA, onnx elsewhere, "
-                        "etc.) in the background. Falls back to the top-level "
+                "help": "Auto-detect and build the best backend artifact for this "
+                        "device (rknn on Rockchip NPU, hef on Hailo, engine on "
+                        "NVIDIA, onnx elsewhere, etc.) in the background. "
+                        "'auto' picks the best format via recommend_format(). "
+                        "Set 'onnx' or 'hef' to force a specific backend. "
+                        "'off' disables optimization. Falls back to the top-level "
                         "config 'optimize' when unset.",
             },
             "target_format": {
@@ -193,8 +200,11 @@ class OptimizableModelPipeline:
 
     def _resolve_target_format(self) -> str:
         explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
+        auto_opt_fmt = self._auto_opt_to_target_format()
         if explicit and explicit != "auto":
             target = explicit
+        elif auto_opt_fmt:
+            target = auto_opt_fmt
         else:
             target = self.recommended_format()
         if target not in SUPPORTED_TARGET_FORMATS:
@@ -218,20 +228,71 @@ class OptimizableModelPipeline:
 
         Honors both current keys (quantize/optimize) and legacy aliases
         (quantized/auto_opt); subclasses reading a vision_model block get
-        that block checked too.
+        that block checked too. optimize/auto_opt can be a boolean or a
+        string: "auto", "onnx", "hef", etc. are truthy; "off" or False
+        are falsy.
         """
         if bool(getattr(self, "quantize", False)):
             return True
-        if getattr(self, "_auto_opt", False):
+        auto_opt = getattr(self, "_auto_opt", False)
+        if isinstance(auto_opt, str):
+            if auto_opt.lower().strip() in ("off", "false", "0", ""):
+                return False
+            return True
+        if auto_opt:
             return True
         vm_getter = getattr(self, "_current_vm_config", None)
         if vm_getter is not None:
             vm = vm_getter()
             if isinstance(vm, dict):
-                return bool(vm.get("optimize") or vm.get("auto_opt")) or bool(
-                    vm.get("quantize") or vm.get("quantized")
-                )
+                opt_val = vm.get("optimize") or vm.get("auto_opt")
+                if isinstance(opt_val, str):
+                    if opt_val.lower().strip() in ("off", "false", "0", ""):
+                        opt_val = False
+                    else:
+                        opt_val = True
+                q_val = vm.get("quantize") or vm.get("quantized")
+                return bool(opt_val) or bool(q_val)
         return False
+
+    @staticmethod
+    def _normalize_auto_opt(raw_optimize) -> bool | str:
+        """Normalize the optimize/auto_opt setting.
+
+        Can be a boolean, or a string: "auto", "onnx", "hef", etc. (format
+        selectors), "off"/"false"/"0" (disabled), or "true"/"yes"/"on" (auto).
+        A bare truthy boolean means "auto". Returns the raw format string
+        when a concrete format is given, else a bool.
+        """
+        if raw_optimize is None:
+            return False
+        if isinstance(raw_optimize, str):
+            val = raw_optimize.strip().lower()
+            if val in ("off", "false", "0", "no", "none", ""):
+                return False
+            if val in ("true", "yes", "on", "1", "auto"):
+                return True
+            if val in SUPPORTED_TARGET_FORMATS:
+                return val
+            return True
+        return bool(raw_optimize)
+
+    def _auto_opt_to_target_format(self) -> str | None:
+        """Resolve the _auto_opt string value to a concrete target format.
+
+        When _auto_opt is a string like "onnx" or "hef", return it directly.
+        When _auto_opt is True or "auto", return None (caller should use
+        recommended_format()). When _auto_opt is False/"off", return None.
+        """
+        auto_opt = getattr(self, "_auto_opt", False)
+        if isinstance(auto_opt, str):
+            val = auto_opt.lower().strip()
+            if val in ("off", "false", "0", "", "auto", "true", "1", "yes", "on"):
+                return None
+            if val in SUPPORTED_TARGET_FORMATS:
+                return val
+            return None
+        return None
 
     def _is_processable(self) -> bool:
         if getattr(self, "_optimizing", False):
