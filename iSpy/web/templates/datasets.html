@@ -7,11 +7,26 @@
   <div class="controls-bar" style="margin-bottom:16px;">
     <input type="text" id="new-dataset-name" placeholder="New dataset name..." style="flex:1; min-width:180px;">
     <button onclick="createDataset()">Create Dataset</button>
-    <button class="btn-secondary" onclick="window.location.href='/datasets/bundled'">Try Out Our Pre-Bundled Datasets</button>
+    <button class="btn-secondary" onclick="window.location.href='/datasets/bundled'">Manage Pre-Bundled</button>
   </div>
-  <div id="datasets-grid" class="dataset-grid">
-    <div class="card"><div class="skeleton-block"></div><div class="skeleton-block" style="width:60%;"></div></div>
-    <div class="card"><div class="skeleton-block"></div><div class="skeleton-block" style="width:60%;"></div></div>
+  
+  <div class="sidebar-sections">
+    <!-- User datasets -->
+    <div id="datasets-grid" class="dataset-grid">
+      <div class="card"><div class="skeleton-block"></div><div class="skeleton-block" style="width:60%;"></div></div>
+      <div class="card"><div class="skeleton-block"></div><div class="skeleton-block" style="width:60%;"></div></div>
+    </div>
+    
+    <!-- Bundled datasets dropdown -->
+    <details class="dataset-section" open>
+      <summary style="cursor:pointer; font-size:0.9rem; margin-top:8px; color:var(--text);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path><path d="M6 15l6-6 6-6"></path></svg>
+        Pre-Bundled Datasets
+      </summary>
+      <div class="dataset-grid" id="bundled-grid">
+        <div class="empty-state" style="padding:32px;">Loading bundled datasets...</div>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -44,6 +59,7 @@
 <script>
 let currentDataset = null;
 let pendingDelImg = null;
+let bundledDatasets = [];
 
 const FOLDER_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
 
@@ -59,18 +75,40 @@ async function loadDatasets() {
   }
   const grid = document.getElementById('datasets-grid');
   const datasets = data.datasets || [];
+  // Separate user datasets from bundled
+  const userDatasets = datasets.filter(d => !d.bundled);
+  const allBundled = datasets.filter(d => d.bundled);
 
-  if (datasets.length === 0) {
+  if (userDatasets.length === 0) {
     grid.innerHTML = `<div class="card empty-state has-icon">${FOLDER_ICON}No datasets yet. Create one with the form above.</div>`;
-    return;
+  } else {
+    grid.innerHTML = userDatasets.map(d => `
+      <div class="card dataset-card" onclick="openDataset('${d.name}')">
+        <div class="dataset-name">${d.name}</div>
+        <div class="dataset-count">${d.image_count} image${d.image_count !== 1 ? 's' : ''}</div>
+      </div>
+    `).join('');
   }
 
-  grid.innerHTML = datasets.map(d => `
-    <div class="card dataset-card" onclick="openDataset('${d.name}')">
-      <div class="dataset-name">${d.name}</div>
-      <div class="dataset-count">${d.image_count} image${d.image_count !== 1 ? 's' : ''}</div>
+  // Render bundled datasets dropdown
+  bundledDatasets = allBundled;
+  const bundledDetail = document.getElementById('bundled-grid');
+  if (allBundled.length === 0) {
+    bundledDetail.innerHTML = '<div class="empty-state" style="padding:8px;">No bundled datasets configured. <a href="/datasets/bundled">Configure bundled datasets</a>.</div>';
+    return;
+  }
+  bundledDetail.innerHTML = `
+    <div style="margin-bottom:8px;">
+      <span style="font-size:0.8rem; color:var(--text-dim);">Available datasets:</span>
     </div>
-  `).join('');
+    ${allBundled.map(d => `
+      <div class="card dataset-card" style="margin-bottom:4px; padding:6px;">
+        <div style="font-size:0.85rem; font-weight:5; color:var(--text);">${d.name}</div>
+        <div style="font-size:0.7rem; color:var(--text-dim);">${d.image_count} image${d.image_count !== 1 ? 's' : ''} ${d.installed ? '(installed)' : ''}</div>
+        ${!d.installed ? `<button onclick="installBundled('${d.name}')" style="margin-top:4px; font-size:0.7rem;">Install</button>` : ''}
+      </div>
+    `).join('')}
+  `;
 }
 
 async function createDataset() {
@@ -182,6 +220,33 @@ async function handleFiles(files) {
   }
   fileInput.value = '';
   loadImages();
+}
+
+async function installBundled(name, btn) {
+  const entry = bundledDatasets.find(d => d.name === name);
+  if (!entry) return;
+  const original = btn ? btn.textContent : 'Install';
+  if (btn) btn.disabled = true;
+  btn.textContent = 'Downloading...';
+  showToast(`Downloading "${name}" - this can take a minute...`, 'info');
+  try {
+    const r = await fetch('/api/datasets/bundled/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'Download failed');
+    showToast(`Installed ${j.downloaded} images into QuantizeDataset/${name}`, 'success');
+    loadDatasets();
+    if (btn && typeof btn !== 'undefined') {
+      btn.disabled = false;
+      btn.textContent = 'Re-download';
+    }
+  } catch (e) {
+    showToast(e.message || 'Download failed', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
 }
 
 loadDatasets();

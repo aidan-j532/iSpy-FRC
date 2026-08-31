@@ -797,15 +797,17 @@ class YoloPT:
     """Dependency-free YOLOv8 detection/pose model.
 
     Mirrors the Ultralytics YOLO surface iSpy relies on: ``.task``, ``.names``,
-    ``.nc``, ``.model``, ``.to()``, and ``(model)(frames, ...)`` returning a
-    list of ``_Result`` with ``.boxes`` / ``.keypoints`` / ``.orig_shape``.
+    ``.nc``, ``.imgsz``, ``.model``, ``.to()``, and ``(model)(frames, ...)``
+    returning a list of ``_Result`` with ``.boxes`` / ``.keypoints`` /
+    ``.orig_shape``.
     """
 
-    def __init__(self, model: DetectionModel, names: dict, task: str, nc: int):
+    def __init__(self, model: DetectionModel, names: dict, task: str, nc: int, imgsz: int = 640):
         self.model = model
         self.names = names
         self.task = task
         self.nc = int(nc)
+        self.imgsz = int(imgsz) if imgsz else 640
         self._device = next(model.parameters()).device if next(model.parameters(), None) is not None else "cpu"
         model.eval()
         if task == "pose":
@@ -942,10 +944,23 @@ def load_yolo_pt(path: str, task: str = "detect", verbose: bool = False) -> Yolo
         except Exception:
             pass
 
+    # Recover the training input size. Ultralytics surfaced this as
+    # model.model.args["imgsz"]; the dependency-free loader re-builds the raw
+    # graph (no .args), so read the same value from the checkpoint's train_args.
+    imgsz = 640
+    try:
+        train_args = ckpt.get("train_args") if isinstance(ckpt, dict) else None
+        if isinstance(train_args, dict):
+            imgsz = train_args.get("imgsz", 640)
+    except Exception:
+        pass
+    if isinstance(imgsz, (list, tuple)):
+        imgsz = imgsz[0]
+
     # Ensure the model's f/i metadata survives as attributes on each module.
     model = model.float()  # some checkpoints ship half-precision weights
     model.eval()
-    return YoloPT(model, names, model_task, nc)
+    return YoloPT(model, names, model_task, nc, imgsz=imgsz)
 
 
 def register_shim():

@@ -83,19 +83,33 @@ def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
     task = getattr(model, "task", "detect") or "detect"
 
     try:
-        nc = int(getattr(model, "nc", 1))
+        nc = int(getattr(model, "nc", None))
     except Exception:
-        nc = 1
+        nc = None
+    if not nc or nc < 1:
+        try:
+            nc = int(getattr(model.model[-1], "nc", 1))
+        except Exception:
+            nc = 1
 
     try:
-        names = dict(getattr(model, "names", {0: "object"}))
+        names = dict(getattr(model, "names", None) or {0: "object"})
     except Exception:
         names = {0: "object"}
 
     try:
         imgsz = 640
+        # Ultralytics stores the training resolution as model.model.args["imgsz"].
+        # The dependency-free loader rebuilds the raw graph (no .args), so fall
+        # back to the same value persisted in the checkpoint's train_args.
         if hasattr(model, "model") and hasattr(model.model, "args"):
             imgsz = model.model.args.get("imgsz", 640)
+        else:
+            train_args = ckpt.get("train_args") if isinstance(ckpt, dict) else None
+            if isinstance(train_args, dict):
+                imgsz = train_args.get("imgsz", 640)
+        if isinstance(imgsz, (list, tuple)):
+            imgsz = imgsz[0]
         input_size = [imgsz, imgsz] if isinstance(imgsz, int) else list(imgsz[:2])
     except Exception:
         input_size = [640, 640]
@@ -124,8 +138,9 @@ def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
     if task == "pose":
         try:
             kpt = getattr(model, "kpt_shape", None)
-            if kpt is None and hasattr(model, "model"):
-                kpt = getattr(model.model, "kpt_shape", None) if hasattr(model.model, "__getitem__") else None
+            if kpt is None and hasattr(model, "model") and len(model.model):
+                # authoritative source: the pose head carries kpt_shape
+                kpt = getattr(model.model[-1], "kpt_shape", None)
             if kpt is not None:
                 meta["kpt_shape"] = [int(kpt[0]), int(kpt[1])]
             else:

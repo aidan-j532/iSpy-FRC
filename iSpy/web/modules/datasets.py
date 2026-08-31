@@ -75,7 +75,11 @@ class DatasetsModule(WebModule):
                 if not d.is_dir():
                     continue
                 count = _count_images_in_dir(d)
-                out.append({"name": d.name, "image_count": count})
+                out.append({"name": d.name, "image_count": count, "bundled": False})
+        bundled = self._bundled_list()
+        for ds in bundled.get("datasets", []):
+            ds["bundled"] = True
+        out.extend(bundled.get("datasets", []))
         return jsonify(datasets=out)
 
     def _create(self):

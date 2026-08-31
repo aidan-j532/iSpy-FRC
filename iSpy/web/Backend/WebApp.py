@@ -23,10 +23,14 @@ _WEB_ROOT = Path(__file__).resolve().parent.parent
 
 def _get_version() -> str:
     try:
-        mod = importlib.import_module("iSpy")
-        return getattr(mod, "__version__", "0.4.0")
+        pb = Path(__WEB_ROOT / "pyproject.toml").read_text()
+        import re
+        m = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', pb, re.MULTILINE)
+        if m:
+            return m.group(1)
     except Exception:
-        return "0.4.0"
+        pass
+    return "0.4.0"
 
 
 class iSpyWebApp:

@@ -57,18 +57,19 @@ class _SpyDetector:
 # ---------------------------------------------------------------------------
 
 class PipelineConfigTests(unittest.TestCase):
-    def test_default_config_is_object_detection_with_bundled_pose_model(self):
+    def test_default_config_is_object_detection_with_bundled_v26_fuel_model(self):
         cfg = iSpyConfig()
         cam = cfg.default_config["camera_configs"]["default_cam"]
         self.assertEqual(cam["pipeline"]["name"], "object_detection")
         self.assertEqual(
             cam["pipeline"]["settings"]["vision_model"]["file_path"],
-            "YoloModels/pytorch/_default_pose.pt",
+            "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
         )
         self.assertEqual(
             cam["pipeline"]["settings"]["vision_model"]["source_pt"],
-            "YoloModels/pytorch/_default_pose.pt",
+            "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
         )
+        self.assertIs(cam["pipeline"]["settings"]["vision_model"]["optimize"], True)
 
     def test_legacy_flat_camera_config_migrates_to_nested_pipeline(self):
         # old configs kept settings flat on the camera entry - fold every

@@ -122,13 +122,13 @@ def default_vision_model() -> dict:
     if user_pts:
         rel = f"YoloModels/pytorch/{user_pts[0].name}"
     else:
-        # Prefer the working detect model over broken pose/v26 defaults
-        detect = next((p for p in pts if p.name == "_default_detect.pt"), None)
-        if detect:
-            rel = f"YoloModels/pytorch/{detect.name}"
+        # Prefer the v26 fuel detection model, then the plain detect model.
+        fuel = next((p for p in pts if p.name == "_default_v26_detect_for_fuel.pt"), None)
+        if fuel:
+            rel = f"YoloModels/pytorch/{fuel.name}"
         else:
-            pose = next((p for p in pts if p.name == "_default_pose.pt"), None)
-            rel = f"YoloModels/pytorch/{pose.name}" if pose else "YoloModels/pytorch/_default_pose.pt"
+            detect = next((p for p in pts if p.name == "_default_detect.pt"), None)
+            rel = f"YoloModels/pytorch/{detect.name}" if detect else "YoloModels/pytorch/_default_detect.pt"
     return {"file_path": rel, "source_pt": rel, "min_conf": 0.5}
 
 
@@ -259,11 +259,14 @@ class iSpyConfig:
                             "vision_model": {
                                 # input.*/output.* are auto-detected from the model's
                                 # _metadata.yaml sidecar - only override if its wrong.
-                                "file_path": "YoloModels/pytorch/_default_pose.pt",
-                                "source_pt": "YoloModels/pytorch/_default_pose.pt",
+                                "file_path": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
+                                "source_pt": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
                                 "min_conf": 0.5,
-                                # quantization/rknn builds are opt-in per cam (Optimize
-                                # toggle in the web UI) so a fresh install boots fast.
+                                # auto-optimize the model to the best format for this
+                                # machine (onnx/openvino/rknn/...). Done in the background
+                                # so boot/run stay non-blocking; the .pt runs until the
+                                # optimized artifact is ready.
+                                "optimize": True,
                                 "quantize": False,
                                 # Optional PnP for pose (translation stored on
                                 # Box; rotation stored as roll/pitch/yaw on

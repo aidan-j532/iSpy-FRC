@@ -916,17 +916,6 @@ function renderSourceSection(cameraType) {
   holder.insertBefore(newRow, camTypeRow.nextElementSibling);
 }
 
-/* Stepped settings flow: one section at a time, "Save and Continue" advances,
-   the last section's button is "Save and Quit". Every visible field must be
-   filled before a section counts as done (nullable numbers and toggles/selects
-   always count as filled). */
-
-function flowSections() {
-  sections.forEach(s => s.classList.remove('step-hidden', 'step-active'));
-  showFlowSection(sections[0]);
-  updateSubmitLabel();
-}
-
 function showFlowSection(holder) {
   flowSections().forEach(sec => {
     const on = sec === holder;

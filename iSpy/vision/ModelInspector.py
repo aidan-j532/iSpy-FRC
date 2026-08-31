@@ -755,6 +755,11 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
             num_keypoints, keypoint_dims = None, None
 
         input_size = [640, 640]
+        try:
+            imgsz = model.imgsz
+            input_size = [imgsz, imgsz] if isinstance(imgsz, int) else list(imgsz[:2])
+        except Exception:
+            pass
 
     except Exception:
         model_task = task
