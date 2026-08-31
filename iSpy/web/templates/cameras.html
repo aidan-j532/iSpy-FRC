@@ -2211,6 +2211,12 @@ function freezeCalibrationFrame() {
   calibrationState.start = null;
   calibrationState.end = null;
   calibrationState.liveSrc = img.src;
+  // Set the stage container's aspect ratio to match the actual image
+  // so the frozen frame (canvas + img data URL) doesn't stretch.
+  const stage = canvas.closest('.calib-stage');
+  if (stage) {
+    stage.style.aspectRatio = (img.naturalWidth / img.naturalHeight).toFixed(4);
+  }
   img.src = canvas.toDataURL('image/jpeg', 0.9);
   canvas.style.display = 'block';
   canvas.onmousedown = onCalibMouseDown;
@@ -2239,6 +2245,11 @@ function unfreezeCalibrationFrame() {
   calibrationState.frozen = false;
   const img = $id('calib-feed');
   const canvas = $id('calib-canvas');
+  // Restore the stage container's aspect ratio to default (16/9 from CSS)
+  const stage = canvas?.closest('.calib-stage');
+  if (stage) {
+    stage.style.aspectRatio = '';
+  }
   if (img) {
     if (calibrationState.liveSrc) {
       // MJPEG streams don't reconnect when re-setting an identical src -

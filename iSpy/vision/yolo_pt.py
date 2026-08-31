@@ -103,6 +103,29 @@ class C2f(nn.Module):
         return self.cv2(torch.cat(y, 1))
 
 
+class C3k(nn.Module):
+    """C3k2 YOLO block - a C2f variant with configurable inner block.
+
+    YOLOv11/v26-family block: C2f with C3k inner blocks. When a flag is set,
+    uses C3k (Bottleneck with flag), otherwise plain Bottleneck.
+    """
+
+    def __init__(self, c1, c2, n=1, e=0.5, shortcut=True, g=1, d=False):
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)
+        self.m = nn.ModuleList(
+            Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0)
+            for _ in range(n)
+        )
+
+    def forward(self, x):
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+
 class SPPF(nn.Module):
     """Spatial Pyramid Pooling - Fast."""
 
@@ -145,6 +168,66 @@ class DFL(nn.Module):
     def forward(self, x):
         b, _, a = x.shape
         return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
+
+
+def _make_keypoint_conv(c1, c2, k=1):
+    """Create a keypoint convolution head.
+    
+    YOLOv8 Pose head outputs 4 (xyxy) + num_classes + num_keypoints * keypoint_dims
+    The keypoints are decoded from the last channels.
+    """
+    return Conv(c1, c2, k)
+
+
+class PoseModel(nn.Module):
+    """Pose detection head for YOLOv8 - outputs keypoints alongside boxes."""
+
+    def __init__(self, nc, reg_max=16, num_keypoints=17, keypoint_dims=2, end2end=False, ch=()):
+        super().__init__()
+        self.nc = nc
+        self.nl = len(ch) if ch else 3
+        self.reg_max = reg_max
+        self.num_keypoints = num_keypoints
+        self.keypoint_dims = keypoint_dims
+        self.no = nc + self.reg_max * 4 + num_keypoints * keypoint_dims
+        self.stride = torch.zeros(self.nl)
+        c2, c3 = max((16, ch[0] // 4, self.no * 4)) if ch else 64, (max(ch[0], min(self.nc, 100)) if ch else 80)
+        self.cv2 = nn.ModuleList(
+            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
+        )
+        self.cv3 = nn.ModuleList(
+            nn.Sequential(
+                _make_keypoint_conv(c2, c3, 3),
+                _make_keypoint_conv(c3, c3, 3),
+                nn.Conv2d(c3, num_keypoints * keypoint_dims, 1),
+            )
+            for _ in ch
+        )
+        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+
+    def forward(self, x):
+        preds = self.forward_head(x, **self.one2many)
+        if self.training:
+            return preds
+        y = self._inference(preds)
+        return (y,) if self.export else (y, preds)
+
+    def forward_head(self, x, box_head=None, cls_head=None):
+        if box_head is None or cls_head is None:
+            return dict()
+        bs = x[0].shape[0]
+        boxes = torch.cat([box_head[i](x[i]).view(bs, 4 * self.reg_max, -1) for i in range(self.nl)], dim=-1)
+        keypoints = torch.cat([kp_head[i](x[i]).view(bs, self.num_keypoints * self.keypoint_dims, -1) for i, kp_head in enumerate(self.cv3)], dim=-1)
+        scores = torch.cat([cls_head[i](x[i]).view(bs, self.nc, -1) for i in range(self.nl)], dim=-1)
+        return dict(boxes=boxes, scores=scores, keypoints=keypoints, feats=x)
+
+    @property
+    def one2many(self):
+        return dict(box_head=self.cv2, cls_head=self.cv3[:1] if hasattr(self, 'cv3') else self.cv3, kpt_head=self.cv3[1:] if len(self.cv3) > 1 else [])
+
+    @property
+    def one2one(self):
+        return dict(box_head=self.cv2, cls_head=self.cv3, kpt_head=self.cv3)
 
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
@@ -392,7 +475,7 @@ def _register_shim():
     head_ns = types.ModuleType("ultralytics.nn.modules.head")
     tasks_ns = types.ModuleType("ultralytics.nn.tasks")
 
-    for ns in (conv_ns, block_ns, head_ns, tasks_ns):
+for ns in (conv_ns, block_ns, head_ns, tasks_ns):
         ns.Conv = Conv
         ns.C2f = C2f
         ns.SPPF = SPPF
@@ -400,11 +483,15 @@ def _register_shim():
         ns.Concat = Concat
         ns.DFL = DFL
         ns.Detect = Detect
+        ns.PoseModel = PoseModel
+        ns.C3k = C3k  # ADD: register C3k block shim
     modules_ns.Conv = Conv
     modules_ns.C2f = C2f
     modules_ns.SPPF = SPPF
     modules_ns.Concat = Concat
     modules_ns.Detect = Detect
+    modules_ns.PoseModel = PoseModel
+    modules_ns.C3k = C3k  # ADD: register C3k block shim in parent pkg
     tasks_ns.DetectionModel = DetectionModel
 
     # Ultralytics nn.Module re-exports each class under the same name in both

@@ -53,3 +53,5 @@ repomix-output.xml
 weights
 Save/*.json
 docs/iSpy_7_Day_Pre_Release_Plan.pdf
+*CACHEDIR.TAG
+YoloModels/*/CACHEDIR.TAG

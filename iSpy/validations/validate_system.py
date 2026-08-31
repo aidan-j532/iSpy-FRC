@@ -45,7 +45,7 @@ def validate_config_files() -> None:
 
     logger.info("All config files are valid.")
 
-def run_unit_tests() -> None:
+def run_unit_tests() -> bool:
     logger.info("Running unit tests...")
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -62,11 +62,6 @@ def run_unit_tests() -> None:
         runner = unittest.TextTestRunner(verbosity=2, stream=devnull)
         result = runner.run(suite)
     return result.wasSuccessful()
-    result = runner.run(suite)
-    if not result.wasSuccessful():
-        raise RuntimeError("Unit tests failed.")
-
-    logger.info("All unit tests passed.")
 
 def get_addon_setting(config: dict, addon_type: str, addon_name: str,
                       key: str, default=None):
@@ -387,9 +382,11 @@ def validate_system() -> bool:
         validate_model_files()
         validate_config_files()
 
-        validate_quantization_dataset_wrapper()
+        if not validate_quantization_dataset_wrapper():
+            raise RuntimeError("Quantization dataset validation failed.")
 
-        run_unit_tests()
+        if not run_unit_tests():
+            raise RuntimeError("Unit tests failed during boot validation.")
         logger.info("System validation successful.")
         return True
 

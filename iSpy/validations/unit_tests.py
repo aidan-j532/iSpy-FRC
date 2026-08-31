@@ -23,7 +23,8 @@ import numpy as np
 
 # ─── Fake out hardware imports so tests run on any machine ───────────────────
 
-# Fake rknnlite
+# Fake rknnlite (import-order-dependent: monkeypatch sys.modules;
+# works if this file is the FIRST import of iSpy.vision.genericYolo)
 rknnlite_mod = types.ModuleType("rknnlite")
 rknnlite_api = types.ModuleType("rknnlite.api")
 
@@ -51,6 +52,10 @@ rknnlite_mod.api = rknnlite_api
 rknnlite_mod.__file__ = "fake_rknnlite/__init__.py"
 sys.modules["rknnlite"] = rknnlite_mod
 sys.modules["rknnlite.api"] = rknnlite_api
+
+# Remove the module-level patch - instead, each test that needs RKNN fake
+# should patch genericYolo.RKNNLite directly using unittest.mock.patch
+
 
 # Fake tflite_runtime
 tflite_mod = types.ModuleType("tflite_runtime")
@@ -206,6 +211,17 @@ class TestBoxResults(unittest.TestCase):
 # ─── GenericYolo model handling (missing / broken / valid) ──────────────────
 
 class TestGenericYoloModelSelection(unittest.TestCase):
+
+    def setUp(self):
+        # Patch genericYolo.RKNNLite directly so tests work regardless of import order
+        from iSpy import vision
+        self._original_rknnlite = vision.genericYolo.RKNNLite
+        vision.genericYolo.RKNNLite = FakeRKNNLite
+
+    def tearDown(self):
+        # Restore original RKNNLite
+        from iSpy import vision
+        vision.genericYolo.RKNNLite = self._original_rknnlite
 
     def _dummy_model(self, suffix=".rknn", size=4096):
         tmp = tempfile.TemporaryDirectory()

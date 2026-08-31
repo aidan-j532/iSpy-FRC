@@ -456,11 +456,17 @@ class GenericYolo:
             self.model_type = "rknn"
             self._rknn_fmt_checked = False
             self.model = RKNNLite(verbose=False)
-            if self.model.load_rknn(self.model_file) != 0:
-                raise ValueError(f"Failed to load RKNN model: {self.model_file}")
+            try:
+                if self.model.load_rknn(self.model_file) != 0:
+                    raise ValueError(f"Failed to load RKNN model: {self.model_file}")
+            except Exception as e:
+                raise ValueError(f"Failed to load RKNN model: {self.model_file}") from e
             _set_rknn_log_level(3)
-            if self.model.init_runtime(core_mask=(core_mask if core_mask is not None else 7)) != 0:
-                raise ValueError(f"Failed to init RKNN runtime: {self.model_file}")
+            try:
+                if self.model.init_runtime(core_mask=(core_mask if core_mask is not None else 7)) != 0:
+                    raise ValueError(f"Failed to init RKNN runtime: {self.model_file}")
+            except Exception as e:
+                raise ValueError(f"Failed to init RKNN runtime: {self.model_file}") from e
 
         elif self.model_file.endswith(".onnx"):
             self._require_input_block()

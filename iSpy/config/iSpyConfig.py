@@ -122,8 +122,13 @@ def default_vision_model() -> dict:
     if user_pts:
         rel = f"YoloModels/pytorch/{user_pts[0].name}"
     else:
-        pose = next((p for p in pts if p.name == "_default_pose.pt"), None)
-        rel = f"YoloModels/pytorch/{pose.name}" if pose else "YoloModels/pytorch/_default_pose.pt"
+        # Prefer the working detect model over broken pose/v26 defaults
+        detect = next((p for p in pts if p.name == "_default_detect.pt"), None)
+        if detect:
+            rel = f"YoloModels/pytorch/{detect.name}"
+        else:
+            pose = next((p for p in pts if p.name == "_default_pose.pt"), None)
+            rel = f"YoloModels/pytorch/{pose.name}" if pose else "YoloModels/pytorch/_default_pose.pt"
     return {"file_path": rel, "source_pt": rel, "min_conf": 0.5}
 
 

@@ -171,7 +171,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             self._resync_stale_model_file_path(config)
         try:
             self.model = GenericYolo(vm_filled, self.core_mask, iSpy_config=config)
-        except ModelFileError as e:
+        except (ModelFileError, ValueError) as e:
             self.logger.error(
                 "Camera '%s': %s — this camera will run without detection until fixed.",
                 camera_config.get("name", "?"), e,

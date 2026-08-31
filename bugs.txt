@@ -1,0 +1,308 @@
+CONTEXT: iSpy-FRC boot log from real hardware (Orange Pi, Rockchip NPU, real rknnlite installed).
+`ispy-boot -f` completed and reported "System validation successful," but `ispy-run` immediately
+crashes on startup. The validation report was also incorrect — unit tests actually failed during
+that boot and it said nothing. Fix these four issues in priority order. Do not move to the next
+item until the previous one is verified working.
+
+═══════════════════════════════════════════════════════════════════
+P0 — ispy-run crash, blocks all runtime use
+═══════════════════════════════════════════════════════════════════
+Traceback:
+    File "iSpy/web/Backend/WebApp.py", line 5, in <module>
+        from iSpy import __version__
+    ImportError: cannot import name '__version__' from 'iSpy' (unknown location)
+
+"(unknown location)" means Python resolved `iSpy` to an implicit namespace package
+(PEP 420 — no __init__.py found), NOT the real iSpy/__init__.py that defines
+`__version__ = "0.4.0"`. Note this only breaks under `ispy-run`, not `ispy-boot -f` —
+boot.py never imports iSpy.web.Backend.WebApp at module load time, but
+iSpy/core/game_loop.py -> iSpy/iSpy.py does (`from iSpy.web.Backend.WebApp import
+create_app` at the top of iSpy.py). So this import path is genuinely never exercised
+by `ispy-boot -f` — this may be a brand-new bug, not a preexisting one that boot's
+success masked.
+
+Diagnose, don't guess:
+1. Run `python -c "import iSpy; print(iSpy.__file__, iSpy.__path__)"` from the same
+   venv/cwd used to invoke `ispy-run`. If it errors or shows no __file__, that
+   confirms the namespace-package theory.
+2. Check `pip show -f ispy-frc` (or whatever the installed distribution name is) —
+   confirm iSpy/__init__.py is actually listed as an installed file, not just the
+   subpackages.
+3. Check pyproject.toml/setup.py packaging config for auto-discovery that might
+   be excluding the top-level __init__.py (e.g. explicit `packages=find_packages()`
+   with an include/exclude pattern that misses the root, or `src`-layout config
+   pointing at the wrong directory).
+4. Check for a second, empty `iSpy` directory anywhere on sys.path (e.g. cwd itself
+   getting prepended by the console-script shim in a way that finds a different
+   `iSpy/` before site-packages does).
+5. Confirm the fix by actually running `ispy-run` end to end, not just re-importing
+   in isolation — this bug may only reproduce through the real console-script entry
+   point depending on cwd/sys.path setup.
+
+ACCEPTANCE: `ispy-run` starts without ImportError and the web dashboard is reachable.
+
+═══════════════════════════════════════════════════════════════════
+P1 — validate_system() always reports success even when unit tests fail
+═══════════════════════════════════════════════════════════════════
+Two files have the identical bug — a `return` statement placed before code that was
+meant to run, silently killing everything after it:
+
+iSpy/validations/validate_system.py, run_unit_tests():
+    with open(os.devnull, "w") as devnull:
+        runner = unittest.TextTestRunner(verbosity=2, stream=devnull)
+        result = runner.run(suite)
+    return result.wasSuccessful()          # <-- exits here
+    result = runner.run(suite)              # DEAD CODE, never runs
+    if not result.wasSuccessful():          # DEAD CODE
+        raise RuntimeError("Unit tests failed.")
+    logger.info("All unit tests passed.")   # DEAD CODE
+
+iSpy/validations/ez.py, unit_tests(): same pattern, same dead tail.
+
+WORSE: validate_system() calls `run_unit_tests()` and discards the return value
+entirely:
+    run_unit_tests()
+    logger.info("System validation successful.")
+    return True
+
+So even a correctly-returning run_unit_tests() wouldn't matter — the caller never
+checks it. This is why the log shows real RKNN native-library errors
+("RKNN_ERR_MODEL_INVALID") during boot's test run, immediately followed by
+"System validation successful."
+
+FIX:
+1. Delete the dead code after `return` in both files (or restructure so the
+   RuntimeError-raising path is the one that actually executes).
+2. In validate_system(), capture and check the return value:
+       if not run_unit_tests():
+           raise RuntimeError("Unit tests failed during boot validation.")
+   inside the existing try/except so it's caught and reported like the other
+   validation steps, not left to crash boot ungracefully.
+3. Decide (and document) whether a unit test failure during `boot -f` should be
+   fatal or just logged loudly — right now it's neither, it's invisible. Fatal is
+   probably right for a fresh install; non-fatal-but-loud may be right for a normal
+   boot on a board with quirky hardware. Pick one, make it match the docstring/log
+   message ("System validation successful" must stop being printed when it wasn't).
+
+ACCEPTANCE: intentionally break a trivial assertion in unit_tests.py, run boot -f,
+confirm it now surfaces as a failure (either raised or clearly logged as FAILED,
+not "successful").
+
+═══════════════════════════════════════════════════════════════════
+P1 — RKNN unit tests hit REAL hardware with garbage data during every boot
+═══════════════════════════════════════════════════════════════════
+iSpy/validations/unit_tests.py fakes rknnlite via sys.modules substitution at
+module import time, then imports GenericYolo. This only works if unit_tests.py is
+the FIRST thing to import iSpy.vision.genericYolo in the process. It isn't:
+boot.py's metadata-generation step (setup_files() -> metadata_from_pt() for each
+bundled .pt) triggers `from iSpy.vision.genericYolo import torch_load`, which
+executes genericYolo.py's module-level `from rknnlite.api import RKNNLite` for
+real — and on this hardware, real rknnlite IS installed, so RKNN_FOUND=True and
+genericYolo.RKNNLite is bound to the real class before unit_tests.py's fakery ever
+runs. Python's module cache means unit_tests.py's later `sys.modules["rknnlite"]
+= fake` has zero effect on the already-imported genericYolo module.
+
+Result, visible in the log: test_loads_rknn_when_rknnlite_present() constructs a
+GenericYolo from a 4KB file of zero bytes with a .rknn extension, which goes
+through the REAL RKNNLite().load_rknn() / init_runtime() against real NPU driver
+calls, and blows up with `RKNN_ERR_MODEL_INVALID` — not a mocked, deterministic,
+hardware-independent result like the test intends. This is a test-isolation bug
+that (a) makes the RKNN unit tests meaningless on any machine with real rknnlite
+installed, (b) spams real driver error output into every boot log, and (c) was
+being silently swallowed by the P1 bug above so nobody noticed it was broken.
+
+FIX — pick one:
+1. (Preferred) Make the fake unconditional and import-order-independent: instead
+   of monkeypatching sys.modules and hoping nothing imported the real module first,
+   have unit_tests.py patch `iSpy.vision.genericYolo.RKNNLite` directly (the
+   already-bound symbol) via `unittest.mock.patch.object` in a setUp/context
+   manager scoped to the RKNN test class, regardless of what was imported when.
+2. Alternatively, force genericYolo to be freshly imported under the fake
+   environment by removing it (and rknnlite/rknnlite.api) from sys.modules before
+   the fakes are installed, then re-importing — fragile, avoid if (1) works.
+
+Also fix GenericYolo's exception handling while you're in here: `RKNNLite.init_runtime()`
+can raise a bare Exception from the native layer (as seen in the log — not a
+non-zero return code, an actual raised Exception), but genericYolo.py only checks
+`if self.model.init_runtime(...) != 0: raise ValueError(...)`. A raised exception
+from the driver bypasses that check and propagates a raw, unhelpful native
+exception instead of iSpy's own error type. Wrap the init_runtime() and load_rknn()
+calls in try/except and re-raise as ValueError with the model path in the message,
+consistent with the rest of that constructor.
+
+ACCEPTANCE: run the unit test suite standalone (`python -m iSpy.validations.ez` or
+equivalent) on the same board that showed this bug, confirm no real RKNN driver
+output appears in the test run, and the RKNN tests pass using genuinely fake calls.
+
+═══════════════════════════════════════════════════════════════════
+P2 — yolo_pt.py shim can't load the two shipped default models
+═══════════════════════════════════════════════════════════════════
+Log shows both bundled non-basic-detect models fail metadata generation:
+    _default_pose.pt        -> Can't get attribute 'PoseModel' on ultralytics.nn.tasks
+    _default_v26_detect_for_fuel.pt -> Can't get attribute 'C3k2' on ultralytics.nn.modules.block
+
+iSpy/vision/yolo_pt.py's shim only registers Conv, C2f, SPPF, Bottleneck, Concat,
+DFL, Detect, and DetectionModel — a YOLOv8-detect-only architecture. It does NOT
+register:
+  - PoseModel (task marker class) or a pose detection head (keypoint regression
+    on top of Detect) — needed for _default_pose.pt
+  - C3k2, C3k, or any YOLOv11/v26-family block — needed for
+    _default_v26_detect_for_fuel.pt
+
+metadata_from_pt() currently catches this and logs a warning, so boot doesn't
+crash — but this is not just a metadata problem. fill_missing_config() falls back
+to inspect_model() -> _inspect_ultralytics() -> load_yolo_pt() on ANY load attempt
+when no metadata sidecar exists, which hits the exact same missing-attribute
+failure at actual inference time, not just at boot. In other words: right now,
+on this hardware, the shipped pose model and the shipped v26/fuel detect model
+are BOTH completely non-functional — any camera configured to use either one will
+fail to construct GenericYolo entirely. Only _default_detect.pt (plain YOLOv8
+detect) works.
+
+This is a big gap, not a nice-to-have. Two options, pick based on which models
+are actually meant to ship:
+
+Option A — if _default_pose.pt and _default_v26_detect_for_fuel.pt are meant to
+keep shipping, the shim needs real architecture support added:
+  - PoseModel: register as an alias/subclass marker (mirror DetectionModel's
+    approach) and extend Detect (or add a Pose head class) with the keypoint
+    branch — cv4 conv stack producing num_keypoints * keypoint_dims channels,
+    decoded the same way GenericYolo._parse_raw_pose already expects
+    (features_first -> keypoints after the score columns). Check what keypoint
+    head shape the actual checkpoint's state_dict expects before guessing at
+    the module structure — load the checkpoint's raw state_dict keys (without
+    unpickling the model, just `torch.load(..., weights_only=True)` won't work
+    since it's not a weights-only checkpoint, so inspect via `zipfile` on the
+    .pt to read the pickle's referenced class paths) to confirm the exact
+    module names/shapes needed instead of guessing.
+  - C3k2/C3k: implement the YOLOv11-style block (a C2f variant with a
+    configurable inner block — C3k when a flag is set, otherwise a plain
+    Bottleneck) under ultralytics.nn.modules.block in the shim namespace.
+
+Option B — if these are legacy/test assets that shouldn't be bundled as
+"_default_*" anymore, remove them from iSpy/assets/ and update boot.py's
+staging step + default_vision_model()'s fallback logic (iSpyConfig.py) so
+nothing points at a pose or v26 model by default. Confirm with Aidan which
+of these is actually correct before touching the shim — this is a scope
+decision, not a pure bug fix, and guessing wrong wastes real implementation
+work on either the shim or the asset cleanup.
+
+ACCEPTANCE (Option A): construct GenericYolo directly against both
+_default_pose.pt and _default_v26_detect_for_fuel.pt (no metadata sidecar
+present, forcing the tensor-inspection fallback path) and confirm both load
+without the AttributeError, and that metadata_from_pt() succeeds and writes a
+valid sidecar for both.
+ACCEPTANCE (Option B): confirm boot -f no longer stages or references either
+model, and no code path defaults to them.
+
+═══════════════════════════════════════════════════════════════════
+Report back after each priority tier with: what changed, the file(s) touched,
+and the exact command you ran to verify the acceptance criteria. Don't batch all
+four into one unverified commit.
+[PREPEND TO P0 SECTION, BEFORE THE NAMESPACE-PACKAGE THEORY]
+
+FIRST CHECK — environment mismatch (do this before anything else):
+The log shows `ispy-boot -f` was run with NO venv active (prompt: `ubuntu@ispy:~/iSpy-FRC$`)
+and `ispy-run` was run INSIDE an activated venv (prompt: `(env) ubuntu@ispy:~/iSpy-FRC$`).
+These are two different Python environments. Before investigating packaging bugs:
+  1. `which ispy-boot ispy-run` with `env` active — confirm both resolve into env's bin/.
+  2. `pip show ispy-frc` (or whatever the dist name is) with env active — confirm it's
+     installed in THIS environment at all, and check the version/location match what
+     you expect.
+  3. If iSpy isn't installed in `env`, that alone fully explains the ImportError — cwd
+     ends up on sys.path, Python finds the source `iSpy/` directory as an implicit
+     namespace package with no proper __init__.py registration, and `__version__`
+     isn't found. Fix: install iSpy into env (`env`'s pip install -e .), or make
+     install.sh/the docs stop mixing global and venv installs across commands.
+Only fall through to the packaging/PEP-420 investigation below if both commands are
+confirmed to run in the SAME environment and the bug still reproduces.
+
+[EXISTING P0 CONTENT STAYS AS FALLBACK INVESTIGATION]
+
+═══════════════════════════════════════════════════════════════════
+[ADD TO P1 SECTION — validate_system.py]
+═══════════════════════════════════════════════════════════════════
+Same discarded-return-value bug also exists one call earlier in the same function:
+
+    def validate_system() -> bool:
+        try:
+            validate_model_files()
+            validate_config_files()
+            validate_quantization_dataset_wrapper()   # <-- returns bool, discarded
+            run_unit_tests()                            # <-- returns bool, discarded
+            logger.info("System validation successful.")
+            return True
+
+validate_quantization_dataset_wrapper() returns True/False and it's silently ignored
+exactly like run_unit_tests(). Fix both in the same pass:
+
+    if not validate_quantization_dataset_wrapper():
+        raise RuntimeError("Quantization dataset validation failed.")
+    if not run_unit_tests():
+        raise RuntimeError("Unit tests failed during boot validation.")
+
+Grep validate_system.py for every other function call whose return value is a bool
+and confirm none of the others are similarly discarded — this looks like a
+copy-pasted pattern, not an isolated typo.
+
+═══════════════════════════════════════════════════════════════════
+NEW P1 — exception narrowing in ObjectDetectionPipeline hides real failures
+═══════════════════════════════════════════════════════════════════
+iSpy/vision/pipelines/object_detection.py, __init__():
+
+    try:
+        self.model = GenericYolo(vm_filled, self.core_mask, iSpy_config=config)
+    except ModelFileError as e:
+        self.logger.error(...)
+        self.model = None
+
+This only catches ModelFileError. When fill_missing_config() fails to inspect a
+model (e.g. the yolo_pt shim can't reconstruct the checkpoint — see P2) it swallows
+that failure and returns the config UNCHANGED, missing task/num_classes/output.
+GenericYolo's normalize_model_config() then raises ValueError on the incomplete
+config, which is NOT ModelFileError, so it skips this except block entirely and
+propagates up to the broad `except Exception` in iSpy.py::_build_cameras_from_config
+— meaning the camera silently vanishes with a raw, unhelpful stack trace instead of
+the intended "camera will run without detection until fixed" message.
+
+FIX: broaden the except clause (or catch ValueError separately with its own clear
+log message) so any model-load failure — bad file, bad metadata inspection, bad
+config — degrades the same way: log clearly, set self.model = None, keep the camera
+alive without detection. Test by forcing fill_missing_config() to fail (e.g. point
+a camera at a .pt the shim can't parse) and confirming you get a clean warning, not
+a raw traceback three layers up.
+
+═══════════════════════════════════════════════════════════════════
+[APPEND TO P2 SECTION — severity note]
+═══════════════════════════════════════════════════════════════════
+IMPORTANT — this is not just "one broken bundled model." Check
+iSpyConfig.py::default_vision_model() and the hardcoded "file_path"/"source_pt" in
+default_config — BOTH point new/fresh cameras at _default_pose.pt by default. A
+completely vanilla `boot -f` with zero user configuration lands on the exact model
+proven broken in this log. Combined with bug P1-new above (exception narrowing),
+the practical effect on a fresh rookie install right now is: the default camera
+constructs, fails to load its model, logs a confusing raw stack trace, and runs
+with no detection — with no obvious signal to a first-time user about why. Whatever
+you decide for Option A/B on the shim itself, ALSO fix default_vision_model() to
+prefer _default_detect.pt (confirmed working in this log) until pose support is
+confirmed fixed, so a broken model is never the out-of-box default regardless of
+shim progress.
+
+═══════════════════════════════════════════════════════════════════
+NEW P3 — test-triggered logging bypasses the "quiet" test runner
+═══════════════════════════════════════════════════════════════════
+run_unit_tests() redirects unittest's own output stream to os.devnull, but
+AutoOpt.recommend_format()'s logger.info() calls go through Python's logging
+module, wired to real stdout by boot.py independently of the test runner's stream
+arg. Every TestAutoOpt test case (11 of them) triggers a real "X detected -> format"
+log line straight to the console during boot's "Running unit tests..." step — this
+is the "AMD GPU detected / ARM edge device detected / Hailo NPU detected..." spam
+visible in the log, and it's currently burying the real RKNN test failures right
+next to it.
+
+FIX: in run_unit_tests()/ez.py's unit_tests(), temporarily raise the log level for
+loggers under test (or all non-root loggers) to WARNING for the duration of the
+run, restoring it after — same pattern already used elsewhere in this codebase
+(see benchmarking.py's per-logger level save/restore around _mute_kernel_rknn()).
+Low priority relative to P0-P2, but fix it in the same pass since you'll already
+be in this file for the P1 return-value fixes.
