@@ -564,6 +564,14 @@ pre {
 
 /* Metrics chart "waiting for data" overlay */
 .chart-card { position: relative; }
+.chart-card canvas {
+  /* Charts keep a stable height instead of re-flowing with every grid
+     column that snaps in/out as the window resizes. With
+     maintainAspectRatio:false (metrics.html) the canvas fills this box. */
+  width: 100%;
+  height: 210px;
+  max-height: 210px;
+}
 .chart-waiting {
   position: absolute; left: 0; right: 0; bottom: 10px;
   text-align: center; pointer-events: none;

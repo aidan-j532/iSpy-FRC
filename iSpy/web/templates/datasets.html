@@ -7,7 +7,12 @@
   .tree-folder { display:flex; align-items:center; gap:6px; font-size:0.78rem; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px; }
   .tree-folder svg { width:14px; height:14px; flex:none; color:var(--accent); }
   .tree-item { margin-left:18px; padding-left:12px; border-left:1px solid var(--border-light); }
-  .tree-corner { color:var(--text-muted); font-family:var(--mono); font-size:0.85rem; margin-right:4px; }
+  /* Pre-Bundled disclosure: hide the native summary triangle (which double-renders
+     next to the custom chevron below) and use a single rotating ::before marker. */
+  .dataset-section summary { list-style: none; display:flex; align-items:center; gap:6px; }
+  .dataset-section summary::-webkit-details-marker { display: none; }
+  .dataset-section summary .ds-chevron { display:inline-flex; transition: transform 0.15s ease; }
+  .dataset-section details[open] summary .ds-chevron { transform: rotate(180deg); color: var(--accent); }
 </style>
 
 <div id="datasets-view">
@@ -30,8 +35,7 @@
     <div class="tree-item">
       <details class="dataset-section" open>
         <summary style="cursor:pointer; font-size:0.9rem; margin-top:8px; color:var(--text);">
-          <span class="tree-corner">&#9492;&#9472;</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path><path d="M6 15l6-6 6-6"></path></svg>
+          <svg class="ds-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
           Pre-Bundled Datasets
         </summary>
         <div class="dataset-grid" id="bundled-grid">

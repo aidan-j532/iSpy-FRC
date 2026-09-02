@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from iSpy.config.iSpyConfig import iSpyCameraConfig
+from iSpy.vision.Cameras._device_guard import free_camera_device
 from iSpy.vision.Object import Object
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -450,6 +451,19 @@ class CameraBase:
             self._open_camera()
         except Exception as exc:
             self._reconnect_failures += 1
+            # A stray non-iSpy process may be holding the v4l2 devnode open,
+            # which OpenCV reports as a reopen failure (e.g. "Inappropriate
+            # ioctl for device" / "Camera ... still waiting"). Force it out so
+            # the next attempt has a real chance - never touch iSpy's own pid.
+            if (
+                platform.system() == "Linux"
+                and not self._is_url_source
+                and not self.is_image
+            ):
+                try:
+                    free_camera_device(self.source)
+                except Exception:
+                    self.logger.debug("device-guard failed; continuing", exc_info=True)
             if (
                 self._reconnect_failures == 1
                 or self._reconnect_failures % self._RECONNECT_WARN_EVERY == 0

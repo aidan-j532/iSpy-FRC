@@ -967,13 +967,24 @@ function renderSourceSection(cameraType) {
   newRow.className = 'form-field';
 
   if (cameraType === 'opencv') {
-    // Device selector for OpenCV cameras
-    const field = buildField('device', COMMON_FIELDS.device, 'common');
-    newRow.appendChild(field);
-    newRow.dataset.fieldKey = 'device';
-    // Preselect the camera's current source when editing so it stays in the
-    // list and saving does not silently blank the source.
-    populateDevices(camModal.mode === 'edit' ? camModal.data.source : undefined).then(() => initSettingsFlow());
+    if (camModal.mode === 'edit') {
+      // Editing an already-configured camera: the device is fixed. Just show
+      // what it is, read-only - no editable dropdown, no required picker, so
+      // it never blocks the flow.
+      const field = buildField('source', COMMON_FIELDS.source, 'common');
+      const input = field.querySelector('input');
+      if (input) input.readOnly = true;
+      const src = (camModal.data && camModal.data.source != null)
+        ? camModal.data.source : '';
+      setFieldValue('source', src);
+      newRow.appendChild(field);
+    } else {
+      // Adding a new (or detected-but-unconfigured) camera: pick a device.
+      const field = buildField('device', COMMON_FIELDS.device, 'common');
+      newRow.appendChild(field);
+      newRow.dataset.fieldKey = 'device';
+      populateDevices().then(() => initSettingsFlow());
+    }
   } else if (cameraType === 'tello') {
     // Text input for Tello UDP source
     const field = buildField('source', COMMON_FIELDS.source, 'common');

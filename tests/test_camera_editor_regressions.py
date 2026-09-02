@@ -69,5 +69,26 @@ class TestTelloSchemaWiring(unittest.TestCase):
         self.assertIn("COMMON_FIELDS[key]", body)
 
 
+class TestEditModeDeviceArea(unittest.TestCase):
+    """Editing a configured camera must not force a required device picker.
+
+    Edit shows the current device read-only (no change, no block); only add /
+    detected-but-unconfigured uses the required device dropdown.
+    """
+
+    def test_edit_mode_renders_readonly_source_not_device_dropdown(self):
+        body = func_body("renderSourceSection")
+        self.assertIn("camModal.mode === 'edit'", body)
+        self.assertIn("input.readOnly = true", body)
+        # device selector is only for the add path
+        self.assertIn("COMMON_FIELDS.device", body)
+
+    def test_edit_mode_never_blocks_validation(self):
+        body = func_body("validateCurrentSection")
+        # source (pre-filled when editing) is a plain text check, so a filled
+        # readonly value always validates - no required-dropdown trap
+        self.assertIn("String(el.value || '').trim() !== ''", body)
+
+
 if __name__ == "__main__":
     unittest.main()

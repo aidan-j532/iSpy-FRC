@@ -23,7 +23,7 @@ function ensureChart(id, label, unit) {
   charts[id] = new Chart(ctx, {
     type: 'line',
     data: { labels: [], datasets: [{ label: `${label} (${unit})`, data: [], borderColor: '#4c8bf5', pointRadius: 0, borderWidth: 2, tension: 0.1 }] },
-    options: { animation: false, scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { display: false } } },
+    options: { animation: false, responsive: true, maintainAspectRatio: false, scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { display: false } } },
   });
   return charts[id];
 }
@@ -35,6 +35,8 @@ function ensureCodeChart() {
     data: { labels: [], datasets: [] },
     options: {
       animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       scales: {
         x: { stacked: true, display: false },
