@@ -3,6 +3,7 @@ from pathlib import Path
 from flask import jsonify, render_template, request
 from werkzeug.utils import secure_filename
 from iSpy.web.Backend.WebModule import WebModule
+from iSpy.web.Backend.PluginStatus import require_local_or_token
 from iSpy.config.iSpyConfig import get_pipeline_settings
 from iSpy.vision.metadata import read_metadata, metadata_from_pt, write_metadata, metadata_path_for
 
@@ -87,7 +88,7 @@ class ModelsModule(WebModule):
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/models", "models_page", lambda: render_template("models.html"))
         flask_app.add_url_rule("/api/models", "api_models_list", self._list, methods=["GET"])
-        flask_app.add_url_rule("/api/models/upload", "api_models_upload", self._upload, methods=["POST"])
+        flask_app.add_url_rule("/api/models/upload", "api_models_upload", require_local_or_token(self._upload), methods=["POST"])
         flask_app.add_url_rule("/api/models/<name>", "api_models_detail", self._detail, methods=["GET"])
         flask_app.add_url_rule("/api/models/<name>", "api_models_delete", self._delete, methods=["DELETE"])
         flask_app.add_url_rule("/api/models/select", "api_models_select", self._select, methods=["POST"])
@@ -138,7 +139,7 @@ class ModelsModule(WebModule):
             return jsonify(error=space_err), 503
         try:
             f.save(str(tmp))
-            meta = metadata_from_pt(tmp)
+            meta = metadata_from_pt(tmp, trusted=False)
             write_metadata(metadata_path_for(dest), meta)
             tmp.rename(dest)
         except Exception as e:

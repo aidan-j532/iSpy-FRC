@@ -68,6 +68,20 @@ class DatasetsModule(WebModule):
         # datasets live flat: QuantizeDataset/<name>/img1.png ...
         return self.dataset_root / name
 
+    def _bundled_entries(self):
+        out = []
+        for entry in BUNDLED_DATASETS:
+            name = _validate_filename(str(entry.get("name", "")))
+            ds_dir = self._images_dir(name)
+            count = _count_images_in_dir(ds_dir)
+            out.append({
+                "name": name,
+                "description": str(entry.get("description", "")),
+                "installed": count > 0,
+                "image_count": count,
+            })
+        return out
+
     def _list(self):
         out = []
         if self.dataset_root.exists():
@@ -76,10 +90,9 @@ class DatasetsModule(WebModule):
                     continue
                 count = _count_images_in_dir(d)
                 out.append({"name": d.name, "image_count": count, "bundled": False})
-        bundled = self._bundled_list()
-        for ds in bundled.get("datasets", []):
+        for ds in self._bundled_entries():
             ds["bundled"] = True
-        out.extend(bundled.get("datasets", []))
+        out.extend(self._bundled_entries())
         return jsonify(datasets=out)
 
     def _create(self):
@@ -127,18 +140,7 @@ class DatasetsModule(WebModule):
         )
 
     def _bundled_list(self):
-        out = []
-        for entry in BUNDLED_DATASETS:
-            name = _validate_filename(str(entry.get("name", "")))
-            ds_dir = self._images_dir(name)
-            count = _count_images_in_dir(ds_dir)
-            out.append({
-                "name": name,
-                "description": str(entry.get("description", "")),
-                "installed": count > 0,
-                "image_count": count,
-            })
-        return jsonify(datasets=out)
+        return jsonify(datasets=self._bundled_entries())
 
     def _bundled_install(self):
         from iSpy.dataset.dataset import _download_release_images

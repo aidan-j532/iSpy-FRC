@@ -54,7 +54,7 @@ async function installBundled(name, btn) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || 'Download failed');
     showToast(`Installed ${j.downloaded} images into QuantizeDataset/${name}`, 'success');
-    loadBundled();
+    window.location.href = '/datasets?name=' + encodeURIComponent(name);
   } catch (e) {
     showToast(e.message || 'Download failed', 'error');
     btn.disabled = false;

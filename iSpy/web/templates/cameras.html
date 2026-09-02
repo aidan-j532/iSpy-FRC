@@ -132,9 +132,13 @@
     </div>
     <div id="model-picker-panel-upload" style="display:none;">
       <p class="picker-hint">Upload a .pt file from your computer. It will be copied into the Yolo Models library on this device.</p>
-      <div class="upload-row">
-        <input type="file" id="model-upload-input" accept=".pt" style="flex:1;">
-        <button onclick="uploadModelFromPicker()" id="model-upload-btn">Upload</button>
+      <div class="model-upload">
+        <span id="model-upload-name" class="model-file-name">No file chosen</span>
+        <button class="btn-secondary" id="model-upload-btn" onclick="$id('model-upload-input').click()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg>
+          Choose File
+        </button>
+        <input type="file" id="model-upload-input" accept=".pt" style="display:none;">
       </div>
       <div id="model-upload-status" class="upload-status" style="margin-top:8px;"></div>
     </div>
@@ -321,6 +325,7 @@ let currentRate = 1000;
 let knownCameras = new Map();
 const camerasConn = connTracker(2);
 let pipelineSchemas = {};
+let cameraSchemas = {};   // camera_type -> config_schema() from /api/camera_schemas
 
 const camModal = {
   mode: 'add',       // 'add' | 'edit'
@@ -727,6 +732,30 @@ async function loadPipelines() {
   }
 }
 
+async function loadCameraSchemas() {
+  // config_schema() per camera-source, straight from the backend (BUG 5) so
+  // the frontend does not hardcode a second copy that can silently drift from
+  // iSpy/vision/Cameras/*.config_schema(). Cached like pipelineSchemas.
+  try {
+    const data = await fetch('/api/camera_schemas').then(r => r.json());
+    cameraSchemas = (data.schemas || {});
+  } catch (e) {
+    console.warn('Failed to load camera schemas', e);
+    cameraSchemas = {};
+  }
+}
+
+function cameraFieldDef(key) {
+  // Backend config_schema() wins (labels/defaults/help/type); fall back to the
+  // hardcoded COMMON_FIELDS so the field still renders on older backends.
+  const camType = camModal && camModal.camera_type;
+  const schema = (camType && cameraSchemas[camType]) || {};
+  return (schema[key] && schema[key].hasOwnProperty('default')) ? {
+    label: schema[key].label, type: schema[key].type, default: schema[key].default,
+    help: schema[key].help, step: (schema[key].step != null) ? schema[key].step : undefined,
+  } : (COMMON_FIELDS[key] || { label: humanizeFieldName(key), type: 'text' });
+}
+
 function populatePipelineSelect() {
   const sel = $id(fieldId('pipeline'));
   if (!sel) return;
@@ -752,11 +781,25 @@ async function populateDevices(preselect) {
   sel.innerHTML = '<option value="" disabled>Detecting cameras...</option>';
   try {
     const data = await fetch('/api/cameras/discover').then(r => r.json());
-    const available = (data.devices || []).filter(d => !d.active);
+    // Edit mode must keep the currently-configured camera visible even though
+    // it is "active": list everything not in use plus the active device that
+    // matches the preselected source, then fall back to the raw configured
+    // value (rtsp:// streams, image files, a now-unplugged index) if discovery
+    // cannot see it at all.
+    const editing = preselect !== undefined && preselect !== null;
+    const want = String(preselect ?? '');
+    let available = (data.devices || []).filter(d => !d.active || (editing && String(d.path) === want));
+    if (editing && !available.some(d => String(d.path) === want)) {
+      available.push({
+        path: preselect,
+        name: `${preselect} (configured)`,
+        device_id: (camModal.data && camModal.data.device_id) ? camModal.data.device_id : '',
+      });
+    }
     sel.innerHTML = available.map(d =>
       `<option value="${escapeHtml(d.path)}" data-device-id="${escapeHtml(d.device_id || '')}">${escapeHtml(d.name)}${d.resolution ? ' (' + escapeHtml(d.resolution) + ')' : ''}</option>`
-    ).join('') || '<option value="" disabled>No unused cameras detected</option>';
-    if (preselect) sel.value = preselect;
+    ).join('') || '<option value="" disabled>' + (editing ? 'No matching camera detected' : 'No unused cameras detected') + '</option>';
+    if (editing) sel.value = want;
     sel.onchange = onDeviceChanged;
     onDeviceChanged();
   } catch (e) {
@@ -799,6 +842,7 @@ async function openCameraModal(mode, arg) {
     camModal.data = r.camera;
   }
   await loadPipelines();
+  await loadCameraSchemas();
 
   $id('camera-modal-title').textContent = mode === 'add' ? 'Add Camera' : 'Edit Camera';
   $id('camera-modal-note').style.display = mode === 'add' ? 'none' : '';
@@ -818,12 +862,14 @@ async function openCameraModal(mode, arg) {
   if (camTypeSel) {
     camTypeSel.onchange = () => {
       const newType = camTypeSel.value;
+      camModal.camera_type = newType;
       renderSourceSection(newType);
     };
     // Set initial value from data if editing
     if (mode === 'edit' && camModal.data && camModal.data.camera_type) {
       camTypeSel.value = camModal.data.camera_type;
     }
+    camModal.camera_type = camTypeSel.value;
     // Trigger initial render
     renderSourceSection(camTypeSel.value);
   }
@@ -857,12 +903,21 @@ async function openCameraModal(mode, arg) {
     const pipeline = camModal.pipeline || '';
     const warnEl = document.getElementById('pipeline-warning');
     if (pipeline === 'yolo_world') {
-      warnEl.className = 'pill warning-pill';
-      warnEl.textContent = 'YoloWorld not recommended for gameplay - inference latency may be high';
-      setTimeout(() => {
-        warnEl.textContent = '';
-        warnEl.className = 'pill warning-pill hidden';
-      }, 5000);
+      if (typeof showTimeWarning === 'function') {
+        showTimeWarning({
+          header: 'YOLO World selected',
+          duration: 5,
+          description: 'YOLO World is not recommended for gameplay - inference latency may be high.',
+          continueMessage: 'I understand',
+        });
+      } else {
+        warnEl.className = 'pill warning-pill';
+        warnEl.textContent = 'YOLO World not recommended for gameplay - inference latency may be high';
+        setTimeout(() => {
+          warnEl.textContent = '';
+          warnEl.className = 'pill warning-pill hidden';
+        }, 5000);
+      }
     } else {
       warnEl.className = 'pill warning-pill hidden';
     }
@@ -916,8 +971,9 @@ function renderSourceSection(cameraType) {
     const field = buildField('device', COMMON_FIELDS.device, 'common');
     newRow.appendChild(field);
     newRow.dataset.fieldKey = 'device';
-    // Populate devices after insertion
-    populateDevices().then(() => initSettingsFlow());
+    // Preselect the camera's current source when editing so it stays in the
+    // list and saving does not silently blank the source.
+    populateDevices(camModal.mode === 'edit' ? camModal.data.source : undefined).then(() => initSettingsFlow());
   } else if (cameraType === 'tello') {
     // Text input for Tello UDP source
     const field = buildField('source', COMMON_FIELDS.source, 'common');
@@ -931,6 +987,30 @@ function renderSourceSection(cameraType) {
     }
   }
   holder.insertBefore(newRow, camTypeRow.nextElementSibling);
+
+  // Tello connection details: the tello_* config keys are defined in
+  // COMMON_FIELDS and persisted top-level by the backend, but were never
+  // rendered, so the Tello defaults could not be changed from the UI. Render
+  // them as a dedicated section and drop it on re-render / type switch so the
+  // DOM (and the stepped settings flow) stays consistent.
+  const existingTello = body.querySelector('[data-tello-section]');
+  if (existingTello) existingTello.remove();
+  if (cameraType === 'tello') {
+    const sec = renderSection('Tello Connection', {});
+    sec.holder.dataset.telloSection = 'true';
+    ['tello_ip', 'tello_command_port', 'tello_video_port'].forEach(key => {
+      // Prefer the backend config_schema() (labels/defaults/step/help) so the
+      // UI follows iSpy/vision/Cameras/TelloCamera.config_schema(); the
+      // hardcoded COMMON_FIELDS entry is only a fallback for older backends.
+      const d = cameraFieldDef(key);
+      const v = (camModal.data && camModal.data[key] != null) ? camModal.data[key] : d.default;
+      const row = buildField(key, d, 'common');
+      sec.body.appendChild(row);
+      setFieldValue(key, v);
+    });
+    body.insertBefore(sec.holder, newRow.nextElementSibling);
+    initSettingsFlow();
+  }
 }
 
 function showFlowSection(holder) {
@@ -1089,12 +1169,25 @@ async function submitCameraModal() {
       payload.source = isNaN(Number(opt.value)) ? opt.value : Number(opt.value);
       payload.device_id = opt.dataset.deviceId || null;
     } else {
-      const src = readField('source');
-      payload.source = (src !== '' && !isNaN(Number(src))) ? Number(src) : src;
+      // The opencv edit path renders a device selector (same as add), so the
+      // configured source is kept in the select. Prefer it over the raw
+      // source field, which only exists for tello / free-text entries.
+      const deviceSel = $id(fieldId('device'));
+      if (deviceSel && deviceSel.value !== '') {
+        const opt = deviceSel.selectedOptions[0];
+        payload.source = isNaN(Number(opt.value)) ? opt.value : Number(opt.value);
+        if (opt.dataset.deviceId) payload.device_id = opt.dataset.deviceId;
+      } else {
+        const src = readField('source');
+        payload.source = (src !== '' && !isNaN(Number(src))) ? Number(src) : src;
+      }
     }
   } else if (camType === 'tello') {
     const src = readField('source');
     payload.source = src || '';
+    payload.tello_ip = readField('tello_ip');
+    payload.tello_command_port = readField('tello_command_port');
+    payload.tello_video_port = readField('tello_video_port');
   }
 
   const name = String(readField('name') || '').trim();
@@ -1305,6 +1398,12 @@ function setModelPickerTab(tab) {
   $id('model-picker-panel-upload').style.display = tab === 'upload' ? '' : 'none';
 }
 
+$id('model-upload-input').addEventListener('change', () => {
+  const f = $id('model-upload-input').files[0];
+  $id('model-upload-name').textContent = f ? f.name : 'No file chosen';
+  if (f) uploadModelFromPicker();
+});
+
 async function uploadModelFromPicker() {
   const input = $id('model-upload-input');
   const f = input.files[0];
@@ -1339,6 +1438,7 @@ async function openModelPicker(inputId) {
   modelPickerTarget = inputId;
   setModelPickerTab('device');
   $id('model-upload-input').value = '';
+  $id('model-upload-name').textContent = 'No file chosen';
   $id('model-upload-status').textContent = '';
   const list = $id('model-picker-list');
   list.innerHTML = '<div class="empty-state">Loading models...</div>';

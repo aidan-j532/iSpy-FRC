@@ -104,27 +104,45 @@ class C2f(nn.Module):
         return self.cv2(torch.cat(y, 1))
 
 
-class C3k(nn.Module):
-    """C3k2 YOLO block - a C2f variant with configurable inner block.
+class C3(nn.Module):
+    """CSP bottleneck with 3 convolutions (Ultralytics ``C3``).
 
-    YOLOv11/v26-family block: C2f with C3k inner blocks. When a flag is set,
-    uses C3k (Bottleneck with flag), otherwise plain Bottleneck.
+    Both ``cv1`` and ``cv2`` project the input to ``c_`` hidden channels; the
+    bottleneck chain ``m`` runs on ``cv1``'s branch and the ``cv3`` fuses the
+    concatenation. **Not** a C2f-style chunk topology: this structural split is
+    required so that pickled C3k instances (whose attributes follow C3) forward
+    correctly.
     """
 
-    def __init__(self, c1, c2, n=1, e=0.5, shortcut=True, g=1, d=False):
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         super().__init__()
-        self.c = int(c2 * e)
-        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1)
-        self.m = nn.ModuleList(
-            Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0)
-            for _ in range(n)
+        c_ = int(c2 * e)
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 1)
+        self.m = nn.Sequential(
+            *(Bottleneck(c_, c_, shortcut, g, k=((1, 1), (3, 3)), e=1.0) for _ in range(n))
         )
 
     def forward(self, x):
-        y = list(self.cv1(x).chunk(2, 1))
-        y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
+
+
+class C3k(C3):
+    """YOLOv11/v26 C3k block - Ultralytics' ``C3k(C3)`` variant.
+
+    Replaces the inherited bottleneck chain with ``k x k`` bottlenecks but keeps
+    the C3 topology (cv1/cv2 project to c_, cv3 fuses). The pickled instance
+    attributes of YOLO11/v26 pose/detect checkpoints follow exactly this
+    structure, so the forward rebuilt here must not assume any C2f-style split.
+    """
+
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k=3):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = nn.Sequential(
+            *(Bottleneck(c_, c_, shortcut, g, k=(k, k), e=1.0) for _ in range(n))
+        )
 
 
 class DWConv(Conv):
@@ -481,7 +499,7 @@ def _pose_nms(prediction, kpts, conf_thres, nc, num_keypoints, keypoint_dims):
             keep_idx = keep_idx[keep_order]
         det = torch.cat([x[keep_idx, :4], scores[keep_idx, None], cls[keep_idx, None]], 1)
         kp = kpts[xi, :, keep_idx]  # [nk, N_keep]
-        kp = kp.view(num_keypoints, keypoint_dims, -1).transpose(0, 2)  # [N_keep, K, dims]
+        kp = kp.view(num_keypoints, keypoint_dims, -1).permute(2, 0, 1)  # [N_keep, K, dims]
         dets[xi] = det
         kp_out[xi] = kp
 
@@ -665,6 +683,7 @@ def _register_shim():
         ns.Detect = Detect
         ns.PoseModel = PoseModel
         ns.Pose = Pose
+        ns.C3 = C3
         ns.C3k = C3k
         ns.C3k2 = C3k2
         ns.C2PSA = C2PSA
@@ -684,6 +703,7 @@ def _register_shim():
     modules_ns.Detect = Detect
     modules_ns.PoseModel = PoseModel
     modules_ns.Pose = Pose
+    modules_ns.C3 = C3
     modules_ns.C3k = C3k
     modules_ns.C3k2 = C3k2
     modules_ns.C2PSA = C2PSA

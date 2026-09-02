@@ -489,6 +489,29 @@ pre {
 .upload-row { display: flex; gap: 12px; align-items: center; }
 .upload-status { font-size: 0.8rem; color: var(--text-dim); }
 
+/* Model upload (styled file picker) */
+.model-upload {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.model-file-name {
+  flex: 1; min-width: 0;
+  font-size: 0.83rem; color: var(--text-dim);
+  font-family: var(--mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.model-upload .btn-secondary {
+  flex: none; padding: 7px 16px;
+  border: 1px dashed var(--border-light);
+  background: var(--bg-surface);
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
+}
+.model-upload .btn-secondary:hover {
+  border-color: var(--accent); color: var(--text); background: var(--accent-dim);
+}
+.model-upload .btn-secondary svg {
+  width: 15px; height: 15px; flex-shrink: 0; color: var(--accent);
+}
+
 /* Badges */
 .badge-ok {
   color: var(--ok); font-size: 0.68rem; font-weight: 600; margin-left: 6px;

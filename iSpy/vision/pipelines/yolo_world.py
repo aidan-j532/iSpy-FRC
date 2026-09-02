@@ -1,5 +1,9 @@
 import hashlib
+import json
 import logging
+import subprocess
+import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -348,40 +352,85 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
     def _reparameterize_world(self, weights: str) -> str | None:
         # NOTE: This is an optional *build-time* step (like the optimizer's
         # exporter). It bakes the text prompt's class vocabulary into a
-        # fixed-vocab .pt using Ultralytics (AGPL-3.0). The produced .pt is a
-        # plain fixed-vocab detector that the on-device loader (load_yolo_pt)
-        # consumes at runtime WITHOUT any Ultralytics dependency. Ultralytics
-        # is therefore only required in a build environment to produce the
-        # bundled/fixed weights, never for iSpy runtime inference.
-        try:
-            from ultralytics import YOLOWorld, YOLO  # optional build-time tool (AGPL)
-        except Exception as exc:  # pragma: no cover - runtime dependency fallback
-            self.logger.error(
-                "Ultralytics is required to reparameterize YOLO World weights "
-                "(build-time step; install the 'optimizer' extra or pre-bake "
-                "the classes into a .pt and bundle it as an asset): %s", exc,
-            )
-            return None
-
+        # fixed-vocab .pt. The produced .pt is a plain fixed-vocab detector
+        # that the on-device loader (load_yolo_pt) consumes at runtime WITHOUT
+        # any Ultralytics dependency; Ultralytics is only required in a build
+        # environment to produce the bundled/fixed weights, never for iSpy
+        # runtime inference. That AGPL build step is isolated in a subprocess
+        # (_yoloworld_reparam_worker) so the network-serving process never
+        # imports ultralytics.
         classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[:8]
         fixed = _WORLD_MODEL_DIR / "world" / f"{Path(weights).stem}-{classes_key}.pt"
         if fixed.exists() and fixed.stat().st_size >= 1024:
             return str(fixed)
 
-        fixed.parent.mkdir(parents=True, exist_ok=True)
         try:
-            model = YOLOWorld(weights, verbose=False)
-            model.set_classes(self.classes)
-            model.save(str(fixed))
-            try:
-                model = YOLO(str(fixed), task="detect", verbose=False, weights_only=True)
-            except TypeError:
-                model = YOLO(str(fixed), task="detect", verbose=False)
-            self.logger.info("Reparameterized YOLO World model -> %s (classes=%s)", fixed, self.classes)
-            return str(fixed)
+            self._reparameterize_world_subprocess(weights, fixed)
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
             self.logger.exception("Failed to reparameterize YOLO World model: %s", exc)
             return None
+
+        if not (fixed.exists() and fixed.stat().st_size >= 1024):
+            self.logger.error(
+                "Reparameterized YOLO World model missing/empty at %s", fixed,
+            )
+            return None
+
+        self.logger.info("Reparameterized YOLO World model -> %s (classes=%s)", fixed, self.classes)
+        return str(fixed)
+
+    def _reparameterize_world_subprocess(self, weights: str, output: Path) -> None:
+        # Mirror the optimizer's _convert_model_subprocess: write a JSON args
+        # file, run the isolated worker, read back <args>.result.json. All
+        # ultralytics imports live inside the subprocess.
+        outputs_dir = Path(__file__).resolve().parents[3] / "Outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+
+        args = {
+            "weights": weights,
+            "classes": list(self.classes),
+            "output_path": str(output),
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, dir=str(outputs_dir), encoding="utf-8"
+        ) as f:
+            args_path = f.name
+            json.dump(args, f)
+
+        result_path = args_path + ".result.json"
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "iSpy.boot._yoloworld_reparam_worker", args_path],
+                cwd=str(Path(__file__).resolve().parents[3]),
+                capture_output=True,
+                text=True,
+            )
+            if proc.stderr:
+                self.logger.debug("yoloworld reparam worker stderr: %s", proc.stderr.strip())
+            if proc.returncode != 0 or not Path(result_path).exists():
+                detail = ""
+                try:
+                    with open(result_path, encoding="utf-8") as rf:
+                        detail = json.load(rf).get("error", "")
+                except (OSError, ValueError):
+                    detail = proc.stderr.strip()
+                raise RuntimeError(
+                    f"yolo_world reparameterization subprocess failed (exit {proc.returncode}): {detail}"
+                )
+            with open(result_path, encoding="utf-8") as f:
+                result = json.load(f)
+            if "error" in result:
+                raise RuntimeError(f"yolo_world reparameterization failed: {result['error']}")
+            if result.get("result") != str(output):
+                raise RuntimeError(
+                    f"yolo_world reparameterization produced unexpected path {result.get('result')}"
+                )
+        finally:
+            for p in (args_path, result_path):
+                try:
+                    Path(p).unlink()
+                except OSError:
+                    pass
 
     def _load_model(self):
         if self._optimization_requested():

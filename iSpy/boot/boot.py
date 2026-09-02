@@ -375,6 +375,9 @@ def _wait_for_pipeline_ready(
 
 def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = False):
     _configure_quiet_logging()
+    logger.info(
+        "ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix
+    )
 
     # in iSpy/boot/boot.py, inside on_boot(), right after setup_files(fresh=True)
     # and iSpyConfig construction, before cleanup_missing_cameras:

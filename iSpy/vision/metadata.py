@@ -66,11 +66,11 @@ def set_calibration_keywords(pt_path: Path, keywords: list[str]) -> None:
     meta["calibration_keywords"] = list(keywords)
     write_metadata(metadata_path_for(pt_path), meta)
 
-def metadata_from_pt(pt_path: Path) -> Dict[str, Any]:
+def metadata_from_pt(pt_path: Path, trusted: bool = True) -> Dict[str, Any]:
     import torch
     from iSpy.vision.genericYolo import torch_load
 
-    ckpt = torch_load(pt_path)
+    ckpt = torch_load(pt_path, trusted=trusted)
     if isinstance(ckpt, dict) and "model" in ckpt:
         model = ckpt["model"]
     elif isinstance(ckpt, torch.nn.Module):

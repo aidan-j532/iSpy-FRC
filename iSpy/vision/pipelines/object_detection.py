@@ -94,7 +94,20 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                     _v = camera_config.get_pipeline_setting(_legacy)
             if _v is not None:
                 vm_cfg[_k] = _v
-        vm_filled = fill_missing_config(dict(vm_cfg))
+        # Malformed metadata sidecars (e.g. a non-integer nc) make
+        # fill_missing_config raise ValueError instead of degrading. Keep the
+        # camera alive: fall back to the raw config so the pipeline can still
+        # boot, and let the GenericYolo block below report / disable the model
+        # if it cannot be built at all.
+        try:
+            vm_filled = fill_missing_config(dict(vm_cfg))
+        except (ModelFileError, ValueError, TypeError, OSError) as e:
+            self.logger.error(
+                "Camera '%s': could not normalize model config %s - using raw "
+                "config; this camera will run without detection until fixed.",
+                camera_config.get("name", "?"), e,
+            )
+            vm_filled = dict(vm_cfg)
         self.margin = vm_filled.get("margin", vm_cfg.get("margin", 0))
         raw_min_conf = vm_filled.get("min_conf", vm_cfg.get("min_conf", 0.5))
         self.min_confidence = float(raw_min_conf) if raw_min_conf is not None else 0.5

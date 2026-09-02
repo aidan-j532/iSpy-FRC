@@ -4,11 +4,15 @@
 <h1>Model Manager</h1>
 
 <div class="card">
-  <div class="upload-row">
-    <input type="file" id="file-input" accept=".pt" style="flex:1;">
-    <button onclick="upload()" id="upload-btn">Upload</button>
+  <div class="model-upload">
+    <span id="file-name" class="model-file-name">No file chosen</span>
+    <button id="upload-btn" class="btn-secondary" onclick="document.getElementById('file-input').click()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg>
+      Choose File
+    </button>
+    <input type="file" id="file-input" accept=".pt" style="display:none;">
   </div>
-  <div id="upload-progress" style="display:none; margin-top:8px;">
+  <div id="upload-progress" style="display:none; margin-top:12px;">
     <div class="progress-bar-wrap">
       <div class="progress-bar" id="upload-bar" style="width:0%"></div>
     </div>
@@ -88,6 +92,13 @@ async function loadModels() {
     </tr>`).join('');
 }
 
+function resetUploadUI() {
+  document.getElementById('file-input').value = '';
+  document.getElementById('file-name').textContent = 'No file chosen';
+  document.getElementById('upload-btn').style.display = '';
+  document.getElementById('upload-progress').style.display = 'none';
+}
+
 async function upload() {
   const f = document.getElementById('file-input').files[0];
   if (!f) return;
@@ -139,9 +150,7 @@ async function upload() {
   }
 
   setTimeout(() => {
-    btn.style.display = '';
-    progress.style.display = 'none';
-    document.getElementById('file-input').value = '';
+    resetUploadUI();
     loadModels();
   }, 1500);
 }
@@ -206,6 +215,12 @@ document.getElementById('delete-modal').addEventListener('click', e => {
 });
 document.getElementById('delete-modal-step2').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeDeleteModalStep2();
+});
+
+document.getElementById('file-input').addEventListener('change', () => {
+  const f = document.getElementById('file-input').files[0];
+  document.getElementById('file-name').textContent = f ? f.name : 'No file chosen';
+  if (f) upload();
 });
 
 loadModels();

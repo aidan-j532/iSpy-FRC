@@ -29,6 +29,7 @@ build/
 Image/*.img
 .env
 .venv/
+.ispy-python
 iSpy_frc-*/
 /Config/iSpy_frc-*
 .svg

@@ -312,5 +312,203 @@ class TestModelMetadata(unittest.TestCase):
             self.assertIsNone(read_metadata(Path(d) / "nope.rknn"))
 
 
+# ─── Pose-checkpoint regression (BUG 1) ──────────────────────────────────────
+
+class TestPosePtRegression(unittest.TestCase):
+    """Real _default_pose.pt load + inference regression.
+
+    The import-time fake 'torch' shim above cannot load a real ``.pt``, so
+    this class swaps the REAL torch package back in (when the machine has it
+    installed) and re-imports yolo_pt against it. Guards the C3k topology
+    regression: a v26 pose checkpoint's C3k instances must forward through the
+    C3-style graph (cv1/cv2 -> c_ channels, cv3 fuses), not a C2f chunk.
+    Machines without torch skip the test.
+    """
+
+    _yolo_pt = None
+
+    @classmethod
+    def _locate_pose_model(cls):
+        repo_root = Path(__file__).resolve().parents[2]
+        for candidate in (
+            repo_root / "YoloModels" / "pytorch" / "_default_pose.pt",
+            repo_root / "iSpy" / "assets" / "_default_pose.pt",
+        ):
+            if candidate.exists():
+                return candidate
+        return None
+
+    @classmethod
+    def setUpClass(cls):
+        if cls._locate_pose_model() is None:
+            raise unittest.SkipTest("Required test model _default_pose.pt not found")
+
+        import importlib
+
+        # Restore the REAL torch (the fake above only satisfies import-time).
+        for _m in [m for m in list(sys.modules) if m == "torch" or m.startswith("torch.")]:
+            sys.modules.pop(_m, None)
+        try:
+            real_torch = importlib.import_module("torch")
+            if getattr(real_torch, "nn", None) is None:
+                raise RuntimeError("real torch missing torch.nn")
+            cls._yolo_pt = importlib.import_module("iSpy.vision.yolo_pt")
+            importlib.reload(cls._yolo_pt)
+        except Exception as exc:  # no real torch on this machine
+            raise unittest.SkipTest(f"real torch unavailable: {exc}")
+
+    def test_pose_pt_loads_and_infers(self):
+        model_path = self._locate_pose_model()
+        model = self._yolo_pt.load_yolo_pt(str(model_path), task="pose")
+        self.assertEqual(model.task, "pose")
+        self.assertEqual((model.num_keypoints, model.keypoint_dims), (17, 3))
+
+        rng = np.random.RandomState(20260901)
+        frame = (rng.rand(480, 640, 3) * 255).astype(np.uint8)
+        results = model([frame], imgsz=640, conf=0.001)
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertIsNotNone(
+            r.keypoints, "low-threshold run produced no candidate - pose decode never exercised"
+        )
+        kd = r.keypoints.data
+        self.assertEqual(kd.ndim, 3)
+        self.assertEqual(kd.shape[1:], (17, 3))
+
+
+# ─── validate_system() regression (BUG 2) ────────────────────────────────────
+
+class TestValidateSystemRegression(unittest.TestCase):
+    """A failing validator must flip validate_system() to False."""
+
+    def test_broken_model_file_path_flips_validate_system_to_false(self):
+        from iSpy.validations.validate_system import validate_system
+
+        old_cwd = os.getcwd()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.chdir, old_cwd)
+
+        bad_dir = Path(tmp.name) / "YoloModels" / "pytorch"
+        bad_dir.mkdir(parents=True)
+        (bad_dir / "corrupt model!.txt").write_bytes(b"junk")
+        os.chdir(tmp.name)
+
+        # validate_model_files() raises on the invalid path -> validate_system()
+        # returns False (never reaches run_unit_tests -> no recursion).
+        self.assertFalse(validate_system())
+
+
+# ─── object_detection pipeline config-normalization regression (BUG 6) ───────
+
+class _QuietLogging:
+    """Temporarily silence INFO/DEBUG logs during pipeline construction."""
+
+    def __init__(self):
+        self._stack = ExitStack()
+
+    def __enter__(self):
+        import logging
+        logger = logging.getLogger("iSpy")
+        self._stack.__enter__()
+        self._stack.enter_context(patch.object(logger, "debug", MagicMock()))
+        self._stack.enter_context(patch.object(logger, "info", MagicMock()))
+        self._stack.enter_context(patch.object(logger, "warning", MagicMock()))
+        return self
+
+    def __exit__(self, *exc):
+        return self._stack.__exit__(*exc)
+
+
+class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
+    """BUG 6: fill_missing_config raising ValueError must not skip the camera.
+
+    A malformed metadata sidecar (e.g. ``nc: not_an_int``) makes
+    fill_missing_config raise ValueError before the GenericYolo block. The
+    pipeline must still construct (self.model is None) so the camera shows an
+    error status instead of silently vanishing from self.cameras.
+    """
+
+    @staticmethod
+    def _restore_scipy_optimize(had_optimize, prior_optimize):
+        if had_optimize:
+            sys.modules["scipy.optimize"] = prior_optimize
+        else:
+            sys.modules.pop("scipy.optimize", None)
+
+    def _build_pipeline(self, model_path: str):
+        # unit_tests.py fakes scipy with only scipy.spatial at import time, but
+        # the object_detection -> calibration import chain needs scipy.optimize.
+        # Register a fake submodule (and clean it up) so the pipeline module
+        # imports on machines where real scipy is absent.
+        from iSpy import vision as _vision
+
+        scipy_optimize = types.ModuleType("scipy.optimize")
+        scipy_optimize.least_squares = MagicMock()
+        had_optimize = "scipy.optimize" in sys.modules
+        prior_optimize = sys.modules.get("scipy.optimize")
+        sys.modules["scipy.optimize"] = scipy_optimize
+        self.addCleanup(self._restore_scipy_optimize, had_optimize, prior_optimize)
+
+        from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+        from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+
+        config = iSpyConfig()
+        cam_entry = {
+            "name": "bug6_cam",
+            "source": 99,
+            "fps_cap": 1000,
+            "yaw": 0, "pitch": 0, "height": 1.0,
+            "x": 0, "y": 0,
+            "grayscale": False,
+            "subsystem": "test",
+            "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
+            "pipeline": {
+                "name": "object_detection",
+                "settings": {"vision_model": {"file_path": model_path, "task": "detect"}},
+            },
+        }
+        config.set("camera_configs", {"bug6_cam": cam_entry})
+        cam_cfg = iSpyCameraConfig(cam_entry)
+        with _QuietLogging():
+            return ObjectDetectionPipeline(cam_cfg, config)
+
+    def test_malformed_sidecar_valueerror_still_constructs_with_model_none(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        tmp_dir = Path(tmp.name)
+
+        weight = tmp_dir / "corrupt.pt"
+        weight.write_bytes(b"\x00" * 512)  # under the load floor -> ModelFileError later
+
+        sidecar = tmp_dir / "corrupt_metadata.yaml"
+        sidecar.write_text("nc: not_an_int\n", encoding="utf-8")
+
+        try:
+            camera = self._build_pipeline(str(weight))
+        except ValueError as e:
+            self.fail(
+                "ObjectDetectionPipeline.__init__ must not propagate the "
+                f"fill_missing_config ValueError (BUG 6); got: {e}"
+            )
+
+        # the camera should surface as errored, not disappear entirely
+        self.assertIsNone(camera.model)
+        ready, status = camera.is_ready()
+        self.assertFalse(ready)
+        self.assertTrue(status.startswith("error:"), f"unexpected status: {status!r}")
+
+    def test_good_sidecar_constructs_ready(self):
+        # sanity: with NO sidecar and a missing file (fill_missing_config short
+        # circuits on os.path.exists -> returns config as-is), the pipeline
+        # still constructs with model None + error status, so a missing model
+        # does not take down the camera either.
+        camera = self._build_pipeline("does/not/exist.pt")
+        self.assertIsNone(camera.model)
+        ready, status = camera.is_ready()
+        self.assertFalse(ready)
+        self.assertTrue(status.startswith("error:"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

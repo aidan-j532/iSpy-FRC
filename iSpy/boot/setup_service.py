@@ -7,6 +7,13 @@ import hashlib
 import getpass
 from pathlib import Path
 
+# make the iSpy package importable even when this file is run directly (not
+# via `pip install -e .` / `python -m iSpy.boot.*`)
+if str(Path(__file__).resolve().parents[1]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from iSpy.boot._venv import record_python
+
 SERVICE_NAME = "iSpy"
 FIRST_BOOT_SERVICE_NAME = "ispy-first-boot"
 
@@ -211,9 +218,22 @@ def get_platform():
         return "linux_systemd"
     return "linux_other"
 
+
+def _make_python() -> str:
+    """Capture the interpreter this install will bake into the units.
+
+    Also persists it to the repo-root marker so watchdog.py and
+    service_daemon.py can spawn children with the exact same interpreter
+    later, instead of independently re-resolving sys.executable.
+    """
+    python = sys.executable
+    record_python(python)
+    return python
+
+
 def setup_first_boot_service(project_root: str | None = None) -> None:
     """Write and enable the ispy-first-boot.service oneshot unit."""
-    python = sys.executable
+    python = _make_python()
     workdir = project_root or os.getcwd()
 
     unit = f"""[Unit]
@@ -280,7 +300,7 @@ def _service_user() -> str:
 
 def setup_systemd(script_path, project_root: str | None = None):
     user = _service_user()
-    python = sys.executable
+    python = _make_python()
     workdir = project_root or os.getcwd()
 
     service = f"""[Unit]
@@ -371,7 +391,7 @@ def _relaunch_as_admin_windows(cmd):
 
 
 def setup_windows(script_path):
-    python = sys.executable
+    python = _make_python()
     script_path = os.path.abspath(script_path)
 
     # Register as a scheduled task that runs at startup
@@ -420,7 +440,7 @@ def setup_windows(script_path):
 
 
 def setup_macos(script_path):
-    python = sys.executable
+    python = _make_python()
     script_path = os.path.abspath(script_path)
     plist_path = os.path.expanduser(f"~/Library/LaunchAgents/com.{SERVICE_NAME}.plist")
 
@@ -464,7 +484,7 @@ def setup(script_path: str, project_root: str | None = None):
         setup_macos(script_path)
     else:
         print("Unsupported platform (no systemd detected). Set up a cron job manually:")
-        print(f"  @reboot {sys.executable} {os.path.abspath(script_path)}")
+        print(f"  @reboot {_make_python()} {os.path.abspath(script_path)}")
 
 if __name__ == "__main__":
     setup("watchdog.py iSpy/boot/service_daemon.py")

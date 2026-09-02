@@ -9,19 +9,185 @@ import queue
 import torch
 import warnings
 from pathlib import Path
+import importlib
+import functools
+import pickletools
+import sys
+import zipfile
 
 
-def torch_load(path):
+def torch_load(path, trusted: bool = True):
     """Load an Ultralytics-style ``.pt`` checkpoint without Ultralytics.
 
     Registers the dependency-free namespace shim (see :mod:`iSpy.vision.yolo_pt`)
     so ``torch.load`` can reconstruct the model graph from our re-implemented
     blocks, then returns the raw loaded object (dict or ``nn.Module``) exactly as
     :func:`load_yolo_pt` does internally.
+
+    ``trusted`` selects how far the pickle is allowed to run:
+
+    * ``True`` (default) - the historical behaviour: ``torch.load`` with
+      ``weights_only=False``, i.e. full pickle execution. This is appropriate
+      for checkpoints already sitting on disk, where the operator (or the
+      train/export toolchain that produced the file) is the party executing.
+      The runtime inference path keeps using this.
+    * ``False`` - restricted unpickling via ``weights_only=True``. The
+      checkpoint is first scanned for the pickled globals it references; each
+      one is allowed **only** if it resolves to a dependency-free shim class,
+      a plain ``torch.nn`` data container/layer, or a torch builtin. Arbitrary
+      pickle payloads (``__reduce__`` gadgets that reach ``os.system`` / ``eval``
+      / ``subprocess`` / ``__import__``, ...) are never in that set and raise a
+      ``pickle.UnpicklingError`` instead of executing. This is what the model
+      *upload* path uses, so a user-supplied ``.pt`` bytes cannot run code on
+      the web server before it is validated.
     """
     from iSpy.vision.yolo_pt import register_shim
     register_shim()
+    if not trusted:
+        entries = _safe_globals_for_checkpoint(_checkpoint_pickle_bytes(path))
+        if entries:
+            torch.serialization.add_safe_globals(entries)
+        return torch.load(str(path), map_location="cpu", weights_only=True)
     return torch.load(str(path), map_location="cpu", weights_only=False)
+
+
+def _checkpoint_pickle_bytes(path) -> bytes:
+    """Return the pickle payload of a ``.pt`` file.
+
+    torch-zip archives keep the object graph in a ``data.pkl`` entry; legacy
+    single-file checkpoints are the pickle (plus possibly trailing tensor data)
+    outright. Anything we cannot read as a checkpoint is rejected.
+    """
+    if zipfile.is_zipfile(str(path)):
+        with zipfile.ZipFile(str(path)) as zf:
+            entry = next((n for n in zf.namelist() if n.endswith("data.pkl")), None)
+            if entry is None:
+                raise RuntimeError("checkpoint archive has no data.pkl entry")
+            return zf.read(entry)
+    try:
+        return Path(path).read_bytes()
+    except OSError as e:
+        raise RuntimeError(f"checkpoint could not be read: {e}") from e
+
+
+def _safe_globals_for_checkpoint(raw: bytes):
+    """Build the ``(obj, full_path)`` allowlist entries a checkpoint needs.
+
+    We sweep the pickle opcodes for every ``GLOBAL`` it references and allow
+    each one only if it is:
+
+    * already handled by ``torch``'s own ``weights_only`` defaults (which are
+      safe by construction), or
+    * ``builtins.getattr`` (used by some YOLOv11-family checkpoints; see
+      ``_resolve_safe_global`` for why this is a controlled exception), or
+    * a dependency-free shim class, matched by its ``ultralytics.*`` namespace
+      (see ``_resolve_safe_global``), or
+    * a plain ``torch.nn`` class resolved from the installed torch.
+
+    Anything else fails the upload. The returned list is passed to
+    :func:`torch.serialization.add_safe_globals` and torch's restricted
+    unpickler then refuses to touch a single other global - the pickle can only
+    ever reach the objects we vetted above.
+    """
+    try:
+        globals_in_file = set()
+        waiting_stack_global = 0
+        stack_global_parts = ["", ""]
+        for op, arg, _ in pickletools.genops(raw):
+            if op.name == "GLOBAL":
+                path = arg if isinstance(arg, str) else arg.decode("utf-8")
+                module, sep, name = path.partition(" ")
+                if not sep:
+                    module, sep, name = path.partition(".")
+                if sep:
+                    globals_in_file.add((module.strip(), name.strip()))
+            elif op.name == "STACK_GLOBAL":
+                # protocol-4+ pickles emit STACK_GLOBAL and then push the two
+                # strings (module, name) for the referenced global.
+                waiting_stack_global = 2
+            elif waiting_stack_global and isinstance(arg, str):
+                stack_global_parts[2 - waiting_stack_global] = arg
+                waiting_stack_global -= 1
+                if waiting_stack_global == 0:
+                    globals_in_file.add(
+                        (stack_global_parts[0].strip(), stack_global_parts[1].strip())
+                    )
+    except Exception as e:
+        raise RuntimeError(f"checkpoint could not be scanned safely: {e}") from e
+
+    entries = []
+    for (module, name) in sorted(globals_in_file):
+        obj = _resolve_safe_global(module, name)
+        if obj is _ALLOWED_BY_DEFAULT:
+            continue
+        entries.append((obj, f"{_torch_global_path(module)}.{name}"))
+    return entries
+
+
+class _AllowedByDefault:
+    pass
+
+
+_ALLOWED_BY_DEFAULT = _AllowedByDefault()
+
+
+@functools.lru_cache(maxsize=1)
+def _torch_default_allowed() -> set:
+    from torch._weights_only_unpickler import _get_allowed_globals
+
+    return set(_get_allowed_globals())
+
+
+def _torch_global_path(module: str) -> str:
+    from torch._utils import IMPORT_MAPPING
+
+    return IMPORT_MAPPING.get(module, module)
+
+
+def _resolve_safe_global(module: str, name: str):
+    """Resolve one pickled global to an object we permit (or a sentinel)."""
+    from iSpy.vision.yolo_pt import register_shim
+    from torch._utils import NAME_MAPPING, IMPORT_MAPPING
+
+    module = IMPORT_MAPPING.get(module, module)
+    if (module, name) in NAME_MAPPING:
+        module, name = NAME_MAPPING[(module, name)]
+    full_path = f"{module}.{name}"
+
+    if full_path in _torch_default_allowed():
+        return _ALLOWED_BY_DEFAULT
+
+    if module == "builtins" and name == "getattr":
+        # ``getattr`` only ever read attributes off objects the sandbox already
+        # produced (shim classes / torch.nn containers / torch builtins). It is
+        # not itself a code-execution gadget here: torch still refuses REDUCE /
+        # NEWOBJ / BUILD on anything that is not allowlisted, and no reachable
+        # object exposes a side-effecting attribute-get, so offering ``getattr``
+        # cannot escalate to arbitrary calls.
+        return getattr
+
+    if module.startswith("ultralytics"):
+        register_shim()
+        mod = sys.modules.get(module)
+        obj = None if mod is None else getattr(mod, name, None)
+        if obj is not None and isinstance(obj, type) and obj.__module__.startswith("iSpy.vision.yolo_pt"):
+            return obj
+        raise RuntimeError(f"checkpoint references non-shim ultralytics global {full_path}")
+
+    if module.startswith("torch.nn"):
+        try:
+            obj = getattr(importlib.import_module(module), name)
+        except (ImportError, AttributeError) as e:
+            raise RuntimeError(
+                f"checkpoint references unresolved torch.nn global {full_path}"
+            ) from e
+        if isinstance(obj, type):
+            return obj
+        raise RuntimeError(
+            f"checkpoint references non-class torch.nn global {full_path}"
+        )
+
+    raise RuntimeError(f"checkpoint references non-allowlisted global {full_path}")
 
 
 class ModelFileError(RuntimeError):

@@ -54,10 +54,12 @@ def run_unit_tests() -> bool:
 
     import unittest
     import logging
-    # Suppress logging during unit tests to avoid spam in boot output
-    root_logger = logging.getLogger()
-    original_level = root_logger.level
-    root_logger.setLevel(logging.ERROR)
+    # Suppress logging during unit tests to avoid spam in boot output.
+    # Setting the root level is not enough: iSpy.* loggers get an explicit
+    # INFO level in boot's quiet-logging setup, so their records ignore the
+    # root threshold. logging.disable() is a global tripwire that every
+    # logger respects regardless of its own level.
+    logging.disable(logging.ERROR)
     try:
         loader = unittest.TestLoader()
         suite = loader.discover(
@@ -69,7 +71,7 @@ def run_unit_tests() -> bool:
             result = runner.run(suite)
         return result.wasSuccessful()
     finally:
-        root_logger.setLevel(original_level)
+        logging.disable(logging.NOTSET)
 
 def get_addon_setting(config: dict, addon_type: str, addon_name: str,
                       key: str, default=None):

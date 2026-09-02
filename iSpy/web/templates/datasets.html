@@ -3,6 +3,13 @@
 {% block content %}
 <h1>Dataset Manager</h1>
 
+<style>
+  .tree-folder { display:flex; align-items:center; gap:6px; font-size:0.78rem; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px; }
+  .tree-folder svg { width:14px; height:14px; flex:none; color:var(--accent); }
+  .tree-item { margin-left:18px; padding-left:12px; border-left:1px solid var(--border-light); }
+  .tree-corner { color:var(--text-muted); font-family:var(--mono); font-size:0.85rem; margin-right:4px; }
+</style>
+
 <div id="datasets-view">
   <div class="controls-bar" style="margin-bottom:16px;">
     <input type="text" id="new-dataset-name" placeholder="New dataset name..." style="flex:1; min-width:180px;">
@@ -11,22 +18,27 @@
   </div>
   
   <div class="sidebar-sections">
-    <!-- User datasets -->
+    <div class="tree-folder">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+      Datasets
+    </div>
     <div id="datasets-grid" class="dataset-grid">
       <div class="card"><div class="skeleton-block"></div><div class="skeleton-block" style="width:60%;"></div></div>
       <div class="card"><div class="skeleton-block"></div><div class="skeleton-block" style="width:60%;"></div></div>
     </div>
     
-    <!-- Bundled datasets dropdown -->
-    <details class="dataset-section" open>
-      <summary style="cursor:pointer; font-size:0.9rem; margin-top:8px; color:var(--text);">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path><path d="M6 15l6-6 6-6"></path></svg>
-        Pre-Bundled Datasets
-      </summary>
-      <div class="dataset-grid" id="bundled-grid">
-        <div class="empty-state" style="padding:32px;">Loading bundled datasets...</div>
-      </div>
-    </details>
+    <div class="tree-item">
+      <details class="dataset-section" open>
+        <summary style="cursor:pointer; font-size:0.9rem; margin-top:8px; color:var(--text);">
+          <span class="tree-corner">&#9492;&#9472;</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path><path d="M6 15l6-6 6-6"></path></svg>
+          Pre-Bundled Datasets
+        </summary>
+        <div class="dataset-grid" id="bundled-grid">
+          <div class="empty-state" style="padding:32px;">Loading bundled datasets...</div>
+        </div>
+      </details>
+    </div>
   </div>
 </div>
 
@@ -239,10 +251,8 @@ async function installBundled(name, btn) {
     if (!r.ok) throw new Error(j.error || 'Download failed');
     showToast(`Installed ${j.downloaded} images into QuantizeDataset/${name}`, 'success');
     loadDatasets();
-    if (btn && typeof btn !== 'undefined') {
-      btn.disabled = false;
-      btn.textContent = 'Re-download';
-    }
+    openDataset(name);
+    return;
   } catch (e) {
     showToast(e.message || 'Download failed', 'error');
     if (btn) { btn.disabled = false; btn.textContent = original; }
@@ -250,5 +260,7 @@ async function installBundled(name, btn) {
 }
 
 loadDatasets();
+const dsParam = new URLSearchParams(location.search).get('name');
+if (dsParam) openDataset(dsParam);
 </script>
 {% endblock %}

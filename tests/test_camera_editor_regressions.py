@@ -42,5 +42,32 @@ class TestSectionFlowValidation(unittest.TestCase):
         self.assertIn("def.nullable || String(el.value || '').trim() !== ''", body)
 
 
+class TestTelloSchemaWiring(unittest.TestCase):
+    """BUG 5: Tello connection fields are rendered, captured, and schema-driven."""
+
+    def test_render_source_section_renders_tello_fields(self):
+        body = func_body("renderSourceSection")
+        # the three Tello fields must be built/rendered (not dead data)
+        for key in ("tello_ip", "tello_command_port", "tello_video_port"):
+            self.assertIn(key, body)
+
+    def test_tello_fields_prefer_backend_schema(self):
+        body = func_body("renderSourceSection")
+        self.assertIn("cameraFieldDef(key)", body)
+
+    def test_submit_captures_tello_fields(self):
+        body = func_body("submitCameraModal")
+        for key in ("tello_ip", "tello_command_port", "tello_video_port"):
+            self.assertIn(f"payload.{key} = readField('{key}')", body)
+
+    def test_load_camera_schemas_hits_backend_endpoint(self):
+        body = func_body("loadCameraSchemas")
+        self.assertIn("'/api/camera_schemas'", body)
+
+    def test_camera_field_def_falls_back_to_common_fields(self):
+        body = func_body("cameraFieldDef")
+        self.assertIn("COMMON_FIELDS[key]", body)
+
+
 if __name__ == "__main__":
     unittest.main()

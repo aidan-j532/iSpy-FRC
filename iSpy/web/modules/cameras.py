@@ -479,6 +479,7 @@ class CamerasModule(WebModule):
         flask_app.add_url_rule("/api/cameras/tuning/<cam_name>", "api_cameras_tuning_get", self._tuning_get, methods=["GET"])
         flask_app.add_url_rule("/api/cameras/tuning/<cam_name>", "api_cameras_tuning_set", self._tuning_set, methods=["POST"])
         flask_app.add_url_rule("/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines)
+        flask_app.add_url_rule("/api/camera_schemas", "api_camera_schemas", self._camera_schemas)
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>", "api_cameras_calibration_get", self._calibration_get, methods=["GET"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>", "api_cameras_calibration_reset", self._calibration_reset, methods=["DELETE"])
         flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/focal", "api_cameras_calibration_focal", self._calibration_focal, methods=["POST"])
@@ -811,6 +812,18 @@ class CamerasModule(WebModule):
 
     def _vision_pipelines(self):
         return jsonify(pipelines=_build_vision_pipeline_payloads())
+
+    def _camera_schemas(self):
+        # Serve each camera-source's config_schema() straight from the backend
+        # so the frontend never hardcodes a second copy that can drift (BUG 5).
+        from iSpy.vision.Cameras import get_camera_classes
+        schemas = {}
+        for cam_type, cls in get_camera_classes().items():
+            try:
+                schemas[cam_type] = cls.config_schema() or {}
+            except Exception:
+                schemas[cam_type] = {}
+        return jsonify(schemas=schemas)
 
     # ------------------------------------------------------------------
     # Camera calibration (web wizard)
