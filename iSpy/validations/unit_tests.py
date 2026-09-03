@@ -85,6 +85,106 @@ sys.modules["scipy"] = scipy_mod
 sys.modules["scipy.spatial"] = scipy_spatial
 sys.modules["scipy.spatial.transform"] = scipy_transform
 
+# Fake tensorrt (for .engine runtime tests)
+trt_mod = types.ModuleType("tensorrt")
+
+
+class _FakeTensorIOMode:
+    INPUT = "input"
+    OUTPUT = "output"
+
+
+class _FakeEngineContext:
+    """Mimics trt.IExecutionContext just enough for GenericYolo._run_engine."""
+
+    def __init__(self, shapes, output_name):
+        self._shapes = dict(shapes)
+        self._output_name = output_name
+
+    def set_tensor_shape(self, name, shape):
+        self._shapes[name] = tuple(shape)
+
+    def get_tensor_shape(self, name):
+        return self._shapes.get(name)
+
+    def execute_v2(self, bindings):
+        # bindings layout is [input_ptr, output_ptr]; the output buffer was
+        # pre-initialized to an empty (1, 0, F) tensor, so nothing to write.
+        pass
+
+
+class _FakeEngine:
+    def __init__(self, input_name, output_name, feat_w):
+        self._input_name = input_name
+        self._output_name = output_name
+        self._feat_w = feat_w
+        self.num_io_tensors = 2
+
+    def get_tensor_name(self, idx):
+        return self._input_name if idx == 0 else self._output_name
+
+    def get_tensor_mode(self, name):
+        return (
+            _FakeTensorIOMode.INPUT
+            if name == self._input_name
+            else _FakeTensorIOMode.OUTPUT
+        )
+
+    def create_execution_context(self):
+        shapes = {
+            self._input_name: (1, 3, 640, 640),
+            self._output_name: (1, 0, self._feat_w),
+        }
+        return _FakeEngineContext(shapes, self._output_name)
+
+
+class _FakeTensorRTRuntime:
+    def __init__(self, *args, **kwargs):
+        self.engine = _FakeEngine("images", "output0", 5)
+
+    def deserialize_cuda_engine(self, data):  # noqa: ARG001
+        return self.engine
+
+
+trt_mod.Runtime = _FakeTensorRTRuntime
+trt_mod.Logger = MagicMock()
+trt_mod.TensorIOMode = _FakeTensorIOMode
+sys.modules["tensorrt"] = trt_mod
+
+# Fake openvino (for .xml runtime tests)
+ov_mod = types.ModuleType("openvino")
+
+
+class _FakeOutput:
+    def __init__(self, name):
+        self._name = name
+
+    def get_any_name(self):
+        return self._name
+
+
+class _FakeCompiledModel:
+    def __init__(self, feat_w):
+        self._feat_w = feat_w
+        self.inputs = [_FakeOutput("images")]
+
+    def __call__(self, feed):  # noqa: ARG001
+        return {"output0": np.empty((1, 0, self._feat_w), dtype=np.float32)}
+
+
+class _FakeOpenVINOCore:
+    available_devices = ["CPU"]
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def compile_model(self, model_path, device="AUTO", *args, **kwargs):  # noqa: ARG001
+        return _FakeCompiledModel(5)
+
+
+ov_mod.Core = _FakeOpenVINOCore
+sys.modules["openvino"] = ov_mod
+
 # ─── Modules under test ──────────────────────────────────────────────────────
 
 from iSpy.config.AutoOpt import SUPPORTED_FORMATS, recommend_format  # noqa: E402
@@ -125,11 +225,12 @@ def _recommend(**overrides):
     import iSpy.config.AutoOpt as ao
 
     flags = _no_hw_flags()
+    runtime_supported = overrides.pop("runtime_supported", True)
     flags.update(overrides)
     with ExitStack() as stack:
         for name, value in flags.items():
             stack.enter_context(patch.object(ao, name, return_value=value))
-        return ao.recommend_format()
+        return ao.recommend_format(runtime_supported=runtime_supported)
 
 
 # ─── AutoOpt tests ───────────────────────────────────────────────────────────
@@ -173,6 +274,43 @@ class TestAutoOpt(unittest.TestCase):
 
     def test_no_special_hardware_defaults_to_onnx(self):
         self.assertEqual(_recommend(), "onnx")
+
+    def test_runtime_unsupported_skips_coreml_on_apple_silicon(self):
+        # Bug 7: CoreML has no runtime inference, so a load-and-run caller
+        # must NOT be handed 'coreml' even on Apple hardware.
+        self.assertEqual(
+            _recommend(has_apple_silicon=True, runtime_supported=False), "onnx"
+        )
+        self.assertEqual(
+            _recommend(has_apple_silicon=True, runtime_supported=True), "coreml"
+        )
+
+    def test_runtime_unsupported_skips_engine_on_nvidia(self):
+        self.assertEqual(
+            _recommend(has_nvidia=True, has_tensorrt=True, runtime_supported=False),
+            "onnx",
+        )
+        self.assertEqual(
+            _recommend(has_nvidia=True, has_tensorrt=True, runtime_supported=True),
+            "engine",
+        )
+
+    def test_runtime_unsupported_skips_openvino_on_intel(self):
+        self.assertEqual(
+            _recommend(has_intel_gpu=True, runtime_supported=False), "onnx"
+        )
+        self.assertEqual(
+            _recommend(has_intel_gpu=True, runtime_supported=True), "openvino"
+        )
+
+    def test_runtime_unsupported_keeps_cpu_backends(self):
+        # rknn/tflite/tpu remain valid runtime formats and shouldn't be skipped.
+        self.assertEqual(
+            _recommend(has_rockchip_npu=True, runtime_supported=False), "rknn"
+        )
+        self.assertEqual(
+            _recommend(has_edge_tpu=True, runtime_supported=False), "tflite"
+        )
 
 
 # ─── Box / Results tests ─────────────────────────────────────────────────────
@@ -263,6 +401,91 @@ class TestGenericYoloModelSelection(unittest.TestCase):
         w.model.release = MagicMock()
         w.release()
         w.model.release.assert_called_once()
+
+
+# ─── Compiled formats (.engine / .xml) runtime (Bug 7) ──────────────────────
+
+class TestCompiledFormatGenericYolo(unittest.TestCase):
+
+    def _complete_cfg(self, path):
+        return {
+            "file_path": path,
+            "task": "detect",
+            "num_classes": 1,
+            "input_size": [640, 640],
+            "frame_batches": 1,
+            "min_conf": 0.25,
+            "input": {
+                "layout": "nchw",
+                "dtype": "float32",
+                "letterbox": False,
+                "normalize": True,
+                "scale": 255.0,
+            },
+            "output": {
+                "format": "raw",
+                "layout": "features_first",
+                "quantization": "none",
+                "box_format": "cxcywh",
+                "score_mode": "multi_class",
+                "scores_are_logits": False,
+                "apply_software_nms": False,
+                "nms_iou": 0.45,
+            },
+        }
+
+    def test_engine_constructs_and_predicts_results(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        eng = os.path.join(tmp.name, "model.engine")
+        with open(eng, "wb") as f:
+            f.write(b"\x00" * 4096)
+
+        w = GenericYolo(self._complete_cfg(eng))
+        self.assertEqual(w.model_type, "engine")
+
+        res = w.predict(make_frame())
+        self.assertIsInstance(res, Results)
+        self.assertEqual(res.boxes, [])
+
+    def test_engine_requires_tensorrt(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        eng = os.path.join(tmp.name, "model.engine")
+        with open(eng, "wb") as f:
+            f.write(b"\x00" * 4096)
+
+        # tensorrt is faked at module load above; null it out in sys.modules so
+        # the in-method `import tensorrt` fails, and assert GenericYolo surfaces
+        # the ImportError from _load_engine.
+        with self.assertRaises(ImportError):
+            with patch.dict(sys.modules, {"tensorrt": None}):
+                GenericYolo(self._complete_cfg(eng))
+
+    def test_openvino_dir_constructs_and_predicts_results(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        ir_dir = os.path.join(tmp.name, "model_openvino_model")
+        os.makedirs(ir_dir, exist_ok=True)
+        with open(os.path.join(ir_dir, "model_openvino_model.xml"), "wb") as f:
+            f.write(b"\x00" * 4096)
+
+        w = GenericYolo(self._complete_cfg(ir_dir))
+        self.assertEqual(w.model_type, "openvino")
+
+        res = w.predict(make_frame())
+        self.assertIsInstance(res, Results)
+        self.assertEqual(res.boxes, [])
+
+    def test_openvino_single_xml_constructs(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        xml_path = os.path.join(tmp.name, "net_openvino_model.xml")
+        with open(xml_path, "wb") as f:
+            f.write(b"\x00" * 4096)
+
+        w = GenericYolo(self._complete_cfg(xml_path))
+        self.assertEqual(w.model_type, "openvino")
 
 
 # ─── RKNN / ONNX metadata round-trip ─────────────────────────────────────────

@@ -194,7 +194,20 @@ def resolve_openvino_device(requested_device=None) -> str:
     return "intel:cpu"
 
 
-def recommend_format(ignore_dependencies: bool = False) -> str:
+def recommend_format(
+    ignore_dependencies: bool = False, runtime_supported: bool = True
+) -> str:
+    # runtime_supported:
+    #   True  - caller wants the best accelerator *artifact to build/convert*
+    #           (optimizer, dependency installer). Compiler-backed formats
+    #           (engine/openvino/coreml) are all valid picks.
+    #   False - caller only wants a format it can *load and run inference on*
+    #           right now. engine/openvino/coreml are skipped so the pick falls
+    #           through to the next best thing (e.g. onnx on CPU), because
+    #           GenericYolo may not expose a runtime path for every compiled
+    #           format. Only coreml stays unimplemented after Bug 7, but the
+    #           engine/openvino guard keeps the contract honest if a future
+    #           backend regresses either.
     # 1. embedded NPUs / TPUs
     if has_rockchip_npu():
         logger.info("Rockchip NPU detected - using RKNN format for hardware acceleration.")
@@ -207,7 +220,7 @@ def recommend_format(ignore_dependencies: bool = False) -> str:
         return "tflite"
 
     # 2. apple ecosystem
-    if has_apple_silicon():
+    if has_apple_silicon() and runtime_supported:
         logger.info("Apple Silicon detected - using Core ML format for hardware acceleration.")
         return "coreml"
 
@@ -218,22 +231,22 @@ def recommend_format(ignore_dependencies: bool = False) -> str:
 
     # 4. nvidia - tensorrt engine > onnx for max fps
     if has_nvidia():
-        if has_tensorrt() or ignore_dependencies:
+        if (has_tensorrt() or ignore_dependencies) and runtime_supported:
             logger.info(
                 "NVIDIA GPU detected - using .engine format for maximum FPS."
             )
             return "engine"
         logger.info(
-            "NVIDIA GPU detected but TensorRT not found - falling back to ONNX "
-            "(install tensorrt for a significant FPS boost)."
+            "NVIDIA GPU detected but .engine runtime unsupported - falling back "
+            "to ONNX (install tensorrt for a significant FPS boost)."
         )
         return "onnx"
 
     # 5. desktop hardware
-    if os.name != "nt" and has_intel_vpu():
+    if os.name != "nt" and has_intel_vpu() and runtime_supported:
         logger.info("Intel VPU detected - using OpenVINO format for hardware acceleration.")
         return "openvino"
-    if has_intel_gpu():
+    if has_intel_gpu() and runtime_supported:
         logger.info("Intel GPU detected - using OpenVINO format for hardware acceleration.")
         return "openvino"
     if has_amd_gpu():

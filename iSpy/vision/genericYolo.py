@@ -674,22 +674,37 @@ class GenericYolo:
             self._pool = None
 
         elif (
-            self.model_file.endswith(".pt")
+            self.model_file.endswith(".engine")
             or "openvino_model" in self.model_file
-            or self.model_file.endswith(".mlpackage")
-            or self.model_file.endswith(".engine")
+            or self.model_file.endswith(".xml")
         ):
+            # Compiled accelerator formats (TensorRT / OpenVINO), converted from
+            # an onnx source by optimizer.convert_model() - NOT raw checkpoints,
+            # so they bypass the ".pt never live-runs" ModelFileError guard.
+            self._require_input_block()
+            if self.model_file.endswith(".engine"):
+                self.model_type = "engine"
+                self._load_engine(self.model_file)
+            else:
+                self.model_type = "openvino"
+                self._load_openvino(self.model_file)
+
+        elif self.model_file.endswith(".mlpackage"):
+            # CoreML stays unimplemented for runtime inference (Apple Silicon
+            # has no CI coverage). recommend_format(..., runtime_supported=False)
+            # avoids ever recommending coreml for a load-and-run path; if one is
+            # still handed to us, raise like the old compiled-format guard did.
+            raise ValueError(
+                "Runtime loading of .mlpackage (CoreML) requires coremltools "
+                "export tooling and is not supported; use a .pt model (loaded "
+                "via the dependency-free yolo_pt loader) for runtime inference."
+            )
+
+        elif self.model_file.endswith(".pt"):
             self.model_type = "yolo"
             from .yolo_pt import load_yolo_pt
-            if not self.model_file.endswith(".pt"):
-                raise ValueError(
-                    "Runtime loading of compiled formats (.engine/.mlpackage/OpenVINO) "
-                    "requires export tooling; use a .pt model (loaded via the dependency-free "
-                    "yolo_pt loader) for runtime inference."
-                )
             self.model = load_yolo_pt(self.model_file, task=self.task)
-            if self.model_file.endswith(".pt"):
-                self.model.to("cpu" if self.device == "cpu" else f"cuda:{self.device}")
+            self.model.to("cpu" if self.device == "cpu" else f"cuda:{self.device}")
 
             self._pool: _GPUInferencePool | None = None
 
@@ -701,7 +716,7 @@ class GenericYolo:
                 except Exception:
                     num_gpus = 1
 
-            if self.model_type == "yolo" and num_gpus > 1:
+            if num_gpus > 1:
                 try:
                     import torch
                     available = torch.cuda.device_count()
@@ -842,7 +857,124 @@ class GenericYolo:
         self.model.allocate_tensors()
         self._tflite_inp = self.model.get_input_details()[0]
         self._tflite_out = self.model.get_output_details()
-        
+
+    def _load_engine(self, model_file: str) -> None:
+        # TensorRT .engine artifact, converted from an onnx source by
+        # optimizer.convert_model(). Deserialize once; each inference creates a
+        # fresh execution context (mirrors depth_anything._infer_depth_engine).
+        try:
+            import tensorrt as trt
+        except ImportError as exc:
+            raise ImportError("tensorrt is required for .engine models.") from exc
+
+        try:
+            runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
+            engine: "trt.ICudaEngine" = runtime.deserialize_cuda_engine(
+                Path(model_file).read_bytes()
+            )
+            if engine is None:
+                raise ValueError(f"TensorRT engine deserialization returned None: {model_file}")
+        except Exception as exc:
+            raise ValueError(f"Failed to load TensorRT engine: {model_file} ({exc})") from exc
+
+        self.model = engine
+        self._engine_context = None
+        self.logger.info("Loaded TensorRT engine from %s (device %s)", model_file, self.device)
+
+    def _load_openvino(self, model_file: str) -> None:
+        # OpenVINO IR (.xml + .bin) artifact. mirror the resolve/fallback
+        # pattern from depth_anything._load_openvino (cache dir + device
+        # registration fallback), but reuse self.device which GenericYolo.__init__
+        # already resolved via resolve_openvino_device.
+        try:
+            import openvino as ov
+        except ImportError as exc:
+            raise ImportError("openvino is required for .xml models.") from exc
+
+        # model_file is usually the *directory* produced by the optimizer
+        # (YoloModels/openvino/<stem>_openvino_model/) - resolve the actual IR.
+        model_path = Path(model_file)
+        if model_path.is_dir():
+            ir_xml = model_path / f"{model_path.name}.xml"
+            if not ir_xml.exists():
+                xmls = sorted(model_path.glob("*.xml"))
+                if not xmls:
+                    raise ValueError(
+                        f"OpenVINO model directory has no .xml IR: {model_path}"
+                    )
+                ir_xml = xmls[0]
+        else:
+            ir_xml = model_path
+
+        device = self.device
+        if isinstance(device, str) and device.startswith("intel:"):
+            device = device.split(":", 1)[1]  # OpenVINO wants 'GPU', not 'intel:gpu'
+
+        core = ov.Core()
+        try:
+            registered = next(
+                (d for d in core.available_devices if d.lower() == device.lower()),
+                None,
+            )
+            if registered is None:
+                registered = next(
+                    (d for d in core.available_devices if device.lower() in d.lower()),
+                    None,
+                )
+            if registered is None:
+                self.logger.warning(
+                    "OpenVINO device %r not registered (%s) - using AUTO",
+                    device, core.available_devices,
+                )
+                registered = "AUTO"
+
+            compiled = self._compile_openvino(core, ir_xml, registered)
+            self.model = compiled
+            self._openvino_inp_name = next(iter(compiled.inputs)).get_any_name()
+            self.logger.info("Loaded OpenVINO IR from %s (device %s)", ir_xml, registered)
+        except Exception as exc:
+            raise ValueError(f"Failed to load OpenVINO model: {model_file} ({exc})") from exc
+
+    def _compile_openvino(self, core, ir_xml: Path, device: str):
+        try:
+            return core.compile_model(str(ir_xml), device)
+        except Exception as exc:
+            self.logger.warning(
+                "OpenVINO compile failed on %r (%s) - falling back to AUTO",
+                device, exc,
+            )
+            return core.compile_model(str(ir_xml), "AUTO")
+
+    def _run_engine(self, frame: np.ndarray, orig_shape) -> Results:
+        import tensorrt as trt
+
+        inp = self._preprocess_frame(frame)
+        engine = self.model
+        context = engine.create_execution_context()
+        for idx in range(engine.num_io_tensors):
+            name = engine.get_tensor_name(idx)
+            if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                context.set_tensor_shape(name, inp.shape)
+        bindings = []
+        output = None
+        for idx in range(engine.num_io_tensors):
+            name = engine.get_tensor_name(idx)
+            shape = context.get_tensor_shape(name)
+            if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                bindings.append(np.ascontiguousarray(inp).ctypes.data)
+            else:
+                out = np.empty(tuple(shape), dtype=np.float32)
+                bindings.append(out.ctypes.data)
+                output = out
+        context.execute_v2(bindings)
+        return self.postprocess([output], orig_shape)
+
+    def _run_openvino(self, frame: np.ndarray, orig_shape) -> Results:
+        inp = self._preprocess_frame(frame)
+        outputs = self.model({self._openvino_inp_name: inp})
+        out = np.asarray(next(iter(outputs.values())))
+        return self.postprocess([out], orig_shape)
+
     def _letterbox_into(self, img, dst, target_size, pad_value=114):
         h, w = img.shape[:2]
         target_w, target_h = target_size
@@ -940,6 +1072,10 @@ class GenericYolo:
                     results_list.append(self._run_tflite(frame, target_shape))
                 elif self.model_type == "tpu":
                     results_list.append(self._run_tpu(frame, target_shape))
+                elif self.model_type == "engine":
+                    results_list.append(self._run_engine(frame, target_shape))
+                elif self.model_type == "openvino":
+                    results_list.append(self._run_openvino(frame, target_shape))
                 else:
                     result = self.model(
                         frame, verbose=False, show=False,
@@ -1580,6 +1716,9 @@ class GenericYolo:
             if self._onnx_pool is not None:
                 self._onnx_pool.stop()
         elif self.model_type == "tflite":
+            del self.model
+        elif self.model_type in ("engine", "openvino"):
+            # drop refs to free the CUDA context / compiled blob
             del self.model
         pool = getattr(self, "_pool", None)
         if pool is not None:
