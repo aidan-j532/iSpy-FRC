@@ -38,47 +38,26 @@ _open_worker_live = 0
 
 
 class CameraBase:
-    """A camera *source*: something that produces frames.
+    """A camera source: something that produces frames.
 
-    This is the low-level frame pipeline every concrete source (OpenCV USB
-    camera, DJI Tello, RTSP stream, ...) is built on. It owns the reader
-    thread, automatic reconnect while the device is missing, placeholder
-    frames, image adjustment knobs and the calibration mode / heartbeat state
-    shared with the web wizard.
-
-    Concrete sources subclass :class:`CameraBase`, set a unique ``camera_type``
-    and (optionally) override how the capture device is opened. The capture
-    machinery keeps working unchanged - the class only needs to know how to
-    *produce* the frame, exactly like a pipeline only knows how to *use* it.
+    Base class for concrete sources (OpenCV USB camera, DJI Tello, RTSP, etc.).
+    Handles reader thread, auto-reconnect, placeholder frames, image adjustments,
+    and calibration mode/heartbeat shared with the web wizard.
     """
 
     camera_type = "generic"
 
     _PLACEHOLDER_W = 640
     _PLACEHOLDER_H = 480
-
-    # first-frame timeout (MSMF is slow to start)
     _STREAM_START_TIMEOUT = 1.5
-
-    # max time cv2.VideoCapture() can block before we give up
     _CAP_OPEN_TIMEOUT = 15.0
-
     _READ_RETRY_DELAY = 0.05
     _READ_REOPEN_AFTER = 10
     _READ_WARN_EVERY = 20
-
     _CALIBRATION_HEARTBEAT_TIMEOUT = 10.0
-
-    # how long to wait between reconnect attempts when the device is missing
     _RECONNECT_RETRY_DELAY = 3.0
-    # poll `stopped` at most every this long while sleeping so a leaked reader
-    # never keeps polling a bogus source (e.g. /dev/video99) through interpreter
-    # shutdown and races native (RKNN/OpenCV) teardown.
     _RECONNECT_POLL_S = 0.05
-    # warn about the missing device at most every N attempts (~30s)
     _RECONNECT_WARN_EVERY = 10
-
-    # reported frame age while the device is missing (JSON-safe "very stale")
     _DISCONNECTED_AGE_S = 1e6
 
     @staticmethod
@@ -92,21 +71,10 @@ class CameraBase:
 
     @classmethod
     def config_schema(cls) -> dict:
-        """Schema describing which config keys configure this camera source.
-
-        Mirrors the pipeline config_schema() convention: {key: {...field}}.
-        Consumed by the web UI to render the per-source field section.
-        """
         return {}
 
     @classmethod
     def discover(cls, claimed_sources: set | None = None) -> list[dict]:
-        """Enumerate the sources this camera type can currently see.
-
-        Returns a list of ``{"path", "name", "device_id", ...}`` dicts suitable
-        for the web discovery endpoint. Defaults to nothing - only sources that
-        can actually be enumerated override it.
-        """
         return []
 
     def __init__(
@@ -126,11 +94,7 @@ class CameraBase:
         self._cap_h = input_size[1]
 
         self.source = camera_config["source"]
-
-        self._is_url_source = (
-            isinstance(self.source, str) and "://" in self.source
-        )
-
+        self._is_url_source = isinstance(self.source, str) and "://" in self.source
         self.is_image = (
             isinstance(self.source, str)
             and self.source.lower().endswith((".png", ".jpg", ".jpeg", ".bmp"))
@@ -144,9 +108,6 @@ class CameraBase:
         self._frame_event = threading.Event()
         self._frame_processors = []
 
-        # False until the capture device is successfully opened. While False,
-        # the placeholder frame is served but the reader thread keeps polling
-        # for the device so it recovers automatically when plugged back in.
         self._connected = False
         self._reconnect_failures = 0
         self._placeholder_frame = self._make_placeholder_frame()
@@ -175,27 +136,19 @@ class CameraBase:
         if self.is_image:
             self.image = cv2.imread(self.source)
             if self.image is None:
-                self.logger.warning(
-                    "Could not read image '%s' - using synthetic placeholder frame.",
-                    self.source,
-                )
+                self.logger.warning("Could not read image '%s' - using placeholder", self.source)
                 self.image = self._placeholder_frame
         else:
             try:
                 self._open_camera()
                 self._connected = True
             except Exception as exc:
-                # Don't fall back to a static image forever - stay in camera
-                # mode and keep searching for the device in the reader thread.
                 self.logger.warning(
-                    "Camera source '%s' could not be opened (%s) - showing "
-                    "placeholder and searching for the device in the background.",
-                    self.source,
-                    exc,
+                    "Camera source '%s' could not be opened (%s) - searching in background",
+                    self.source, exc,
                 )
                 self.cap = None
 
-            self._reader_thread: threading.Thread | None = None
             self._reader_thread = threading.Thread(
                 target=self._reader,
                 daemon=True,
@@ -358,8 +311,6 @@ class CameraBase:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             cap.set(cv2.CAP_PROP_FPS, 30)
         else:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
@@ -450,15 +401,10 @@ class CameraBase:
         self._frame_processors = []
 
     def _attempt_reconnect(self) -> bool:
-        """Try to open the capture device; keep searching if it's absent."""
         try:
             self._open_camera()
         except Exception as exc:
             self._reconnect_failures += 1
-            # A stray non-iSpy process may be holding the v4l2 devnode open,
-            # which OpenCV reports as a reopen failure (e.g. "Inappropriate
-            # ioctl for device" / "Camera ... still waiting"). Force it out so
-            # the next attempt has a real chance - never touch iSpy's own pid.
             if (
                 platform.system() == "Linux"
                 and not self._is_url_source
@@ -507,12 +453,6 @@ class CameraBase:
             return False
 
     def _sleep_stopping(self, seconds: float, poll: float) -> bool:
-        """Sleep, but abort early when `stopped` so destroy() join is reliable.
-
-        Returns False once stopping has begun (caller should return from the
-        reader loop). Makes a leaked reader stop promptly instead of polling a
-        bogus source (e.g. /dev/video99) through interpreter shutdown.
-        """
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             if self.stopped:

@@ -8,10 +8,6 @@ from pathlib import Path
 _BOOT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = Path.cwd()
 
-# Serializes config file writes. Background threads (e.g. the optimizer build
-# thread persisting quantization settings) and web handlers share one iSpyConfig
-# instance - interleaved open("w")/write/close from two threads could corrupt
-# config.json, so every save is funneled through this one lock.
 _CONFIG_WRITE_LOCK = threading.RLock()
 
 _MODEL_BACKED_PIPELINES = ("object_detection",)
@@ -26,8 +22,6 @@ _CAMERA_CORE_KEYS = {
     "camera_type", "tello_ip", "tello_command_port", "tello_video_port",
 }
 
-# Camera-source config keys that are valid at the top level for every
-# camera type, no matter which Cameras/ class is running.
 _CAMERA_TYPE_KEYS = (
     "camera_type", "tello_ip", "tello_command_port", "tello_video_port",
 )
@@ -44,17 +38,11 @@ _LEGACY_SETTING_ALIASES = {
 
 _ADDON_TYPES = ("trackers", "utilities", "frame_processors")
 
-# Conversion factors: how many inches does 1 of the given unit equal.
 _UNIT_TO_INCHES = {
-    "inch": 1.0,
-    "inches": 1.0,
-    "foot": 12.0,
-    "feet": 12.0,
-    "meter": 1.0 / 0.0254,
-    "meters": 1.0 / 0.0254,
-    "centimeter": 1.0 / 2.54,
-    "centimeters": 1.0 / 2.54,
-    # FRC/WPILib: inputs are in inches (calibration convention)
+    "inch": 1.0, "inches": 1.0,
+    "foot": 12.0, "feet": 12.0,
+    "meter": 1.0 / 0.0254, "meters": 1.0 / 0.0254,
+    "centimeter": 1.0 / 2.54, "centimeters": 1.0 / 2.54,
     "frc": 1.0,
 }
 
@@ -68,27 +56,20 @@ _UNIT_LABELS = {
 
 
 def unit_to_inches(value: float, unit: str) -> float:
-    """Convert *value* from *unit* to inches (the internal math unit)."""
     return value * _UNIT_TO_INCHES.get(unit.lower().strip(), 1.0)
 
 
 def unit_label(unit: str) -> str:
-    """Return a short display label for *unit* (e.g. 'in', 'm', 'ft')."""
     return _UNIT_LABELS.get(unit.lower().strip(), unit)
 
-# legacy top-level keys folded into individual add-ons. (key, addon type,
-# addon name, target setting key) - used by _migrate_addons.
 _ADDON_LEGACY_FOLDS = (
-    ("dbscan",           "trackers",    "object_tracker", None),  # special: dict
-    ("distance_threshold", "trackers",  "object_tracker", "distance_threshold"),
-    ("stale_threshold",  "trackers",    "object_tracker", "stale_threshold"),
+    ("dbscan", "trackers", "object_tracker", None),
+    ("distance_threshold", "trackers", "object_tracker", "distance_threshold"),
+    ("stale_threshold", "trackers", "object_tracker", "stale_threshold"),
 )
 
-# health reporting is a core web module (HealthModule) - these opt-in
-# utilities were removed; their settings fold into top-level keys instead
 _MERGED_HEALTH_ADDONS = ("health_reporter", "status_reporter")
 
-# legacy enabled flags - the flag value is discarded once it becomes add-on presence
 _ADDON_LEGACY_FLAGS = {
     "use_network_tables": ("utilities", "network_table_handler"),
     "record_mode": ("utilities", "video_recorder"),
@@ -122,7 +103,6 @@ def default_vision_model() -> dict:
     if user_pts:
         rel = f"YoloModels/pytorch/{user_pts[0].name}"
     else:
-        # Prefer the v26 fuel detection model, then the plain detect model.
         fuel = next((p for p in pts if p.name == "_default_v26_detect_for_fuel.pt"), None)
         if fuel:
             rel = f"YoloModels/pytorch/{fuel.name}"
@@ -216,20 +196,15 @@ class iSpyConfig:
         self.default_config = {
             "num_gpus": "auto",
             "device": 0,
-            # "frc" = FRC/WPILib convention: outputs in meters (what robot code
-            # expects, matches Limelight/PhotonVision), calibration inputs in inches.
             "unit": "frc",
             "debug_mode": True,
             "frame_sync": False,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
-            # seconds without a fresh frame before /health reports degraded
             "health_stale_threshold": 1.0,
             "metrics": True,
             "app_mode": True,
             "max_fps": 0,
-            # reset to False by every `boot -f` (fresh install) so the web UI
-            # shows its first-run tutorial once until the user dismisses it.
             "onboarding": {
                 "completed": False,
             },
@@ -246,7 +221,6 @@ class iSpyConfig:
                         "size": 0,
                         "fov": 0,
                     },
-                    # mount offsets stay on the cam entry; pipeline stuff lives under pipeline.settings
                     "yaw": 0,
                     "pitch": 0,
                     "height": 1.0,
@@ -256,43 +230,17 @@ class iSpyConfig:
                         "name": "object_detection",
                         "settings": {
                             "vision_model": {
-                                # input.*/output.* are auto-detected from the model's
-                                # _metadata.yaml sidecar - only override if its wrong.
                                 "file_path": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
                                 "source_pt": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
                                 "min_conf": 0.5,
-                                # auto-optimize the model to the best format for this
-                                # machine (onnx/openvino/rknn/...). Done in the background
-                                # so boot/run stay non-blocking; the .pt runs until the
-                                # optimized artifact is ready.
-                                # Values: "off" (disabled), "auto" (auto-detect), "onnx", "rknn", "openvino", "tflite", "hef", "engine", "coreml"
                                 "optimize": "off",
                                 "quantize": False,
-                                # Optional PnP for pose (translation stored on
-                                # Box; rotation stored as roll/pitch/yaw on
-                                # Box). Enable to get 3D position + orientation
-                                # from 2D keypoints, and to render a 3D human
-                                # skeleton in the web viewer (when
-                                # keypoints_3d is present on the Object).
-                                # "pnp": {
-                                #     # Canonical COCO 17-keypoint skeleton
-                                #     # (~1.8 m tall, origin at mid-hip).
-                                #     "object_points": [...],
-                                #     "camera_matrix": [[fx, 0, cx], ...],
-                                #     "dist_coeffs": [0, 0, 0, 0, 0],
-                                #     "min_keypoint_conf": 0.5,
-                                #     # "mode": "flexible" | "rigid"
-                                # },
                             },
                         },
                     },
                 }
             },
             "plugins": {
-                # enabled add-ons only - presence == enabled, no flag. each entry maps
-                # a name to that add-on's own settings (schema defaults apply at runtime).
-                # "trackers": {"object_tracker": {"distance_threshold": 0.5}},
-                # "utilities": {"network_table_handler": {"network_tables_ip": "10.0.0.2"}},
                 "trackers": {},
                 "utilities": {},
                 "frame_processors": {}
@@ -403,14 +351,6 @@ class iSpyConfig:
             self.config.pop(legacy_key, None)
 
     def _migrate_legacy_vision_model(self, data: dict) -> None:
-        """Fold the legacy top-level 'vision_model' key into camera entries.
-
-        Old configs (pre restructure) kept model settings in a single top-level
-        ``vision_model`` dict which every model-backed camera consumed. The new
-        layout stores them per camera under ``pipeline.settings.vision_model``.
-        This is a one-way, idempotent migration: the top-level key is removed so
-        the next ``save()`` persists the new layout and the load never fails.
-        """
         vm = data.pop("vision_model", None)
         if not isinstance(vm, dict):
             return
@@ -426,7 +366,7 @@ class iSpyConfig:
                 continue
             settings = get_pipeline_settings(cam_cfg)
             if isinstance(settings.get("vision_model"), dict):
-                continue  # camera already has its own model - leave it alone
+                continue
             self.logger.info(
                 "Migrating legacy top-level vision_model into camera '%s'.", name
             )
@@ -434,9 +374,8 @@ class iSpyConfig:
             consumed = True
         if not consumed:
             self.logger.warning(
-                "Legacy top-level vision_model was found but no camera consumed "
-                "it (empty camera_configs?); removing the key. Re-add the model "
-                "from the Camera Settings page if it is still needed."
+                "Legacy top-level vision_model found but no camera consumed "
+                "it; removing the key. Re-add the model from Camera Settings if needed."
             )
 
     def _migrate_camera_configs(self):
@@ -480,17 +419,12 @@ class iSpyConfig:
 
     def load_from_file(self, file_path: str):
         try:
-            # utf-8-sig strips a UTF-8 BOM, which editors like Notepad add on
-            # save - json.load() would otherwise fail at char 0 with a bogus
-            # "Expecting value: line 1 column 1" error.
             with open(file_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if isinstance(data, dict) and "vision_model" in data:
                 self._migrate_legacy_vision_model(data)
             self._update_config(data)
         except json.JSONDecodeError as e:
-            # bad config is an error - boot never silently regenerates it.
-            # first-run setup is explicitly the job of `boot -f`.
             raise RuntimeError(
                 f"Config at {file_path} is invalid JSON ({e}). Fix it or run "
                 "'boot -f' to start from a fresh default configuration."
@@ -505,6 +439,7 @@ class iSpyConfig:
                 self._configure_logging()
             except Exception:
                 self.logger.exception("Failed to apply logging configuration after loading file")
+
     def save(self, quiet=False):
         try:
             if self.file_path:
@@ -518,10 +453,6 @@ class iSpyConfig:
             target.parent.mkdir(parents=True, exist_ok=True)
             payload = json.dumps(self.config, indent=4).encode("utf-8")
 
-            # Atomic write: dump to a temp file in the same directory, fsync it,
-            # then os.replace() over the real config so a power cut mid-write can
-            # never leave a truncated/corrupt config.json behind. Everything runs
-            # under the module-wide lock so concurrent savers can't interleave.
             with _CONFIG_WRITE_LOCK:
                 fd, tmp_name = tempfile.mkstemp(
                     dir=str(target.parent), prefix=target.name + ".", suffix=".tmp"
@@ -550,13 +481,6 @@ class iSpyConfig:
             return val
         except (KeyError, TypeError):
             return default
-
-    # ---------------------------------------------------------------
-    # add-on config helpers
-    #
-    # plugins.<type> is a dict of enabled add-on name -> its settings.
-    # presence == enabled; the value is the add-on's own settings dict.
-    # ---------------------------------------------------------------
 
     def addon_entries(self, addon_type: str) -> dict:
         if addon_type not in _ADDON_TYPES:
@@ -643,15 +567,12 @@ class iSpyConfig:
             target = target[key]
         target[keys[-1]] = value
         if keys[-1] == "camera_configs":
-            # whole-dict replace orphans the wrapper views - rebuild em
             self._rebuild_camera_configs()
 
     def _update_config(self, data: dict, current_dict: dict = None):
         if current_dict is None:
             current_dict = self.config
         if isinstance(data, dict) and "vision_model" in data and current_dict is self.config:
-            # model settings live per-cam under pipeline.settings now - a top-level
-            # key is either a stale UI payload or a legacy config.
             raise ValueError(
                 "A top-level 'vision_model' key is no longer supported - "
                 "model settings are configured per camera under "
@@ -662,13 +583,10 @@ class iSpyConfig:
                 if not isinstance(value, dict):
                     continue
                 if current_dict is not self.config:
-                    # _compare() merges on a scratch copy - keep the raw entries
-                    # so the diff sees what was actually sent.
                     current_dict[key] = value
                 else:
                     self.config[key] = json.loads(json.dumps(value))
                     ensure_camera_entries_ready(self.config[key])
-                    # fresh deep copy orphaned the wrappers - rebuild em
                     self._rebuild_camera_configs()
             elif (
                 isinstance(value, dict)
@@ -764,12 +682,6 @@ class iSpyCameraConfig:
         if config_dict:
             self.data.update(config_dict)
 
-    # ---------------------------------------------------------------
-    # pipeline (pipeline: {name, settings}) accessors. legacy flat entries
-    # (bare-string pipeline + settings spread on the cam) migrate lazily on
-    # first touch.
-    # ---------------------------------------------------------------
-
     def pipeline_entry(self) -> dict:
         p = self.data.get("pipeline")
         if isinstance(p, dict):
@@ -796,7 +708,6 @@ class iSpyCameraConfig:
         settings = self.pipeline_entry()["settings"]
         if key in settings:
             return settings[key]
-        # legacy flat layout - the setting may still live directly on the cam entry
         if key not in _CAMERA_CORE_KEYS and key in self.data:
             return self.data[key]
         return default

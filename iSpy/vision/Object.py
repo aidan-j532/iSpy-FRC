@@ -56,8 +56,6 @@ class Object:
         robot_pitch: float = 0.0,
         robot_yaw: float = 0.0,
     ):
-        # frame: +X right, +Y forward, +Z up; robot_yaw is +ve when the
-        # robot turned RIGHT (boresight rotated from +Y toward +X)
         cos_y = math.cos(robot_yaw)
         sin_y = math.sin(robot_yaw)
         field_x = self.x * cos_y + self.y * sin_y
@@ -100,13 +98,6 @@ class Object:
     # ------------------------------------------------------------------
 
     def to_dict(self) -> dict:
-        """Serialize to the universal pipeline-output schema.
-
-        JSON-safe, pipeline-agnostic: every pipeline's Objects flatten to the
-        same keys; ``vis_type`` selects how to interpret them and ``vis_meta``
-        carries the pipeline-specific payload (tag ids, flow vectors, depth
-        estimates, ...).
-        """
         return {
             "id": self.id,
             "name": self.name,
@@ -136,10 +127,6 @@ class Object:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Object":
-        """Rebuild an Object from :meth:`to_dict` output.
-
-        Tolerates missing keys and legacy flat dicts; unknown keys are ignored.
-        """
         obj = cls(
             x=float(data.get("x", 0.0)),
             y=float(data.get("y", 0.0)),

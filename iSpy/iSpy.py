@@ -35,8 +35,6 @@ class iSpy:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-        # bring the web app up FIRST so the UI is reachable while cameras/models/
-        # plugins are still loading - they wire in later via set_cameras()/set_vision_instance()
         self.web_app = web_app
         if self.web_app is None and config.config.get("app_mode", False):
             self.web_app = create_app(cameras=[], config=config)
@@ -65,13 +63,9 @@ class iSpy:
         if self.web_app is not None:
             self.web_app.set_cameras(self.cameras)
 
-        # shared "what object is currently selected" primitive - one instance on
-        # the shared context so any tracker/utility can read/set it without
-        # depending on a specific add-on (see iSpy.plugins.selection).
         from iSpy.plugins.selection import SelectionState
         self.selection = SelectionState()
 
-        # shared context for every add-on; each one gets its OWN settings view
         self._base_context = {
             "config": config,
             "global_config": config,
@@ -83,7 +77,7 @@ class iSpy:
         }
 
         tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)
-        self.trackers = {}  # No default trackers
+        self.trackers = {}
         for name, settings in self._enabled_addons("trackers"):
             if name in tracker_classes:
                 self.trackers[name] = tracker_classes[name](
@@ -136,7 +130,6 @@ class iSpy:
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
         if self.web_app:
-            # server thread already started above; just wire in what loaded since then
             dash = self.web_app.modules.get("dashboard")
             if dash and hasattr(dash, "set_plugins"):
                 dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
@@ -148,10 +141,6 @@ class iSpy:
             for camera in self.cameras:
                 for name, processor in self.frame_processors.items():
                     camera.add_frame_processor(processor)
-
-        # I think has to be at very bottom
-        if self.web_app:
-            self.web_app.set_vision_instance(self)
 
     @staticmethod
     def _build_cameras_from_config(config: iSpyConfig) -> list[VisionPipeline]:
@@ -272,7 +261,6 @@ class iSpy:
             return objects, frame
         except Exception:
             self.logger.exception("Solo-vision exception")
-            # never kill the loop on one pipeline hiccup - fall back to the raw frame so the feed keeps flowing
             return [], camera.get_frame() if hasattr(camera, "get_frame") else None
 
     def validate_vision_model(self, repo_root: Path | None = None):
@@ -339,7 +327,6 @@ class iSpy:
 
         t_track = time.perf_counter()
         for tracker in self.trackers.values():
-            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
@@ -402,7 +389,6 @@ class iSpy:
 
         t_track = time.perf_counter()
         for tracker in self.trackers.values():
-            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
