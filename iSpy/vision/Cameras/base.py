@@ -14,7 +14,7 @@ from iSpy.vision.Cameras._device_guard import free_camera_device
 from iSpy.vision.Object import Object
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
-_ASSETS_DIR = _PACKAGE_ROOT.parents[2] / "assets"
+_ASSETS_DIR = _PACKAGE_ROOT.parents[1] / "assets"
 
 try:
     cv2.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)

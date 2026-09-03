@@ -494,7 +494,13 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
 
         # the camera should surface as errored, not disappear entirely
         self.assertIsNone(camera.model)
-        ready, status = camera.is_ready()
+        try:
+            ready, status = camera.is_ready()
+        finally:
+            # the pipeline starts a background _reader thread that keeps
+            # retrying the bogus source (99) - stop it so it doesn't spam
+            # stderr / keep the boot log alive on a nonexistent device
+            camera.destroy()
         self.assertFalse(ready)
         self.assertTrue(status.startswith("error:"), f"unexpected status: {status!r}")
 
@@ -505,7 +511,10 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
         # does not take down the camera either.
         camera = self._build_pipeline("does/not/exist.pt")
         self.assertIsNone(camera.model)
-        ready, status = camera.is_ready()
+        try:
+            ready, status = camera.is_ready()
+        finally:
+            camera.destroy()
         self.assertFalse(ready)
         self.assertTrue(status.startswith("error:"))
 
