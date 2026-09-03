@@ -761,5 +761,79 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
         )
 
 
+class TestEKFTracker(unittest.TestCase):
+    """F1: the EKF tracker smooths a constant-velocity target's position.
+
+    Feeds a synthetic target moving at constant velocity with Gaussian
+    position noise and asserts the Kalman-smoothed track's RMSE to the true
+    path is lower than the raw noisy measurements' RMSE.
+    """
+
+    def _make_tracker(self):
+        from iSpy.plugins.trackers.BuiltIn.EKFTracker import EKFTracker
+        return EKFTracker({
+            "config": {
+                "process_noise": 0.5,
+                "measurement_noise": 0.1,
+                "distance_threshold": 1.0,
+                "stale_threshold": 2.0,
+            },
+            "global_config": None,
+        })
+
+    def test_ekf_smoothes_better_than_raw_measurements(self):
+        from iSpy.vision.Object import Object
+
+        rng = np.random.default_rng(7)
+        tracker = self._make_tracker()
+
+        # constant-velocity ground truth: start at origin, move +1.0 m/s in x
+        velocity = np.array([1.0, 0.0, 0.0])
+        dt = 0.1
+        n = 30
+        true_positions = []
+        raw_sq = 0.0
+        # collect smoothed positions as they are produced
+        smoothed_path = []
+
+        for i in range(n):
+            t_i = i * dt
+            true = velocity * t_i
+            true_positions.append(true)
+            noise = rng.normal(0.0, 0.5, size=3)  # fairly noisy measurements
+            raw = true + noise
+            raw_sq += float(np.linalg.norm(noise) ** 2)
+
+            obj = Object(x=float(raw[0]), y=float(raw[1]), z=float(raw[2]), name="ball")
+            tracker.update([obj], 0.0, 0.0, 0.0, 0.0)
+            smoothed_path.append(np.array(tracker.tracked_objects[0].get_position()))
+
+        true_arr = np.array(true_positions)
+        sm_arr = np.array(smoothed_path)
+
+        raw_rmse = float(np.sqrt(raw_sq / n))
+        smoothed_rmse = float(np.sqrt(np.mean(np.sum((sm_arr - true_arr) ** 2, axis=1))))
+
+        self.assertLess(
+            smoothed_rmse, raw_rmse,
+            msg=f"EKF ({smoothed_rmse:.4f}) must beat raw noise ({raw_rmse:.4f})",
+        )
+
+    def test_same_identity_gating(self):
+        # a cone must never merge into a robot track, mirroring ObjectTracker
+        from iSpy.vision.Object import Object
+
+        tracker = self._make_tracker()
+        robot = Object(x=0.0, y=0.0, z=0.0, name="robot")
+        cone = Object(x=0.05, y=0.0, z=0.0, name="cone")
+        tracker.update([robot], 0.0, 0.0, 0.0, 0.0)
+        tracker.update([cone], 0.0, 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 2)
+
+    def test_run_returns_tracked_objects(self):
+        tracker = self._make_tracker()
+        self.assertEqual(tracker.run(), tracker.tracked_objects)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
