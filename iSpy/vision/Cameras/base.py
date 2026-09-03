@@ -71,6 +71,10 @@ class CameraBase:
 
     # how long to wait between reconnect attempts when the device is missing
     _RECONNECT_RETRY_DELAY = 3.0
+    # poll `stopped` at most every this long while sleeping so a leaked reader
+    # never keeps polling a bogus source (e.g. /dev/video99) through interpreter
+    # shutdown and races native (RKNN/OpenCV) teardown.
+    _RECONNECT_POLL_S = 0.05
     # warn about the missing device at most every N attempts (~30s)
     _RECONNECT_WARN_EVERY = 10
 
@@ -502,6 +506,20 @@ class CameraBase:
             )
             return False
 
+    def _sleep_stopping(self, seconds: float, poll: float) -> bool:
+        """Sleep, but abort early when `stopped` so destroy() join is reliable.
+
+        Returns False once stopping has begun (caller should return from the
+        reader loop). Makes a leaked reader stop promptly instead of polling a
+        bogus source (e.g. /dev/video99) through interpreter shutdown.
+        """
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if self.stopped:
+                return False
+            time.sleep(min(poll, deadline - time.monotonic()))
+        return not self.stopped
+
     def _reader(self):
         frame_interval = 1.0 / self._fps_cap if self._fps_cap > 0 else 0.0
         next_frame_time = 0.0
@@ -520,7 +538,10 @@ class CameraBase:
 
             if self.cap is None:
                 if not self._attempt_reconnect():
-                    time.sleep(self._RECONNECT_RETRY_DELAY)
+                    if not self._sleep_stopping(
+                        self._RECONNECT_RETRY_DELAY, self._RECONNECT_POLL_S
+                    ):
+                        return
                 continue
 
             ret, frame = self.cap.read()
@@ -624,9 +645,20 @@ class CameraBase:
         self.stopped = True
         reader = getattr(self, "_reader_thread", None)
         if reader is not None and reader is not threading.current_thread():
-            reader.join(timeout=2.0)
+            # Release the capture first: on most backends this aborts a reader
+            # blocked in cap.read(). The reconnect sleep also polls `stopped`
+            # now, so the join below cannot be beaten by a 3s retry sleep.
+            if not self.is_image and hasattr(self, "cap") and self.cap:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+            reader.join(timeout=5.0)
         if not self.is_image and hasattr(self, "cap") and self.cap:
-            self.cap.release()
+            try:
+                self.cap.release()
+            except Exception:
+                pass
         cv2.destroyAllWindows()
 
     def release(self):

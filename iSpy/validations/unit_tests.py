@@ -12,6 +12,8 @@ exporter), so nothing imports it at module load.
 """
 import os
 import sys
+import threading
+import time
 import types
 import unittest
 import tempfile
@@ -740,6 +742,23 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
             camera.destroy()
         self.assertFalse(ready)
         self.assertTrue(status.startswith("error:"))
+
+    def test_destroy_stops_reader_thread_promptly(self):
+        # Regression for the boot-time leak: a pipeline built on a bogus source
+        # (99) must not leave its daemon _reader thread retrying /dev/video99
+        # after destroy(). On the RKNN board that leaked thread's cv2 polling
+        # raced native teardown at interpreter shutdown -> Segmentation fault.
+        camera = self._build_pipeline("does/not/exist.pt")
+        reader = getattr(camera, "_reader_thread", None)
+        self.assertIsNotNone(reader, "reader thread should have been started")
+        self.assertTrue(reader.is_alive())
+        camera.destroy()
+        reader.join(timeout=2.0)
+        self.assertFalse(
+            reader.is_alive(),
+            "destroy() must stop the reader thread (polling must not survive "
+            "into interpreter shutdown)",
+        )
 
 
 if __name__ == "__main__":
