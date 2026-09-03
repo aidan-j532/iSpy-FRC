@@ -10,6 +10,9 @@
 #object-list { max-height:200px; overflow-y:auto; }
 #object-list table { width:100%; }
 .obj-row td { font-size:0.82rem; }
+.obj-row { cursor:pointer; }
+.obj-row.selected td { background:rgba(76,139,245,0.22); outline:1px solid #4c8bf5; }
+.empty-row-note { color:var(--text-dim); font-size:0.8rem; }
 </style>
 {% endblock %}
 {% block content %}
@@ -171,6 +174,12 @@ function makeCubeMarker() {
 function updateCubeMarker(mesh, o) {
   mesh.position.copy(toViewer(o.x, o.y, o.z));
   mesh.rotation.set(o.roll, o.yaw, o.pitch);
+  // selected target gets a distinct, brighter outline
+  const wire = mesh.children.find(c => c.isLineSegments);
+  if (wire) {
+    wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
+    wire.material.opacity = selectedId === o.id ? 0.9 : 0.3;
+  }
 }
 
 function makePlanarMarker(o) {
@@ -195,6 +204,12 @@ function updatePlanarMarker(g, o) {
   g.rotation.set(o.roll, o.yaw, o.pitch);
   const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
   g.scale.setScalar(size / (g.userData.planarSize || size));
+  // selected target gets a distinct outline color
+  const wire = g.children.find(c => c.isLineSegments);
+  if (wire) {
+    wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
+    wire.material.opacity = selectedId === o.id ? 0.9 : 0.5;
+  }
 }
 
 function buildPointCloud(kpts3d) {
@@ -243,6 +258,9 @@ function resolveVisType(o) {
 
 // detection sync
 const boxes = {};
+// the currently selected target's id (drives row + marker highlight).
+// kept in sync with the target_selector /api status endpoint each poll.
+let selectedId = null;
 
 function createBoxForDetection(o) {
   const key = o.id;
@@ -441,7 +459,8 @@ function renderTable(objects, overlays) {
     const label = visType === 'points' ? `${nk} pts`
                 : visType === 'planar' ? (o.vis_meta && o.vis_meta.tag_id != null ? `tag ${o.vis_meta.tag_id}` : 'planar')
                 : '-';
-    rows += `<tr class="obj-row"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.pitch * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.roll * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
+    const selectedCls = (selectedId === o.id) ? 'selected' : '';
+    rows += `<tr class="obj-row ${selectedCls}" data-id="${o.id}"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.pitch * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.roll * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
   }
   for (const o of overlays) {
     if (!o.id) continue;
@@ -451,18 +470,46 @@ function renderTable(objects, overlays) {
   tbody.innerHTML = rows || '<tr><td colspan="8" class="empty-state">No detections</td></tr>';
 }
 
+function selectRowById(trackId) {
+  // optimistically highlight immediately; the server is the source of truth
+  selectedId = trackId;
+  fetch('/api/target-selector/select', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ track_id: trackId }),
+  }).catch(() => {});
+}
+
+function clearSelection() {
+  selectedId = null;
+  fetch('/api/target-selector/clear', { method: 'POST' }).catch(() => {});
+}
+
+// delegated click-to-select on the detection table
+document.getElementById('obj-tbody').addEventListener('click', (ev) => {
+  const tr = ev.target.closest('tr.obj-row');
+  if (!tr) return;
+  const id = tr.getAttribute('data-id');
+  if (id == null) return;
+  selectRowById(Number(id));
+});
+
 // ============================================================
 // Poll & animate
 // ============================================================
 
 async function poll() {
   try {
-    const [detRes, ovRes] = await Promise.all([
+    const [detRes, ovRes, selRes] = await Promise.all([
       fetch('/api/detections/latest').then(r => r.json()),
       fetch('/api/overlays').then(r => r.json()),
+      fetch('/api/target-selector/status').then(r => r.json()).catch(() => ({ selected_id: null })),
     ]);
     const objects = detRes.objects || [];
     const overlays = ovRes.overlays || [];
+    if (selRes && typeof selRes.selected_id !== 'undefined') {
+      selectedId = selRes.selected_id;
+    }
     syncDetections(objects);
     syncOverlays(overlays);
     renderTable(objects, overlays);

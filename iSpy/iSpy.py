@@ -65,6 +65,12 @@ class iSpy:
         if self.web_app is not None:
             self.web_app.set_cameras(self.cameras)
 
+        # shared "what object is currently selected" primitive - one instance on
+        # the shared context so any tracker/utility can read/set it without
+        # depending on a specific add-on (see iSpy.plugins.selection).
+        from iSpy.plugins.selection import SelectionState
+        self.selection = SelectionState()
+
         # shared context for every add-on; each one gets its OWN settings view
         self._base_context = {
             "config": config,
@@ -73,6 +79,7 @@ class iSpy:
             "flask_app": self.web_app.flask_app if self.web_app else None,
             "vision_instance": self,
             "viewer3d": self.web_app.modules.get("viewer3d") if self.web_app else None,
+            "selection": self.selection,
         }
 
         tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)

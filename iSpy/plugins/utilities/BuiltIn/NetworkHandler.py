@@ -29,6 +29,7 @@ DEFAULT_PUBLISH = [
     {"name": "num_detections", "data_type": "number",  "source": "detection_count",  "nt_topic": "num_detections"},
     {"name": "camera_lag",     "data_type": "number",  "source": "camera_lag_s",     "nt_topic": "camera_lag"},
     {"name": "vision_data",    "data_type": "json",    "source": "detections",       "nt_topic": "vision_data"},
+    {"name": "selected_target", "data_type": "json",   "source": "addon_data.selected_target", "nt_topic": "selected_target"},
 ]
 
 

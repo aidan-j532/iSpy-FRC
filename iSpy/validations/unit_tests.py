@@ -835,5 +835,95 @@ class TestEKFTracker(unittest.TestCase):
         self.assertEqual(tracker.run(), tracker.tracked_objects)
 
 
+class TestSelectionState(unittest.TestCase):
+    """F2a: the shared selection primitive must be a standalone, modular class."""
+
+    def test_basic_lifecycle(self):
+        from iSpy.plugins.selection import SelectionState
+        s = SelectionState()
+        self.assertIsNone(s.selected_id)
+        self.assertIsNone(s.age_s())
+        s.select(7)
+        self.assertEqual(s.selected_id, 7)
+        self.assertIsNotNone(s.age_s())
+        s.clear()
+        self.assertIsNone(s.selected_id)
+        self.assertIsNone(s.age_s())
+
+    def test_addon_base_exposes_selection(self):
+        from iSpy.plugins.bases import AddonBase
+        self.assertTrue(hasattr(AddonBase, "selection"))
+        ctx = {"selection": object()}
+        inst = AddonBase.__new__(AddonBase)
+        inst.context = ctx
+        self.assertIs(inst.selection, ctx["selection"])
+
+
+class TestTargetSelector(unittest.TestCase):
+    """F2a: target_selector reads/publishes the selected tracked Object.
+
+    Selection state lives on the shared context (SelectionState), not on the
+    utility - the utility only publishes and owns the web routes.
+    """
+
+    def _make_selector(self, reacquire_timeout_s: float = 1.0,
+                       output_key: str = "selected_target"):
+        from iSpy.plugins.selection import SelectionState
+        from iSpy.plugins.utilities.BuiltIn.TargetSelector import TargetSelector
+        selection = SelectionState()
+        selector = TargetSelector({
+            "config": {
+                "reacquire_timeout_s": reacquire_timeout_s,
+                "output_key": output_key,
+            },
+            "flask_app": None,
+            "selection": selection,
+        })
+        return selector, selection
+
+    def test_nothing_selected_publishes_none(self):
+        from iSpy.vision.Object import Object
+        selector, _selection = self._make_selector()
+        frame_data = {"detections": [Object(x=1.0, y=2.0, z=3.0, id=9)]}
+        selector.update(frame_data)
+        self.assertEqual(frame_data["addon_data"]["selected_target"], None)
+
+    def test_publishes_selected_object(self):
+        from iSpy.vision.Object import Object
+        selector, selection = self._make_selector()
+        obj = Object(x=1.0, y=2.0, z=3.0, id=5, name="cone")
+        selection.select(5)
+        frame_data = {"detections": [obj]}
+        selector.update(frame_data)
+        published = frame_data["addon_data"]["selected_target"]
+        self.assertIsNotNone(published)
+        self.assertEqual(published["id"], 5)
+        self.assertEqual(published["name"], "cone")
+
+    def test_holds_lock_inside_reacquire_timeout(self):
+        from iSpy.vision.Object import Object
+        selector, selection = self._make_selector(reacquire_timeout_s=5.0)
+        selection.select(5)
+        frame_data = {"detections": [Object(x=1.0, y=2.0, z=3.0, id=5)]}
+        selector.update(frame_data)
+        # id drops out briefly but we are still inside the timeout
+        frame_data2 = {"detections": []}
+        selector.update(frame_data2)
+        # selection must be retained, and nothing new published this tick
+        self.assertEqual(selection.selected_id, 5)
+        self.assertNotIn("selected_target", frame_data2.get("addon_data", {}))
+
+    def test_idless_objects_noop_no_raise(self):
+        from iSpy.vision.Object import Object
+        selector, selection = self._make_selector()
+        selection.select(5)
+        # Object always has an id; simulate a plain id-less fallback dict
+        obj_no_id = {"x": 1.0, "y": 2.0, "z": 3.0}
+        frame_data = {"detections": [obj_no_id]}
+        selector.update(frame_data)  # must not raise
+        published = frame_data.get("addon_data", {}).get("selected_target")
+        self.assertIsNone(published)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -63,6 +63,10 @@ class AddonBase(StatusMixin):
     def global_config(self):
         return self.context.get("global_config")
 
+    @property
+    def selection(self):
+        return self.context.get("selection")
+
     @classmethod
     def config_schema(cls) -> dict:
         """declare this add-on's configurable settings (see examples for the format); {} if none needed"""
