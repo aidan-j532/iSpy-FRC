@@ -65,12 +65,19 @@ def has_jetson() -> bool:
 
 @lru_cache()
 def has_hailo_npu() -> bool:
-    import glob
-    if glob.glob("/dev/hailo*"):
-        return True
-    if "hailo" in _lsusb_output():
-        return True
-    return _cmd_ok("hailortcli fw-control identify")
+    # HAILO DISABLED - see <reason>
+    # Hailo/HEF support is temporarily disabled (no Hailo hardware available
+    # for validation on this project). The real detection below is preserved,
+    # commented out, so re-enabling later is a one-line change (delete the
+    # `return False` and uncomment):
+    #
+    # import glob
+    # if glob.glob("/dev/hailo*"):
+    #     return True
+    # if "hailo" in _lsusb_output():
+    #     return True
+    # return _cmd_ok("hailortcli fw-control identify")
+    return False
 
 @lru_cache()
 def has_nvidia() -> bool:
@@ -212,9 +219,15 @@ def recommend_format(
     if has_rockchip_npu():
         logger.info("Rockchip NPU detected - using RKNN format for hardware acceleration.")
         return "rknn"
-    if has_hailo_npu():
-        logger.info("Hailo NPU detected - using HEF format for hardware acceleration.")
-        return "hef"
+    # HAILO DISABLED - see <reason>
+    # Hailo/HEF backend is disabled. has_hailo_npu() is neutered above AND
+    # this branch is commented out (belt and suspenders - re-enabling one
+    # must force a deliberate look at both before HEF can be auto-selected
+    # again):
+    #
+    # if has_hailo_npu():
+    #     logger.info("Hailo NPU detected - using HEF format for hardware acceleration.")
+    #     return "hef"
     if has_edge_tpu():
         logger.info("Edge TPU detected - using TFLite format for hardware acceleration.")
         return "tflite"

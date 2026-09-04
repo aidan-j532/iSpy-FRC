@@ -265,7 +265,7 @@ class iSpyConfig:
                                 # machine (onnx/openvino/rknn/...). Done in the background
                                 # so boot/run stay non-blocking; the .pt runs until the
                                 # optimized artifact is ready.
-                                # Values: "off" (disabled), "auto" (auto-detect), "onnx", "rknn", "openvino", "tflite", "hef", "engine", "coreml"
+                                # Values: "off" (disabled), "auto" (auto-detect), "onnx", "rknn", "openvino", "tflite", "engine", "coreml"
                                 "optimize": "off",
                                 "quantize": False,
                                 # Optional PnP for pose (translation stored on

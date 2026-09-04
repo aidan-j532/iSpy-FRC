@@ -243,14 +243,19 @@ class TestAutoOpt(unittest.TestCase):
         self.assertIsInstance(_recommend(), str)
 
     def test_returns_known_format(self):
-        known = SUPPORTED_FORMATS | {"hef"}
+        # HAILO DISABLED - "hef" removed from the search space (see AutoOpt)
+        known = SUPPORTED_FORMATS
         self.assertIn(_recommend(), known, f"Unknown format: {_recommend()}")
 
     def test_rknn_wins_when_rockchip_npu(self):
         self.assertEqual(_recommend(has_rockchip_npu=True), "rknn")
 
-    def test_hailo_uses_hef(self):
-        self.assertEqual(_recommend(has_hailo_npu=True), "hef")
+    def test_hailo_disabled_never_selects_hef(self):
+        # HAILO DISABLED - has_hailo_npu() is neutered (returns False) and the
+        # recommend_format() hef branch is commented out, so even simulated
+        # Hailo hardware must fall through to the next best backend (onnx here).
+        self.assertEqual(_recommend(has_hailo_npu=True), "onnx")
+        self.assertNotEqual(_recommend(has_hailo_npu=True), "hef")
 
     def test_edge_tpu_uses_tflite(self):
         self.assertEqual(_recommend(has_edge_tpu=True), "tflite")

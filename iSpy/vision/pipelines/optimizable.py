@@ -12,7 +12,7 @@ Subclasses set these attributes in __init__ BEFORE calling anything here:
     self.logger            logging.Logger
     self.quantize          bool   - int8 quantization requested
     self._auto_opt         bool|str - optimize requested; a str may be a
-                              concrete target format ("onnx"/"hef"/...) or a
+                              concrete target format ("onnx"/"engine"/...) or a
                               truthy/falsy word (legacy auto_opt folded in)
     self._requested_format str    - explicit target format or "auto"
     self._target_format    str|None    - resolved lazily, leave None
@@ -25,7 +25,11 @@ from pathlib import Path
 
 #: every backend any model-backed pipeline can build; 'auto' resolution must
 #: pick from this set or fall back to onnx
-SUPPORTED_TARGET_FORMATS = ("onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu", "hef")
+# HAILO DISABLED - see <reason>
+# Original: ("onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu", "hef")
+# "hef" removed so 'auto' resolution, schema options, and auto_opt validation
+# can never select the disabled Hailo backend.
+SUPPORTED_TARGET_FORMATS = ("onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu")
 
 
 class OptimizableModelPipeline:
@@ -44,7 +48,8 @@ class OptimizableModelPipeline:
     #: for the active model artifact/file.
     _HARDWARE_BY_FORMAT = {
         "rknn": "npu",
-        "hef": "npu",      # Hailo NPU
+        # HAILO DISABLED - see <reason>
+        # "hef": "npu",      # Hailo NPU
         "tpu": "tpu",
         "engine": "gpu",    # NVIDIA TensorRT
         "coreml": "gpu",    # Apple GPU
@@ -124,14 +129,16 @@ class OptimizableModelPipeline:
             "optimize": {
                 "type": "select",
                 "label": "Optimize/Convert",
-                "options": ["auto", "onnx", "hef", "off"],
+                # HAILO DISABLED - see <reason>
+                # original: ["auto", "onnx", "hef", "off"]
+                "options": ["auto", "onnx", "off"],
                 "default": "off",
                 "optimize_toggle": True,
                 "help": "Auto-detect and build the best backend artifact for this "
-                        "device (rknn on Rockchip NPU, hef on Hailo, engine on "
+                        "device (rknn on Rockchip NPU, engine on "
                         "NVIDIA, onnx elsewhere, etc.) in the background. "
                         "'auto' picks the best format via recommend_format(). "
-                        "Set 'onnx' or 'hef' to force a specific backend. "
+                        "Set 'onnx' to force a specific backend. "
                         "'off' disables optimization. Falls back to the top-level "
                         "config 'optimize' when unset.",
             },
@@ -229,7 +236,7 @@ class OptimizableModelPipeline:
         Honors both current keys (quantize/optimize) and legacy aliases
         (quantized/auto_opt); subclasses reading a vision_model block get
         that block checked too. optimize/auto_opt can be a boolean or a
-        string: "auto", "onnx", "hef", etc. are truthy; "off" or False
+        string: "auto", "onnx", etc. are truthy; "off" or False
         are falsy.
         """
         if bool(getattr(self, "quantize", False)):
@@ -259,7 +266,7 @@ class OptimizableModelPipeline:
     def _normalize_auto_opt(raw_optimize) -> bool | str:
         """Normalize the optimize/auto_opt setting.
 
-        Can be a boolean, or a string: "auto", "onnx", "hef", etc. (format
+        Can be a boolean, or a string: "auto", "onnx", etc. (format
         selectors), "off"/"false"/"0" (disabled), or "true"/"yes"/"on" (auto).
         A bare truthy boolean means "auto". Returns the raw format string
         when a concrete format is given, else a bool.
@@ -280,7 +287,7 @@ class OptimizableModelPipeline:
     def _auto_opt_to_target_format(self) -> str | None:
         """Resolve the _auto_opt string value to a concrete target format.
 
-        When _auto_opt is a string like "onnx" or "hef", return it directly.
+        When _auto_opt is a string like "onnx" or "engine", return it directly.
         When _auto_opt is True or "auto", return None (caller should use
         recommended_format()). When _auto_opt is False/"off", return None.
         """
