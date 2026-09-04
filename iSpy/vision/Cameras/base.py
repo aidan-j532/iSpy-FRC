@@ -227,12 +227,13 @@ class CameraBase:
                 raise ValueError(f"Camera stream did not start: {self.source}")
             return cap
         backend_candidates = self._get_capture_backend_candidates(platform.system())
-        if extra_backends and cv2.CAP_DSHOW not in backend_candidates:
-            backend_candidates = backend_candidates + [cv2.CAP_DSHOW]
-        if prefer_dshow and cv2.CAP_DSHOW in backend_candidates:
-            backend_candidates = [cv2.CAP_DSHOW] + [
-                b for b in backend_candidates if b != cv2.CAP_DSHOW
-            ]
+        if platform.system() == "Windows":
+            if extra_backends and cv2.CAP_DSHOW not in backend_candidates:
+                backend_candidates = backend_candidates + [cv2.CAP_DSHOW]
+            if prefer_dshow and cv2.CAP_DSHOW in backend_candidates:
+                backend_candidates = [cv2.CAP_DSHOW] + [
+                    b for b in backend_candidates if b != cv2.CAP_DSHOW
+                ]
         last_error = None
         for backend in backend_candidates:
             try:
