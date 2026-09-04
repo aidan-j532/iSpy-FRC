@@ -121,8 +121,8 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 12px 0; }
 /* Status dots */
 .status-dot { display: inline-block; width: 15px; height: 15px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
 .status-ok { background: var(--ok); }
-.status-bad { background: var(--bad); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--bad) 60%, transparent); }
-.status-warn { background: var(--warn); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--warn) 60%, transparent); }
+.status-bad { background: var(--bad); }
+.status-warn { background: var(--warn); }
 
 /* Flash 'off' half of the blink: a single shared timer in cameras.html
    toggles this class on every dot at once (per-dot CSS animations each run
