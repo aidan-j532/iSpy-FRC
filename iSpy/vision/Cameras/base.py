@@ -302,6 +302,10 @@ class CameraBase:
             daemon=True,
             name=f"CapOpen-{self.source}-{backend}",
         )
+        if self.stopped:
+            raise CameraOpenTimeout(
+                f"Camera {self.source}: stopping - aborting open with backend {backend}"
+            )
         try:
             opener.start()
         except Exception:
@@ -453,6 +457,8 @@ class CameraBase:
 
     def _attempt_reconnect(self) -> bool:
         """Try to open the capture device; keep searching if it's absent."""
+        if self.stopped:
+            return False
         try:
             self._open_camera()
         except Exception as exc:
