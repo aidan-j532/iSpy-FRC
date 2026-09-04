@@ -207,7 +207,7 @@ input[type="checkbox"], input[type="file"] { cursor: pointer; }
   display: flex; align-items: center; gap: 6px;
   padding: 8px 0 0; font-size: 0.82rem;
 }
-.cam-status { color: var(--text-dim); font-size: 0.8rem; text-transform: capitalize; }
+.cam-status { color: var(--text-dim); font-size: 0.8rem; text-transform: capitalize; white-space: pre-line; }
 
 /* Camera lightbox */
 .camera-lightbox {

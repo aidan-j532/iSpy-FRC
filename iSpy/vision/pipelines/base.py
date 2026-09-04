@@ -39,8 +39,13 @@ class VisionPipeline(Camera, VisionBase):
     plugin_name = "pipeline"
     output_schema_version = OUTPUT_SCHEMA_VERSION
 
+    # Build-style messages (optimizing / building / downloading) can overlap
+    # with run-style ones (calibration warnings), so keep them in separate
+    # slots and surface both to the UI.
+    _BUILD_PREFIXES = ("optimizing", "building", "converting", "download")
+
     def __init__(self, camera_config, input_size, grayscale):
-        self._status = "initializing"
+        self._statuses = {"run": "initializing", "build": None}
         Camera.__init__(self, camera_config, input_size, grayscale)
 
     # ------------------------------------------------------------------
@@ -63,7 +68,11 @@ class VisionPipeline(Camera, VisionBase):
         return True, "ready"
 
     def get_status(self) -> str:
-        return getattr(self, "_status", "initializing")
+        build = getattr(self, "_statuses", {}).get("build")
+        run = getattr(self, "_statuses", {}).get("run") or "initializing"
+        if build:
+            return f"{build}\n{run}"
+        return run
 
     def get_state(self) -> str:
         status = self.get_status()
@@ -79,7 +88,11 @@ class VisionPipeline(Camera, VisionBase):
         return "initializing"
 
     def _set_status(self, status: str):
-        self._status = status
+        lowered = status.lower()
+        if lowered.startswith(self._BUILD_PREFIXES):
+            self._statuses["build"] = status
+        else:
+            self._statuses["run"] = status
 
     def process(self, frame):
         return self.run()

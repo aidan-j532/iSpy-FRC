@@ -410,10 +410,13 @@ class CameraBase:
                     break
 
             if not _fmt_ok:
-                self.logger.warning(
-                    "v4l2-ctl format set failed for %s — skipping hardware format negotiation",
-                    device,
-                )
+                now = time.monotonic()
+                if now - getattr(self, "_last_format_warn", 0.0) >= 60.0:
+                    self._last_format_warn = now
+                    self.logger.warning(
+                        "v4l2-ctl format set failed for %s — skipping hardware format negotiation",
+                        device,
+                    )
 
             try:
                 subprocess.run(

@@ -95,8 +95,23 @@ scene.add(hemiLight);
 const gridHelper = new THREE.GridHelper(20, 80, 0x2a2e38, 0x1a1d24);
 gridHelper.material.fog = false;
 scene.add(gridHelper);
-const axesHelper = new THREE.AxesHelper(8);
-axesHelper.material.fog = false;
+function solidAxes(size) {
+  // AxesHelper shades each line's far vertex to a 60% blended color, which
+  // reads as a gradient. Override every vertex color so each axis is one
+  // solid color: X red, Y green, Z blue.
+  const a = new THREE.AxesHelper(size);
+  a.material.fog = false;
+  const solid = [
+    1,0,0, 1,0,0,
+    0,1,0, 0,1,0,
+    0,0,1, 0,0,1,
+  ];
+  const colors = a.geometry.attributes.color.array;
+  for (let i = 0; i < colors.length; i++) colors[i] = solid[i % solid.length];
+  a.geometry.attributes.color.needsUpdate = true;
+  return a;
+}
+const axesHelper = solidAxes(8);
 scene.add(axesHelper);
 
 window.toggleGrid = function() {
@@ -196,8 +211,7 @@ function makePlanarMarker(o) {
     new THREE.EdgesGeometry(planeGeo),
     new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }),
   ));
-  const tagAxes = new THREE.AxesHelper(size * 0.6);
-  tagAxes.material.fog = false;
+  const tagAxes = solidAxes(size * 0.6);
   g.add(tagAxes);
   g.userData.planarSize = size;
   return g;

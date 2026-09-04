@@ -1684,11 +1684,12 @@ class CamerasModule(WebModule):
                 inst = self.live_cameras.get(n)
                 if inst is not None and hasattr(inst, "is_ready"):
                     try:
-                        ready, status = inst.is_ready()
+                        ready, _ = inst.is_ready()
                     except Exception:
-                        ready, status = False, "error: is_ready() raised"
+                        ready = False
                     payload["ready"] = bool(ready)
-                    payload["status"] = str(status)
+                    status = getattr(inst, "get_status", None)
+                    payload["status"] = status() if callable(status) else None
                     state = getattr(inst, "get_state", None)
                     payload["state"] = state() if callable(state) else None
                 else:
