@@ -1489,7 +1489,15 @@ function closeModelPicker() {
 /* Camera cards / refresh */
 
 function statusDotClass(cam) {
-  if (cam.ready) return 'status-ok';
+  if (cam.ready) {
+    // calibration levels are surfaced through cam.status by the pipeline.
+    // "Needs Calibration" (red) = pipeline blocked until calibration exists;
+    // "Needs Calibration for Better Accuracy" (yellow) = runs, just approximate.
+    const s = (cam.status || '').toLowerCase();
+    if (s.includes('needs calibration for better accuracy')) return 'status-warn';
+    if (s.includes('needs calibration')) return 'status-bad';
+    return 'status-ok';
+  }
   if (['optimizing', 'downloading', 'initializing'].includes(cam.state)) return 'status-warn';
   return 'status-bad';
 }

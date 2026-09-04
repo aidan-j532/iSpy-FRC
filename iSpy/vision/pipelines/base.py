@@ -51,6 +51,14 @@ class VisionPipeline(Camera, VisionBase):
         pass
 
     def is_ready(self) -> tuple[bool, str]:
+        level, msg = self.calibration_status()
+        if level == "yellow":
+            # runs, but approximate pose/depth until calibrated
+            self._set_status(msg)
+            return True, msg
+        if level == "red":
+            self._set_status(msg)
+            return False, msg
         self._set_status("ready")
         return True, "ready"
 
@@ -226,13 +234,41 @@ class VisionPipeline(Camera, VisionBase):
             pass
         return self.calibration_ready()
 
+    def needs_calibration_to_run(self) -> bool:
+        """True when the pipeline **cannot produce meaningful output** without
+        calibration (e.g. pose models that need accurate 3D, or pipelines
+        whose detection math depends on camera intrinsics).
+
+        Returns False for pipelines that can still detect objects/tags/codes
+        without calibration — those show a yellow warning instead of blocking."""
+        return True
+
+    def calibration_status(self) -> tuple[str, str | None]:
+        """Classify calibration state for the UI dot + status text.
+
+        Returns one of:
+          ("ready", None)           — calibrated, green dot
+          ("yellow", message)       — uncalibrated but detection still runs
+          ("red", message)          — uncalibrated and pipeline is blocked
+        """
+        if self.calibration_ready():
+            return "ready", None
+        if self.needs_calibration_to_run():
+            return "red", "Needs Calibration"
+        return "yellow", "Needs Calibration for Better Accuracy"
+
     def _gate_uncalibrated(self, frame):
         """run() top helper: returns ([], frame) passthrough when the pipeline
         needs calibration that is not configured yet, else None."""
-        if self._calibration_processable():
+        level, msg = self.calibration_status()
+        if level == "ready":
             return None
-        self._set_status("ready (uncalibrated - passthrough)")
-        return [], frame
+        if level == "red":
+            self._set_status(msg)
+            return [], frame
+        # yellow: detection runs, just show a warning
+        self._set_status(msg)
+        return None
 
 
 class BackgroundPreparedPipeline(VisionPipeline):

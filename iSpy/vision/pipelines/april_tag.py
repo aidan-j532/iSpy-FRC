@@ -101,6 +101,10 @@ class AprilTagPipeline(VisionPipeline):
 
         self._set_status("ready")
 
+    def needs_calibration_to_run(self) -> bool:
+        """AprilTag detection works without calibration — only pose is approximate."""
+        return False
+
     def _focal_length_px_fov(self, img_w: int) -> float:
         if self.fov and self.fov > 0:
             return (img_w / 2.0) / math.tan(math.radians(self.fov / 2.0))
@@ -133,6 +137,7 @@ class AprilTagPipeline(VisionPipeline):
         frame = self.get_frame()
         if frame is None:
             return [], None
+
         gated = self._gate_uncalibrated(frame)
         if gated is not None:
             return gated

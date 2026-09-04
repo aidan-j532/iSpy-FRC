@@ -925,5 +925,125 @@ class TestTargetSelector(unittest.TestCase):
         self.assertIsNone(published)
 
 
+# ─── calibration gating: yellow vs red (detection vs pose) ──────────────────
+
+class TestCalibrationGating(unittest.TestCase):
+    """Uncalibrated detect pipelines run with a yellow warning; pose pipelines
+    block (red) until calibration exists."""
+
+    @staticmethod
+    def _restore_scipy_optimize(had_optimize, prior_optimize):
+        if had_optimize:
+            sys.modules["scipy.optimize"] = prior_optimize
+        else:
+            sys.modules.pop("scipy.optimize", None)
+
+    def _calibration(self, **over):
+        calib = {"distance": 0.0, "game_piece_size": 0.0, "size": 0, "fov": 0}
+        calib.update(over)
+        return calib
+
+    def _build_detect_pipeline(self, task):
+        from iSpy import vision as _vision
+        scipy_optimize = types.ModuleType("scipy.optimize")
+        scipy_optimize.least_squares = MagicMock()
+        had = "scipy.optimize" in sys.modules
+        prior = sys.modules.get("scipy.optimize")
+        sys.modules["scipy.optimize"] = scipy_optimize
+        self.addCleanup(self._restore_scipy_optimize, had, prior)
+
+        from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+        from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+
+        config = iSpyConfig()
+        cam_entry = {
+            "name": "calib_cam",
+            "source": 99,
+            "fps_cap": 1000,
+            "yaw": 0, "pitch": 0, "height": 1.0,
+            "x": 0, "y": 0,
+            "grayscale": False,
+            "subsystem": "test",
+            "calibration": self._calibration(),
+            "pipeline": {
+                "name": "object_detection",
+                "settings": {"vision_model": {"file_path": "does/not/exist.pt", "task": task}},
+            },
+        }
+        config.set("camera_configs", {"calib_cam": cam_entry})
+        cam_cfg = iSpyCameraConfig(cam_entry)
+        with _QuietLogging():
+            return ObjectDetectionPipeline(cam_cfg, config)
+
+    def test_detect_uncalibrated_is_yellow_and_runs(self):
+        """Detect-task model without calibration -> yellow warning, not blocked."""
+        camera = self._build_detect_pipeline("detect")
+        try:
+            level, msg = camera.calibration_status()
+            self.assertEqual(level, "yellow")
+            self.assertIn("Needs Calibration for Better Accuracy", msg)
+            # _gate_uncalibrated must NOT block a detect pipeline
+            self.assertIsNone(camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8)))
+        finally:
+            camera.destroy()
+
+    def test_pose_uncalibrated_is_red_and_blocks(self):
+        """Pose-task model without calibration -> red warning, pipeline blocked."""
+        camera = self._build_detect_pipeline("pose")
+        try:
+            level, msg = camera.calibration_status()
+            self.assertEqual(level, "red")
+            self.assertEqual(msg, "Needs Calibration")
+            # _gate_uncalibrated blocks a pose pipeline
+            gated = camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8))
+            self.assertIsNotNone(gated)
+            objs, frame = gated
+            self.assertEqual(objs, [])
+            self.assertIsNotNone(frame)
+        finally:
+            camera.destroy()
+
+    def test_calibrated_detect_is_green(self):
+        """A calibrated pipeline (fov > 0) reports ready, not yellow."""
+        from iSpy import vision as _vision
+        scipy_optimize = types.ModuleType("scipy.optimize")
+        scipy_optimize.least_squares = MagicMock()
+        had = "scipy.optimize" in sys.modules
+        prior = sys.modules.get("scipy.optimize")
+        sys.modules["scipy.optimize"] = scipy_optimize
+        self.addCleanup(self._restore_scipy_optimize, had, prior)
+
+        from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+        from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+
+        config = iSpyConfig()
+        cam_entry = {
+            "name": "calib_cam",
+            "source": 99,
+            "fps_cap": 1000,
+            "yaw": 0, "pitch": 0, "height": 1.0,
+            "x": 0, "y": 0,
+            "grayscale": False,
+            "subsystem": "test",
+            "calibration": self._calibration(fov=90),
+            "pipeline": {
+                "name": "object_detection",
+                "settings": {"vision_model": {"file_path": "does/not/exist.pt", "task": "detect"}},
+            },
+        }
+        config.set("camera_configs", {"calib_cam": cam_entry})
+        cam_cfg = iSpyCameraConfig(cam_entry)
+        with _QuietLogging():
+            camera = ObjectDetectionPipeline(cam_cfg, config)
+        try:
+            level, msg = camera.calibration_status()
+            self.assertEqual(level, "ready")
+            # calibrated gate lets the pipeline through (model missing -> not
+            # processable, but that's a separate concern from calibration)
+            self.assertIsNone(camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8)))
+        finally:
+            camera.destroy()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

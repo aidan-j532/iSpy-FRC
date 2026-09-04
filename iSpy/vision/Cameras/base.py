@@ -205,7 +205,6 @@ class CameraBase:
 
             try:
                 atexit.register(self.destroy)
-                print(f"[DEBUG] Camera {self.source}: atexit registered", flush=True)
             except Exception:
                 pass
 
@@ -529,7 +528,6 @@ class CameraBase:
         return not self.stopped
 
     def _reader(self):
-        print(f"[DEBUG] Camera {self.source}: reader thread started", flush=True)
         frame_interval = 1.0 / self._fps_cap if self._fps_cap > 0 else 0.0
         next_frame_time = 0.0
         consecutive_failures = 0
@@ -652,10 +650,8 @@ class CameraBase:
 
     def destroy(self):
         if getattr(self, "_destroyed", False):
-            print(f"[DEBUG] Camera {self.source}: destroy() called again (atexit?) - skipping", flush=True)
             return
         self._destroyed = True
-        print(f"[DEBUG] Camera {self.source}: destroy() called - joining reader thread", flush=True)
         self.stopped = True
         reader = getattr(self, "_reader_thread", None)
         if reader is not None and reader is not threading.current_thread():
@@ -665,7 +661,6 @@ class CameraBase:
                 except Exception:
                     pass
             reader.join(timeout=5.0)
-            print(f"[DEBUG] Camera {self.source}: reader thread joined (alive={reader.is_alive()})", flush=True)
         if not self.is_image and hasattr(self, "cap") and self.cap:
             try:
                 self.cap.release()
@@ -675,7 +670,6 @@ class CameraBase:
             cv2.destroyAllWindows()
         except Exception:
             pass
-        print(f"[DEBUG] Camera {self.source}: destroy() complete", flush=True)
 
     def release(self):
         self.destroy()

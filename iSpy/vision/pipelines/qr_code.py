@@ -89,6 +89,10 @@ class QRCodePipeline(VisionPipeline):
 
         self._set_status("ready")
 
+    def needs_calibration_to_run(self) -> bool:
+        """QR detection works without calibration — only pose is approximate."""
+        return False
+
     def _focal_length_px_fov(self, img_w: int) -> float:
         if self.fov and self.fov > 0:
             return (img_w / 2.0) / math.tan(math.radians(self.fov / 2.0))
@@ -162,9 +166,9 @@ class QRCodePipeline(VisionPipeline):
             self._last_objects = self.get_demo_objects(frame)
             return self._last_objects, frame
 
-        if not self._calibration_processable():
-            self._set_status("ready (uncalibrated - passthrough)")
-            return [], frame
+        gated = self._gate_uncalibrated(frame)
+        if gated is not None:
+            return gated
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 

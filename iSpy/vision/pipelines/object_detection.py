@@ -394,24 +394,47 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             return Path(path).name == _artifact_name(src, self._target_format_cached())
         return True
 
+    def needs_calibration_to_run(self) -> bool:
+        """Pose models need calibration for accurate 3D — block (red).
+        Detect-only models can run without calibration — warn (yellow)."""
+        vm_cfg = self.config.get_pipeline_setting("vision_model")
+        task = "detect"
+        if isinstance(vm_cfg, dict):
+            task = vm_cfg.get("task", "detect")
+        return task == "pose"
+
     def is_ready(self) -> tuple[bool, str]:
         # pure status report - never triggers/blocks on optimization
+        cal_level, cal_msg = self.calibration_status()
         if not self._optimization_requested():
-            status = "ready" if self.model is not None else "error: no model configured/found"
+            model_ok = self.model is not None
+            if cal_level == "red":
+                self._set_status(cal_msg)
+                return False, cal_msg
+            if cal_level == "yellow":
+                self._set_status(cal_msg)
+                return model_ok, cal_msg
+            status = "ready" if model_ok else "error: no model configured/found"
             self._set_status(status)
-            return self.model is not None, status
+            return model_ok, status
 
         if self._optimizing:
             self._set_status("optimizing")
             return False, "optimizing"
 
-        if self._optimized_active():
-            self._set_status("ready")
-            return True, "ready"
+        if not self._optimized_active():
+            status = self._optimize_error or "optimizing"
+            self._set_status(status)
+            return False, status
 
-        status = self._optimize_error or "optimizing"
-        self._set_status(status)
-        return False, status
+        if cal_level == "red":
+            self._set_status(cal_msg)
+            return False, cal_msg
+        if cal_level == "yellow":
+            self._set_status(cal_msg)
+            return True, cal_msg
+        self._set_status("ready")
+        return True, "ready"
 
     def optimize(self, **kwargs) -> str:
         if self._optimizing:
@@ -856,9 +879,12 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 frame = self.frame
         if frame is None:
             return [], None
+
+        gated = self._gate_uncalibrated(frame)
+        if gated is not None:
+            return gated
+
         if not self._is_processable():
-            if not self._calibration_processable():
-                self._set_status("ready (uncalibrated - passthrough)")
             return [], frame
 
         data, annotated = self.get_yolo_data()
