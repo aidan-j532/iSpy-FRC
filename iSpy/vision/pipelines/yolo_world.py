@@ -233,11 +233,11 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         elif auto_opt_fmt:
             target = auto_opt_fmt
         else:
-            # same resolution ensure_quantized_model uses so readiness
-            # agrees with the artifact that actually gets built
+            # same resolution _target_format_cached() agrees with so
+            # readiness matches the artifact that actually gets built
             # (deliberately NOT ignore_dependencies - unlike the other
             # model-backed pipelines, a dependency-less guess here could
-            # disagree with the artifact ensure_quantized_model builds)
+            # disagree with the artifact the quantized build produces)
             from iSpy.config.AutoOpt import recommend_format
             target = recommend_format()
         if target not in SUPPORTED_TARGET_FORMATS:
@@ -511,18 +511,38 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 self.model = None
                 return
 
-            from iSpy.vision.QuantizedModel import ensure_quantized_model
+            # AGPL isolation (like _reparameterize_world): every format this
+            # path can produce is exported via optimizer._export_ultralytics(),
+            # which imports ultralytics (AGPL-3.0) in-process if reached
+            # directly. ensure_quantized_model()/convert_model() do exactly
+            # that, so the quantized build is pushed into a subprocess via
+            # optimizer._convert_model_subprocess - the same pattern
+            # ObjectDetectionPipeline.optimize() uses. The network-serving
+            # process never imports ultralytics.
+            #
             # cached resolved format (not the raw "auto" setting) so the
             # artifact built here is always the one _optimized_active()
             # expects to find
-            artifact, converted = ensure_quantized_model(
-                fixed,
-                self._target_format_cached(),
-                (self._model_input_size, self._model_input_size),
-                quantize=True,
-                dataset_path=self._quantization_dataset,
-                force=force,
-            )
+            target_format = self._target_format_cached()
+            if target_format == "tpu":
+                # TPU runs the .pt directly via torch_xla - no conversion
+                artifact, converted = fixed, True
+            else:
+                from iSpy.vision.optimizer import _convert_model_subprocess
+
+                converted_path = _convert_model_subprocess(
+                    str(fixed),
+                    target_format,
+                    list((self._model_input_size, self._model_input_size)),
+                    quantize=True,
+                    force=force,
+                    dataset_path=self._quantization_dataset,
+                )
+                # _convert_model_subprocess falls back to the source .pt when
+                # conversion is skipped or fails; reclaim ensure_quantized_model's
+                # (artifact, converted) contract from the returned path.
+                artifact = str(converted_path)
+                converted = artifact != str(fixed)
             if not converted:
                 self._set_load_error(
                     f"quantized conversion of {Path(fixed).name} produced no artifact"
