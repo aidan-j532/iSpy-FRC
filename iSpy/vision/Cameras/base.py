@@ -11,6 +11,7 @@ import numpy as np
 
 from iSpy.config.iSpyConfig import iSpyCameraConfig
 from iSpy.vision.Cameras._device_guard import free_camera_device
+from iSpy.vision.Cameras._discovery import _silence_stderr
 from iSpy.vision.Object import Object
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -277,11 +278,16 @@ class CameraBase:
             global _open_worker_live
             try:
                 try:
-                    cap = (
-                        cv2.VideoCapture(self.source)
-                        if backend is None
-                        else cv2.VideoCapture(self.source, backend)
-                    )
+                    # OpenCV's v4l2 backend prints some open failures via
+                    # perror() straight to fd 2 (see _silence_stderr) - silence
+                    # it here so a non-camera /dev/video* node can't spam the
+                    # log on every open/reconnect attempt.
+                    with _silence_stderr():
+                        cap = (
+                            cv2.VideoCapture(self.source)
+                            if backend is None
+                            else cv2.VideoCapture(self.source, backend)
+                        )
                 except Exception as exc:
                     holder["error"] = exc
                     return

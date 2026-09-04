@@ -11,6 +11,7 @@ what it can see. Discovery is platform-aware:
 - Anything else (macOS ...): best-effort /dev/video glob + index probing.
 """
 
+import contextlib
 import glob
 import os
 import platform
@@ -18,6 +19,28 @@ import re
 import subprocess
 
 import cv2
+
+
+@contextlib.contextmanager
+def _silence_stderr():
+    """Devnull fd 2 while a 3rd-party call prints straight to stderr.
+
+    Some OpenCV builds report V4L2 open failures (e.g. ``ioctl(VIDIOC_QUERYCAP):
+    Inappropriate ioctl for device`` on a Rockchip /dev/video* node that isn't a
+    capture camera) via perror() directly to fd 2, bypassing the env-controllable
+    logger - so OPENCV_LOG_LEVEL can't silence them. Redirecting fd 2 around the
+    call covers those AND any build that ignores the env vars. iSpy's own logging
+    is unaffected: it writes to the real stderr fd captured at boot.
+    """
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_fd = os.dup(2)
+    os.dup2(devnull, 2)
+    try:
+        yield
+    finally:
+        os.dup2(old_fd, 2)
+        os.close(old_fd)
+        os.close(devnull)
 
 # names windows hands out when it has nothing better - treat as unknown and keep digging
 _GENERIC_WINDOWS_NAMES = {
@@ -260,16 +283,20 @@ def _probe_index_devices(claimed):
             devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
             continue
         try:
-            cap = cv2.VideoCapture(i, cv2.CAP_ANY)
-            if cap is not None and cap.isOpened():
-                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                devices.append({
-                    "path": str(i), "name": f"Camera {i}",
-                    "resolution": f"{w}x{h}" if w and h else None,
-                    "device_id": None,
-                })
-                cap.release()
+            # OpenCV prints some open failures via perror() straight to stderr
+            # (see _silence_stderr) - keep the UI probe log clean for the
+            # /dev/video* indices that aren't cameras.
+            with _silence_stderr():
+                cap = cv2.VideoCapture(i, cv2.CAP_ANY)
+                if cap is not None and cap.isOpened():
+                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    devices.append({
+                        "path": str(i), "name": f"Camera {i}",
+                        "resolution": f"{w}x{h}" if w and h else None,
+                        "device_id": None,
+                    })
+                    cap.release()
         except Exception:
             continue
     return devices
