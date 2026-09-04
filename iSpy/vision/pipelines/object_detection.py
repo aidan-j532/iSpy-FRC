@@ -921,10 +921,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         return self.subsystem
 
     def destroy(self):
-        self.stopped = True
-        if not self.is_image and hasattr(self, "cap") and self.cap:
-            self.cap.release()
-        cv2.destroyAllWindows()
+        super().destroy()
 
     def release(self):
         self.destroy()

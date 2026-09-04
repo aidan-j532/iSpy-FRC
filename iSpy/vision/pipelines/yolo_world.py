@@ -613,8 +613,5 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return frame
 
     def destroy(self):
-        self.stopped = True
-        if hasattr(self, "cap") and self.cap:
-            self.cap.release()
-        cv2.destroyAllWindows()
+        super().destroy()
 
