@@ -458,6 +458,16 @@ def _any_camera_uses_csi() -> bool:
         return False
 
 
+def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Attach the flags shared between `python -m iSpy.boot.boot` and the
+    `ispy` CLI (iSpy.cli), so both entry points stay in lockstep."""
+    parser.add_argument("-s", "--service", action="store_true",
+                         help="Install and start the watchdog service")
+    parser.add_argument("-w", "--wait", action="store_true",
+                         help="Wait for all pipelines to be ready before running vision")
+    return parser
+
+
 def main():
     if has_jetson() and _any_camera_uses_csi():
         if ensure_csi_capable_opencv(auto_fix=True):
@@ -465,14 +475,11 @@ def main():
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
     parser = argparse.ArgumentParser(description="iSpy boot sequence")
-    parser.add_argument("-s", "--service", action="store_true",
-                         help="Install and start the watchdog service")
+    parser = add_boot_arguments(parser)
     parser.add_argument("-f", "--fresh", action="store_true",
                          help="Forcefully wipe generated state (Config, Outputs, "
                               "YoloModels, QuantizeDataset) and create a fresh "
                               "default setup")
-    parser.add_argument("-w", "--wait", action="store_true",
-                         help="Wait for all pipelines to be ready before running vision")
     args = parser.parse_args()
     on_boot(install_service=args.service, fresh=args.fresh, wait=args.wait)
 

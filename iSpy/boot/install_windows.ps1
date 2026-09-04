@@ -50,13 +50,21 @@ if ($LASTEXITCODE -ne 0) {
     & cmd /c "$pythonCmd -m pip install -e ."
 }
 
-# 4. Run fresh setup
+# 4. Run fresh setup (prefer the `ispy` CLI; fall back to `python -m` if the
+# console script didn't register, e.g. on some non-editable installs)
 Write-Host "Running first-time setup..."
-& cmd /c "$pythonCmd -m iSpy.boot.boot -f"
+$ispyCommand = Get-Command ispy -ErrorAction SilentlyContinue
+if ($ispyCommand) {
+    & ispy setup
+} else {
+    & cmd /c "$pythonCmd -m iSpy.boot.boot -f"
+}
 
 Write-Host ""
 Write-Host "Setup complete." -ForegroundColor Green
-Write-Host "Run 'python -m iSpy.boot.boot -s' from $installDir to start iSpy as a background service."
+Write-Host "Run 'ispy start' from $installDir to start iSpy"
+Write-Host "  (fallback: 'python -m iSpy.boot.boot')."
+Write-Host "Run 'ispy start -s' -- or 'python -m iSpy.boot.boot -s' -- to start iSpy as a background service."
 Write-Host "Dashboard: http://localhost:5000"
 
 Pop-Location

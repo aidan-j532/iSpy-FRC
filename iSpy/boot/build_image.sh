@@ -68,9 +68,14 @@ apt-get install -y python3 python3-pip python3-venv avahi-daemon v4l-utils
 cd /opt/iSpy-FRC
 pip3 install -e . --break-system-packages
 
-# fresh install: this pulls hardware-appropriate deps via
+# fresh install: prefer the `ispy` CLI, fall back to python -m if the
+# console script didn't register. this pulls hardware-appropriate deps via
 # install_special_dependencies(auto_install=True) (see first_boot.py patch)
-python3 -m iSpy.boot.boot -f
+if command -v ispy >/dev/null 2>&1; then
+    ispy setup
+else
+    python3 -m iSpy.boot.boot -f
+fi
 
 # bake in the systemd units + mDNS hostname so it's live on first real boot,
 # not just this chroot session
@@ -101,3 +106,5 @@ xz -T0 -9 "./${OUT_NAME}.img"
 
 echo "==> Done: ${OUT_NAME}.img.xz"
 echo "Flash with Raspberry Pi Imager or balenaEtcher. Board boots as 'ispy.local'."
+echo "Manage the install with 'ispy setup' / 'ispy start'"
+echo "  (fallback: 'python3 -m iSpy.boot.boot -f' / 'python3 -m iSpy.boot.boot')."

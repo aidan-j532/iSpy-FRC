@@ -52,11 +52,18 @@ echo "Installing iSpy and dependencies..."
 "$PYTHON_BIN" -m pip install -e . --break-system-packages 2>/dev/null \
     || "$PYTHON_BIN" -m pip install -e .
 
-# 4. Run fresh setup
+# 4. Run fresh setup (prefer the `ispy` CLI; fall back to `python -m` if the
+# console script didn't register, e.g. on some non-editable installs)
 echo "Running first-time setup..."
-"$PYTHON_BIN" -m iSpy.boot.boot -f
+if command -v ispy >/dev/null 2>&1; then
+    ispy setup
+else
+    "$PYTHON_BIN" -m iSpy.boot.boot -f
+fi
 
 echo ""
 echo "Setup complete."
-echo "Run '$PYTHON_BIN -m iSpy.boot.boot -s' from $INSTALL_DIR to install iSpy as a background service."
+echo "Run 'ispy start' from $INSTALL_DIR to start iSpy"
+echo "  (fallback: '$PYTHON_BIN -m iSpy.boot.boot')."
+echo "Run 'ispy start -s' -- or '$PYTHON_BIN -m iSpy.boot.boot -s' -- to install iSpy as a background service."
 echo "Dashboard: http://localhost:5000"

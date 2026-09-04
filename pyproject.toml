@@ -70,6 +70,7 @@ optimizer = [
 ]
 
 [project.scripts]
+ispy = "iSpy.cli:main"
 ispy-run  = "iSpy.core.game_loop:main"
 ispy-boot = "iSpy.boot.boot:main"
 ispy-bench = "iSpy.validations.benchmarking:main"
