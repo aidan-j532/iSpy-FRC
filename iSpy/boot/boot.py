@@ -22,7 +22,7 @@ from iSpy.vision.metadata import (
 from iSpy.boot.opencv_fix import ensure_csi_capable_opencv
 from iSpy.vision.pipelines import get_pipeline_classes
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("iSpy.boot.boot")
 logging.getLogger().setLevel(logging.INFO)
 
 _BOOT_DIR = Path(__file__).resolve().parent
@@ -211,7 +211,7 @@ def _configure_quiet_logging() -> None:
     class _iSpyLogFilter(logging.Filter):
         def filter(self, record: logging.LogRecord) -> bool:
             name = record.name or ""
-            return name == "root" or name.startswith("iSpy")
+            return name == "root" or name == "__main__" or name.startswith("iSpy")
 
     formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
@@ -232,7 +232,7 @@ def _configure_quiet_logging() -> None:
 
     logging.getLogger("iSpy").setLevel(logging.INFO)
     for name in list(logging.Logger.manager.loggerDict):
-        if not name.startswith("iSpy"):
+        if name != "__main__" and not name.startswith("iSpy"):
             logging.getLogger(name).setLevel(logging.WARNING)
 
 
