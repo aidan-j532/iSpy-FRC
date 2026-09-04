@@ -1530,12 +1530,14 @@ function updateCameraFooter(card, cam) {
   if (!footer) {
     footer = document.createElement('div');
     footer.className = 'camera-footer';
+    footer.innerHTML = '<span class="status-dot"></span><span class="cam-status"></span>';
     card.appendChild(footer);
   }
-  footer.innerHTML = `
-    <span class="status-dot ${statusDotClass(cam)}"></span>
-    <span class="cam-status">${escapeHtml(status)}</span>
-  `;
+  // reuse the existing dot instead of re-creating it every refresh, otherwise
+  // the new element starts a fresh phase and the shared blink clock can't keep
+  // it in sync with the other dots
+  footer.querySelector('.status-dot').className = 'status-dot ' + statusDotClass(cam);
+  footer.querySelector('.cam-status').textContent = status;
 }
 
 function buildCameraCard(name, isStreaming, ageText, cam) {
@@ -2666,5 +2668,22 @@ async function resetCalibration() {
 refreshCameras();
 refreshTimer = setInterval(refreshCameras, currentRate);
 _syncUnit();
+
+/* One shared blink clock for all camera status dots: a single timer toggles
+   the same class on every dot at the same moment, so the header + footer dots
+   (and every camera card) flash in sync instead of each element running its
+   own independent CSS animation phase. Yellow blinks slow (~1.4s), red blinks
+   fast (~0.7s). Skipped when the user prefers reduced motion. */
+if (!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+  let warnOn = true, badOn = true;
+  setInterval(() => {
+    warnOn = !warnOn;
+    document.querySelectorAll('.status-dot.status-warn').forEach(d => d.classList.toggle('status-hidden', warnOn));
+  }, 700);
+  setInterval(() => {
+    badOn = !badOn;
+    document.querySelectorAll('.status-dot.status-bad').forEach(d => d.classList.toggle('status-hidden', badOn));
+  }, 350);
+}
 </script>
 {% endblock %}

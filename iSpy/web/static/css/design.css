@@ -119,22 +119,16 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 12px 0; }
 .stat-unit { font-size: 0.78rem; color: var(--text-dim); margin-left: 2px; font-weight: 400; }
 
 /* Status dots */
-.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
+.status-dot { display: inline-block; width: 15px; height: 15px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
 .status-ok { background: var(--ok); }
-.status-bad { background: var(--bad); }
-.status-warn { background: var(--warn); }
+.status-bad { background: var(--bad); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--bad) 60%, transparent); }
+.status-warn { background: var(--warn); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--warn) 60%, transparent); }
 
-/* Camera status dots flash on non-ready states: yellow blinks (calibrating /
-   initializing / optimizing), red blinks faster (error); green stays solid. */
-@keyframes status-dot-flash {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0.12; }
-}
-.status-dot.status-warn { animation: status-dot-flash 1.4s step-end infinite; }
-.status-dot.status-bad { animation: status-dot-flash 0.7s step-end infinite; }
-@media (prefers-reduced-motion: reduce) {
-  .status-dot.status-warn, .status-dot.status-bad { animation: none; }
-}
+/* Flash 'off' half of the blink: a single shared timer in cameras.html
+   toggles this class on every dot at once (per-dot CSS animations each run
+   their own phase and drift out of sync), so header + footer + all cards
+   blink together. Yellow blinks slow, red fast; green stays solid. */
+.status-dot.status-hidden { opacity: 0.12; }
 
 /* Buttons */
 button, .btn {
