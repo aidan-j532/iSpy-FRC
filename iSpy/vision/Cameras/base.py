@@ -643,6 +643,9 @@ class CameraBase:
         pass
 
     def destroy(self):
+        if getattr(self, "_destroyed", False):
+            return
+        self._destroyed = True
         self.stopped = True
         reader = getattr(self, "_reader_thread", None)
         if reader is not None and reader is not threading.current_thread():
@@ -660,7 +663,10 @@ class CameraBase:
                 self.cap.release()
             except Exception:
                 pass
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
 
     def release(self):
         self.destroy()
