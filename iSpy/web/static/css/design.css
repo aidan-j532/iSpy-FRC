@@ -124,6 +124,18 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 12px 0; }
 .status-bad { background: var(--bad); }
 .status-warn { background: var(--warn); }
 
+/* Camera status dots flash on non-ready states: yellow blinks (calibrating /
+   initializing / optimizing), red blinks faster (error); green stays solid. */
+@keyframes status-dot-flash {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.12; }
+}
+.status-dot.status-warn { animation: status-dot-flash 1.4s step-end infinite; }
+.status-dot.status-bad { animation: status-dot-flash 0.7s step-end infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.status-warn, .status-dot.status-bad { animation: none; }
+}
+
 /* Buttons */
 button, .btn {
   background: var(--accent); color: #fff; border: none; padding: 7px 14px;
