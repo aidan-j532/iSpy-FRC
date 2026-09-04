@@ -30,14 +30,22 @@ class SettingsModule(WebModule):
         flask_app.add_url_rule("/api/settings/compare", "api_settings_compare", self._compare, methods=["POST"])
         flask_app.add_url_rule("/api/settings/snapshot", "api_settings_snapshot", self._snapshot, methods=["POST"])
         flask_app.add_url_rule("/api/settings/restore", "api_settings_restore", self._restore, methods=["POST"])
+        flask_app.add_url_rule("/api/settings/raw-unlock", "api_settings_raw_unlock", self._raw_unlock, methods=["POST"])
 
     def _get(self):
+        from iSpy.web.Backend.save_store import read
         config = self.context["config"]
         return jsonify(
             config=config.config,
             defaults=config.default_config,
             gpu_count=_detect_gpu_count(),
+            raw_json_unlocked=bool((read("raw_json_unlocked") or {}).get("unlocked", False)),
         )
+
+    def _raw_unlock(self):
+        from iSpy.web.Backend.save_store import write
+        write("raw_json_unlocked", {"unlocked": True})
+        return jsonify(success=True)
 
     def _snapshot(self):
         from iSpy.web.Backend.save_store import write

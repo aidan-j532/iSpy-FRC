@@ -276,13 +276,30 @@
 
     </div>
 
+    <div style="margin-top:14px; display:flex; justify-content:flex-end;">
+
+      <button class="btn btn-ok" onclick="saveSettings()">Save Settings</button>
+
+    </div>
+
   </div>
 
 </div>
 
 <script>
 
+const ABOUT_LICENSE = 'PolyForm Noncommercial License 1.0.0';
+
 async function loadAbout() {
+
+  const verEl = document.getElementById('about-version');
+
+  const licEl = document.getElementById('about-license');
+
+  // Never leave the fields stuck on "loading...": set the known values
+  // up front, then best-effort improve them.
+  if (verEl) verEl.textContent = '';
+  if (licEl) licEl.textContent = ABOUT_LICENSE;
 
   try {
 
@@ -290,45 +307,39 @@ async function loadAbout() {
 
     const j = await r.json();
 
-    const verEl = document.getElementById('about-version');
-
-    const licEl = document.getElementById('about-license');
-
     if (verEl && j && j.version) {
 
       verEl.textContent = 'v' + j.version;
 
     }
 
-    // Fetch license from PyPI
+  } catch (e) {
 
-    try {
+    if (verEl && !verEl.textContent) verEl.textContent = 'v?';
 
-      const lr = await fetch('https://pypi.org/pypi/ispy-frc/json');
+  }
 
-      const lj = await lr.json();
+  // Best-effort live license from PyPI, with a short timeout so an offline
+  // box never blocks (the static value above is authoritative anyway).
+  try {
 
-      if (licEl && lj && lj.info && lj.info.license) {
+    const ctrl = new AbortController();
 
-        licEl.textContent = lj.info.license;
+    const to = setTimeout(() => ctrl.abort(), 4000);
 
-      }
+    const lr = await fetch('https://pypi.org/pypi/ispy-frc/json', { signal: ctrl.signal });
 
-    } catch(e) {
+    clearTimeout(to);
 
-      licEl.textContent = 'MIT';
+    const lj = await lr.json();
+
+    if (licEl && lj && lj.info && typeof lj.info.license === 'string' && lj.info.license.trim()) {
+
+      licEl.textContent = lj.info.license;
 
     }
 
-  } catch(e) {
-
-    console.error('Failed to load about info', e);
-
-    document.getElementById('about-version').textContent = 'loading failed';
-
-    document.getElementById('about-license').textContent = 'MIT';
-
-  }
+  } catch (e) { /* keep the static license */ }
 
 }
 
@@ -338,13 +349,9 @@ async function loadAbout() {
 
 <div id="raw-gate" class="card">
 
-    <p><strong>Advanced feature.</strong> Editing raw JSON can break your config if done incorrectly. A single restore point is saved automatically before your first edit in this session.</p>
+    <p id="raw-warn"><strong>Advanced feature.</strong> Editing raw JSON can break your config if done incorrectly. A single restore point is saved automatically before your first edit in this session.</p>
 
-    <div id="risk-timer" class="text-dim" style="margin-top:8px; font-size:0.85rem; display:none;"></div>
-
-    <label><input type="checkbox" id="raw-ack" onchange="unlockRawEditor()"> I understand the risk</label>
-
-    <button id="continue-risky" onclick="startRiskTimer()">Continue (Risky)</button>
+    <button id="continue-risky" class="btn raw-btn" onclick="onContinueClick()">Continue (Risky)</button>
 
 </div>
 
@@ -398,57 +405,145 @@ function parseValue(el) {
 
 
 
-function unlockRawEditor() {
+let rawJsonUnlocked = false;
 
-  if (!document.getElementById('raw-ack').checked) return;
+let rawCooldownDone = false;
 
-  document.getElementById('raw-gate').style.display = 'none';
 
-  document.getElementById('raw-editor-wrap').style.display = '';
 
-  snapshotBeforeFirstEdit();
+function setupRawGate() {
+
+  const btn = document.getElementById('continue-risky');
+
+  if (!btn) return;
+
+  btn.disabled = false;
+
+  btn.textContent = rawJsonUnlocked ? 'Edit Raw JSON' : 'Continue (Risky)';
+
+  const warn = document.getElementById('raw-warn');
+
+  if (warn) warn.style.display = rawJsonUnlocked ? 'none' : '';
 
 }
 
 
 
-function startRiskTimer() {
+function openRawEditor() {
 
-  const timerEl = document.getElementById('risk-timer');
+  snapshotBeforeFirstEdit();
 
-  const continueBtn = document.getElementById('continue-risky');
+  document.getElementById('raw-gate').style.display = 'none';
 
-  if (!timerEl || !continueBtn) return;
+  document.getElementById('raw-editor-wrap').style.display = '';
 
-  let seconds = 10;
+}
 
-  timerEl.style.display = 'block';
 
-  timerEl.textContent = 'Warning: Editing raw JSON can break your configuration. You have ' + seconds + 's to reconsider.';
 
-  continueBtn.disabled = true;
+async function onContinueClick() {
 
-  const interval = setInterval(() => {
+  const btn = document.getElementById('continue-risky');
 
-    seconds--;
+  if (!btn || btn.disabled) return;
 
-    timerEl.textContent = 'Warning: Editing raw JSON can break your configuration. You have ' + seconds + 's to reconsider.';
+  if (rawJsonUnlocked) {
 
-    if (seconds <= 0) {
+    if (rawCooldownDone) {
 
-      clearInterval(interval);
+      rawCooldownDone = false;
 
-      timerEl.style.display = 'none';
+      openRawEditor();
 
-      timerEl.textContent = '';
-
-      continueBtn.disabled = false;
-
-      continueBtn.textContent = 'Continue (Risky)';
+      return;
 
     }
 
-  }, 1000);
+    btn.disabled = true;
+
+    runRawCooldown(btn, 10000, () => {
+
+      rawCooldownDone = true;
+
+      btn.disabled = false;
+
+      btn.classList.add('raw-btn-ready');
+
+      setTimeout(() => btn.classList.remove('raw-btn-ready'), 1400);
+
+    });
+
+    return;
+
+  }
+
+  // First time and first time only: a horizontal bar sweeps across the
+  // button (100% opacity at its left edge fading to 20% on the right).
+  btn.disabled = true;
+
+  runRawSweep(btn, 5000, async () => {
+
+    try {
+
+      await fetch('/api/settings/raw-unlock', { method: 'POST' });
+
+    } catch (e) { /* non-fatal - unlocked flag is cosmetic */ }
+
+    rawJsonUnlocked = true;
+
+    rawCooldownDone = false;
+
+    setupRawGate();
+
+    openRawEditor();
+
+    showToast('Raw JSON editor unlocked', 'success');
+
+  });
+
+}
+
+
+
+function runRawSweep(btn, ms, done) {
+
+  const sweep = document.createElement('div');
+
+  sweep.className = 'raw-btn-sweep';
+
+  btn.appendChild(sweep);
+
+  requestAnimationFrame(() => {
+
+    sweep.style.transition = `transform ${ms}ms linear`;
+
+    sweep.style.transform = 'translateX(100%)';
+
+  });
+
+  setTimeout(() => { sweep.remove(); done(); }, ms);
+
+}
+
+
+
+function runRawCooldown(btn, ms, done) {
+
+  const bar = document.createElement('div');
+
+  bar.className = 'raw-btn-progress';
+
+  btn.appendChild(bar);
+
+  requestAnimationFrame(() => {
+
+    bar.style.transition = `transform ${ms}ms linear`;
+
+    bar.style.transform = 'scaleX(1)';
+
+  });
+
+  setTimeout(() => { bar.remove(); done(); }, ms);
 
 }
 
@@ -724,7 +819,7 @@ function switchTab(name, btn) {
 
     document.getElementById('raw-editor-wrap').style.display = 'none';
 
-    document.getElementById('raw-ack').checked = false;
+    rawCooldownDone = false;
 
   }
 
@@ -857,6 +952,10 @@ async function load() {
   document.getElementById('cfg').value = JSON.stringify(configData, null, 2);
 
   populateGpuSelect(data.gpu_count);
+
+  rawJsonUnlocked = !!data.raw_json_unlocked;
+
+  setupRawGate();
 
   loadFormValues();
 

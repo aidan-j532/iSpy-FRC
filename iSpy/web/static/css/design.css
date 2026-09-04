@@ -695,6 +695,26 @@ pre {
 .list-table td .form-input { width: 100%; padding: 3px 6px; font-size: 0.82rem; }
 .list-table td select.form-input { padding: 3px 4px; }
 
+/* Raw JSON gate button animations */
+.raw-btn { position: relative; overflow: hidden; }
+.raw-btn:disabled { cursor: default; opacity: 0.85; }
+.raw-btn-sweep {
+  position: absolute; top: 0; left: 0; height: 100%; width: 100%;
+  pointer-events: none; transform: translateX(-100%);
+  background: linear-gradient(90deg, rgba(255,255,255,1.0) 0%, rgba(255,255,255,0.2) 100%);
+}
+.raw-btn-progress {
+  position: absolute; left: 0; bottom: 0; height: 3px; width: 100%;
+  pointer-events: none; transform: scaleX(0); transform-origin: left;
+  background: var(--accent);
+}
+.raw-btn-ready { animation: raw-btn-ready-pulse 1.4s ease; }
+@keyframes raw-btn-ready-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(47,129,247,0.55); }
+  70% { box-shadow: 0 0 0 12px rgba(47,129,247,0); }
+  100% { box-shadow: 0 0 0 0 rgba(47,129,247,0); }
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .sidebar { width: 64px; min-width: 64px; padding: 16px 8px; align-items: center; }
