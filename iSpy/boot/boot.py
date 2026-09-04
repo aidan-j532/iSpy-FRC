@@ -476,5 +476,12 @@ def main():
     args = parser.parse_args()
     on_boot(install_service=args.service, fresh=args.fresh, wait=args.wait)
 
+    # RKNN/OpenCV native extensions segfault during Python interpreter
+    # teardown on ARM.  Flush everything and hard-exit to avoid it.
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+
 if __name__ == "__main__":
     main()
