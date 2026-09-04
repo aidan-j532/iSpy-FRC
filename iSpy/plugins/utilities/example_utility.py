@@ -3,7 +3,7 @@ import logging
 from iSpy.plugins.bases import UtilityBase
 
 class YourUtility(UtilityBase):
-    """template utility - shows settings, flask routes, and runtime output.
+    """Example utility - copy this file to build your own.
 
     Declaring "output_key" in config_schema makes this utility's runtime
     value available to other systems (e.g. NetworkTables publishing) as:
@@ -12,6 +12,7 @@ class YourUtility(UtilityBase):
     """
 
     plugin_name = "example_utility"
+    template = True
 
     @classmethod
     def config_schema(cls) -> dict:

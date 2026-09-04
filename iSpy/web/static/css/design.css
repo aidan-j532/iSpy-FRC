@@ -603,20 +603,21 @@ pre {
 .addon-row { border-bottom: 1px solid var(--border); }
 .addon-row:last-child { border-bottom: none; }
 .addon-row.is-enabled .addon-name { color: var(--accent); }
-.addon-row-main { display: flex; align-items: center; gap: 12px; padding: 10px 4px; flex-wrap: wrap; }
-.addon-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.addon-row-main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 4px; }
+.addon-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.addon-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .addon-name { font-weight: 600; font-size: 0.9rem; }
 .addon-doc {
   color: var(--text-dim); font-size: 0.8rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 320px; min-width: 0; flex: 1 1 auto;
+  min-width: 0;
 }
 .addon-status {
   display: flex; align-items: center; gap: 6px;
   font-size: 0.8rem; color: var(--text-dim); white-space: nowrap;
 }
 .addon-right {
-  margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-shrink: 0; min-width: 0;
 }
 .addon-actions { display: flex; gap: 6px; }
 .addon-actions .btn-sm { white-space: nowrap; }

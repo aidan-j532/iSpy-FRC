@@ -253,6 +253,7 @@ class PluginStatusModule(WebModule):
                     "type": ptype,
                     "enabled": enabled,
                     "builtin": is_builtin,
+                    "template": bool(getattr(cls, "template", False)),
                     "doc": (cls.__doc__ or "").strip()[:200],
                     "filename": filename,
                     "config_schema": schema if isinstance(schema, dict) else {},

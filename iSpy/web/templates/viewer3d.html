@@ -93,8 +93,10 @@ const hemiLight = new THREE.HemisphereLight(0x4c8bf5, 0x111318, 0.3);
 scene.add(hemiLight);
 
 const gridHelper = new THREE.GridHelper(20, 80, 0x2a2e38, 0x1a1d24);
+gridHelper.material.fog = false;
 scene.add(gridHelper);
 const axesHelper = new THREE.AxesHelper(8);
+axesHelper.material.fog = false;
 scene.add(axesHelper);
 
 window.toggleGrid = function() {
@@ -194,7 +196,9 @@ function makePlanarMarker(o) {
     new THREE.EdgesGeometry(planeGeo),
     new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }),
   ));
-  g.add(new THREE.AxesHelper(size * 0.6));
+  const tagAxes = new THREE.AxesHelper(size * 0.6);
+  tagAxes.material.fog = false;
+  g.add(tagAxes);
   g.userData.planarSize = size;
   return g;
 }

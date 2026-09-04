@@ -185,6 +185,25 @@ function fieldOptions(fdef, val) {
   return opts;
 }
 
+function listRowHtml(key, fields, row, ri) {
+  const cells = Object.keys(fields).map(fk => {
+    const fdef = fields[fk] || {};
+    const val = row[fk] != null ? row[fk] : (fdef.default || '');
+    if (fdef.type === 'select') {
+      const opts = fieldOptions(fdef, val).map(o =>
+        `<option value="${esc(o.v)}" ${o.v === val ? 'selected' : ''}>${esc(o.t)}</option>`
+      ).join('');
+      return `<td><select class="form-input list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="select">${opts}</select></td>`;
+    }
+    if (fdef.type === 'toggle') {
+      return `<td><input type="checkbox" class="list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="toggle" ${val ? 'checked' : ''}></td>`;
+    }
+    const inputType = fdef.type === 'number' ? 'number' : 'text';
+    return `<td><input class="form-input list-cell" type="${inputType}" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="${fdef.type || 'text'}" value="${esc(val == null ? '' : String(val))}" step="any"></td>`;
+  }).join('');
+  return `<tr>${cells}<td><button class="btn-sm btn-bad" onclick="removeListRow(this)" title="Remove">&times;</button></td></tr>`;
+}
+
 function renderListField(key, def, rows) {
   const fields = def.fields || {};
   const fieldKeys = Object.keys(fields);
@@ -195,24 +214,7 @@ function renderListField(key, def, rows) {
     return `<th>${esc(fdef.label || fk)}</th>`;
   }).join('');
 
-  const rowsHtml = rows.map((row, ri) => {
-    const cells = fieldKeys.map(fk => {
-      const fdef = fields[fk] || {};
-      const val = row[fk] != null ? row[fk] : (fdef.default || '');
-      if (fdef.type === 'select') {
-        const opts = fieldOptions(fdef, val).map(o =>
-          `<option value="${esc(o.v)}" ${o.v === val ? 'selected' : ''}>${esc(o.t)}</option>`
-        ).join('');
-        return `<td><select class="form-input list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="select">${opts}</select></td>`;
-      }
-      if (fdef.type === 'toggle') {
-        return `<td><input type="checkbox" class="list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="toggle" ${val ? 'checked' : ''}></td>`;
-      }
-      const inputType = fdef.type === 'number' ? 'number' : 'text';
-      return `<td><input class="form-input list-cell" type="${inputType}" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="${fdef.type || 'text'}" value="${esc(val == null ? '' : String(val))}" step="any"></td>`;
-    }).join('');
-    return `<tr>${cells}<td><button class="btn-sm btn-bad" onclick="removeListRow(this)" title="Remove">&times;</button></td></tr>`;
-  }).join('');
+  const rowsHtml = rows.map((row, ri) => listRowHtml(key, fields, row, ri)).join('');
 
   return `<div class="form-row" style="flex-direction:column;gap:4px;">
     <span class="form-label">${esc(def.label || key)}</span>
@@ -247,24 +249,8 @@ window.addListRow = function(key) {
     newRow[fk] = fields[fk].default != null ? fields[fk].default : '';
   }
   const tbody = table.querySelector('tbody');
-  const ri = tbody.rows.length;
-  const cells = fieldKeys.map(fk => {
-    const fdef = fields[fk] || {};
-    const val = newRow[fk];
-    if (fdef.type === 'select') {
-      const opts = fieldOptions(fdef, val).map(o =>
-        `<option value="${esc(o.v)}" ${o.v === val ? 'selected' : ''}>${esc(o.t)}</option>`
-      ).join('');
-      return `<td><select class="form-input list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="select">${opts}</select></td>`;
-    }
-    if (fdef.type === 'toggle') {
-      return `<td><input type="checkbox" class="list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="toggle" ${val ? 'checked' : ''}></td>`;
-    }
-    const inputType = fdef.type === 'number' ? 'number' : 'text';
-    return `<td><input class="form-input list-cell" type="${inputType}" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="${fdef.type || 'text'}" value="${esc(val == null ? '' : String(val))}" step="any"></td>`;
-  }).join('');
   const tr = document.createElement('tr');
-  tr.innerHTML = cells + `<td><button class="btn-sm btn-bad" onclick="removeListRow(this)" title="Remove">&times;</button></td>`;
+  tr.innerHTML = listRowHtml(key, fields, newRow, tbody.rows.length);
   tbody.appendChild(tr);
 };
 
@@ -276,7 +262,7 @@ function renderRow(p) {
   const key = `${p.type}::${p.name}`;
   const isPipeline = p.type === 'vision_pipeline';
   const schema = p.config_schema || {};
-  const hasSettings = !isPipeline && Object.keys(schema).length > 0;
+  const hasSettings = !isPipeline && !p.template && Object.keys(schema).length > 0;
   const status = loaded[`${p.type}/${p.name}`] || null;
 
   let statusHtml = '';
@@ -331,14 +317,16 @@ function renderRow(p) {
   <div class="addon-row ${p.enabled ? 'is-enabled' : ''}">
     <div class="addon-row-main">
       ${toggle}
-      <div class="addon-title">
-        <strong class="addon-name">${esc(p.name)}</strong>
-        ${typeBadge(p.type)}
-        ${builtinPill}
-        ${betaPill}
-        ${warnPill}
+      <div class="addon-info">
+        <div class="addon-title">
+          <strong class="addon-name">${esc(p.name)}</strong>
+          ${typeBadge(p.type)}
+          ${builtinPill}
+          ${betaPill}
+          ${warnPill}
+        </div>
+        ${p.doc ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
       </div>
-      ${p.doc ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
       <div class="addon-right">
         ${statusHtml}
         <div class="addon-actions">${actions.join('')}</div>
@@ -383,12 +371,44 @@ function restoreOpenPanels(open) {
     if (!panel) return;
     panel.style.display = '';
     Object.entries(vals).forEach(([k, v]) => {
-      if (Array.isArray(v)) return; // list values restored via re-render
+      if (Array.isArray(v)) {
+        restoreListSetting(panel, k, v);
+        return;
+      }
       const el = panel.querySelector(`[data-key="${k}"]`);
       if (!el) return;
-      if (el.type === 'checkbox') el.checked = v; else el.value = v;
+      if (el.type === 'checkbox') el.checked = !!v;
+      else el.value = String(v);
     });
   });
+}
+
+function restoreListSetting(panel, key, rowsData) {
+  const table = panel.querySelector(`.list-table[data-list-key="${CSS.escape(key)}"]`);
+  if (!table) return;
+  const parts = (panel.dataset.addon || '').split('::');
+  const addon = allAddons.find(a => a.name === parts[1] && a.type === parts[0]);
+  if (!addon) return;
+  const def = (addon.config_schema || {})[key];
+  if (!def || !def.fields) return;
+  const tbody = table.querySelector('tbody');
+  const existing = Array.from(tbody.rows);
+  for (let r = 0; r < rowsData.length; r++) {
+    const rowData = rowsData[r] || {};
+    const tr = existing[r] || document.createElement('tr');
+    if (!existing[r]) {
+      tr.innerHTML = listRowHtml(key, def.fields, rowData, r);
+      tbody.appendChild(tr);
+    } else {
+      tr.querySelectorAll('.list-cell').forEach(cell => {
+        const fk = cell.dataset.field;
+        if (!(fk in rowData)) return;
+        if (cell.type === 'checkbox') cell.checked = !!rowData[fk];
+        else cell.value = rowData[fk] == null ? '' : String(rowData[fk]);
+      });
+    }
+  }
+  while (tbody.rows.length > rowsData.length) tbody.deleteRow(-1);
 }
 
 function renderList() {
