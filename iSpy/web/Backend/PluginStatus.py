@@ -244,8 +244,12 @@ class PluginStatusModule(WebModule):
                     schema = {}
                 filename = self._filename_for(subdir, name)
                 # files under <subdir>/BuiltIn/ are iSpy's bundled add-ons:
-                # toggleable/configureable but not deletable
-                is_builtin = bool(filename and filename.startswith("BuiltIn/"))
+                # toggleable/configureable but not deletable. Template add-ons
+                # (example_*) also ship with iSpy, so they get the same
+                # built-in treatment instead of reading as user-authored.
+                is_builtin = bool(filename and filename.startswith("BuiltIn/")) or bool(
+                    getattr(cls, "template", False)
+                )
                 supported = getattr(cls, "supported_pipelines", None)
                 supported = list(supported) if supported else []
                 available.append({

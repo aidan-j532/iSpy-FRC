@@ -6,6 +6,10 @@ from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
 
+#: the only color presets a health contributor may choose. Everything else
+#: falls back to green (or red when the legacy "ok": False flag is used).
+COLOR_PRESETS = ("green", "yellow", "red")
+
 
 class HealthModule(WebModule):
     plugin_name = "health"
@@ -80,7 +84,7 @@ class HealthModule(WebModule):
         uptime_s = round(now - self._uptime_start, 1)
         cameras_data, all_cams_ok = self._camera_status()
         addon_health = self._collect_addon_health()
-        addons_ok = all(item["ok"] for item in addon_health)
+        addons_ok = all(item["color"] != "red" for item in addon_health)
 
         healthy = stale_s < self._stale_threshold and all_cams_ok and addons_ok
 
@@ -97,30 +101,29 @@ class HealthModule(WebModule):
         }, healthy
 
     def _collect_addon_health(self) -> list:
-        """Collect optional health widgets from enabled add-ons.
+        """Collect health rows from vision pipelines and utilities.
 
-        Any add-on (utility, tracker, frame processor) or vision pipeline that
-        implements ``get_health()`` can contribute a card to the Health tab.
-        The method should return a dict like::
+        Only vision pipelines and utilities may contribute to the Health tab;
+        trackers and frame processors don't get a row. Each contributor
+        returns a dict::
 
-            {"ok": bool, "title": str, "info": str, "rows": [{"label", "value"}]}
+            {
+                "color": "green" | "yellow" | "red",   # preset, their choice
+                "state": str,                           # their own state text
+                "metrics": [{"label", "value"}, ...],   # live values, cycled
+            }
 
-        ``ok`` feeds the banner/degradation decision; ``rows`` render as a small
-        label/value table. Contributors that raise are reported as unhealthy
-        instead of breaking the health page.
+        The legacy {"ok", "title", "info", "rows"} shape is still honored so
+        older add-ons degrade gracefully instead of breaking the page.
+        Contributors that raise are reported as a red "error" row.
         """
         vision = self.context.get("vision_instance")
         collected = []
         groups = []
         if vision is not None:
-            for group, attr in (
-                ("tracker", "trackers"),
-                ("utility", "utilities"),
-                ("frame_processor", "frame_processors"),
-            ):
-                items = getattr(vision, attr, None) or {}
-                for name, inst in items.items():
-                    groups.append((group, name, inst))
+            utilities = getattr(vision, "utilities", None) or {}
+            for name, inst in utilities.items():
+                groups.append(("utility", name, inst))
         with self._lock:
             cameras = list(self.cameras)
         for cam in cameras:
@@ -134,16 +137,37 @@ class HealthModule(WebModule):
                 data = fn() or {}
             except Exception:
                 self.logger.exception("get_health() raised for %s %s", group, name)
-                data = {"ok": False, "title": name, "info": "get_health() raised", "rows": []}
+                data = {"ok": False, "state": "get_health() raised", "metrics": []}
             if not isinstance(data, dict):
                 continue
+
+            color = str(data.get("color", "")).lower()
+            if color not in COLOR_PRESETS:
+                color = "green" if bool(data.get("ok", True)) else "red"
+
+            state = str(data.get("state")
+                        or data.get("info")
+                        or data.get("title")
+                        or name)
+
+            metrics = data.get("metrics") or data.get("rows") or []
+            normalized = []
+            for metric in metrics:
+                if not isinstance(metric, dict):
+                    continue
+                label = str(metric.get("label") or "")
+                value = metric.get("value")
+                normalized.append({
+                    "label": label,
+                    "value": "" if value is None else str(value),
+                })
+
             collected.append({
                 "name": name,
                 "type": group,
-                "ok": bool(data.get("ok", True)),
-                "title": data.get("title") or name,
-                "info": data.get("info"),
-                "rows": data.get("rows", []),
+                "color": color,
+                "state": state,
+                "metrics": normalized,
             })
         return collected
 

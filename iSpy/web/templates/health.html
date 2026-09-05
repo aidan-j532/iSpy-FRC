@@ -33,7 +33,7 @@
 
 <div class="card" style="margin-top:16px;">
   <h3>Add-on Health</h3>
-  <div id="h-addon-health"><div class="skeleton-block"></div></div>
+  <div id="h-addon-health"><div class="health-tbl"><div class="skeleton-block"></div></div></div>
 </div>
 
 <script>
@@ -55,6 +55,52 @@ function statusDot(status) {
   if (status === 'running' || status === 'active') return 'status-dot status-ok';
   if (status === 'idle') return 'status-dot status-warn';
   return 'status-dot status-bad';
+}
+
+function healthColorClass(color) {
+  if (color === 'red') return 'status-bad';
+  if (color === 'yellow') return 'status-warn';
+  return 'status-ok';
+}
+
+// per-row cursor so each add-on's metrics cycle one-per-second
+const healthCycle = {};
+function advanceMetric(a) {
+  const m = a.metrics || [];
+  if (!m.length) return null;
+  const key = a.type + ':' + a.name;
+  const idx = (healthCycle[key] || 0) % m.length;
+  healthCycle[key] = idx + 1;
+  return m[idx];
+}
+
+function renderHealthTable(ah) {
+  const el = document.getElementById('h-addon-health');
+  if (!ah.length) {
+    el.innerHTML = '<div class="empty-state">No add-ons report health</div>';
+    return;
+  }
+  const head = `
+    <div class="health-tbl">
+      <div class="health-tbl-row health-head">
+        <span class="health-dot"></span>
+        <span>Source</span>
+        <span>Type</span>
+        <span>State</span>
+        <span>Status</span>
+      </div>`;
+  const rows = ah.map(a => {
+    const metric = advanceMetric(a);
+    return `
+      <div class="health-tbl-row">
+        <span class="health-dot"><span class="status-dot ${healthColorClass(a.color)}"></span></span>
+        <span class="health-name">${a.name}</span>
+        ${typeBadge(a.type)}
+        <span class="health-state">${a.state || '--'}</span>
+        <span class="health-metric">${metric ? `<span class="metric-label">${metric.label}</span><strong>${metric.value}</strong>` : '--'}</span>
+      </div>`;
+  }).join('');
+  el.innerHTML = head + rows + '</div>';
 }
 
 const healthConn = connTracker(2);
@@ -86,23 +132,7 @@ async function refresh() {
           <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}</span>
         </div>`).join('');
 
-    const nt = data.addon_health || [];
-    const rows = a => (a.rows || []).map(r => `
-        <div style="display:flex;justify-content:space-between;gap:16px;padding:2px 0;color:var(--text-dim);font-size:0.8rem;">
-          <span>${r.label}</span><span style="text-align:right;">${r.value ?? '--'}</span>
-        </div>`).join('');
-    document.getElementById('h-addon-health').innerHTML = nt.length === 0
-      ? '<div class="empty-state">No add-ons report health</div>'
-      : nt.map(a => `
-        <div style="padding:8px 0;border-bottom:1px solid var(--border);">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <span class="${statusDot(a.ok ? 'running' : 'error')}"></span>
-            <strong>${a.title}</strong>
-            ${typeBadge(a.type)}
-            <span style="margin-left:auto;color:var(--text-dim);font-size:0.85rem;">${a.info || ''}</span>
-          </div>
-          ${rows(a)}
-        </div>`).join('');
+    renderHealthTable(data.addon_health || []);
 
     const plugins = data.plugins || [];
     document.getElementById('h-plugins').innerHTML = plugins.length === 0
@@ -119,7 +149,7 @@ async function refresh() {
     healthConn.fail();
   }
 }
-setInterval(refresh, 200);
+setInterval(refresh, 1000);
 refresh();
 </script>
 {% endblock %}

@@ -68,7 +68,7 @@ scene.background = new THREE.Color(0x0a0a0f);
 scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
 
 const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 200);
-camera.position.set(0, 8, 14);
+camera.position.set(9, 9, 9);
 camera.lookAt(0, 0, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -139,7 +139,7 @@ window.toggleLightBg = function() {
 };
 
 const PRESETS = {
-  default: { pos: [0, 8, 14], target: [0, 0, 0] },
+  default: { pos: [9, 9, 9], target: [0, 0, 0] },
   top: { pos: [0, 22, 0.01], target: [0, 0, 0] },
   front: { pos: [0, 2, 18], target: [0, 0, 0] },
   side: { pos: [18, 2, 0], target: [0, 0, 0] },

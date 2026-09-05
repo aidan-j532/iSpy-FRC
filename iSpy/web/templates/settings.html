@@ -26,17 +26,13 @@
 
 <div class="settings-actions">
 
-  <button class="btn btn-ok" onclick="saveSettings()">Save Settings</button>
+  <button class="btn btn-ok" id="settings-save-btn" onclick="saveSettings()">Save Settings</button>
 
   <span id="msg" class="settings-msg"></span>
 
 </div>
 
 <div class="settings-auto-note" style="display:none;color:var(--text-muted);font-size:0.78rem;margin-top:4px;">Auto-saving&hellip;</div>
-
-
-
-<div id="frame-sync-warning" class="text-dim" style="margin-top:8px; color:var(--text-dim); font-size:0.85rem; display:none;"></div>
 
 
 
@@ -109,6 +105,8 @@
         <option value="false">Disabled</option>
 
       </select>
+
+      <span id="frame-sync-note" class="text-dim" style="margin-left:8px; font-size:0.8rem;"></span>
 
     </div>
 
@@ -273,12 +271,6 @@
       </div>
 
       <p class="text-dim text-sm" style="margin-top:12px;">iSpy is a real-time vision system for FRC robots. It provides plug-and-play camera pipelines, 3D field visualization, and model-based object detection.</p>
-
-    </div>
-
-    <div style="margin-top:14px; display:flex; justify-content:flex-end;">
-
-      <button class="btn btn-ok" onclick="saveSettings()">Save Settings</button>
 
     </div>
 
@@ -811,6 +803,10 @@ function switchTab(name, btn) {
 
   btn.classList.add('active');
 
+  const saveBtn = document.getElementById('settings-save-btn');
+
+  if (saveBtn) saveBtn.style.display = (name === 'about') ? 'none' : '';
+
 
 
   if (name !== 'raw') {
@@ -899,23 +895,9 @@ async function saveSettings() {
 
       }
 
-      // Show frame sync warning
+      // Show current frame sync state next to the Frame Sync control
 
-      const frameSyncWarn = document.getElementById('frame-sync-warning');
-
-      if (data.frame_sync !== j.old_frame_sync) {
-
-        frameSyncWarn.style.display = 'block';
-
-        frameSyncWarn.textContent = j.frame_sync
-
-          ? 'Frame sync enabled - cameras will wait for synchronized frames'
-
-          : 'Frame sync disabled - cameras run independently';
-
-        setTimeout(() => { frameSyncWarn.style.display = 'none'; frameSyncWarn.textContent = ''; }, 8000);
-
-      }
+      updateFrameSyncNote(data.frame_sync);
 
       showToast('Settings saved', 'success');
 
@@ -958,6 +940,12 @@ async function load() {
   setupRawGate();
 
   loadFormValues();
+
+  updateFrameSyncNote(
+
+    configData.frame_sync !== undefined ? configData.frame_sync : defaultsData.frame_sync
+
+  );
 
   fetch('/api/version').then(r => r.json()).then(j => {
 
@@ -1055,29 +1043,23 @@ if (unitSelect) {
 
 
 
-// Frame sync initial state
+// Frame sync state helper
 
-const frameSyncWarn = document.getElementById('frame-sync-warning');
+function frameSyncBool(v) { return v === true || v === 'true'; }
 
-fetch('/api/settings', {method: 'GET'}).then(r => r.json()).then(j => {
+function updateFrameSyncNote(value) {
 
-  if (j.config && j.config.frame_sync !== undefined) {
+  const note = document.getElementById('frame-sync-note');
 
-    const frameSyncWarn = document.getElementById('frame-sync-warning');
+  if (!note || value === undefined || value === null) return;
 
-    frameSyncWarn.style.display = 'block';
+  note.textContent = frameSyncBool(value)
 
-    frameSyncWarn.textContent = j.config.frame_sync
+    ? 'Enabled - cameras will wait for synchronized frames'
 
-      ? 'Frame sync enabled - cameras will wait for synchronized frames'
+    : 'Disabled - cameras run independently';
 
-      : 'Frame sync disabled - cameras run independently';
-
-    setTimeout(() => { frameSyncWarn.style.display = 'none'; frameSyncWarn.textContent = ''; }, 5000);
-
-  }
-
-});
+}
 
 load();
 loadAbout();

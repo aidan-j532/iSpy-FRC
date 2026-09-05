@@ -457,18 +457,15 @@ class HealthModuleTests(unittest.TestCase):
 
     def test_addon_health_from_network_table_handler(self):
         vision = mock.Mock()
-        vision.trackers = {}
         vision.utilities = {
             "network_table_handler": mock.Mock(
                 get_health=lambda: {
-                    "ok": True,
-                    "title": "NetworkTables",
-                    "info": "Connected",
-                    "rows": [{"label": "Robot IP", "value": "10.1.2.3"}],
+                    "color": "green",
+                    "state": "Connected",
+                    "metrics": [{"label": "Robot IP", "value": "10.1.2.3"}],
                 }
             ),
         }
-        vision.frame_processors = {}
         mod = self._make(vision=vision)
         payload, healthy = mod._build_payload()
         self.assertTrue(healthy)
@@ -476,22 +473,68 @@ class HealthModuleTests(unittest.TestCase):
         entry = payload["addon_health"][0]
         self.assertEqual(entry["name"], "network_table_handler")
         self.assertEqual(entry["type"], "utility")
-        self.assertTrue(entry["ok"])
-        self.assertEqual(entry["title"], "NetworkTables")
+        self.assertEqual(entry["color"], "green")
+        self.assertEqual(entry["state"], "Connected")
+        self.assertEqual(entry["metrics"], [{"label": "Robot IP", "value": "10.1.2.3"}])
 
     def test_unhealthy_addon_degrades_banner(self):
         vision = mock.Mock()
-        vision.trackers = {}
         vision.utilities = {
             "network_table_handler": mock.Mock(
-                get_health=lambda: {"ok": False, "title": "NetworkTables", "info": "Disconnected", "rows": []}
+                get_health=lambda: {"color": "red", "state": "Disconnected", "metrics": []}
             ),
         }
-        vision.frame_processors = {}
         mod = self._make(vision=vision)
         payload, healthy = mod._build_payload()
         self.assertFalse(healthy)
         self.assertEqual(payload["status"], "degraded")
+
+    def test_only_utilities_and_pipelines_contribute(self):
+        vision = mock.Mock()
+        vision.utilities = {"util": mock.Mock(get_health=lambda: {"state": "up", "metrics": []})}
+        vision.trackers = {"tracker": mock.Mock(get_health=lambda: {"state": "x", "metrics": []})}
+        vision.frame_processors = {"fp": mock.Mock(get_health=lambda: {"state": "x", "metrics": []})}
+        mod = self._make(vision=vision)
+        payload, _healthy = mod._build_payload()
+        names = [entry["name"] for entry in payload["addon_health"]]
+        self.assertEqual(names, ["util"])
+
+    def test_legacy_ok_rows_shape_is_honored(self):
+        vision = mock.Mock()
+        vision.utilities = {
+            "old_addon": mock.Mock(get_health=lambda: {
+                "ok": False, "title": "Old", "info": "bad link",
+                "rows": [{"label": "L", "value": "V"}],
+            }),
+        }
+        mod = self._make(vision=vision)
+        payload, healthy = mod._build_payload()
+        entry = payload["addon_health"][0]
+        self.assertEqual(entry["color"], "red")
+        self.assertEqual(entry["state"], "bad link")
+        self.assertEqual(entry["metrics"], [{"label": "L", "value": "V"}])
+        self.assertFalse(healthy)
+
+    def test_pipeline_contributes_health(self):
+        class FakePipeline:
+            source = "cam0"
+            config = {"name": "front"}
+
+            def get_frame_age(self):
+                return 0.05
+
+            def get_health(self):
+                return {"color": "yellow", "state": "calibrating",
+                        "metrics": [{"label": "Frame age", "value": "12ms"}]}
+
+        mod = self._make(cameras=[FakePipeline()])
+        payload, healthy = mod._build_payload()
+        self.assertTrue(healthy)
+        self.assertEqual(payload["addon_health"], [{
+            "name": "cam0", "type": "pipeline", "color": "yellow",
+            "state": "calibrating",
+            "metrics": [{"label": "Frame age", "value": "12ms"}],
+        }])
 
     def test_broken_camera_counts_as_bad(self):
         class BrokenCam:
@@ -518,6 +561,82 @@ class HealthModuleTests(unittest.TestCase):
 
     def test_stop_is_safe(self):
         self._make().stop()
+
+
+class DashboardModuleTests(unittest.TestCase):
+    """System-card hardware aggregation: group by accelerator type, hide
+    generic camera names, best-effort utilization reading."""
+
+    class FakeCam:
+        def __init__(self, name, hardware):
+            self.source = name
+            self.config = {"name": name}
+            self._hardware = hardware
+
+        def active_hardware(self):
+            return self._hardware
+
+    def _make(self, cameras=None):
+        from iSpy.web.modules.dashboard import DashboardModule
+        return DashboardModule({
+            "config": iSpyConfig(),
+            "cameras": cameras or [],
+            "vision_instance": None,
+        })
+
+    def test_groups_by_hardware_type_and_filters_generic_names(self):
+        cams = [
+            self.FakeCam("default_cam", "npu"),
+            self.FakeCam("front_left", "npu"),
+            self.FakeCam("Front-6d", "gpu"),
+            self.FakeCam("cpu-only", None),
+        ]
+        hw = self._make(cams)._get_hardware()
+        by_type = {h["hardware"]: h for h in hw}
+        self.assertEqual(set(by_type), {"npu", "gpu"})
+        self.assertEqual(by_type["npu"]["cameras"], ["front_left"])
+        self.assertEqual(by_type["gpu"]["cameras"], ["Front-6d"])
+        self.assertIn("load_percent", by_type["npu"])
+
+    def test_pipelines_without_accelerator_are_omitted(self):
+        cams = [self.FakeCam("cpu_cam", None), self.FakeCam("other", "")]
+        self.assertEqual(self._make(cams)._get_hardware(), [])
+
+    def test_npu_load_reads_sysfs(self):
+        mod = self._make()
+        with mock.patch("pathlib.Path.read_text", return_value="42\n"):
+            self.assertEqual(mod._read_hardware_load("npu"), 42)
+
+    def test_npu_load_clamps_to_100(self):
+        mod = self._make()
+        with mock.patch("pathlib.Path.read_text", return_value="250"):
+            self.assertEqual(mod._read_hardware_load("npu"), 100)
+
+    def test_npu_load_none_when_sysfs_unavailable(self):
+        mod = self._make()
+        with mock.patch("pathlib.Path.read_text", side_effect=FileNotFoundError):
+            self.assertIsNone(mod._read_hardware_load("npu"))
+
+    def test_unknown_hardware_load_is_none(self):
+        mod = self._make()
+        self.assertIsNone(mod._read_hardware_load("tpu"))
+        self.assertIsNone(mod._read_hardware_load("cpu"))
+
+    def test_gpu_load_uses_nvidia_smi_and_caches(self):
+        mod = self._make()
+        fake_run = mock.Mock(return_value=mock.Mock(returncode=0, stdout="37\n"))
+        with mock.patch("shutil.which", return_value="/usr/bin/nvidia-smi"), \
+             mock.patch("subprocess.run", fake_run):
+            self.assertEqual(mod._read_hardware_load("gpu"), 37)
+        fake_run.assert_called_once()
+        with mock.patch("shutil.which") as which_mock:
+            self.assertEqual(mod._read_hardware_load("gpu"), 37)
+        which_mock.assert_not_called()
+
+    def test_gpu_load_none_without_nvidia_smi(self):
+        mod = self._make()
+        with mock.patch("shutil.which", return_value=None):
+            self.assertIsNone(mod._read_hardware_load("gpu"))
 
 
 class ExampleAddonTests(unittest.TestCase):

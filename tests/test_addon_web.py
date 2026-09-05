@@ -75,8 +75,12 @@ class PluginStatusModuleTests(unittest.TestCase):
         # <type>/BuiltIn/ add-ons are builtin - toggleable + configurable but never deletable
         self.assertTrue(by_name[("tracker", "object_tracker")]["builtin"])
         self.assertTrue(by_name[("utility", "rollback")]["builtin"])
-        # ...user-authored ones arent
-        self.assertFalse(by_name[("tracker", "example_tracker")]["builtin"])
+        # template examples ship with iSpy but live outside BuiltIn/ - they
+        # still get the built-in badge so they are never mistaken for
+        # user-authored add-ons
+        self.assertTrue(by_name[("tracker", "example_tracker")]["builtin"])
+        self.assertTrue(by_name[("utility", "example_utility")]["builtin"])
+        self.assertTrue(by_name[("frame_processor", "example_frame_processor")]["builtin"])
 
     def test_pipeline_mismatch_warning_payload(self):
         # an addon declaring supported_pipelines gets a warning listing the

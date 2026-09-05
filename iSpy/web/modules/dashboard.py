@@ -14,6 +14,21 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+#: camera-name tokens that say nothing useful about which pipeline owns an
+#: accelerator ("default_cam", "Camera 0", "video0", ...) - hidden from the
+#: System card's hardware rows instead of cluttering them.
+_GENERIC_CAMERA_TOKENS = ("default", "camera", "cam", "webcam", "video", "usb", "unnamed")
+
+
+def _generic_camera_name(name: str) -> bool:
+    n = str(name or "").strip().lower()
+    if not n:
+        return True
+    if n.replace("_", " ").replace("-", " ").split() and n.split()[-1].isdigit() and len(n.split()) == 1:
+        return True
+    return any(token == n or n.startswith(token + " ") or n.startswith(token + "_")
+               or n.startswith(token + "-") for token in _GENERIC_CAMERA_TOKENS)
+
 
 class DashboardModule(WebModule):
     plugin_name = "dashboard"
@@ -157,11 +172,13 @@ class DashboardModule(WebModule):
         """Aggregate each camera/pipeline's active hardware accelerator.
 
         Pipelines with no dedicated accelerator (or not yet loaded) are
-        omitted so we don't double-report the CPU. Returns
-        [{"camera": name, "hardware": "npu"|"tpu"|"gpu"|"cpu", ...}].
+        omitted so we don't double-report the CPU. Accelerators are grouped
+        by type (multiple cameras share one NPU/GPU), and each entry carries
+        a best-effort utilization reading for its progress bar. Returns
+        [{"hardware": "npu"|"tpu"|"gpu"|"cpu", "cameras": [...], "load_percent": int|None}]
         """
         cams = self.context.get("cameras") or []
-        out: list[dict] = []
+        grouped: dict[str, set[str]] = {}
         for cam in cams:
             try:
                 if hasattr(cam, "config"):
@@ -176,10 +193,59 @@ class DashboardModule(WebModule):
                 continue
             if not hardware:
                 continue
-            entry = {"camera": name, "hardware": str(hardware)}
-            if entry not in out:
-                out.append(entry)
+            grouped.setdefault(str(hardware).lower(), set()).add(name)
+
+        out = []
+        for hardware, names in grouped.items():
+            meaningful = sorted(n for n in names if not _generic_camera_name(n))
+            out.append({
+                "hardware": hardware,
+                "cameras": meaningful,
+                "load_percent": self._read_hardware_load(hardware),
+            })
+        out.sort(key=lambda entry: entry["hardware"])
         return out
+
+    def _read_hardware_load(self, hardware: str) -> int | None:
+        """Best-effort utilization (0-100) for a shared accelerator.
+
+        NPU: RKNPU sysfs exposes a live load percentage. GPU: NVIDIA reports
+        via nvidia-smi (throttled to every ~2s so the busy dashboard SSE
+        doesn't spawn a subprocess per tick). Returns None when the platform
+        can't report utilization.
+        """
+        hardware = str(hardware).lower()
+        if hardware == "npu":
+            for path in ("/sys/kernel/rknpu/load", "/sys/class/devfreq/rknpu/load"):
+                try:
+                    raw = Path(path).read_text().strip()
+                    value = int(raw.split()[0])
+                    return max(0, min(value, 100))
+                except Exception:
+                    continue
+            return None
+        if hardware == "gpu":
+            now = time.monotonic()
+            cached = getattr(self, "_gpu_load_cache", None)
+            if cached and now - cached[0] < 2.0:
+                return cached[1]
+            import shutil
+            import subprocess
+            value = None
+            try:
+                if shutil.which("nvidia-smi"):
+                    result = subprocess.run(
+                        ["nvidia-smi", "--query-gpu=utilization.gpu",
+                         "--format=csv,noheader,nounits"],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        value = max(0, min(int(result.stdout.split()[0]), 100))
+            except Exception:
+                value = None
+            self._gpu_load_cache = (now, value)
+            return value
+        return None
 
     def _get_camera_status(self) -> list[dict]:
         cameras = self.context.get("cameras") or []

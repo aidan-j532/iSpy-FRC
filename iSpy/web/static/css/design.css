@@ -11,6 +11,9 @@
   --accent: #2f81f7;
   --accent-hover: #4a93f8;
   --accent-dim: rgba(47,129,247,0.14);
+  --accel: #a371f7;
+  --accel-hover: #b98bff;
+  --accel-dim: rgba(163,113,247,0.14);
   --ok: #3fb950;
   --ok-dim: rgba(63,185,80,0.12);
   --bad: #f85149;
@@ -109,6 +112,12 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 12px 0; }
 @media (max-width: 768px) { #camera-grid { grid-template-columns: 1fr; } }
 .card-full { grid-column: 1 / -1; }
 .card-full h3 .part-note { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-dim); }
+
+/* Metrics page: the four top charts (FPS, Loop, Vision, Camera Lag) always
+   span the full content width in one row instead of auto-wrapping. */
+.metrics-grid { grid-template-columns: repeat(4, 1fr); align-items: stretch; }
+@media (max-width: 1100px) { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .metrics-grid { grid-template-columns: 1fr; } }
 
 /* Stats */
 .stat-label {
@@ -296,16 +305,19 @@ pre {
 .sys-label { color: var(--text-dim); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .sys-val { font-family: var(--mono); font-size: 0.9rem; }
 
-/* Hardware chips */
-.hw-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.hw-chip {
-  display: inline-flex; align-items: center;
-  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
-  padding: 2px 8px; border-radius: 10px;
-  color: var(--text); background: var(--border);
-  border: 1px solid var(--accent);
+/* Hardware accelerators (added by vision pipelines) */
+.hw-list { display: flex; flex-direction: column; margin-top: 12px; gap: 10px; }
+.hw-row { transition: opacity 0.15s ease; }
+.hw-head { display: flex; align-items: baseline; gap: 8px; }
+.hw-name {
+  color: var(--accel); font-weight: 600; font-size: 0.85rem;
+  text-transform: uppercase; letter-spacing: 0.05em; cursor: default;
 }
-.hw-chip:hover { background: var(--accent); color: var(--bg); }
+.hw-cams { color: var(--text-dim); font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hw-val { margin-left: auto; font-family: var(--mono); font-size: 0.85rem; color: var(--accel); }
+.hw-track { height: 6px; margin-top: 4px; }
+.hw-bar { background: var(--accel); }
+.hw-row:hover .hw-name { color: var(--accel-hover); }
 
 /* Progress bars */
 .progress-bar-wrap { height: 4px; background: var(--border); border-radius: 2px; margin-top: 6px; overflow: hidden; }
@@ -584,6 +596,27 @@ pre {
   color: var(--text-muted); font-size: 0.8rem;
 }
 .chart-card.has-data .chart-waiting { display: none; }
+
+/* Add-on health table */
+.health-tbl { display: flex; flex-direction: column; }
+.health-tbl-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1.4fr) 120px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px; align-items: center;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  font-size: 0.88rem;
+}
+.health-head {
+  color: var(--text-dim); font-size: 0.72rem;
+  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+  border-bottom-color: var(--border-light);
+}
+.health-dot { display: flex; align-items: center; }
+.health-dot .status-dot { margin-right: 0; }
+.health-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-state { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-metric { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-metric .metric-label { color: var(--text-dim); margin-right: 6px; }
 
 /* Add-ons page */
 .page-head h1 { margin: 0; }

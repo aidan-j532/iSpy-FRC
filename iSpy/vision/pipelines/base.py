@@ -95,33 +95,44 @@ class VisionPipeline(Camera, VisionBase):
             self._statuses["run"] = status
 
     def get_health(self) -> dict:
-        """Contribute a pipeline widget to the Health tab (optional hook).
+        """Contribute a row to the Health tab (optional hook).
 
-        ``ok`` is False only when pipeline is genuinely blocked (e.g. red
-        calibration level / error), never during transient build/optimize.
+        Only vision pipelines and utilities get health rows. The pipeline
+        picks its own color preset (green/yellow/red), reports its current
+        state string, and offers live metrics the Health page cycles through
+        every second.
         """
-        status = self.get_status()
         state = self.get_state()
+        status = (self.get_status() or "unknown").splitlines()[0]
         level = None
-        ready = True
         try:
             level, _ = self.calibration_status()
-            ready, _ = self.is_ready()
         except Exception:
-            ready = False
-        # hide the calibration line when it's just the default "ready"
-        if not level:
-            level = "n/a"
+            level = None
+
+        if state == "error" or level == "red":
+            color = "red"
+        elif level == "yellow" or state in ("optimizing", "downloading", "initializing"):
+            color = "yellow"
+        else:
+            color = "green"
+
+        metrics = []
+        try:
+            count = len(getattr(self, "_last_objects", []) or [])
+            metrics.append({"label": "Detections", "value": str(count)})
+        except Exception:
+            pass
+        try:
+            age_ms = round(self.get_frame_age() * 1000, 1)
+            metrics.append({"label": "Frame age", "value": f"{age_ms}ms"})
+        except Exception:
+            pass
+
         return {
-            "ok": bool(ready),
-            "title": self.config.get("name", str(self.source)) if hasattr(self, "config") else str(getattr(self, "source", "camera")),
-            "info": (status or "unknown").splitlines()[0],
-            "rows": [
-                {"label": "Pipeline", "value": getattr(self, "plugin_name", "pipeline")},
-                {"label": "State", "value": state},
-                {"label": "Calibration", "value": level},
-                {"label": "Status", "value": status},
-            ],
+            "color": color,
+            "state": status,
+            "metrics": metrics,
         }
 
     def process(self, frame):

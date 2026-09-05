@@ -3,13 +3,7 @@ import logging
 from iSpy.plugins.bases import UtilityBase
 
 class YourUtility(UtilityBase):
-    """Example utility - copy this file to build your own.
-
-    Declaring "output_key" in config_schema makes this utility's runtime
-    value available to other systems (e.g. NetworkTables publishing) as:
-        frame_data["addon_data"][<output_key>]
-    selectable in the NetworkTables source dropdown as: addon_data.<output_key>
-    """
+    """Example utility - copy this file to build your own."""
 
     plugin_name = "example_utility"
     template = True
