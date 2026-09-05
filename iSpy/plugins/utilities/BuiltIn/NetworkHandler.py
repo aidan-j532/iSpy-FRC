@@ -104,6 +104,24 @@ class NetworkTableHandler(UtilityBase):
     def isConnected(self) -> bool:
         return self.inst.isConnected()
 
+    def get_health(self) -> dict:
+        """Contribute a NetworkTables widget to the Health tab.
+
+        Implemented via the optional add-on health hook so the core Health
+        page no longer hard-codes NetworkTables.
+        """
+        connected = self.isConnected()
+        ip = self.config.get("network_tables_ip", "10.0.0.2")
+        return {
+            "ok": connected,
+            "title": "NetworkTables",
+            "info": "Connected" if connected else "Not connected",
+            "rows": [
+                {"label": "Robot IP", "value": str(ip)},
+                {"label": "Status", "value": "Connected" if connected else "Disconnected"},
+            ],
+        }
+
     def _log_connection_state(self):
         connected = self.inst.isConnected()
         if connected and self._conn_state != "up":

@@ -25,10 +25,6 @@ class HealthModule(WebModule):
         # single canonical health implementation (PROMPT 5 merged the old
         # health_reporter/status_reporter add-ons into this always-on module)
         self._stale_threshold = float(config.get("health_stale_threshold", 1.0) or 1.0)
-        self._network_handler = None  # wired externally, see iSpy.py
-
-    def set_network_handler(self, handler):
-        self._network_handler = handler
 
     def set_cameras(self, cameras):
         with self._lock:
@@ -83,15 +79,10 @@ class HealthModule(WebModule):
         stale_s = round(now - last_tick, 2)
         uptime_s = round(now - self._uptime_start, 1)
         cameras_data, all_cams_ok = self._camera_status()
+        addon_health = self._collect_addon_health()
+        addons_ok = all(item["ok"] for item in addon_health)
 
-        nt_connected = None
-        if self._network_handler is not None:
-            try:
-                nt_connected = self._network_handler.isConnected()
-            except Exception:
-                nt_connected = False
-
-        healthy = stale_s < self._stale_threshold and all_cams_ok and (nt_connected is None or nt_connected)
+        healthy = stale_s < self._stale_threshold and all_cams_ok and addons_ok
 
         return {
             "status": "ok" if healthy else "degraded",
@@ -102,8 +93,59 @@ class HealthModule(WebModule):
             "vision_ms": vision_ms,
             "detections": detections,
             "cameras": cameras_data,
-            "network_tables": {"enabled": self._network_handler is not None, "connected": nt_connected},
+            "addon_health": addon_health,
         }, healthy
+
+    def _collect_addon_health(self) -> list:
+        """Collect optional health widgets from enabled add-ons.
+
+        Any add-on (utility, tracker, frame processor) or vision pipeline that
+        implements ``get_health()`` can contribute a card to the Health tab.
+        The method should return a dict like::
+
+            {"ok": bool, "title": str, "info": str, "rows": [{"label", "value"}]}
+
+        ``ok`` feeds the banner/degradation decision; ``rows`` render as a small
+        label/value table. Contributors that raise are reported as unhealthy
+        instead of breaking the health page.
+        """
+        vision = self.context.get("vision_instance")
+        collected = []
+        groups = []
+        if vision is not None:
+            for group, attr in (
+                ("tracker", "trackers"),
+                ("utility", "utilities"),
+                ("frame_processor", "frame_processors"),
+            ):
+                items = getattr(vision, attr, None) or {}
+                for name, inst in items.items():
+                    groups.append((group, name, inst))
+        with self._lock:
+            cameras = list(self.cameras)
+        for cam in cameras:
+            groups.append(("pipeline", str(getattr(cam, "source", "camera")), cam))
+
+        for group, name, inst in groups:
+            fn = getattr(inst, "get_health", None)
+            if not callable(fn):
+                continue
+            try:
+                data = fn() or {}
+            except Exception:
+                self.logger.exception("get_health() raised for %s %s", group, name)
+                data = {"ok": False, "title": name, "info": "get_health() raised", "rows": []}
+            if not isinstance(data, dict):
+                continue
+            collected.append({
+                "name": name,
+                "type": group,
+                "ok": bool(data.get("ok", True)),
+                "title": data.get("title") or name,
+                "info": data.get("info"),
+                "rows": data.get("rows", []),
+            })
+        return collected
 
     def _plugin_statuses(self):
         vision = self.context.get("vision_instance")

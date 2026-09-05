@@ -94,6 +94,36 @@ class VisionPipeline(Camera, VisionBase):
         else:
             self._statuses["run"] = status
 
+    def get_health(self) -> dict:
+        """Contribute a pipeline widget to the Health tab (optional hook).
+
+        ``ok`` is False only when pipeline is genuinely blocked (e.g. red
+        calibration level / error), never during transient build/optimize.
+        """
+        status = self.get_status()
+        state = self.get_state()
+        level = None
+        ready = True
+        try:
+            level, _ = self.calibration_status()
+            ready, _ = self.is_ready()
+        except Exception:
+            ready = False
+        # hide the calibration line when it's just the default "ready"
+        if not level:
+            level = "n/a"
+        return {
+            "ok": bool(ready),
+            "title": self.config.get("name", str(self.source)) if hasattr(self, "config") else str(getattr(self, "source", "camera")),
+            "info": (status or "unknown").splitlines()[0],
+            "rows": [
+                {"label": "Pipeline", "value": getattr(self, "plugin_name", "pipeline")},
+                {"label": "State", "value": state},
+                {"label": "Calibration", "value": level},
+                {"label": "Status", "value": status},
+            ],
+        }
+
     def process(self, frame):
         return self.run()
 

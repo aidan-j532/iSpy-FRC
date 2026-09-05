@@ -443,7 +443,7 @@ class HealthModuleTests(unittest.TestCase):
         self.assertEqual(payload["detections"], 7)
         self.assertGreaterEqual(payload["loop_count"], 1)
         self.assertIn("cameras", payload)
-        self.assertIn("network_tables", payload)
+        self.assertIn("addon_health", payload)
 
     def test_camera_status_marks_stale(self):
         mod = self._make(
@@ -455,14 +455,43 @@ class HealthModuleTests(unittest.TestCase):
         self.assertFalse(by_name["b"]["ok"])
         self.assertFalse(healthy)
 
-    def test_network_handler_integration(self):
-        mod = self._make()
-        fake_handler = mock.Mock()
-        fake_handler.isConnected.return_value = True
-        mod.set_network_handler(fake_handler)
+    def test_addon_health_from_network_table_handler(self):
+        vision = mock.Mock()
+        vision.trackers = {}
+        vision.utilities = {
+            "network_table_handler": mock.Mock(
+                get_health=lambda: {
+                    "ok": True,
+                    "title": "NetworkTables",
+                    "info": "Connected",
+                    "rows": [{"label": "Robot IP", "value": "10.1.2.3"}],
+                }
+            ),
+        }
+        vision.frame_processors = {}
+        mod = self._make(vision=vision)
         payload, healthy = mod._build_payload()
-        self.assertTrue(payload["network_tables"]["enabled"])
-        self.assertTrue(payload["network_tables"]["connected"])
+        self.assertTrue(healthy)
+        self.assertEqual(len(payload["addon_health"]), 1)
+        entry = payload["addon_health"][0]
+        self.assertEqual(entry["name"], "network_table_handler")
+        self.assertEqual(entry["type"], "utility")
+        self.assertTrue(entry["ok"])
+        self.assertEqual(entry["title"], "NetworkTables")
+
+    def test_unhealthy_addon_degrades_banner(self):
+        vision = mock.Mock()
+        vision.trackers = {}
+        vision.utilities = {
+            "network_table_handler": mock.Mock(
+                get_health=lambda: {"ok": False, "title": "NetworkTables", "info": "Disconnected", "rows": []}
+            ),
+        }
+        vision.frame_processors = {}
+        mod = self._make(vision=vision)
+        payload, healthy = mod._build_payload()
+        self.assertFalse(healthy)
+        self.assertEqual(payload["status"], "degraded")
 
     def test_broken_camera_counts_as_bad(self):
         class BrokenCam:

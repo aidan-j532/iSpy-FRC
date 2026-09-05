@@ -10,8 +10,8 @@
   /* Pre-Bundled disclosure: hide the native summary triangle (which double-renders
      next to the custom chevron below) and use a single rotating ::before marker. */
   .dataset-section summary { list-style: none; display:flex; align-items:center; gap:6px; }
-  .dataset-section summary::-webkit-details-marker { display: none; }
-  .dataset-section summary .ds-chevron { display:inline-flex; transition: transform 0.15s ease; }
+  .dataset-section summary::-webkit-details-marker, .dataset-section summary::-moz-details-marker { display: none; }
+  .dataset-section summary .ds-chevron { display:inline-flex; width:14px; height:14px; flex:none; transition: transform 0.15s ease; }
   .dataset-section details[open] summary .ds-chevron { transform: rotate(180deg); color: var(--accent); }
 </style>
 

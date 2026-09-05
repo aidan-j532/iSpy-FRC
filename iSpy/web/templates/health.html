@@ -22,11 +22,6 @@
       <h3>Cameras</h3>
       <div id="h-cameras" class="camera-grid"><div class="skeleton-block"></div><div class="skeleton-block"></div></div>
     </div>
-    <div class="card">
-      <h3>NetworkTables</h3>
-      <p>Enabled: <span id="h-nt-enabled">--</span></p>
-      <p>Connected: <span id="h-nt-connected">--</span></p>
-    </div>
   </div>
   <div class="dash-col-right">
     <div class="card">
@@ -34,6 +29,11 @@
       <div id="h-plugins"><div class="skeleton-block"></div><div class="skeleton-block"></div></div>
     </div>
   </div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+  <h3>Add-on Health</h3>
+  <div id="h-addon-health"><div class="skeleton-block"></div></div>
 </div>
 
 <script>
@@ -46,8 +46,9 @@ function fmtUptime(s) {
 }
 
 function typeBadge(type) {
-  const label = type === 'frame_processor' ? 'frame processor' : type;
-  return `<span class="plugin-pill pill-${type}">${label}</span>`;
+  if (type === 'frame_processor') return '<span class="plugin-pill pill-frame-processor">frame processor</span>';
+  if (type === 'pipeline') return '<span class="plugin-pill pill-vision-pipeline">vision pipeline</span>';
+  return `<span class="plugin-pill pill-${type}">${type}</span>`;
 }
 
 function statusDot(status) {
@@ -85,9 +86,23 @@ async function refresh() {
           <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}</span>
         </div>`).join('');
 
-    const nt = data.network_tables || {};
-    document.getElementById('h-nt-enabled').textContent = nt.enabled;
-    document.getElementById('h-nt-connected').textContent = nt.connected;
+    const nt = data.addon_health || [];
+    const rows = a => (a.rows || []).map(r => `
+        <div style="display:flex;justify-content:space-between;gap:16px;padding:2px 0;color:var(--text-dim);font-size:0.8rem;">
+          <span>${r.label}</span><span style="text-align:right;">${r.value ?? '--'}</span>
+        </div>`).join('');
+    document.getElementById('h-addon-health').innerHTML = nt.length === 0
+      ? '<div class="empty-state">No add-ons report health</div>'
+      : nt.map(a => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border);">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="${statusDot(a.ok ? 'running' : 'error')}"></span>
+            <strong>${a.title}</strong>
+            ${typeBadge(a.type)}
+            <span style="margin-left:auto;color:var(--text-dim);font-size:0.85rem;">${a.info || ''}</span>
+          </div>
+          ${rows(a)}
+        </div>`).join('');
 
     const plugins = data.plugins || [];
     document.getElementById('h-plugins').innerHTML = plugins.length === 0

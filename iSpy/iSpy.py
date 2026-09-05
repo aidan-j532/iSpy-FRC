@@ -127,12 +127,6 @@ class iSpy:
             else:
                 self.logger.warning("Unknown frame processor: %s", name)
 
-        # wire NT handler into health module for /api/health
-        nt = self.utilities.get("network_table_handler")
-        health_mod = self.web_app.modules.get("health") if self.web_app else None
-        if health_mod and nt:
-            health_mod.set_network_handler(nt)
-
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
         if self.web_app:
