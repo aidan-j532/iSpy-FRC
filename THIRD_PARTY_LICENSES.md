@@ -29,14 +29,18 @@ The text below reflects only what is discoverable in the file headers
 (version strings / license banners); entries without a visible license
 header are flagged for manual verification.
 
-- **three.module.js** - Three.js REVISION r164 (version string in file)
+- **three.module.js** - Three.js REVISION r164
   - LICENSE CONFIRMED: MIT - the file header carries
-    `// SPDX-License-Identifier: MIT` and
-    `Copyright 2010-2024 Three.js Authors`.
-- **chart.umd.min.js** - Chart.js 4.4.0 (version string in file:
-  `version="4.4.0"`)
-  - LICENSE UNKNOWN - VERIFY MANUALLY - no license banner in the
-    minified file.
-- **OrbitControls.js** - three.js orbit controls example addon (no
-  version string in file)
-  - LICENSE UNKNOWN - VERIFY MANUALLY - no license banner in the file.
+    `SPDX-License-Identifier: MIT` and it is byte-identical to the
+    official `three@0.164.0/build/three.module.js` npm artifact
+    (modulo CRLF line endings).
+- **OrbitControls.js** - three.js r164 orbit controls example addon
+  - LICENSE CONFIRMED: MIT - byte-identical to the official
+    `three@0.164.0/examples/jsm/controls/OrbitControls.js` npm
+    artifact (modulo CRLF line endings).
+- **chart.umd.min.js** - Chart.js 4.4.0, no license banner in the minified
+  file, source of origin previously unknown
+  - LICENSE CONFIRMED: MIT - replaced with the official
+    `chart.js@4.4.0/dist/chart.umd.min.js` npm artifact (sha256
+    0e2326c686...aac6abff0) on 2026-09-06. Chart.js is MIT licensed
+    (https://github.com/chartjs/Chart.js/blob/v4.4.0/LICENSE.md).

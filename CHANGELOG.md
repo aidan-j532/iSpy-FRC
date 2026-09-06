@@ -105,9 +105,10 @@ All notable changes to iSpy-FRC. Format follows
 
 ### Security / License status
 
-- Final license: **GPL-3.0** (code) - AGPL was deliberated and not adopted.
-  Bundled default `.pt` models ship under the original Ultralytics AGPL-3.0
-  terms; see README "License".
+- Final license: **PolyForm Noncommercial 1.0.0** (source-available code,
+  see LICENSE). Stock Ultralytics default `.pt` models are not bundled - they
+  are downloaded on first use under their original AGPL-3.0 terms; see README
+  "License".
 - This is not a public-internet server: admin routes are local/`ISPY_ADMIN_TOKEN`
   gated, everything else on :5000 is open HTTP.
 

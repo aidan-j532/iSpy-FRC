@@ -12,7 +12,6 @@
   <div class="controls-bar" style="margin-bottom:16px;">
     <input type="text" id="new-dataset-name" placeholder="New dataset name..." style="flex:1; min-width:180px;">
     <button onclick="createDataset()">Create Dataset</button>
-    <button class="btn-secondary" onclick="window.location.href='/datasets/bundled'">Manage Pre-Bundled</button>
   </div>
   
   <div class="sidebar-sections">
@@ -71,13 +70,11 @@ async function loadDatasets() {
   }
   const grid = document.getElementById('datasets-grid');
   const datasets = data.datasets || [];
-  // only user datasets are shown here; bundled ones live on their own page
-  const userDatasets = datasets.filter(d => !d.bundled);
 
-  if (userDatasets.length === 0) {
+  if (datasets.length === 0) {
     grid.innerHTML = `<div class="card empty-state has-icon">${FOLDER_ICON}No datasets yet. Create one with the form above.</div>`;
   } else {
-    grid.innerHTML = userDatasets.map(d => `
+    grid.innerHTML = datasets.map(d => `
       <div class="card dataset-card" onclick="openDataset('${d.name}')">
         <div class="dataset-name">${d.name}</div>
         <div class="dataset-count">${d.image_count} image${d.image_count !== 1 ? 's' : ''}</div>

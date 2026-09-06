@@ -1,4 +1,4 @@
-# iSpy-FRC: A Free, Open-Source Vision Pipeline for FRC — Full Breakdown
+# iSpy-FRC: A Free Vision Pipeline for FRC — Full Breakdown
 
 Hey everyone,
 
@@ -8,7 +8,7 @@ A few people have been asking about iSpy so I figured I'd write up a proper post
 
 ## What Is iSpy?
 
-iSpy is a computer vision pipeline for FRC robots. It's fully open source under GPL-3.0, it's free, and it runs on basically any hardware you want — Orange Pi, Raspberry Pi, Jetson, x86 laptops, Macs, Windows, whatever. It takes a camera feed, runs YOLO object detection on it, converts the pixel detections into real-world field coordinates, and publishes them to NetworkTables so your robot code can use them.
+iSpy is a computer vision pipeline for FRC robots. It's free for noncommercial use (source-available under the PolyForm Noncommercial 1.0.0 license), and it runs on basically any hardware you want — Orange Pi, Raspberry Pi, Jetson, x86 laptops, Macs, Windows, whatever. It takes a camera feed, runs YOLO object detection on it, converts the pixel detections into real-world field coordinates, and publishes them to NetworkTables so your robot code can use them.
 
 The short version: you point a camera at the field, iSpy tells your robot where the game pieces are.
 
@@ -324,7 +324,7 @@ Change the `unit` field in config and all detections are published in that unit.
 | **Web Dashboard** | Basic (crosshair, tuning) | Moderate (camera view, tuning) | 12+ modules (cameras, models, datasets, 3D viewer, metrics, health, logs, etc.) |
 | **AprilTag Tracking** | Yes | Yes | Yes |
 | **Multi-Camera** | Yes (hardware sync) | Limited | Yes (threaded, ray-triangulation merge) |
-| **Open Source** | No | Yes (GPLv3) | Yes (GPLv3) |
+| **Open Source** | No | Yes (GPLv3) | Source-available (PolyForm Noncommercial 1.0.0) |
 | **Plugin System** | No | No | Yes (trackers, utilities, frame processors) |
 | **Zero-Shot Detection** | No | No | Yes (YOLO-World) |
 | **Pose PnP** | No | No | Yes |
@@ -477,7 +477,7 @@ This is a side project by a small team. It works and it's been tested on hardwar
 ## Get Involved
 
 - **GitHub**: [aidan-j532/iSpy-FRC](https://github.com/aidan-j532/iSpy-FRC)
-- **License**: GPL-3.0
+- **License**: PolyForm Noncommercial 1.0.0 (source-available; see LICENSE)
 - **Python**: 3.10+
 - **Install**: `pip install iSpy-frc` or clone and `./install.sh`
 

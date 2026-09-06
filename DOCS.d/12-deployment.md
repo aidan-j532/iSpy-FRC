@@ -275,7 +275,7 @@ YoloModels/
     small/         # medium accuracy/speed
     medium/        # higher accuracy
     large/         # highest accuracy, slowest
-    _default_pose.pt  # bundled default model
+    _default_pose.pt  # stock default, downloaded on first use
   rknn/            # converted for Rockchip NPU
   onnx/            # converted for ONNX Runtime
   openvino/        # converted for Intel

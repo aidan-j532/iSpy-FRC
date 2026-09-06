@@ -17,7 +17,7 @@
 | **AprilTag Tracking** | Yes (MegaTag2) | Yes | Yes |
 | **Multi-Camera** | Yes (hardware sync) | Limited | Yes (threaded, ray-triangulation merge) |
 | **Depth Estimation** | No | No | Yes (Depth Anything V2) |
-| **Open-Source** | No | Yes (GPLv3) | Yes (GPLv3) |
+| **Open-Source** | No | Yes (GPLv3) | Source-available (PolyForm Noncommercial 1.0.0) |
 | **Model Training** | No | No | YOLO-World (zero-shot), dataset tools, Roboflow integration |
 
 ### Where iSpy Wins

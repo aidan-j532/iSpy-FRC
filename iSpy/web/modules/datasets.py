@@ -5,7 +5,6 @@ from iSpy.dataset.dataset import (
     add_image_to_dataset_txt,
     remove_image_from_dataset_txt,
 )
-from iSpy.dataset.bundled_datasets import BUNDLED_DATASETS
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
@@ -46,10 +45,6 @@ class DatasetsModule(WebModule):
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/datasets", "datasets_page", lambda: render_template("datasets.html"))
-        flask_app.add_url_rule(
-            "/datasets/bundled", "datasets_bundled_page",
-            lambda: render_template("bundled_datasets.html"),
-        )
         flask_app.add_url_rule("/api/datasets", "api_datasets_list", self._list, methods=["GET"])
         flask_app.add_url_rule("/api/datasets", "api_datasets_create", self._create, methods=["POST"])
         flask_app.add_url_rule("/api/datasets/<name>/images", "api_ds_images", self._list_images, methods=["GET"])
@@ -57,25 +52,10 @@ class DatasetsModule(WebModule):
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_get", self._get_image, methods=["GET"])
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_delete", self._delete_image, methods=["DELETE"])
         flask_app.add_url_rule("/api/fs/dirs", "api_fs_dirs", self._browse_dirs, methods=["GET"])
-        flask_app.add_url_rule("/api/datasets/bundled", "api_ds_bundled_list", self._bundled_list, methods=["GET"])
 
     def _images_dir(self, name: str) -> Path:
         # datasets live flat: QuantizeDataset/<name>/img1.png ...
         return self.dataset_root / name
-
-    def _bundled_entries(self):
-        out = []
-        for entry in BUNDLED_DATASETS:
-            name = _validate_filename(str(entry.get("name", "")))
-            ds_dir = self._images_dir(name)
-            count = _count_images_in_dir(ds_dir)
-            out.append({
-                "name": name,
-                "description": str(entry.get("description", "")),
-                "installed": count > 0,
-                "image_count": count,
-            })
-        return out
 
     def _list(self):
         out = []
@@ -84,10 +64,7 @@ class DatasetsModule(WebModule):
                 if not d.is_dir():
                     continue
                 count = _count_images_in_dir(d)
-                out.append({"name": d.name, "image_count": count, "bundled": False})
-        for ds in self._bundled_entries():
-            ds["bundled"] = True
-        out.extend(self._bundled_entries())
+                out.append({"name": d.name, "image_count": count})
         return jsonify(datasets=out)
 
     def _create(self):
@@ -133,9 +110,6 @@ class DatasetsModule(WebModule):
             image_count=_count_images_in_dir(base),
             inside_dataset_root=_is_safe_path(self.dataset_root, base),
         )
-
-    def _bundled_list(self):
-        return jsonify(datasets=self._bundled_entries())
 
     def _list_images(self, name):
         d = self._images_dir(name)

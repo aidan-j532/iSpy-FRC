@@ -223,7 +223,7 @@ models of one format. Actual build-tree layout:
 
 ```
 YoloModels/
-  pytorch/_default_detect.pt            # bundled default models + metadata sidecars
+  pytorch/_default_detect.pt            # stock defaults downloaded on first use
   pytorch/_default_pose.pt
   pytorch/_default_pose_metadata.yaml
   pytorch/world/yolov8s-worldv2.pt
@@ -444,13 +444,19 @@ Colab v5e1 Yolov8 nano pose 47 fps, detect is 48, and fuel is
 
 ## License
 
-**GPL-3.0** - see [LICENSE](LICENSE).
+**PolyForm Noncommercial License 1.0.0** (source-available) - see
+[LICENSE](LICENSE).
 
-Licensing status (final): iSpy stays under GPL-3.0; the draft plan's AGPL
-option was **not** adopted. If you distribute iSpy (modified or not) in binary
-form (e.g. a pre-flashed SD image), GPL-3.0 section 6 applies: you must provide
-the corresponding source and the install scripts' license notice. The bundled
-default `.pt` models are distributed under their original Ultralytics AGPL-3.0
-terms - if your team ships them as part of a product bound by AGPL you must meet
-AGPL-3.0 obligations for those model files or retrain/replace them. All code
-authored for iSpy itself remains GPL-3.0.
+iSpy's own code is licensed under the PolyForm Noncommercial License 1.0.0: it
+is free for noncommercial use (which covers student teams, FRC use, and hobby
+projects). Commercial use requires a separate license from the authors. See
+[LICENSE](LICENSE) for the full terms.
+
+The stock default checkpoints (`_default_detect.pt`, `_default_pose.pt`) are
+NOT distributed with iSpy - they are downloaded on first use from Ultralytics'
+own release assets and remain under their original AGPL-3.0 terms. If your team
+distributes them separately you must meet the AGPL-3.0 obligations for those
+model files or retrain/replace them; see
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). The default
+`_default_v26_detect_for_fuel.pt` model is iSpy's own and is licensed under the
+same PolyForm Noncommercial terms as the rest of iSpy.

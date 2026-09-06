@@ -17,8 +17,8 @@ from iSpy.web.modules.models import ModelsModule
 
 
 _REPO = Path(__file__).resolve().parents[1]
-_DEFAULT_DETECT_PT = _REPO / "iSpy" / "assets" / "_default_detect.pt"
-_DEFAULT_POSE_PT = _REPO / "iSpy" / "assets" / "_default_pose.pt"
+_DEFAULT_DETECT_PT = _REPO / "YoloModels" / "pytorch" / "_default_detect.pt"
+_DEFAULT_POSE_PT = _REPO / "YoloModels" / "pytorch" / "_default_pose.pt"
 
 
 class _EvilPickle:
@@ -69,16 +69,22 @@ class RestrictedTorchLoadTests(unittest.TestCase):
         self.assertNoSideEffect()
 
     def test_genuine_detect_checkpoint_loads_restricted(self):
+        if not _DEFAULT_DETECT_PT.exists():
+            self.skipTest("Required test model not found (downloaded on first use)")
         meta = metadata_from_pt(_DEFAULT_DETECT_PT, trusted=False)
         self.assertEqual(meta["task"], "detect")
         self.assertEqual(meta["nc"], 80)
         self.assertIn(0, meta["names"])
 
     def test_genuine_pose_checkpoint_loads_restricted(self):
+        if not _DEFAULT_POSE_PT.exists():
+            self.skipTest("Required test model not found (downloaded on first use)")
         meta = metadata_from_pt(_DEFAULT_POSE_PT, trusted=False)
         self.assertEqual(meta["task"], "pose")
 
     def test_trusted_default_path_unchanged(self):
+        if not _DEFAULT_DETECT_PT.exists():
+            self.skipTest("Required test model not found (downloaded on first use)")
         meta = metadata_from_pt(_DEFAULT_DETECT_PT)
         self.assertEqual(meta["task"], "detect")
 
@@ -150,6 +156,8 @@ class ModelUploadAccessTests(unittest.TestCase):
         self.assertFalse(self.marker.exists())
 
     def test_local_upload_genuine_model_succeeds(self):
+        if not _DEFAULT_DETECT_PT.exists():
+            self.skipTest("Required test model not found (downloaded on first use)")
         raw = _DEFAULT_DETECT_PT.read_bytes()
         r = self.client.post(
             "/api/models/upload",

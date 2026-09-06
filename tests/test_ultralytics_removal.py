@@ -14,8 +14,8 @@ from iSpy.vision.ModelInspector import _inspect_ultralytics
 
 
 _REPO = Path(__file__).resolve().parents[1]
-_DEFAULT_DETECT_PT = _REPO / "iSpy" / "assets" / "_default_detect.pt"
-_DEFAULT_POSE_PT = _REPO / "iSpy" / "assets" / "_default_pose.pt"
+_DEFAULT_DETECT_PT = _REPO / "YoloModels" / "pytorch" / "_default_detect.pt"
+_DEFAULT_POSE_PT = _REPO / "YoloModels" / "pytorch" / "_default_pose.pt"
 
 
 def _make_test_frame() -> np.ndarray:

@@ -560,13 +560,8 @@ class TestPosePtRegression(unittest.TestCase):
     @classmethod
     def _locate_pose_model(cls):
         repo_root = Path(__file__).resolve().parents[2]
-        for candidate in (
-            repo_root / "YoloModels" / "pytorch" / "_default_pose.pt",
-            repo_root / "iSpy" / "assets" / "_default_pose.pt",
-        ):
-            if candidate.exists():
-                return candidate
-        return None
+        candidate = repo_root / "YoloModels" / "pytorch" / "_default_pose.pt"
+        return candidate if candidate.exists() else None
 
     @classmethod
     def setUpClass(cls):
