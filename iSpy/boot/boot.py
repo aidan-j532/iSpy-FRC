@@ -277,11 +277,29 @@ def setup_files(fresh: bool = False):
         (yolo_dir / fmt).mkdir(parents=True, exist_ok=True)
 
     pytorch_dir = yolo_dir / "pytorch"
-    for pt_file in _ASSETS_DIR.rglob("*.pt"):
-        target = pytorch_dir / pt_file.name
+
+    # The owner-trained fuel model stays bundled in assets/ and is staged
+    # directly into the working YoloModels/pytorch/ folder.
+    for bundled in ("_default_v26_detect_for_fuel.pt",):
+        asset = _ASSETS_DIR / bundled
+        if not asset.exists():
+            continue
+        target = pytorch_dir / bundled
         if fresh or not target.exists():
-            shutil.copy2(pt_file, target)
-            logger.info("Staged bundled model %s -> %s", pt_file.name, target)
+            shutil.copy2(asset, target)
+            logger.info("Staged bundled model %s -> %s", bundled, target)
+
+    # Stock Ultralytics checkpoints are no longer bundled in the repo - they
+    # are downloaded on first need from Ultralytics' own release assets. A
+    # failed download (offline board) leaves no file behind; the model-backed
+    # pipelines already tolerate a missing model rather than failing boot.
+    from iSpy.vision.optimizer import ensure_default_model
+
+    for stock in ("_default_detect.pt", "_default_pose.pt"):
+        target = pytorch_dir / stock
+        if not fresh and target.exists() and target.stat().st_size >= 1024:
+            continue
+        ensure_default_model(stock)
 
     # Ensure every .pt in the pytorch directory has a metadata sidecar
     for pt_file in pytorch_dir.glob("*.pt"):

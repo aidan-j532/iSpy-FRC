@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import platform
+import requests
 import shutil
 import subprocess
 import sys
@@ -180,6 +181,103 @@ _RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
         "cp312",
     ): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
 }
+
+# Stock Ultralytics pretrained checkpoints, fetched on first need from
+# Ultralytics' own v8.4.0 release instead of being bundled inside the repo
+# (they are AGPL-3.0 licensed and are NOT part of the iSpy codebase). The
+# filenames are byte-identical to the bundled copies they replace:
+#   _default_detect.pt = yolov8n.pt       (sha256 f59b3d83...)
+#   _default_pose.pt   = yolo11n-pose.pt  (sha256 869e83fc...)
+_DEFAULT_MODEL_URLS = {
+    "_default_detect.pt": (
+        "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt"
+    ),
+    "_default_pose.pt": (
+        "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n-pose.pt"
+    ),
+}
+
+_DEFAULT_MODEL_DIR = _PROJECT_ROOT / "YoloModels" / "pytorch"
+
+_THIRD_PARTY_NOTICE_CONTENT = (
+    "The following files in this directory are stock Ultralytics\n"
+    "pretrained checkpoints, downloaded directly from\n"
+    "https://github.com/ultralytics/assets/releases and are NOT part of\n"
+    "the iSpy codebase. They are licensed AGPL-3.0 by Ultralytics,\n"
+    "independent of iSpy's own PolyForm Noncommercial 1.0.0 license:\n"
+    "\n"
+    "  - _default_detect.pt\n"
+    "  - _default_pose.pt\n"
+    "\n"
+    "Full license text: https://github.com/ultralytics/ultralytics/blob/main/LICENSE\n"
+    "\n"
+    "iSpy never imports Ultralytics code in-process at runtime; these\n"
+    "weights are loaded by iSpy's dependency-free loader\n"
+    "(iSpy/vision/yolo_pt.py). See THIRD_PARTY_LICENSES.md at the repo\n"
+    "root for full details.\n"
+)
+
+
+def _write_default_model_notice() -> None:
+    notice = _DEFAULT_MODEL_DIR / "THIRD_PARTY_NOTICE.txt"
+    if notice.exists():
+        return  # append-only / idempotent - never overwrite user edits
+    try:
+        _DEFAULT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        notice.write_text(_THIRD_PARTY_NOTICE_CONTENT)
+        logger.info("Wrote %s", notice)
+    except OSError as exc:
+        logger.warning("Could not write %s: %s", notice, exc)
+
+
+def ensure_default_model(name: str) -> Path | None:
+    """Download a stock Ultralytics checkpoint on demand.
+
+    Mirrors yolo_world.py's _ensure_world_model(): stream to a .part
+    file, verify final size >= 1024 bytes, atomic rename, return the
+    final Path on success or None on failure (never raises — every
+    caller must handle a None gracefully, same contract as the rest
+    of the download code in this file).
+    """
+    url = _DEFAULT_MODEL_URLS.get(name)
+    if not url:
+        logger.warning("No download URL for stock model %r", name)
+        return None
+    target = _DEFAULT_MODEL_DIR / name
+    if target.exists() and target.stat().st_size >= 1024:
+        return target
+
+    tmp = target.with_suffix(target.suffix + ".part")
+    try:
+        logger.info("Downloading stock Ultralytics model %s from %s ...", name, url)
+        _DEFAULT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        with requests.get(url, stream=True, timeout=60) as resp:
+            resp.raise_for_status()
+            with open(tmp, "wb") as fh:
+                for chunk in resp.iter_content(chunk_size=1 << 16):
+                    fh.write(chunk)
+        tmp.replace(target)
+    except Exception as exc:
+        logger.warning("Failed to download stock model %s: %s", name, exc)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return None
+
+    if target.stat().st_size < 1024:
+        logger.warning(
+            "Downloaded %s appears truncated (%s bytes).", target, target.stat().st_size
+        )
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        return None
+
+    _write_default_model_notice()
+    logger.info("Downloaded stock Ultralytics model %s -> %s", name, target)
+    return target
 
 
 def _detect_rknn_target_platform() -> str | None:

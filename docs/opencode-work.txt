@@ -1,149 +1,159 @@
-iSpy-FRC pre-release work log
-Session scope: Days 4-7 of docs/iSpy_7_Day_Pre_Release_Plan.pdf (regenerated with
-strikethrough on closed items + one Day-1 blocker found and fixed this session).
-Repo root = C:\Users\Aidan\Documents\Vscode\iSpy-FRC\iSpy-FRC, branch Restructure.
+BIG PICKLE PROMPT — Final licensing audit + cleanup before public release
 
-SUMMARY
-=======
-Day 4 (concurrency + resource leaks) - COMPLETE
-  - RollBack worker-thread leak: _stop_recorder now drains the full queue with
-    get_nowait()/task_done() then queues the sentinel, joins the thread, and reaps
-    leftover live threads even when not started; _worker nulls self._thread in
-    finally; _start_recorder joins stale threads. Verified with a full-queue smoke test.
-    File: iSpy/plugins/utilities/BuiltIn/RollBack.py
-  - Camera open bounded: _OPEN_WORKER_MAX=4 with module lock/counter; cap exceeded
-    raises CameraOpenTimeout; counter decremented in worker finally and on opener
-    failure. A wedged driver can no longer spawn unbounded retry threads.
-    File: iSpy/vision/Camera.py
-  - NetworkTables non-blocking: removed the 15s sleep retry loop from __init__;
-    added _conn_state + _log_connection_state() (transition-only logging) called at
-    top of update(). Added test test_connection_retries_are_non_blocking.
-    File: iSpy/plugins/utilities/BuiltIn/NetworkHandler.py
-  - Config write lock: already in place (serialized atomic saves).
+CONTEXT
+iSpy is releasing publicly under PolyForm Noncommercial 1.0.0. Prior work
+established: (1) Ultralytics (AGPL-3.0) must never import in-process at
+runtime — subprocess isolation via _convert_worker.py and
+_yoloworld_reparam_worker.py handles this; (2) the two stock Ultralytics
+checkpoints (_default_detect.pt, _default_pose.pt) are being moved to
+download-on-demand from Ultralytics' own release URLs instead of being
+bundled in the repo; (3) RKNN-Toolkit2 wheels mirrored on our GitHub
+releases are BSD-3-Clause (confirmed, redistribution permitted with
+attribution); (4) the bundled calibration dataset ZIPs
+(200.Robotics.Images.zip, 200.Human.Images.zip, valid.zip) are being
+DELETED — their provenance couldn't be fully cleared (YouTube frames,
+unclear Kaggle CCTV dataset license) and the owner has decided to drop
+them rather than resolve provenance.
 
-Day 5 (automated + manual testing) - COMPLETE (hardware items deferred)
-  - Restored iSpy/validations/unit_tests.py: 25 tests (AutoOpt recommendations
-    incl. hef/engine/onnx, Box/Results, GenericYolo model selection incl.
-    ModelFileError, metadata round-trips) under ez.unit_tests() / run_unit_tests().
-    Fake rknnlite/tflite/ultralytics/torch/scipy at import. 25/25 pass.
-  - Fixed real bug during restore: genericYolo._set_rknn_log_level now guards
-    _os.listdir() with try/except OSError.
-  - tests/test_architecture.py:
-      + test_missing_model_degrades_gracefully (missing .pt -> model None, no
-        detection) -> added Day 5.
-  - Config migration, broken-camera skip, power-cut (atomic save), upgrade path:
-    covered by existing test_architecture cases.
-  - Deferred (needs hardware): fresh boot -f on RPi/OPi, E2E manual matrix.
+This is a final verification + cleanup pass, not new feature work. Your
+job is to audit the whole repo against these decisions and either fix
+clean mechanical gaps or report anything requiring a human judgment call.
+DO NOT invent new licensing text. DO NOT guess at unclear provenance and
+ship anyway — flag it.
 
-Day 6 (multi-board + field conditions) - COMPLETE (hardware/load deferred)
-  - Unique per-board mDNS hostname: iSpy/boot/setup_service.py gains
-    _board_identifier(), default_mdns_hostname() -> "ispy-<6hex>" (machine-id, else
-    MAC, else hostname; stable across reboots), override via ISPY_MDNS_HOSTNAME or
-    setup_mdns(hostname=...). setup_mdns/default now use it. Tests:
-    default hostname shape/stability + env override.
-  - RKNN target-platform detection is now visible: _detect_rknn_target_platform()
-    returns str | None and honors ISPY_RKNN_TARGET_PLATFORM; new
-    _resolve_rknn_target_platform() prints a loud warning to _REAL_STDOUT + logs a
-    warning and falls back to ("rk3588", False). _export_rknn_metadata() accepts
-    target_platform / target_platform_detected and stamps meta["target_platform"],
-    meta["target_platform_detected"], and meta["warning"] when undetected;
-    _convert_rknn uses _resolve_rknn_target_platform(). (lru_cache removed.
-    File: iSpy/vision/optimizer.py.)
-  - Fixed dead RKNN wheel URL: base pointed at the non-existent v1.0.2 release
-    tag; the live asset set sits under the "RKNN_Wheels" tag. Verified via GitHub
-    API (6 rknn_toolkit2 2.3.2 wheels, aarch64+x86_64 for cp310/311/312) and a
-    HEAD request (200, size matches asset). _RKNN_LITE_FILENAMES (3 aarch64) are
-    resolved only from the local rknn_wheels/ package dir as designed.
-  - Windows camera discovery / conversion dataset autodetection represented by
-    unit tests: Camera._get_capture_backend_candidates (Windows/MSMF,
-    Linux/V4L2+ANY, other/ANY), _user_calibration_data_yaml (writes correct
-    data.yaml from metadata), wheel-URL/wheel-name structural checks.
-  - tests/test_architecture.py Day-6 classes: CaptureBackendDetectionTests (3),
-    MDNSHostnameTests (2), RKNNPlatformTests (2), RKNNWheelUrlTests (1),
-    UserCalibrationDataYamlTests (1).
-  - Deferred (needs hardware/network): MJPEG multi-viewer load test, SBC field
-    stability, real camera-open smoke on the bench.
+SCOPE — WHAT TO AUDIT AND FIX
 
-Day 7 (docs + packaging + release gate) - COMPLETE except fresh-machine installs
-  - readme.md: removed "outdated, will be updated soon"; Model Setup section now
-    matches the real YoloModels layout (pytorch/onnx/openvino/engine/tflite/coreml/
-    huggingface, metadata sidecars); fixed config-example model path; manual
-    convert example now points at iSpy.vision.optimizer.convert_model (the old
-    iSpy.utilities.laptop.AllInOneConvert path does not exist anymore); NetworkTables
-    section updated to the JSON-string default (struct[] still present via the
-    data_type dropdown); added "Known Limitations & Security" (verified claims
-    against code - no TLS, admin routes local-only + ISPY_ADMIN_TOKEN);
-    License section documents the final decision.
-  - DOCS.d/09-boot.md: mDNS section updated for the unique hostname; DHCP hint
-    section clarified.
-  - DOCS.d/10-algorithms.md: _detect_rknn_target_platform doc updated (str | None,
-    env override, metadata stamps).
-  - CHANGELOG.md created: added/changed/fixed/security/license + upgrade
-    requirements for 1.2.15-track.
-  - install_windows.ps1 parsed (AST OK); install.py/service_daemon.py compile;
-    root install.sh reviewed. NOT run end-to-end on fresh machines (deferred).
-  - Final audit review: all release-blocking items closed except knowingly-
-    deferred hardware/load items; see Release Gate below.
-  - docs/iSpy_7_Day_Pre_Release_Plan.pdf regenerated (fpdf2, system python) with
-    grey strikethrough = fully completed, orange strikethrough = closed by
-    documented decision, unstruck + "(deferred: ...)" note = not verifiable here.
+1. BUNDLED DATASET REMOVAL
+   - Confirm the calibration ZIPs are not present anywhere in the repo
+     (check iSpy/assets/, any test fixtures, any path referenced in
+     iSpy/dataset/bundled_datasets.py).
+   - iSpy/dataset/bundled_datasets.py currently hardcodes BUNDLED_DATASETS
+     with three entries pointing at these ZIPs by URL. Remove the entries
+     for the images being deleted. If ALL entries are being removed,
+     leave the BUNDLED_DATASETS list as an empty list (not delete the
+     file/module) since iSpy/web/modules/datasets.py imports it directly
+     and iterates over it — verify that an empty list doesn't break
+     _bundled_entries()/_bundled_list()/_bundled_install() in that module
+     (it should just render "no bundled datasets" - confirm, don't guess).
+   - Check iSpy/web/templates/bundled_datasets.html and
+     iSpy/web/templates/datasets.html for hardcoded references to the
+     specific dataset names/descriptions that assume entries exist (e.g.
+     placeholder text, example screenshots) - report anything that reads
+     oddly with an empty list rather than silently patching UI copy.
+   - Check iSpy/vision/optimizer.py's `keywords = ["frc game piece", ...]`
+     and default calibration keyword fallback path (get_calibration_keywords,
+     dataset.py's _CALIBRATION_RELEASE_URL / _VALIDATION_RELEASE_URL) -
+     these are SEPARATE download URLs from the ones being deleted. Confirm
+     whether _CALIBRATION_RELEASE_URL and _VALIDATION_RELEASE_URL point at
+     the same ZIPs being deleted or different ones. If they're the same
+     files being deleted, this is a real functional break (rknn
+     quantization auto-download would silently fail) - report this
+     explicitly, do not silently leave it broken or silently swap in a
+     different URL without asking.
 
-Day-1 BLOCKER found & fixed this session (new)
-  - setup_systemd() still hardcoded User=pi -> now _service_user() (SUDO_USER when
-    root, else invoking user, root as last resort). Fixes Orange Pi / Ubuntu installs.
-    Tests: ServiceUserTests (3) - root+SUDO_USER, root-only, non-root.
-    (Fresh-install on RPi/OPi still deferred - needs hardware.)
+2. AGPL MODEL DOWNLOAD-ON-DEMAND — VERIFY, DON'T REDO
+   - Confirm the prior download-on-demand work for _default_detect.pt /
+     _default_pose.pt is actually complete: no code path in
+     iSpy/boot/boot.py's setup_files() still copies these two specific
+     filenames from iSpy/assets/. If they're still present in
+     iSpy/assets/, report it - do not delete them yourself in this pass,
+     since that was scoped to a separate prior prompt; just report current
+     state.
+   - Confirm _default_v26_detect_for_fuel.pt (owner-trained, stays
+     bundled) is untouched by any of this.
 
-VERIFICATION (Windows, env\Scripts\python.exe)
-  - unit_tests.py: 25 OK.
-  - tests/test_architecture.py: 44 passed.
-  - Full suite tests/: 311 passed, 9 failed - ALL 9 confirmed pre-existing
-    on pristine HEAD (git stash):
-      4 x NetworkHandler struct[] (JSON-default publishing) - test_addons /
-        test_addon_output_system
-      2 x settings-page key drift - test_settings_page_keys
-      3 x camera geometry triangulation - test_camera_geometry (MountHeight/
-        ElevatedObject)
+3. GREP AUDIT — NO IN-PROCESS ULTRALYTICS IMPORTS
+   - Run a repo-wide search for `import ultralytics` and
+     `from ultralytics` across every .py file, excluding
+     iSpy/boot/_convert_worker.py and
+     iSpy/boot/_yoloworld_reparam_worker.py (the two sanctioned subprocess
+     workers) and iSpy/vision/optimizer.py's _export_ultralytics()
+     function specifically (which is documented build-time-only tooling
+     that never runs in the live vision process - confirm this function
+     is ONLY ever called from within a subprocess worker context, not
+     directly from any runtime pipeline file, by tracing its callers).
+   - List every remaining match with file + line number + a one-line
+     classification: "sanctioned build-time tool", "still needs isolation
+     (BUG)", or "false positive (comment/string, not real import)".
+   - Do not fix any newly-found in-process import yourself - classify and
+     report per the existing project convention (see iSpy's prior
+     "Big Pickle" pattern: report new isolation gaps, don't silently
+     auto-fix them).
 
-RELEASE GATE
-  - All release blockers closed or deliberately accepted WITH documentation:
-    licensing (GPL-3.0 code; bundled default .pt models keep Ultralytics
-    AGPL-3.0 - documented in CHANGELOG + README), service user (fixed), config
-    durability/security/concurrency (done), unit tests restored, mDNS/RKNN
-    platform handling (done).
-  - Known-deferred (hardware/field only, not software-verifiable in this env):
-    boot -f on real RPi/OPi, MJPEG load test, SBC field stability, Windows
-    real-camera open, fresh-machine install.sh / install_windows.ps1 E2E runs.
-  - Pre-existing test failures (9) are flagged; none introduced by this work.
-  - Do NOT tag until the 3 geometry + 2 settings + 4 NT-struct failures are
-    adjudicated (or explicitly accepted) and the deferred hardware items are
-    either run or consciously waived.
-FOLLOW-UP (same session, after hardware-crash report)
-=====================================================
-- Camera open UnboundLocalError FIXED: added 'global _open_worker_live' to
-  _open_capture_bounded + nested _worker in iSpy/vision/Camera.py. 3 new
-  CameraOpenBoundedTests (success/failure/oversubscription, slot returns to 0).
-  Arch file now 56 tests, all passing.
+4. LICENSE FILE + PACKAGE METADATA
+   - Confirm a LICENSE file exists at repo root with the full, unmodified
+     PolyForm Noncommercial 1.0.0 license text (available at
+     https://polyformproject.org/licenses/noncommercial/1.0.0/ - fetch
+     and use the canonical text verbatim, do not paraphrase or
+     summarize it).
+   - Confirm pyproject.toml's `license` field (and `classifiers` if
+     present) references PolyForm Noncommercial 1.0.0 consistently, not
+     a stale MIT/Apache/etc. placeholder.
+   - If pyproject.toml has no license field at all, add one pointing at
+     the LICENSE file (standard `license = {file = "LICENSE"}` or
+     equivalent for whatever build backend pyproject.toml declares -
+     check which backend first, don't assume setuptools).
 
-- Calibrate-tab regression FIXED (cameras.html): Focal/FOV tab only appeared if
-  the Edit/Add modal had been opened first (pipelineSchemas was loaded only
-  there). openCalibrationWizardFor now awaits loadPipelines() when schemas are
-  empty; the offline fallback carries calibration_sections; loadPipelines() also
-  runs at page init (which also correctly hides Calibrate for
-  calibration_sections=[] pipelines).
+5. THIRD_PARTY_LICENSES.md
+   - Confirm this file exists at repo root and includes, at minimum:
+     a) RKNN-Toolkit2 wheels — BSD-3-Clause, © Rockchip Electronics Co.,
+        Ltd., link to https://github.com/airockchip/rknn-toolkit2/blob/master/LICENSE
+     b) Ultralytics pretrained checkpoints (downloaded on demand, not
+        bundled) — AGPL-3.0, link to
+        https://github.com/ultralytics/ultralytics/blob/main/LICENSE,
+        note that iSpy never imports Ultralytics code in-process.
+   - If it's missing either entry or missing entirely, create/complete it
+     using exactly this content structure - do not add extra
+     editorializing or additional third-party entries beyond what's
+     listed here without flagging them to me first.
 
-- NEW: per-pipeline "needs calibration to run" contract (base.py):
-    requires_calibration()  classmethod (default = bool(calibration_sections))
-    calibration_ready()     any declared section satisfied
-    _calibration_processable() (+ in_calibration_mode bypass)
-    _gate_uncalibrated(frame) -> ([], frame) passthrough + status hint
-    Section rules: charuco = camera_matrix+dist_coeffs; focal =
-    focal_length_pixels/fov>0; pnp = calibration[pnp].
-  Wired into optimizable._is_processable (object_detection) and april_tag,
-  qr_code, optical_flow run() tops (via _gate_uncalibrated). Status becomes
-  "ready (uncalibrated - passthrough)" while gated. yolo_world/depth_anything
-  opt out. requires_calibration exposed in /api/vision_pipelines payload.
-  9 new PipelineCalibrationGateTests added.
+6. OTHER BUNDLED THIRD-PARTY ASSETS — AUDIT ONLY, DO NOT ASSUME CLEARED
+   - Search iSpy/web/static/vendor/ and iSpy/web/static/ for any
+     third-party JS/CSS libraries checked into the repo (e.g.
+     chart.umd.min.js, three.module.js, OrbitControls.js referenced in
+     viewer3d.html, and anything else under static/vendor/).
+   - For each one found, report: filename, apparent library name/version
+     (check for a version string or comment header in the file), and
+     whether it has an identifiable license header at the top of the
+     file. Do NOT determine licensing yourself by guessing from the
+     library's public reputation - just report what's discoverable
+     in-file, and flag anything with no visible license header as
+     "needs manual verification."
+   - Same treatment for any font files, icon sets, or images under
+     iSpy/web/static/ that are not obviously the project's own logo
+     (iSpyLogo.png, old_favicon.svg are the project's own - skip those).
+   - Add a "Bundled frontend libraries" section to THIRD_PARTY_LICENSES.md
+     listing what you found, with "LICENSE CONFIRMED: <name>" or
+     "LICENSE UNKNOWN - VERIFY MANUALLY" per entry. Do not fabricate a
+     license for anything you can't confirm in-file.
 
-  Full suite: 326 passed / 9 failed (identical pre-existing failures: 4 NT
-  struct, 2 settings keys, 3 camera geometry).
+7. RUNTIME DEPENDENCY LICENSE SPOT-CHECK
+   - Check pyproject.toml's dependency list against BACKEND_DEPENDENCIES
+     in optimizer.py and any other runtime-required package. Flag (don't
+     fix) any dependency that is itself AGPL/GPL/copyleft-licensed and
+     imported directly at runtime (not behind the [optimizer] extra or a
+     subprocess boundary) - this would be a genuine new isolation problem
+     if one exists and hasn't been caught yet. Ultralytics is already
+     known/handled; look for anything else.
+
+REQUIRED OUTPUT STRUCTURE
+Produce a single report with these exact sections in this order:
+1. Dataset removal — files/entries removed, any broken download paths
+   found (esp. the _CALIBRATION_RELEASE_URL / _VALIDATION_RELEASE_URL
+   question above)
+2. AGPL model download-on-demand — current state, any bundled leftovers
+3. Ultralytics import grep results — full table of matches + classification
+4. LICENSE file — present/created, content source confirmed as verbatim
+   PolyForm text
+5. pyproject.toml — license field status, what was changed if anything
+6. THIRD_PARTY_LICENSES.md — present/created, contents confirmed
+7. Bundled frontend libraries — full list with confirmed/unknown status
+8. Runtime dependency spot-check — any new copyleft concerns found
+9. OPEN QUESTIONS FOR THE OWNER — everything you deliberately did not
+   resolve yourself, with enough context that a human can decide in one
+   read
+
+Do not proceed past step 1 if the _CALIBRATION_RELEASE_URL /
+_VALIDATION_RELEASE_URL question reveals a functional break in RKNN
+quantization - stop and report that up front, since it may change how
+the owner wants dataset removal handled.

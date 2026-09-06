@@ -9,8 +9,6 @@ logger = logging.getLogger(__name__)
 _IMAGE_EXTS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
 _CALIB_COUNT = 200
 _IMGSZ = 640
-_CALIBRATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/releases/download/RKNN_Quantization/200.Robotics.Images.zip"
-_VALIDATION_RELEASE_URL = "https://github.com/aidan-j532/iSpy-FRC/releases/download/Test_Images/valid.zip"
 _VALIDATION_KEYWORDS = [
     "robotics validation images",
     "robotics test images",
@@ -47,7 +45,11 @@ def _download_release_images(
     images_dir = folder / target_dir
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    url = release_url or _CALIBRATION_RELEASE_URL
+    if not release_url:
+        logger.info("No release image URL provided - skipping release download")
+        return downloaded
+
+    url = release_url
     logger.info("Trying release calibration images: %s", url)
     try:
         sess = _session()
@@ -603,7 +605,7 @@ def add_validate_images(
         return validation_dir
 
     logger.info("Preparing %d validation images under %s", validation_count, validation_dir)
-    release_url = _extract_release_url(keywords) or _VALIDATION_RELEASE_URL
+    release_url = _extract_release_url(keywords)
     _download_release_images(
         ds,
         validation_count,

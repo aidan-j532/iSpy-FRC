@@ -1,16 +1,4 @@
-BUNDLED_DATASETS: list[dict] = [
-    {
-        "name": "robotics_calibration",
-        "url": "https://github.com/aidan-j532/iSpy-FRC/releases/download/Fuel_Quantization/200.Robotics.Images.zip",
-        "description": "200 generic robotics calibration images. Good starting "
-                       "point for int8/uint8 quantization, but for best results "
-                       "use your own images of your actual game pieces and field.",
-    },
-    {
-        "name": "human_calibration",
-        "url": "https://github.com/aidan-j532/iSpy-FRC/releases/download/Pose_Quantization/200.Human.Images.zip",
-        "description": "200 generic human pose images. Good starting "
-                       "point for int8/uint8 quantization, but for best results "
-                       "use your own images of actual people.",
-    },
-]
+# The bundled calibration image ZIPs (from the project's GitHub release assets)
+# have been removed. Use your own images for int8/uint8 quantization; the
+# pipeline falls back to synthetic calibration images otherwise.
+BUNDLED_DATASETS: list[dict] = []

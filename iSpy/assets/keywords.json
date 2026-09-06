@@ -1,5 +1,5 @@
 {
     "_default_box": ["human", "person", "women", "man"],
     "_default_pose": ["human", "person", "women", "man"],
-    "_default_v26_detect_for_fuel": ["https://github.com/aidan-j532/iSpy-FRC/releases/download/RKNN_Quantization/200.Robotics.Images.zip"]
+    "_default_v26_detect_for_fuel": []
 }

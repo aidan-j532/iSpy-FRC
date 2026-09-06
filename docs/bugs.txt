@@ -1,237 +1,141 @@
-TASK: Fix 1 P0 security bug, wire missing Tello UI fields, tighten one
-exception-handling gap, then run final pre-release verification. This is
-the LAST prompt before Chief Delphi release — treat Section D's report as
-a go/no-go gate, not a formality.
+BIG PICKLE PROMPT — Stock Ultralytics model download-on-demand + third-party notice
 
-============================================================
-BUG 4 — torch.load(weights_only=False) reachable from public upload endpoint (P0, security)
-============================================================
+CONTEXT
+iSpy currently bundles two stock Ultralytics pretrained checkpoints
+(_default_detect.pt, _default_pose.pt) inside iSpy/assets/, copied into
+YoloModels/pytorch/ by setup_files() in iSpy/boot/boot.py at every fresh
+boot (`boot -f`). These two files are unmodified Ultralytics releases and
+are licensed AGPL-3.0 by Ultralytics — separate from iSpy's own PolyForm
+Noncommercial 1.0.0 license. Bundling them inside the iSpy repo means the
+repo is distributing AGPL-licensed files, which we want to stop doing.
+_default_v26_detect_for_fuel.pt is NOT part of this task — it was trained
+by the repo owner and stays bundled exactly as-is, no changes.
 
-File: iSpy/vision/genericYolo.py (torch_load), iSpy/web/modules/models.py
-(ModelsModule._upload)
+GOAL
+Replace the "bundle + copy from assets/" pattern for _default_detect.pt
+and _default_pose.pt with a "download from Ultralytics' own release URLs
+on first need" pattern, mirroring the existing style already used in
+iSpy/vision/pipelines/yolo_world.py's _ensure_world_model() (download to a
+target path, verify size, retry via .part file, don't overwrite a good
+existing file). Also drop a generated third-party notice into
+YoloModels/pytorch/ whenever either file is downloaded, so a user browsing
+their own YoloModels folder sees the AGPL attribution locally, not just in
+the repo's root THIRD_PARTY_LICENSES.md.
 
-Context: torch_load() in genericYolo.py hardcodes weights_only=False when
-calling torch.load, because the dependency-free yolo_pt shim needs to
-reconstruct custom nn.Module classes (Conv, C2f, DFL, etc.) that
-weights_only=True's restricted unpickler would reject. That's a legitimate
-need for TRUSTED local model files. The problem: ModelsModule._upload()
-(iSpy/web/modules/models.py) accepts an unauthenticated .pt upload via
-POST /api/models/upload, saves it to a temp path, and immediately calls
-metadata_from_pt(tmp) -> torch_load(tmp) on the raw uploaded bytes BEFORE
-any validation. This is arbitrary pickle deserialization from an
-unauthenticated network endpoint - a full RCE surface.
+SCOPE — FILES YOU MAY TOUCH
+- iSpy/boot/boot.py (setup_files())
+- iSpy/vision/optimizer.py (add a download helper near the top-level
+  URL constants, alongside _RKNN_FULL_BASE / _RKNN_FULL_WHEELS style)
+- iSpy/config/iSpyConfig.py (default_vision_model()) — read-only unless
+  step 4 requires a change; report if you think it does, don't silently
+  edit it
+- iSpy/assets/ — you MAY delete _default_detect.pt and _default_pose.pt
+  from this directory as the final step, but only after confirming the
+  download path works
+- A new file: iSpy/vision/_default_model_urls.py (or fold into
+  optimizer.py if you judge that cleaner — your call, but keep it small
+  and isolated)
 
-Steps:
-1. Confirm the call chain: _upload() -> metadata_from_pt() (iSpy/vision/
-   metadata.py) -> torch_load() (iSpy/vision/genericYolo.py) -> the
-   register_shim() + torch.load(weights_only=False) call. Confirm no
-   validation happens on the uploaded bytes before this call.
-2. Do NOT globally flip weights_only=True - that breaks the legitimate
-   yolo_pt shim reconstruction path for already-trusted local models
-   (YoloModels/pytorch/*.pt placed by boot.py, the optimizer, or picked
-   from the local library). The fix is restricting what's deserializable
-   FROM THE UPLOAD PATH specifically, not changing trust behavior for
-   models already on disk.
-3. Fix options (pick the one that fits without breaking the shim, verify
-   by testing an actual pose .pt upload still works after the fix):
-   a. Add a pre-load structural check on the upload path: use
-      torch.load(tmp, map_location="cpu", weights_only=True) FIRST as a
-      cheap sanity pass; if that fails (expected, since it's a real
-      Ultralytics checkpoint with custom classes), fall back to the
-      shimmed weights_only=False load, but ONLY after confirming the
-      pickle's declared classes are limited to the known-safe shim
-      registry (use torch.serialization.add_safe_globals to explicitly
-      allowlist iSpy.vision.yolo_pt's classes for weights_only=True instead
-      of disabling it - check whether the installed torch version supports
-      add_safe_globals; this is the correct long-term fix if available).
-   b. If add_safe_globals isn't viable on the supported torch version,
-      require the upload endpoint to run the untrusted load in a
-      subprocess with no filesystem/network access beyond writing the
-      validated result, mirroring the _convert_worker.py subprocess
-      isolation pattern already used elsewhere in this codebase. The
-      subprocess boundary limits blast radius even if the pickle exploits
-      something.
-4. Require ISPY_ADMIN_TOKEN or local-only access on POST /api/models/upload
-   the same way iSpy/web/Backend/PluginStatus.py's require_local_or_token
-   decorator already gates /api/plugins/upload - confirm whether
-   ModelsModule._upload currently has ANY auth gate (it does not appear
-   to). Add the same decorator.
-   4a. While here, grep for every route in iSpy/web/modules/ and
-       iSpy/web/Backend/ that accepts request.files or writes to disk from
-       a POST body, and confirm each one either has require_local_or_token
-       or a documented reason it doesn't need it (e.g. dataset image
-       upload in datasets.py, addon upload in PluginStatus.py - the latter
-       should already be gated, confirm rather than assume). Report any
-       gap found even if out of scope to fix here.
-5. Add a test that a malicious/malformed .pt (e.g. a pickle containing a
-   disallowed class not in the shim registry) is rejected before reaching
-   torch.load, not silently swallowed into a 500.
-6. Report: which fix (3a or 3b) was applied and why, confirm existing
-   legitimate model uploads (detect + pose) still work post-fix, confirm
-   the auth gate is in place, report findings from 4a.
+DO NOT TOUCH
+- _default_v26_detect_for_fuel.pt or any code path specific to it
+- The RKNN wheel download logic already in optimizer.py
+  (_RKNN_FULL_WHEELS, _rknn_wheel_targets) — same pattern, different
+  concern, leave it alone
+- The subprocess isolation architecture (_convert_worker.py,
+  _yoloworld_reparam_worker.py) — unrelated to this task
 
-============================================================
-BUG 5 — Tello camera config fields never rendered in Add/Edit modal (P1)
-============================================================
+STEP 1 — Locate the real Ultralytics release URLs
+Find the actual asset URLs Ultralytics publishes for the stock YOLO
+detect and pose checkpoints on https://github.com/ultralytics/assets/releases
+(the same release family yolo_world.py already downloads from via
+_WORLD_MODEL_URLS). Determine which specific checkpoint filenames
+correspond to whatever _default_detect.pt and _default_pose.pt currently
+are (check their file sizes / any existing metadata sidecar
+_default_detect_metadata.yaml, _default_pose_metadata.yaml under
+iSpy/assets/ if present, to infer which YOLO version/size they are —
+report back to me what you find if it's ambiguous; DO NOT GUESS AND SHIP A
+DIFFERENT MODEL SIZE THAN WHAT'S CURRENTLY BUNDLED).
 
-Files: iSpy/web/templates/cameras.html, iSpy/web/modules/cameras.py (or a
-new camera-schema endpoint if needed)
+STEP 2 — Add a download helper
+In optimizer.py (or the new small module), add:
 
-Context: TelloCamera.config_schema() (iSpy/vision/Cameras/TelloCamera.py)
-declares tello_ip, tello_command_port, tello_video_port with labels/
-defaults/help text. cameras.html's COMMON_FIELDS dict also declares these
-three keys (tello_ip, tello_command_port, tello_video_port) with the same
-shape. But neither idKeys (used for the 'add' vs 'edit' identity section)
-nor any COMMON_SECTIONS group ever includes them, so they're dead data -
-declared twice, rendered nowhere. renderSourceSection('tello') only ever
-inserts the 'source' text field, never the IP/port fields. A Tello user
-therefore cannot configure the drone's command port, video port, or IP
-from the UI at all - only through hand-editing config.json.
+    _DEFAULT_MODEL_URLS = {
+        "_default_detect.pt": "<resolved URL from step 1>",
+        "_default_pose.pt": "<resolved URL from step 1>",
+    }
 
-Also confirmed: there is no API endpoint serving camera-source schemas
-(config_schema() per camera_type) to the frontend the way /api/
-vision_pipelines already serves pipeline schemas. cameras.html hardcodes
-COMMON_FIELDS by hand instead of reading CameraBase.config_schema() /
-TelloCamera.config_schema() from the backend, so the two can silently
-drift (as they already have).
+    def ensure_default_model(name: str) -> Path | None:
+        \"\"\"Download a stock Ultralytics checkpoint on demand.
 
-Steps:
-1. Add GET /api/camera_schemas to CamerasModule (iSpy/web/modules/
-   cameras.py), mirroring _vision_pipelines()'s shape: return
-   {"opencv": OpenCVCamera.config_schema(), "tello": TelloCamera.
-   config_schema()} by calling iSpy.vision.Cameras.get_camera_classes()
-   and calling .config_schema() on each.
-2. In cameras.html, fetch this endpoint alongside loadPipelines() (call it
-   in openCameraModal or a new loadCameraSchemas(), cached like
-   pipelineSchemas is).
-3. Fix renderSourceSection(cameraType): when cameraType === 'tello', after
-   inserting the source field, also render tello_ip, tello_command_port,
-   tello_video_port using the schema fetched in step 2 (reuse buildField()
-   - it already handles number/text field types generically). Pre-fill
-   from camModal.data when editing, from config_schema() defaults when
-   adding.
-4. Confirm submitCameraModal() / collectSchemaFields() actually captures
-   these three fields into the payload when camera_type === 'tello' (trace
-   the field -> payload path; camModal.fields only populates from fields
-   actually built by buildField(), so step 3 fixes this automatically IF
-   the fields are tagged with source: 'common' or 'schema' consistently
-   with how the rest of the form collects values - verify).
-5. Once wired, prefer reading COMMON_FIELDS' tello_* entries from the new
-   endpoint's schema instead of the hardcoded JS dict, OR at minimum add a
-   code comment noting both copies must be kept in sync until this is
-   fully schema-driven, to prevent the next drift.
-6. Manual test: add a new Tello camera via the UI, set a non-default
-   tello_ip/tello_command_port/tello_video_port, save, re-open Edit, confirm
-   the values round-trip correctly through GET /api/cameras/config/<name>.
+        Mirrors yolo_world.py's _ensure_world_model(): stream to a .part
+        file, verify final size >= 1024 bytes, atomic rename, return the
+        final Path on success or None on failure (never raises — every
+        caller must handle a None gracefully, same contract as the rest
+        of the download code in this file).
+        \"\"\"
 
-============================================================
-BUG 6 — ObjectDetectionPipeline model-config ValueError not caught locally (P2)
-============================================================
+Target path: YoloModels/pytorch/<name>, same directory convention as
+today. Log at INFO when a download starts/completes, WARNING on failure
+with the reason, exactly like _ensure_world_model does.
 
-File: iSpy/vision/pipelines/object_detection.py
+STEP 3 — Wire it into default_vision_model() / boot
+default_vision_model() in iSpyConfig.py currently assumes
+_default_v26_detect_for_fuel.pt or _default_detect.pt already exist on
+disk under YoloModels/pytorch/ and just returns a path string. Change the
+call site(s) that currently rely on setup_files() having copied the stock
+models from assets/ so that, when no user model exists AND the fallback
+would be _default_detect.pt or _default_pose.pt, ensure_default_model()
+is called first. Boot must not hang or crash if the download fails (e.g.
+offline board) — fall back to whatever the existing no-model-found error
+path already does (ObjectDetectionPipeline already tolerates self.model
+being None; do not change that contract). Report explicitly which call
+site(s) you changed and why.
 
-Context: ObjectDetectionPipeline.__init__ calls
-fill_missing_config(dict(vm_cfg)) (iSpy/vision/ModelInspector.py) BEFORE
-the try/except (ModelFileError, ValueError) block that wraps
-GenericYolo(vm_filled, ...). If fill_missing_config() itself raises
-ValueError (it can, e.g. via inspect_model()'s format-detection path), that
-exception is NOT caught locally in ObjectDetectionPipeline.__init__ - it
-propagates up to iSpy.py:_build_cameras_from_config's `except Exception`
-wrapper, which logs and skips the camera entirely. This means: instead of
-the camera appearing with an "error: <reason>" status (like a bad
-GenericYolo load produces via the existing try/except), the camera simply
-never appears in self.cameras at all - no dashboard entry, no is_ready()
-status, nothing. This is a silent-ish failure mode, not a crash, but it's
-inconsistent with the ModelFileError/ValueError-from-GenericYolo path 30
-lines later in the same function, which DOES surface a clean per-camera
-error status.
+STEP 4 — Drop the third-party notice file
+Whenever ensure_default_model() successfully downloads a file, write (if
+not already present) YoloModels/pytorch/THIRD_PARTY_NOTICE.txt containing:
 
-Steps:
-1. Confirm by tracing: does fill_missing_config() have any code path that
-   raises ValueError given a legitimately-bad-but-plausible vm_cfg (e.g.
-   malformed input_size, a model file that exists but fails
-   inspect_model())? Check inspect_model()'s dispatch and each _inspect_*
-   helper for raise ValueError(...) calls reachable from a normal (not
-   adversarial) misconfiguration.
-2. Wrap the fill_missing_config(dict(vm_cfg)) call (and the subsequent
-   vm_filled = ... line) in the SAME try/except (ModelFileError, ValueError)
-   pattern already used around GenericYolo(...) a few lines later, logging
-   the same style of error and leaving self.model = None instead of
-   propagating. Camera construction should still succeed (so the camera
-   appears with an error status) rather than being skipped entirely.
-3. Do NOT change behavior for any OTHER exception type raised here (e.g. a
-   genuine bug) - only ModelFileError/ValueError, consistent with the
-   existing pattern's intent (these two are "bad model config", not "iSpy
-   bug").
-4. Add a test: construct ObjectDetectionPipeline with a vm_cfg that causes
-   fill_missing_config to raise ValueError, assert the pipeline still
-   constructs successfully with self.model is None and is_ready() reports
-   "error: ..." rather than the constructor raising. Also assert a
-   logger.error (or equivalent) call actually fired with the underlying
-   reason - the failure must be loud in Outputs/log.txt, not just
-   swallowed into a quiet None.
-5. Report: confirm this doesn't change behavior for the already-passing
-   "model file missing" and "model file corrupt" test cases in
-   TestGenericYoloModelSelection (iSpy/validations/unit_tests.py) - those
-   exercise GenericYolo directly, not ObjectDetectionPipeline.__init__, so
-   should be unaffected, but verify.
+    The following files in this directory are stock Ultralytics
+    pretrained checkpoints, downloaded directly from
+    https://github.com/ultralytics/assets/releases and are NOT part of
+    the iSpy codebase. They are licensed AGPL-3.0 by Ultralytics,
+    independent of iSpy's own PolyForm Noncommercial 1.0.0 license:
 
-============================================================
-SECTION D — FINAL PRE-RELEASE VERIFICATION (report-only, no code changes
-except where explicitly noted)
-============================================================
+      - _default_detect.pt
+      - _default_pose.pt
 
-This section runs LAST, after Bugs 4-6 and after confirming the separate
-in-flight pose/venv/yolo_world task is fully merged. Do not skip it even
-if short on time - it's the actual release gate.
+    Full license text: https://github.com/ultralytics/ultralytics/blob/main/LICENSE
 
-D1. Venv divergence proof
-    On real hardware (or a venv-based dev setup mirroring the install
-    flow): run the full install -> `boot -s` -> reboot cycle. Pull
-    Outputs/log.txt after reboot and confirm the sys.executable/sys.prefix
-    log lines from the ispy-boot service and the watchdog-launched
-    ispy-run process are IDENTICAL. If they diverge, report the exact
-    divergence - do not re-guess a fix here, that's out of scope for this
-    prompt.
+    iSpy never imports Ultralytics code in-process at runtime; these
+    weights are loaded by iSpy's dependency-free loader
+    (iSpy/vision/yolo_pt.py). See THIRD_PARTY_LICENSES.md at the repo
+    root for full details.
 
-D2. AGPL runtime boundary audit
-    Run: grep -rn "import ultralytics\|from ultralytics" across the whole
-    repo. For every hit, confirm it is reachable ONLY through
-    _convert_model_subprocess() (optimizer.py) or the yolo_world reparam
-    subprocess worker - never through a code path that runs inside the
-    live Flask/vision process. Report every hit and its call path. This
-    determines whether PolyForm Noncommercial can be honestly applied -
-    treat any in-process hit as a release blocker.
+Append-only / idempotent: if the file already exists, don't duplicate
+content or overwrite user edits to it.
 
-D3. License metadata consistency
-    - Confirm a LICENSE file exists at repo root with PolyForm
-      Noncommercial 1.0.0 text (not leftover MIT/AGPL).
-    - In iSpy/web/templates/settings.html, the About tab's PyPI license
-      fetch falls back to the hardcoded string 'MIT' on failure (see the
-      catch block around the pypi.org fetch). CHANGE this fallback string
-      to match the real license - this is an explicitly authorized fix,
-      make it.
-    - Confirm pyproject.toml's license field/classifier matches PolyForm
-      Noncommercial 1.0.0.
-    - Report iSpy/__init__.py's current __version__ value. Do not change
-      it without explicit confirmation of the intended release number.
+STEP 5 — Remove the bundled copies
+Only after steps 1-4 are verified working end to end (a `boot -f` on a
+clean checkout actually produces a working _default_detect.pt via
+download, not a stale bundled copy): delete _default_detect.pt and
+_default_pose.pt (and their metadata sidecars, if those sidecars are
+regenerated fresh by the existing metadata_from_pt() path — verify this
+before deleting the sidecars specifically) from iSpy/assets/, and update
+setup_files() so it no longer expects them there.
 
-D4. Default model sanity
-    Confirm default_config's default_cam entry in iSpy/config/
-    iSpyConfig.py and default_vision_model() in the same file both point
-    at the same model, and that model is the intended out-of-box default
-    now that pose loading is fixed (per the separate in-flight task).
-    Report which model is default and confirm both functions agree - do
-    not change it, just verify.
+REQUIRED OUTPUT STRUCTURE
+For each step, report:
+1. What you changed (file + function names)
+2. What you verified (e.g. "ran boot -f in a clean tmp checkout, observed
+   download log lines, confirmed YoloModels/pytorch/_default_detect.pt
+   exists and loads via GenericYolo")
+3. Anything ambiguous you did NOT resolve yourself — stop and ask rather
+   than guessing on: which exact checkpoint size/version to fetch, whether
+   metadata sidecars should be regenerated vs. redownloaded, or any
+   existing test in iSpy/validations/unit_tests.py that references these
+   filenames directly and might need updating (search for
+   "_default_detect" and "_default_pose" across the test suite before
+   touching anything — report matches, do not silently edit tests).
 
-D5. RKNN test isolation re-check
-    Confirm iSpy/validations/unit_tests.py's rknnlite fake is actually in
-    effect for every test path validate_system() exercises at boot,
-    specifically that no real /dev/rknpu* access happens during
-    `boot -f` on an RKNN-capable board. If real hardware is available,
-    watch dmesg during boot and confirm no NPU driver activity coincides
-    with the unit-test phase. Report pass/fail plainly.
-
-Report format for Section D: one line per D1-D5, PASS or FAIL with the
-specific evidence (log excerpt, grep output, file diff), not a summary
-judgment. Do not soften a FAIL into a "mostly fine."
+Do not touch licensing text itself beyond the THIRD_PARTY_NOTICE.txt
+content specified above — the wording is final, copy it verbatim.

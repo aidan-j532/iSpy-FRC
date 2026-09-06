@@ -3,12 +3,7 @@ from pathlib import Path
 from iSpy.plugins.bases import UtilityBase
 from iSpy.config.iSpyConfig import get_pipeline_settings
 from iSpy.vision.metadata import metadata_from_pt, write_metadata, metadata_path_for
-
-try:
-    from flask import jsonify, request
-    FLASK_AVAILABLE = True
-except ImportError:
-    FLASK_AVAILABLE = False
+from flask import jsonify, request
 
 _PROJECT_ROOT = Path.cwd()
 _YOLO_DIR = _PROJECT_ROOT / "YoloModels"
@@ -38,12 +33,6 @@ class YOLOHandler(UtilityBase):
     def __init__(self, context: dict):
         self.config = context["config"]
         self.logger = logging.getLogger(__name__)
-        # flask_app = context.get("flask_app")
-
-        # if flask_app and FLASK_AVAILABLE:
-        #     flask_app.add_url_rule("/api/models/select", "yolo_select", self._select, methods=["POST"])
-        # elif not FLASK_AVAILABLE:
-        #     self.logger.warning("Flask not available - model endpoints disabled.")
 
     def _select(self):
         data = request.get_json(force=True) or {}
