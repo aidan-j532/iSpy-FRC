@@ -397,146 +397,52 @@ function parseValue(el) {
 
 
 
-let rawJsonUnlocked = false;
-
-let rawCooldownDone = false;
-
-
+// In-memory only: resets on page reload, so the confirmation sweep runs again on next visit.
+let rawArmed = false;
 
 function setupRawGate() {
-
   const btn = document.getElementById('continue-risky');
-
   if (!btn) return;
-
   btn.disabled = false;
-
-  btn.textContent = rawJsonUnlocked ? 'Edit Raw JSON' : 'Continue (Risky)';
-
+  btn.textContent = rawArmed ? 'Click Again to Continue' : 'Continue (Risky)';
   const warn = document.getElementById('raw-warn');
-
-  if (warn) warn.style.display = rawJsonUnlocked ? 'none' : '';
-
+  if (warn) warn.style.display = rawArmed ? 'none' : '';
 }
-
-
 
 function openRawEditor() {
-
   snapshotBeforeFirstEdit();
-
   document.getElementById('raw-gate').style.display = 'none';
-
   document.getElementById('raw-editor-wrap').style.display = '';
-
 }
 
-
-
-async function onContinueClick() {
-
+function onContinueClick() {
   const btn = document.getElementById('continue-risky');
-
   if (!btn || btn.disabled) return;
-
-  if (rawJsonUnlocked) {
-
-    if (rawCooldownDone) {
-
-      rawCooldownDone = false;
-
-      openRawEditor();
-
-      return;
-
-    }
-
-    btn.disabled = true;
-
-    runRawCooldown(btn, 10000, () => {
-
-      rawCooldownDone = true;
-
-      btn.disabled = false;
-
-      btn.classList.add('raw-btn-ready');
-
-      setTimeout(() => btn.classList.remove('raw-btn-ready'), 1400);
-
-    });
-
-    return;
-
-  }
-
-  // First time and first time only: a horizontal bar sweeps across the
-  // button (100% opacity at its left edge fading to 20% on the right).
-  btn.disabled = true;
-
-  runRawSweep(btn, 5000, async () => {
-
-    try {
-
-      await fetch('/api/settings/raw-unlock', { method: 'POST' });
-
-    } catch (e) { /* non-fatal - unlocked flag is cosmetic */ }
-
-    rawJsonUnlocked = true;
-
-    rawCooldownDone = false;
-
-    setupRawGate();
-
+  if (rawArmed) {
+    rawArmed = false;
     openRawEditor();
-
-    showToast('Raw JSON editor unlocked', 'success');
-
+    return;
+  }
+  // First click: a horizontal line sweeps across the button (opacity fade).
+  // When it finishes the button returns to normal and arms the next click.
+  btn.disabled = true;
+  runRawSweep(btn, 5000, () => {
+    rawArmed = true;
+    setupRawGate();
+    btn.classList.add('raw-btn-ready');
+    setTimeout(() => btn.classList.remove('raw-btn-ready'), 1400);
   });
-
 }
-
-
 
 function runRawSweep(btn, ms, done) {
-
   const sweep = document.createElement('div');
-
   sweep.className = 'raw-btn-sweep';
-
   btn.appendChild(sweep);
-
   requestAnimationFrame(() => {
-
     sweep.style.transition = `transform ${ms}ms linear`;
-
     sweep.style.transform = 'translateX(100%)';
-
   });
-
   setTimeout(() => { sweep.remove(); done(); }, ms);
-
-}
-
-
-
-function runRawCooldown(btn, ms, done) {
-
-  const bar = document.createElement('div');
-
-  bar.className = 'raw-btn-progress';
-
-  btn.appendChild(bar);
-
-  requestAnimationFrame(() => {
-
-    bar.style.transition = `transform ${ms}ms linear`;
-
-    bar.style.transform = 'scaleX(1)';
-
-  });
-
-  setTimeout(() => { bar.remove(); done(); }, ms);
-
 }
 
 
@@ -815,8 +721,6 @@ function switchTab(name, btn) {
 
     document.getElementById('raw-editor-wrap').style.display = 'none';
 
-    rawCooldownDone = false;
-
   }
 
 }
@@ -934,8 +838,6 @@ async function load() {
   document.getElementById('cfg').value = JSON.stringify(configData, null, 2);
 
   populateGpuSelect(data.gpu_count);
-
-  rawJsonUnlocked = !!data.raw_json_unlocked;
 
   setupRawGate();
 

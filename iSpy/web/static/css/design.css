@@ -452,7 +452,7 @@ pre {
   background: var(--warn-dim); color: var(--warn); font-size: 0.68rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; margin-left: 8px;
 }
-.settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+.settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; margin-bottom: 20px; }
 .settings-msg { font-size: 0.85rem; }
 .msg-ok { color: var(--ok); }
 .msg-warn { color: var(--warn); }
@@ -601,11 +601,13 @@ pre {
 .health-tbl { display: flex; flex-direction: column; }
 .health-tbl-row {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1.4fr) 120px minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: 20px minmax(0, 1.4fr) auto minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px; align-items: center;
   padding: 8px 10px; border-bottom: 1px solid var(--border);
   font-size: 0.88rem;
 }
+.health-tbl-row .health-type { display: flex; align-items: center; justify-content: center; }
+.health-tbl-row .health-type .plugin-pill { margin-right: 0; }
 .health-head {
   color: var(--text-dim); font-size: 0.72rem;
   text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
@@ -735,11 +737,6 @@ pre {
   position: absolute; top: 0; left: 0; height: 100%; width: 100%;
   pointer-events: none; transform: translateX(-100%);
   background: linear-gradient(90deg, rgba(255,255,255,1.0) 0%, rgba(255,255,255,0.2) 100%);
-}
-.raw-btn-progress {
-  position: absolute; left: 0; bottom: 0; height: 3px; width: 100%;
-  pointer-events: none; transform: scaleX(0); transform-origin: left;
-  background: var(--accent);
 }
 .raw-btn-ready { animation: raw-btn-ready-pulse 1.4s ease; }
 @keyframes raw-btn-ready-pulse {

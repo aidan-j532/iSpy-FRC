@@ -85,7 +85,7 @@ function renderHealthTable(ah) {
       <div class="health-tbl-row health-head">
         <span class="health-dot"></span>
         <span>Source</span>
-        <span>Type</span>
+        <span class="health-type">Type</span>
         <span>State</span>
         <span>Status</span>
       </div>`;
@@ -95,7 +95,7 @@ function renderHealthTable(ah) {
       <div class="health-tbl-row">
         <span class="health-dot"><span class="status-dot ${healthColorClass(a.color)}"></span></span>
         <span class="health-name">${a.name}</span>
-        ${typeBadge(a.type)}
+        <span class="health-type">${typeBadge(a.type)}</span>
         <span class="health-state">${a.state || '--'}</span>
         <span class="health-metric">${metric ? `<span class="metric-label">${metric.label}</span><strong>${metric.value}</strong>` : '--'}</span>
       </div>`;

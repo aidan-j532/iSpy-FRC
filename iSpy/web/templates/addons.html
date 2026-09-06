@@ -325,7 +325,7 @@ function renderRow(p) {
           ${betaPill}
           ${warnPill}
         </div>
-        ${p.doc ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
+        ${p.doc && !p.template ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
       </div>
       <div class="addon-right">
         ${statusHtml}
