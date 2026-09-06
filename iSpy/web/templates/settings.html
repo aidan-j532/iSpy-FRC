@@ -397,19 +397,21 @@ function parseValue(el) {
 
 
 
-// In-memory only: resets on page reload, so the confirmation sweep runs again on next visit.
-let rawArmed = false;
+// In-memory only: resets on page reload, but NOT when switching tabs.
+// rawOpened stays true once the editor has been unlocked this session, so
+// leaving the Raw JSON tab and coming back keeps the editor open instead of
+// making the user run the confirmation sweep again.
+let rawOpened = false;
 
 function setupRawGate() {
   const btn = document.getElementById('continue-risky');
   if (!btn) return;
   btn.disabled = false;
-  btn.textContent = rawArmed ? 'Click Again to Continue' : 'Continue (Risky)';
-  const warn = document.getElementById('raw-warn');
-  if (warn) warn.style.display = rawArmed ? 'none' : '';
+  btn.textContent = 'Continue (Risky)';
 }
 
 function openRawEditor() {
+  rawOpened = true;
   snapshotBeforeFirstEdit();
   document.getElementById('raw-gate').style.display = 'none';
   document.getElementById('raw-editor-wrap').style.display = '';
@@ -418,19 +420,11 @@ function openRawEditor() {
 function onContinueClick() {
   const btn = document.getElementById('continue-risky');
   if (!btn || btn.disabled) return;
-  if (rawArmed) {
-    rawArmed = false;
-    openRawEditor();
-    return;
-  }
-  // First click: a horizontal line sweeps across the button (opacity fade).
-  // When it finishes the button returns to normal and arms the next click.
+  // Single confirmation: a horizontal line sweeps across the button once,
+  // then the editor opens. No second "click again" step.
   btn.disabled = true;
   runRawSweep(btn, 5000, () => {
-    rawArmed = true;
-    setupRawGate();
-    btn.classList.add('raw-btn-ready');
-    setTimeout(() => btn.classList.remove('raw-btn-ready'), 1400);
+    openRawEditor();
   });
 }
 
@@ -713,14 +707,17 @@ function switchTab(name, btn) {
 
   if (saveBtn) saveBtn.style.display = (name === 'about') ? 'none' : '';
 
-
-
-  if (name !== 'raw') {
-
-    document.getElementById('raw-gate').style.display = '';
-
-    document.getElementById('raw-editor-wrap').style.display = 'none';
-
+  // Keep the raw editor open across tab switches once it's been unlocked
+  // this session (rawOpened). Only re-show the confirmation gate for a
+  // fresh page load.
+  if (name === 'raw') {
+    if (rawOpened) {
+      document.getElementById('raw-gate').style.display = 'none';
+      document.getElementById('raw-editor-wrap').style.display = '';
+    } else {
+      document.getElementById('raw-gate').style.display = '';
+      document.getElementById('raw-editor-wrap').style.display = 'none';
+    }
   }
 
 }

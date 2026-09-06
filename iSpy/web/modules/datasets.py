@@ -1,15 +1,11 @@
-import logging
 from pathlib import Path
 from flask import jsonify, render_template, request, send_from_directory
 from iSpy.web.Backend.WebModule import WebModule, ensure_disk_space
 from iSpy.dataset.dataset import (
-    _rebuild_dataset_txt,
     add_image_to_dataset_txt,
     remove_image_from_dataset_txt,
 )
 from iSpy.dataset.bundled_datasets import BUNDLED_DATASETS
-
-logger = logging.getLogger(__name__)
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
@@ -62,7 +58,6 @@ class DatasetsModule(WebModule):
         flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_delete", self._delete_image, methods=["DELETE"])
         flask_app.add_url_rule("/api/fs/dirs", "api_fs_dirs", self._browse_dirs, methods=["GET"])
         flask_app.add_url_rule("/api/datasets/bundled", "api_ds_bundled_list", self._bundled_list, methods=["GET"])
-        flask_app.add_url_rule("/api/datasets/bundled/install", "api_ds_bundled_install", self._bundled_install, methods=["POST"])
 
     def _images_dir(self, name: str) -> Path:
         # datasets live flat: QuantizeDataset/<name>/img1.png ...
@@ -141,40 +136,6 @@ class DatasetsModule(WebModule):
 
     def _bundled_list(self):
         return jsonify(datasets=self._bundled_entries())
-
-    def _bundled_install(self):
-        from iSpy.dataset.dataset import _download_release_images
-
-        data = request.get_json(force=True) or {}
-        name = _validate_filename(str(data.get("name", "")))
-        entry = next(
-            (e for e in BUNDLED_DATASETS
-             if _validate_filename(str(e.get("name", ""))) == name),
-            None,
-        )
-        if entry is None:
-            return jsonify(error=f"Unknown bundled dataset '{name}'"), 404
-
-        target = self.dataset_root / name
-        if not _is_safe_path(self.dataset_root, target):
-            return jsonify(error="Invalid path"), 400
-        target.mkdir(parents=True, exist_ok=True)
-
-        try:
-            images = _download_release_images(
-                target, count=1_000_000,
-                release_url=str(entry.get("url", "")),
-                target_dir="",
-            )
-        except Exception as e:
-            logger.exception("Bundled dataset download failed: %s", e)
-            return jsonify(error=f"Download failed: {e}"), 500
-        if not images:
-            return jsonify(error="Download failed - no images were extracted"), 502
-
-        # bare filenames now that datasets are flat
-        _rebuild_dataset_txt(target)
-        return jsonify(success=True, downloaded=len(images))
 
     def _list_images(self, name):
         d = self._images_dir(name)

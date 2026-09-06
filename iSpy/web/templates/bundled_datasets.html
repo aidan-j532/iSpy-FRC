@@ -1,123 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Bundled Datasets - iSpy{% endblock %}
-{% block head %}
-<style>
-  /* ---- "Bundled Datasets" popup that slides in beside the sidebar to
-     mark this page as a subfolder of the Datasets page ---- */
-  .bundled-tab {
-    position: fixed; left: 236px; top: 26px; z-index: 600;
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 16px;
-    background: var(--bg-surface); border: 1px solid var(--border-light);
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-lg);
-    opacity: 0; transform: translateX(-18px);
-    animation: bundled-tab-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.05s forwards;
-  }
-  @keyframes bundled-tab-in { to { opacity: 1; transform: none; } }
-  .bundled-tab > svg { width: 16px; height: 16px; color: var(--accent); flex: none; }
-  .bundled-tab .bt-caption { display: flex; flex-direction: column; gap: 1px; line-height: 1.2; }
-  .bundled-tab .bt-crumb {
-    font-size: 0.6rem; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.06em;
-  }
-  .bundled-tab .bt-label { font-size: 0.85rem; font-weight: 600; color: var(--text); }
-  /* corner lines around the popup - it reads as a window opened out of Datasets */
-  .bundled-tab .bt-corner { position: absolute; width: 9px; height: 9px; pointer-events: none; }
-  .bundled-tab .bt-corner.bt-tl { top: -3px; left: -3px; border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); border-top-left-radius: 3px; }
-  .bundled-tab .bt-corner.bt-tr { top: -3px; right: -3px; border-top: 2px solid var(--accent); border-right: 2px solid var(--accent); border-top-right-radius: 3px; }
-  .bundled-tab .bt-corner.bt-bl { bottom: -3px; left: -3px; border-bottom: 2px solid var(--accent); border-left: 2px solid var(--accent); border-bottom-left-radius: 3px; }
-  .bundled-tab .bt-corner.bt-br { bottom: -3px; right: -3px; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); border-bottom-right-radius: 3px; }
-  @media (max-width: 768px) { .bundled-tab { left: 72px; } }
-
-  /* ---- folder-style breadcrumb (tree vocabulary from the Datasets page) ---- */
-  .bundled-crumbs {
-    display: flex; align-items: center; gap: 8px;
-    margin-bottom: 14px; font-size: 0.82rem;
-  }
-  .bundled-crumbs a {
-    display: inline-flex; align-items: center; gap: 6px;
-    color: var(--accent); text-decoration: none; font-weight: 500;
-  }
-  .bundled-crumbs a:hover { text-decoration: underline; }
-  .bundled-crumbs a svg { width: 14px; height: 14px; }
-  .bundled-crumbs .bundled-sep { color: var(--text-muted); }
-  .bundled-crumbs .bundled-current {
-    display: inline-flex; align-items: center; gap: 5px;
-    color: var(--text); font-weight: 600;
-  }
-  .bundled-crumbs .bundled-current svg { width: 13px; height: 13px; color: var(--accent); }
-
-  /* ---- the subfolder window: corner-bracketed panel holding the grid ---- */
-  .bundled-window { position: relative; margin-top: 18px; }
-  .bundled-window .bw-corner { position: absolute; width: 14px; height: 14px; pointer-events: none; }
-  .bundled-window .bw-corner.bw-tl { top: -1px; left: -1px; border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); border-top-left-radius: 3px; }
-  .bundled-window .bw-corner.bw-tr { top: -1px; right: -1px; border-top: 2px solid var(--accent); border-right: 2px solid var(--accent); border-top-right-radius: 3px; }
-  .bundled-window .bw-corner.bw-bl { bottom: -1px; left: -1px; border-bottom: 2px solid var(--accent); border-left: 2px solid var(--accent); border-bottom-left-radius: 3px; }
-  .bundled-window .bw-corner.bw-br { bottom: -1px; right: -1px; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); border-bottom-right-radius: 3px; }
-
-  .bundled-window .bw-head {
-    display: flex; align-items: center; gap: 8px;
-    padding: 10px 16px;
-    background: var(--bg); border: 1px solid var(--border);
-    border-bottom: none; border-radius: var(--radius) var(--radius) 0 0;
-  }
-  .bundled-window .bw-head svg { width: 15px; height: 15px; color: var(--accent); flex: none; }
-  .bundled-window .bw-title { font-weight: 600; font-size: 0.82rem; letter-spacing: 0.02em; }
-  .bundled-window .bw-sub { color: var(--text-dim); font-size: 0.75rem; }
-  .bundled-window .bw-back { margin-left: auto; }
-  .bundled-window .bw-body {
-    padding: 16px;
-    background: var(--bg-elevated); border: 1px solid var(--border);
-    border-radius: 0 0 var(--radius) var(--radius);
-  }
-</style>
-{% endblock %}
 {% block content %}
 
-<!-- popup marking this page as the Datasets subfolder -->
-<div class="bundled-tab" role="note">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-  <div class="bt-caption">
-    <span class="bt-crumb">Datasets &rsaquo;</span>
-    <span class="bt-label">Bundled Datasets</span>
-  </div>
-  <i class="bt-corner bt-tl"></i><i class="bt-corner bt-tr"></i>
-  <i class="bt-corner bt-bl"></i><i class="bt-corner bt-br"></i>
-</div>
-
-<nav class="bundled-crumbs">
-  <a href="/datasets">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-    Datasets
-  </a>
-  <span class="bundled-sep">/</span>
-  <span class="bundled-current">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-    Pre-Bundled Datasets
-  </span>
+<nav class="bundled-crumbs" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:0.82rem;">
+  <a href="/datasets" style="color:var(--accent);text-decoration:none;font-weight:500;">&larr; Back to Datasets</a>
 </nav>
 
 <h1 style="margin-top:0;">Pre-Bundled Datasets</h1>
 <p class="text-dim" style="margin-bottom:16px;">
-  Ready-made quantization datasets from the project's GitHub releases. Each one
-  installs flat into <code>QuantizeDataset/&lt;name&gt;/</code> so it shows up
-  immediately in the Dataset Manager and camera settings.
+  Ready-made quantization datasets install straight into the Dataset Manager.
 </p>
 
-<div class="bundled-window">
-  <i class="bw-corner bw-tl"></i><i class="bw-corner bw-tr"></i>
-  <i class="bw-corner bw-bl"></i><i class="bw-corner bw-br"></i>
-
-  <div class="bw-head">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-    <span class="bw-title">Bundled Datasets</span>
-    <span class="bw-sub">&mdash; a subfolder of the Dataset Manager</span>
-    <a class="btn-secondary bw-back" href="/datasets">&larr; Back to Datasets</a>
-  </div>
-
-  <div class="bw-body">
-    <div id="bundled-grid" class="dataset-grid"></div>
+<div class="card">
+  <div id="bundled-grid" class="dataset-grid">
+    <div class="empty-state">Coming soon - pre-bundled datasets are being prepared.</div>
   </div>
 </div>
 {% endblock %}
@@ -125,53 +21,51 @@
 {% block scripts %}
 <script>
 // this page is a subfolder of Datasets - keep the Datasets nav item active
+// and rename it to reflect we're inside the bundled subfolder
+let datasetsLink = null;
 document.querySelectorAll('.sidebar a').forEach(a => {
-  if (a.pathname === '/datasets') a.classList.add('active');
+  if (a.pathname === '/datasets') {
+    datasetsLink = a;
+    a.classList.add('active');
+  }
 });
 
-let bundledDatasets = [];
-
 async function loadBundled() {
-  const data = await fetch('/api/datasets/bundled').then(r => r.json());
-  bundledDatasets = data.datasets || [];
+  let datasets = [];
+  try {
+    const data = await fetch('/api/datasets/bundled').then(r => r.json());
+    datasets = data.datasets || [];
+  } catch (e) {
+    console.error('Bundled datasets load failed:', e);
+  }
   const grid = document.getElementById('bundled-grid');
-  if (!bundledDatasets.length) {
-    grid.innerHTML = '<div class="card empty-state">No bundled datasets are configured yet.</div>';
+  if (datasets.length === 0) {
+    grid.innerHTML = '<div class="empty-state has-icon">\n' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>\n' +
+      'Coming soon - pre-bundled datasets are being prepared.</div>';
     return;
   }
-  grid.innerHTML = bundledDatasets.map(d => `
-    <div class="card dataset-card">
+  grid.innerHTML = datasets.map(d => `
+    <div class="card dataset-card" style="cursor:default;">
       <div class="dataset-name">${d.name}</div>
       <div class="dataset-count">${d.installed ? d.image_count + ' image' + (d.image_count !== 1 ? 's' : '') + ' installed' : 'Not installed'}</div>
-      <p class="form-help" style="margin-top:8px;">${d.description}</p>
-      <button onclick="installBundled('${d.name}', this)">
-        ${d.installed ? 'Re-download' : 'Download'}
-      </button>
+      ${d.description ? `<p class="form-help" style="margin-top:8px;">${d.description}</p>` : ''}
     </div>
   `).join('');
 }
 
-async function installBundled(name, btn) {
-  const original = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Downloading...';
-  showToast(`Downloading "${name}" - this can take a minute...`, 'info');
-  try {
-    const r = await fetch('/api/datasets/bundled/install', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || 'Download failed');
-    showToast(`Installed ${j.downloaded} images into QuantizeDataset/${name}`, 'success');
-    window.location.href = '/datasets?name=' + encodeURIComponent(name);
-  } catch (e) {
-    showToast(e.message || 'Download failed', 'error');
-    btn.disabled = false;
-    btn.textContent = original;
+// rename the "Datasets" nav item while on this page; restore on unload
+const ORIGINAL_TEXT = datasetsLink ? datasetsLink.textContent.trim() : 'Datasets';
+function setNavText(t) {
+  if (datasetsLink) {
+    const textNode = datasetsLink.childNodes[datasetsLink.childNodes.length - 1];
+    if (textNode) textNode.textContent = t;
   }
 }
+setNavText('Datasets/Bundled');
+window.addEventListener('pagehide', () => setNavText(ORIGINAL_TEXT));
+window.addEventListener('beforeunload', () => setNavText(ORIGINAL_TEXT));
+window.addEventListener('unload', () => setNavText(ORIGINAL_TEXT));
 
 loadBundled();
 </script>

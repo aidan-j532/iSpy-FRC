@@ -61,6 +61,9 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 
 const container = document.getElementById('scene-container');
 const scene = new THREE.Scene();
@@ -92,24 +95,87 @@ scene.add(dirLight);
 const hemiLight = new THREE.HemisphereLight(0x4c8bf5, 0x111318, 0.3);
 scene.add(hemiLight);
 
-const gridHelper = new THREE.GridHelper(20, 80, 0x2a2e38, 0x1a1d24);
-gridHelper.material.fog = false;
+// --- thick (fat) lines ---
+// WebGL caps LineBasicMaterial linewidth at 1px on most platforms, which makes
+// thin wireframes shimmer/alias at glancing angles. LineSegments2 + LineMaterial
+// render true pixel-width lines instead, so "slightly thicker" actually works.
+const fatMats = [];
+function trackFat(mat) {
+  mat.resolution.set(renderer.domElement.width, renderer.domElement.height);
+  fatMats.push(mat);
+  return mat;
+}
+function updateFatRes() {
+  const r = renderer.domElement;
+  for (const m of fatMats) m.resolution.set(r.width, r.height);
+}
+
+const GRID_EXTENT = 20;
+const GRID_DIVS = 80;
+
+function buildFatGrid(centerColor, gridColor, linewidth) {
+  const positions = [];
+  const half = GRID_EXTENT / 2;
+  const step = GRID_EXTENT / GRID_DIVS;
+  for (let i = 0; i <= GRID_DIVS; i++) {
+    const p = -half + i * step;
+    positions.push(-half, 0, p, half, 0, p);   // line along X
+    positions.push(p, 0, -half, p, 0, half);   // line along Z
+  }
+  const segCount = positions.length / 6;
+  const geo = new LineSegmentsGeometry().setPositions(positions);
+  geo.setColors(gridColorArray(segCount, centerColor, gridColor));
+  const mat = trackFat(new LineMaterial({ color: 0xffffff, linewidth, vertexColors: true }));
+  const mesh = new LineSegments2(geo, mat);
+  mesh.userData.segCount = segCount;
+  mesh.frustumCulled = false;
+  return mesh;
+}
+
+function gridColorArray(segCount, centerColor, gridColor) {
+  const out = new Float32Array(segCount * 6);
+  const half = GRID_EXTENT / 2;
+  const step = GRID_EXTENT / GRID_DIVS;
+  const cc = new THREE.Color(centerColor);
+  const cg = new THREE.Color(gridColor);
+  let s = 0;
+  for (let i = 0; i <= GRID_DIVS; i++) {
+    const isCenter = Math.abs(-half + i * step) < step * 0.5;
+    const c = isCenter ? cc : cg;
+    for (let l = 0; l < 2; l++) {
+      out[s++] = c.r; out[s++] = c.g; out[s++] = c.b;
+      out[s++] = c.r; out[s++] = c.g; out[s++] = c.b;
+    }
+  }
+  return out;
+}
+
+function setGridColors(centerColor, gridColor) {
+  const colors = gridColorArray(gridHelper.userData.segCount, centerColor, gridColor);
+  const attrs = gridHelper.geometry.attributes;
+  if (attrs.instanceColorStart && attrs.instanceColorStart.data) {
+    attrs.instanceColorStart.data.array.set(colors);
+    attrs.instanceColorStart.data.needsUpdate = true;
+  }
+}
+
+const gridHelper = buildFatGrid(0x2a2e38, 0x1a1d24, 1.6);
 scene.add(gridHelper);
+
 function solidAxes(size) {
-  // AxesHelper shades each line's far vertex to a 60% blended color, which
-  // reads as a gradient. Override every vertex color so each axis is one
-  // solid color: X red, Y green, Z blue.
-  const a = new THREE.AxesHelper(size);
-  a.material.fog = false;
-  const solid = [
+  // X red, Y green, Z blue — one solid color per axis line, as fat lines.
+  const geo = new LineSegmentsGeometry().setPositions([
+    0,0,0, size,0,0,
+    0,0,0, 0,size,0,
+    0,0,0, 0,0,size,
+  ]);
+  geo.setColors([
     1,0,0, 1,0,0,
     0,1,0, 0,1,0,
     0,0,1, 0,0,1,
-  ];
-  const colors = a.geometry.attributes.color.array;
-  for (let i = 0; i < colors.length; i++) colors[i] = solid[i % solid.length];
-  a.geometry.attributes.color.needsUpdate = true;
-  return a;
+  ]);
+  const mat = trackFat(new LineMaterial({ color: 0xffffff, linewidth: 2, vertexColors: true }));
+  return new LineSegments2(geo, mat);
 }
 const axesHelper = solidAxes(8);
 scene.add(axesHelper);
@@ -126,14 +192,12 @@ window.toggleLightBg = function() {
   if (lightBg) {
     scene.background = new THREE.Color(0xf0f0f0);
     scene.fog = null;
-    gridHelper.material.color.set(0x888888);
-    gridHelper.material.color2.set(0xcccccc);
+    setGridColors(0x888888, 0xcccccc);
     container.style.background = '#f0f0f0';
   } else {
     scene.background = new THREE.Color(0x0a0a0f);
     scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
-    gridHelper.material.color.set(0x2a2e38);
-    gridHelper.material.color2.set(0x1a1d24);
+    setGridColors(0x2a2e38, 0x1a1d24);
     container.style.background = '#0a0a0f';
   }
 };
@@ -169,6 +233,15 @@ function disposeMesh(obj) {
   }
 }
 
+// Pixel-width line wrapper used for all detection/overlay wireframes.
+function makeFatEdges(edgesGeo, color, opacity, linewidth) {
+  const geo = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeo);
+  const mat = trackFat(new LineMaterial({
+    color, transparent: true, opacity, linewidth,
+  }));
+  return new LineSegments2(geo, mat);
+}
+
 function toViewer(px, py, pz) {
   return new THREE.Vector3(px, pz, py);
 }
@@ -183,8 +256,7 @@ function makeCubeMarker() {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
   const wireGeo = new THREE.EdgesGeometry(geo);
-  const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
-  mesh.add(new THREE.LineSegments(wireGeo, wireMat));
+  mesh.add(makeFatEdges(wireGeo, 0xffffff, 0.3, 2));
   return mesh;
 }
 
@@ -192,7 +264,7 @@ function updateCubeMarker(mesh, o) {
   mesh.position.copy(toViewer(o.x, o.y, o.z));
   mesh.rotation.set(o.roll, o.yaw, o.pitch);
   // selected target gets a distinct, brighter outline
-  const wire = mesh.children.find(c => c.isLineSegments);
+  const wire = mesh.children.find(c => c.isLineSegments || c.isLineSegments2);
   if (wire) {
     wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
     wire.material.opacity = selectedId === o.id ? 0.9 : 0.3;
@@ -207,10 +279,7 @@ function makePlanarMarker(o) {
     color: 0xffaa00, transparent: true, opacity: 0.75, side: THREE.DoubleSide,
   });
   g.add(new THREE.Mesh(planeGeo, planeMat));
-  g.add(new THREE.LineSegments(
-    new THREE.EdgesGeometry(planeGeo),
-    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }),
-  ));
+  g.add(makeFatEdges(new THREE.EdgesGeometry(planeGeo), 0xffffff, 0.5, 2));
   const tagAxes = solidAxes(size * 0.6);
   g.add(tagAxes);
   g.userData.planarSize = size;
@@ -223,7 +292,7 @@ function updatePlanarMarker(g, o) {
   const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
   g.scale.setScalar(size / (g.userData.planarSize || size));
   // selected target gets a distinct outline color
-  const wire = g.children.find(c => c.isLineSegments);
+  const wire = g.children.find(c => c.isLineSegments || c.isLineSegments2);
   if (wire) {
     wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
     wire.material.opacity = selectedId === o.id ? 0.9 : 0.5;
@@ -356,8 +425,7 @@ const OVERLAY_RENDERERS = {
       const mesh = new THREE.Mesh(geo, mat);
       mesh.castShadow = true;
       const wireGeo = new THREE.EdgesGeometry(geo);
-      const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 });
-      mesh.add(new THREE.LineSegments(wireGeo, wireMat));
+      mesh.add(makeFatEdges(wireGeo, 0xffffff, 0.25, 2));
       return mesh;
     },
     update(mesh, o) {
@@ -539,6 +607,7 @@ window.addEventListener('resize', () => {
   camera.aspect = container.clientWidth / container.clientHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(container.clientWidth, container.clientHeight);
+  updateFatRes();
 });
 
 function animate() {

@@ -1,3 +1,4 @@
+import re
 import time
 import json
 import logging
@@ -216,10 +217,31 @@ class DashboardModule(WebModule):
         """
         hardware = str(hardware).lower()
         if hardware == "npu":
-            for path in ("/sys/kernel/rknpu/load", "/sys/class/devfreq/rknpu/load"):
+            # Rockchip (RK3588/RK3576/...) exposes NPU utilization through
+            # several files with different formats depending on the distro
+            # kernel. The per-core debugfs file looks like
+            #   "NPU load:  Core0:  0%, Core1:  5%, Core2:  0%,"
+            # (needs root - wrap in a read attempt and fall through) while
+            # the devfreq load file is a bare integer or "load@freq".
+            paths = (
+                "/sys/devices/platform/fdab0000.npu/devfreq/fdab0000.npu/load",
+                "/sys/class/devfreq/fdab0000.npu/load",
+                "/sys/devices/platform/fdab0000.npu/devfreq/rknpu/load",
+                "/sys/kernel/debug/rknpu/load",
+            )
+            for path in paths:
                 try:
                     raw = Path(path).read_text().strip()
-                    value = int(raw.split()[0])
+                except Exception:
+                    continue
+                try:
+                    if "Core" in raw:
+                        per_core = re.findall(r"Core\d+:\s*(\d+)%", raw)
+                        if per_core:
+                            values = [int(v) for v in per_core]
+                            return max(0, min(sum(values) // len(values), 100))
+                        continue
+                    value = int(raw.split("@")[0].split()[0])
                     return max(0, min(value, 100))
                 except Exception:
                     continue

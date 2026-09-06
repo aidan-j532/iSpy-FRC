@@ -63,15 +63,23 @@ function healthColorClass(color) {
   return 'status-ok';
 }
 
-// per-row cursor so each add-on's metrics cycle one-per-second
+// per-row cursor so each add-on's metrics cycle - advanced only on the
+// slower "status" cadence (every 5s) while state/stats update every 0.5s
 const healthCycle = {};
-function advanceMetric(a) {
+function currentMetric(a) {
   const m = a.metrics || [];
   if (!m.length) return null;
   const key = a.type + ':' + a.name;
-  const idx = (healthCycle[key] || 0) % m.length;
-  healthCycle[key] = idx + 1;
-  return m[idx];
+  const idx = healthCycle[key] || 0;
+  return m[idx % m.length];
+}
+function advanceHealthCycle(ah) {
+  for (const a of ah) {
+    const m = a.metrics || [];
+    if (!m.length) continue;
+    const key = a.type + ':' + a.name;
+    healthCycle[key] = ((healthCycle[key] || 0) + 1) % m.length;
+  }
 }
 
 function renderHealthTable(ah) {
@@ -86,11 +94,11 @@ function renderHealthTable(ah) {
         <span class="health-dot"></span>
         <span>Source</span>
         <span class="health-type">Type</span>
-        <span>State</span>
-        <span>Status</span>
+        <span class="health-col-left">State</span>
+        <span class="health-col-left">Status</span>
       </div>`;
   const rows = ah.map(a => {
-    const metric = advanceMetric(a);
+    const metric = currentMetric(a);
     return `
       <div class="health-tbl-row">
         <span class="health-dot"><span class="status-dot ${healthColorClass(a.color)}"></span></span>
@@ -149,7 +157,20 @@ async function refresh() {
     healthConn.fail();
   }
 }
-setInterval(refresh, 1000);
+
+async function refreshAddonStatus() {
+  try {
+    const data = await fetch('/api/health').then(r => r.json());
+    const ah = data.addon_health || [];
+    advanceHealthCycle(ah);
+    renderHealthTable(ah);
+  } catch (e) {
+    console.error('Health status refresh failed', e);
+  }
+}
+setInterval(refresh, 500);
+setInterval(refreshAddonStatus, 5000);
 refresh();
+refreshAddonStatus();
 </script>
 {% endblock %}

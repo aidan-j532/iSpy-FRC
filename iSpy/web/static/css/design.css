@@ -601,12 +601,12 @@ pre {
 .health-tbl { display: flex; flex-direction: column; }
 .health-tbl-row {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1.4fr) auto minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: 20px minmax(0, 1.6fr) max-content minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 12px; align-items: center;
   padding: 8px 10px; border-bottom: 1px solid var(--border);
   font-size: 0.88rem;
 }
-.health-tbl-row .health-type { display: flex; align-items: center; justify-content: center; }
+.health-tbl-row .health-type { display: flex; align-items: center; }
 .health-tbl-row .health-type .plugin-pill { margin-right: 0; }
 .health-head {
   color: var(--text-dim); font-size: 0.72rem;
@@ -615,9 +615,9 @@ pre {
 }
 .health-dot { display: flex; align-items: center; }
 .health-dot .status-dot { margin-right: 0; }
-.health-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.health-state { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.health-metric { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-name { font-weight: 500; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-state { color: var(--text-dim); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-metric { font-family: var(--mono); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .health-metric .metric-label { color: var(--text-dim); margin-right: 6px; }
 
 /* Add-ons page */
@@ -737,12 +737,6 @@ pre {
   position: absolute; top: 0; left: 0; height: 100%; width: 100%;
   pointer-events: none; transform: translateX(-100%);
   background: linear-gradient(90deg, rgba(255,255,255,1.0) 0%, rgba(255,255,255,0.2) 100%);
-}
-.raw-btn-ready { animation: raw-btn-ready-pulse 1.4s ease; }
-@keyframes raw-btn-ready-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(47,129,247,0.55); }
-  70% { box-shadow: 0 0 0 12px rgba(47,129,247,0); }
-  100% { box-shadow: 0 0 0 0 rgba(47,129,247,0); }
 }
 
 /* Responsive */
