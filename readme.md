@@ -458,5 +458,6 @@ own release assets and remain under their original AGPL-3.0 terms. If your team
 distributes them separately you must meet the AGPL-3.0 obligations for those
 model files or retrain/replace them; see
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). The default
-`_default_v26_detect_for_fuel.pt` model is iSpy's own and is licensed under the
-same PolyForm Noncommercial terms as the rest of iSpy.
+`_default_v26_detect_for_fuel.pt` model is trained by the iSpy project owner and
+is released under AGPL-3.0 as well (downloaded on demand from the project's own
+GitHub release, not bundled).

@@ -23,6 +23,14 @@ AGPL-touching pieces, and neither ships inside the PolyForm-licensed
 codebase. When the weights are downloaded on demand, a THIRD_PARTY_NOTICE.txt
 is written next to them in YoloModels/pytorch/.
 
+## iSpy fuel-detect default model (optional download)
+_default_v26_detect_for_fuel.pt is a checkpoint trained by the iSpy project
+owner and is released under AGPL-3.0. It is downloaded on demand from the
+project's own GitHub release
+(https://github.com/aidan-j532/iSpy-FRC/releases/download/Fuel_Detect_Model/fuel_detection_v26.pt)
+and, like the Ultralytics checkpoints, is not bundled inside the
+PolyForm-licensed codebase.
+
 ## Bundled frontend libraries
 Vendored under iSpy/web/static/vendor/ and served to the web dashboard.
 The text below reflects only what is discoverable in the file headers

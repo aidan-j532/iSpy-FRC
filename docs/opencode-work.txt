@@ -1,169 +1,31 @@
-BIG PICKLE — Phase: Close AGPL in-process leaks + replace bundled default
-models with boot-time downloads
+Ran a grep-style pass over the code you pasted, focused on the AGPL isolation invariant ("no in-process Ultralytics import outside a subprocess worker"). Short answer: not fully clean — one leak remains.
 
-CONTEXT
-Decision made: iSpy will NOT ship _default_detect.pt, _default_pose.pt, or the
-v26 fuel-detect model as bundled assets in the repo/package anymore, because
-their AGPL status (per Ultralytics' own licensing FAQ, which asserts that
-trained/fine-tuned YOLO models are AGPL-3.0 by default regardless of who
-trained them or what data was used) is unresolved and conflicts with shipping
-the rest of iSpy under PolyForm Noncommercial 1.0.0. Instead, these three
-models are downloaded from external URLs at boot time, the same way
-QuantizeDataset calibration images already are (see
-iSpy/dataset/dataset.py::_download_release_images and
-_CALIBRATION_RELEASE_URL/_VALIDATION_RELEASE_URL for the existing pattern to
-mirror — same retry/session/timeout conventions, same "never crash boot on a
-failed download" philosophy).
+✅ Confirmed fixed
+QuantizedModel.py::ensure_quantized_model() — routes through _convert_model_subprocess() (imports iSpy.vision.optimizer._convert_model_subprocess, no direct convert_model/_export_ultralytics call). This is one of the two leaks your memory says needed fixing — it's done.
+ObjectDetectionPipeline.optimize(), YoloWorldPipeline._load_quantized_model() — both use _convert_model_subprocess(). Good.
+_yoloworld_reparam_worker.py — import ultralytics only inside the subprocess entrypoint. Correct isolation.
+_convert_worker.py — same pattern, lazy-imports optimizer.convert_model only inside the subprocess main(). Correct.
+❌ Still leaking
 
-I (Aidan) will supply the actual download URLs. Do NOT guess or invent URLs.
-Leave them as an explicit, clearly-labeled placeholder constant for me to fill
-in before this ships — treat a missing URL as a hard stop with a clear log
-message, not a silent skip.
+iSpy/validations/benchmarking.py::get_or_convert():
 
-SCOPE — DO THIS
+python
+def get_or_convert(pt_path, fmt, input_size=(640, 640)):
+    if fmt in ("tpu", "pt"):
+        return pt_path
+    with _quiet():
+        result = Path(convert_model(str(pt_path), fmt, input_size))
+    ...
 
-Step 1: Fix ensure_quantized_model() AGPL in-process leak
-  - iSpy/vision/QuantizedModel.py::ensure_quantized_model() currently calls
-    `optimizer.convert_model(...)` directly, in-process. Replace with a call
-    to `optimizer._convert_model_subprocess(...)`, matching the exact
-    call signature already used in ObjectDetectionPipeline.optimize()
-    (source_pt, target_format, input_size as a list, quantize, force,
-    dataset_path). Preserve ensure_quantized_model's existing
-    (str_path, bool_converted) return contract and its existing
-    try/except fallback-to-source-pt behavior.
-  - Grep the full repo for every call site of `ensure_quantized_model(` and
-    report them, even ones outside the files I've shown you.
+This calls optimizer.convert_model() directly, not _convert_model_subprocess(). convert_model() → _export_ultralytics() → import ultralytics in-process. This is the second of the two leaks your memory flagged — it hasn't been touched yet. Same file's benchmark() also imports ObjectDetectionPipeline in-process, which is fine (that's isolated model loading, not Ultralytics), but get_or_convert is the live violation.
 
-Step 2: Audit-and-report on benchmarking.py (DO NOT auto-fix)
-  - iSpy/validations/benchmarking.py::get_or_convert() also calls
-    `optimizer.convert_model()` in-process. Confirm via grep whether it is
-    ever imported by anything under iSpy/web/, iSpy/core/, iSpy/boot/boot.py,
-    iSpy/boot/service_daemon.py, or iSpy/iSpy.py.
-  - Report findings only. Do not wrap it in subprocess isolation yourself —
-    I decide whether it stays a standalone dev tool (with a comment
-    explaining why it's exempt) or gets the same treatment.
+Since your grep-audit release gate is "no runtime path imports Ultralytics in-process, period" (not scoped to just the Flask server), this file still fails that check even though it's a standalone CLI tool, not part of the always-on web process.
 
-Step 3: Comprehensive grep audit for any other in-process ultralytics touch
-  - Search the full repo for `import ultralytics`, `from ultralytics`, and
-    any call to `optimizer.convert_model(`, `optimizer._export_ultralytics(`,
-    or `optimizer._convert_rknn(` that is NOT inside
-    iSpy/boot/_convert_worker.py, iSpy/boot/_yoloworld_reparam_worker.py, or
-    a `_convert_model_subprocess(` wrapper call.
-  - Classify every hit as: (a) already isolated/safe — cite why, (b) a
-    confirmed new leak — describe the trigger path, or (c) ambiguous —
-    describe the ambiguity. Present as a table. Do not auto-fix (b) or (c).
+Fix needed: swap convert_model(...) → _convert_model_subprocess(...) in get_or_convert, same pattern as the other three call sites.
 
-Step 4: Remove bundled default .pt assets
-  - In iSpy/boot/boot.py::setup_files(), delete the block that does:
-        for pt_file in _ASSETS_DIR.rglob("*.pt"):
-            target = pytorch_dir / pt_file.name
-            if fresh or not target.exists():
-                shutil.copy2(pt_file, target)
-    Bundled .pt files must no longer be copied out of iSpy/assets/ into
-    YoloModels/pytorch/ at boot.
-  - Confirm iSpy/assets/ does not still ship .pt files in the repo — flag
-    (don't delete) if it does; that's a packaging decision, tell me the file
-    list and stop.
-  - Update the metadata-generation loop right below it (the one that calls
-    metadata_from_pt / writes _metadata.yaml sidecars for every
-    pytorch_dir.glob("*.pt")) — leave that loop itself alone, it should just
-    naturally have nothing to do until Step 5's downloads land files there.
+⏳ Still pending (unchanged from your notes, not code bugs)
+_DEFAULT_MODEL_URLS["_default_v26_detect_for_fuel.pt"] = None in default_models.py — URL still unfilled.
+THIRD_PARTY_LICENSES.md — not in the pasted files, so can't verify, but _MODEL_LICENSE_STATUS in default_models.py still hardcodes "UNRESOLVED - see project owner" for all three default models, consistent with prior state.
+Hailo/HEF: confirmed consistently disabled everywhere (has_hailo_npu() → False, SUPPORTED_TARGET_FORMATS excludes it, recommend_format() branch commented) — not a licensing issue but worth noting it's holding steady.
 
-Step 5: Boot-time download of the three default models
-  - Add a new function in iSpy/boot/boot.py (or a new small module
-    iSpy/boot/default_models.py if that reads cleaner — your call, tell me
-    which and why) that downloads exactly three files into
-    YoloModels/pytorch/ during setup_files(fresh=True) — i.e. only on a
-    fresh/first boot, matching the existing fresh-install-only semantics of
-    the asset-staging block you're removing:
-
-        _DEFAULT_MODEL_URLS = {
-            "_default_detect.pt": None,       # TODO(aidan): fill in URL
-            "_default_pose.pt": None,          # TODO(aidan): fill in URL
-            "_default_v26_detect_for_fuel.pt": None,  # TODO(aidan): fill in URL
-        }
-
-    Mirror the existing calibration-image download conventions from
-    iSpy/dataset/dataset.py (_session(), timeout=30, streamed download to a
-    temp file, atomic rename into place, no partial files left behind on
-    failure). Use the same `requests` session pattern already imported there.
-  - Behavior on missing URL (None): log a clear warning naming which model is
-    missing and why ("no download URL configured for <name> — set it in
-    _DEFAULT_MODEL_URLS before shipping"), skip that one file, continue with
-    the others. Never raise/crash boot over a missing URL.
-  - Behavior on download failure (network error, bad status, corrupt/truncated
-    file under the existing size floor used elsewhere — see
-    _validate_model_file's 1024-byte floor in genericYolo.py for the
-    precedent): log a clear warning, do not write a partial file, continue
-    boot. A team with zero default models should still be able to boot,
-    add a camera, and upload/pick their own model — do not let a missing
-    default model be a hard boot failure.
-  - Idempotency: if the target file already exists at
-    YoloModels/pytorch/<name> and is above the size floor, skip re-downloading
-    it (same "don't redo work that's already done" convention used elsewhere
-    in boot.py, e.g. the existing `if fresh or not target.exists()` check you
-    just removed — same idea, just sourced from a URL now instead of a local
-    copy).
-  - After each successful download, run it through the existing
-    metadata_from_pt() / write_metadata() path (same as the loop currently
-    below the old asset-copy block) so the _metadata.yaml sidecar gets
-    generated exactly as it does today for locally-staged models. Do not
-    duplicate that logic — call into it or restructure so it applies
-    uniformly to downloaded files.
-
-Step 6: Fix default_vision_model() and anything else assuming bundled assets
-  - iSpy/config/iSpyConfig.py::default_vision_model() references
-    "_default_v26_detect_for_fuel.pt" and "_default_detect.pt" by name when
-    picking a fallback model — this logic can stay as-is since it just checks
-    for the file's *existence* in YoloModels/pytorch/, which downloads now
-    satisfy instead of local copies. Confirm this is actually true by reading
-    the function again after your Step 4/5 changes and report whether it
-    still behaves correctly when: (a) all three downloads succeeded, (b) all
-    three failed/were skipped (no vision_model resolvable — what happens to a
-    fresh-boot camera in this case? trace it and report, don't silently
-    patch a new fallback without telling me), (c) only some succeeded.
-  - iSpy/validations/unit_tests.py::TestPosePtRegression._locate_pose_model()
-    currently checks both YoloModels/pytorch/_default_pose.pt AND
-    iSpy/assets/_default_pose.pt. Since assets/ no longer ships this file,
-    update the test to only check YoloModels/pytorch/ (it already has a
-    unittest.SkipTest fallback if the file's absent, which is correct
-    behavior for a CI machine that hasn't downloaded models — leave that
-    skip logic intact).
-
-Step 7: License notice, scoped to downloaded (not bundled) models
-  - Write YoloModels/LICENSE.txt (or NOTICE.txt — pick one, tell me which)
-    during setup_files(), generated from a small explicit constant (reuse or
-    extend _DEFAULT_MODEL_URLS's structure) with placeholder text
-    "UNRESOLVED - see project owner" for each of the three model names. Do
-    not assert a license for any model yourself.
-  - Include static boilerplate: iSpy's own source is PolyForm Noncommercial
-    1.0.0 (see repo root LICENSE); ultralytics is used only as an optional
-    build-time [optimizer] dependency under AGPL-3.0, never at runtime;
-    per-model status for the three downloaded defaults is listed above.
-
-Step 8: Cold-boot verification (release gate)
-  - After all changes land, describe (you don't need to execute this on
-    hardware, just narrate the expected sequence) what a `boot -f` on fresh
-    hardware with all three URLs filled in should do end to end: fresh
-    YoloModels/pytorch/ created empty → three downloads attempted → sidecars
-    written → default_vision_model() resolves one of them → first camera
-    boots with detection working. Flag any step in that chain that your
-    changes leave unverified or assumption-based.
-
-OUTPUT FORMAT
-  1. Diff for QuantizedModel.py (Step 1).
-  2. Import-graph findings for benchmarking.py (Step 2) — report only.
-  3. Classification table from Step 3.
-  4. Diff removing the asset-copy block from boot.py (Step 4), plus the
-     iSpy/assets/ file-list flag if applicable.
-  5. Diff adding the download logic + _DEFAULT_MODEL_URLS constant (Step 5).
-  6. Diff/report for default_vision_model() behavior under all three
-     success/failure scenarios (Step 6), plus the unit_tests.py diff.
-  7. Diff for the YoloModels/LICENSE.txt generator (Step 7).
-  8. Narrated cold-boot trace (Step 8).
-  9. "Needs Aidan's decision" section: at minimum this must include the three
-     blank URLs in _DEFAULT_MODEL_URLS, plus anything else you didn't
-     auto-resolve.
-
-Stop and report after each step if anything is ambiguous. Do not guess a URL,
-a license string, or a fallback model behavior I haven't specified.
+Bottom line: everything else checks out, but benchmarking.py::get_or_convert() is the one call site still bypassing subprocess isolation — that's a real gap before you can claim the AGPL isolation audit is complete.

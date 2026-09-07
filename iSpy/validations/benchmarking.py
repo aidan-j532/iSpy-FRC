@@ -47,7 +47,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from iSpy.config.AutoOpt import has_rockchip_npu, has_nvidia, has_tensorrt, has_tpu
 from iSpy.vision.ModelInspector import fill_missing_config
-from iSpy.vision.optimizer import convert_model
+from iSpy.vision.optimizer import _convert_model_subprocess
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s", force=True)
 logging.getLogger("iSpy.vision.ModelInspector").setLevel(logging.INFO)
@@ -263,7 +263,7 @@ def get_or_convert(pt_path, fmt, input_size=(640, 640)):
     if fmt in ("tpu", "pt"):
         return pt_path
     with _quiet():
-        result = Path(convert_model(str(pt_path), fmt, input_size))
+        result = _convert_model_subprocess(str(pt_path), fmt, input_size)
     if not result.exists() or result == pt_path:
         return None
     return result

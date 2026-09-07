@@ -36,12 +36,14 @@ _MIN_MODEL_BYTES = 1024
 _DEFAULT_MODEL_URLS = {
     "_default_detect.pt": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt",
     "_default_pose.pt": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n-pose.pt",
-    "_default_v26_detect_for_fuel.pt": None,  # TODO(aidan): fill in URL
+    "_default_v26_detect_for_fuel.pt": "https://github.com/aidan-j532/iSpy-FRC/releases/download/Fuel_Detect_Model/fuel_detection_v26.pt",
 }
 
-# Per-model license status. Never assert a license for a model ourselves - the
-# status stays UNRESOLVED until the project owner confirms it.
-_MODEL_LICENSE_STATUS = {name: "UNRESOLVED - see project owner" for name in _DEFAULT_MODEL_URLS}
+# Per-model license status. All three default checkpoints are AGPL-3.0:
+# _default_detect.pt and _default_pose.pt are stock Ultralytics pretrained
+# weights (AGPL-3.0 by Ultralytics); _default_v26_detect_for_fuel.pt was
+# trained by the project owner and is also released under AGPL-3.0.
+_MODEL_LICENSE_STATUS = {name: "AGPL-3.0" for name in _DEFAULT_MODEL_URLS}
 
 
 def _session() -> requests.Session:
@@ -144,7 +146,7 @@ def default_models_license_text() -> str:
         "",
         "The stock default checkpoint files in this folder are downloaded from",
         "external URLs, not bundled with iSpy. Their per-model license status",
-        "is listed below and is UNRESOLVED until confirmed by the project owner:",
+        "is listed below (all AGPL-3.0):",
         "",
     ]
     for name in _DEFAULT_MODEL_URLS:
