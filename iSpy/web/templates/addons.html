@@ -100,6 +100,8 @@ let allAddons = [];
 let loaded = {};
 let pendingDeleteAddon = null;
 let lastSnapshot = null;
+let visionRunning = false;
+let hasLoadedAddons = false;
 window._publishSources = [];
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -114,8 +116,7 @@ function typeBadge(type) {
 }
 
 function statusDot(status) {
-  if (status === 'running' || status === 'active') return 'status-dot status-ok';
-  if (status === 'idle') return 'status-dot status-warn';
+  if (status === 'running' || status === 'active' || status === 'idle' || status === 'ready') return 'status-dot status-ok';
   return 'status-dot status-bad';
 }
 
@@ -263,12 +264,12 @@ function renderRow(p) {
   const isPipeline = p.type === 'vision_pipeline';
   const schema = p.config_schema || {};
   const hasSettings = !isPipeline && !p.template && Object.keys(schema).length > 0;
-  const status = loaded[`${p.type}/${p.name}`] || null;
+  const status = isPipeline ? null : (loaded[`${p.type}/${p.name}`] || null);
 
   let statusHtml = '';
   if (status) {
     statusHtml = `<span class="addon-status"><span class="${statusDot(status)}"></span><span>${esc(status)}</span></span>`;
-  } else if (p.enabled) {
+  } else if (p.enabled && !isPipeline && visionRunning && hasLoadedAddons) {
     statusHtml = `<span class="addon-status"><span class="status-dot status-warn"></span><span title="Enabled in config - loads after a vision restart">pending restart</span></span>`;
   }
 
@@ -315,7 +316,7 @@ function renderRow(p) {
 
   return `
   <div class="addon-row ${p.enabled ? 'is-enabled' : ''}">
-    <div class="addon-row-main">
+    <div class="addon-row-main ${toggle ? '' : 'no-toggle'}">
       ${toggle}
       <div class="addon-info">
         <div class="addon-title">
@@ -423,6 +424,13 @@ function renderList() {
   restoreOpenPanels(openVals);
 }
 
+// avoid clobbering the user's in-flight focus/caret during a background poll
+function userIsTyping() {
+  const el = document.activeElement;
+  if (!el) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+}
+
 async function loadStatus(force) {
   try {
     const [statusResp, availResp, sourcesResp] = await Promise.all([
@@ -437,8 +445,14 @@ async function loadStatus(force) {
     if (!force && snapshot === lastSnapshot) return;
     lastSnapshot = snapshot;
     loaded = {};
-    (statusResp.plugins || []).forEach(p => { loaded[`${p.type}/${p.name}`] = p.status; });
+    const pluginsResp = statusResp.plugins || [];
+    pluginsResp.forEach(p => { loaded[`${p.type}/${p.name}`] = p.status; });
+    visionRunning = (statusResp.vision_running !== undefined)
+      ? !!statusResp.vision_running
+      : pluginsResp.length > 0;
+    hasLoadedAddons = pluginsResp.length > 0;
     allAddons = availResp.available || [];
+    if (!force && userIsTyping()) return; // keep focus during background tick
     renderList();
   } catch (e) {
     console.error('Failed to load add-ons', e);
@@ -681,6 +695,12 @@ document.getElementById('delete-addon-modal').addEventListener('click', e => {
 
 document.getElementById('addon-search').addEventListener('input', renderList);
 document.getElementById('addon-type-filter').addEventListener('change', renderList);
+document.getElementById('addon-search').addEventListener('blur', () => {
+  if (lastSnapshot) renderList(); // flush any skipped background poll
+});
+document.getElementById('addon-type-filter').addEventListener('blur', () => {
+  if (lastSnapshot) renderList();
+});
 
 loadStatus(true);
 setInterval(() => loadStatus(false), 5000);

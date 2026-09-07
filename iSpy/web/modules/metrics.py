@@ -14,11 +14,14 @@ class MetricsModule(WebModule):
         "vision_s": ("Vision time", "ms", 1000.0),
         "camera_lag_s": ("Camera lag", "ms", 1000.0),
     }
-    # which pipeline stage is slowest; display-only, never written to the saved file
+    # built-in, always-present breakdown parts: {key: (label, color)}.
+    # Display-only, never written to the saved file. Add-ons can register extra
+    # parts at runtime via set_code_parts() so any addon (tracker, utility,
+    # frame processor, vision pipeline) can show up here if it wants to.
     CODE_PARTS = {
         "vision": ("Vision", "#e63946"),
         "trackers": ("Trackers", "#f4a261"),
-        "pose": ("Pose", "#2a9d8f"),
+        "pose": ("Robot pose", "#2a9d8f"),
         "utilities": ("Utilities", "#457b9d"),
         "web": ("Web", "#9b5de5"),
     }
@@ -28,8 +31,21 @@ class MetricsModule(WebModule):
         super().__init__(context)
         self._timeline = {k: deque(maxlen=self.MAX_POINTS) for k in self.SERIES}
         self._fps_timeline = deque(maxlen=self.MAX_POINTS)
-        self._code_timeline = {k: deque(maxlen=self.MAX_POINTS) for k in self.CODE_PARTS}
+        self._code_parts = dict(self.CODE_PARTS)
+        self._code_timeline = {k: deque(maxlen=self.MAX_POINTS) for k in self._code_parts}
         self._start = time.perf_counter()
+
+    def set_code_parts(self, parts: dict):
+        """Register extra Code Breakdown parts contributed by add-ons.
+
+        parts maps a unique key to ``(label, color)``. Called once at startup
+        once every addon/pipeline is loaded; safe to call again after a reload.
+        """
+        for key, (label, color) in (parts or {}).items():
+            if key in self._code_parts:
+                continue
+            self._code_parts[key] = (label, color)
+            self._code_timeline[key] = deque(maxlen=self.MAX_POINTS)
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/metrics", "metrics_page", lambda: render_template("metrics.html"))
@@ -46,7 +62,7 @@ class MetricsModule(WebModule):
         if loop_s:
             self._fps_timeline.append((t, 1.0 / loop_s if loop_s > 0 else 0))
         code_times = frame_data.get("code_times") or {}
-        for key in self.CODE_PARTS:
+        for key in self._code_parts:
             val = code_times.get(key)
             if val is not None:
                 self._code_timeline[key].append((t, val * 1000.0))
@@ -71,7 +87,7 @@ class MetricsModule(WebModule):
                     "x": [p[0] for p in self._code_timeline[key]],
                     "y": [p[1] for p in self._code_timeline[key]],
                 }
-                for key, (label, color) in self.CODE_PARTS.items()
+                for key, (label, color) in self._code_parts.items()
             },
         }
         return jsonify(out)

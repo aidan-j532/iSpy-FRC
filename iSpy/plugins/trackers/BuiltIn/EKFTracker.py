@@ -23,6 +23,10 @@ _EMA_ALPHA = 0.3
 class EKFTracker(TrackerBase):
     plugin_name = "ekf_tracker"
 
+    # show this add-on as its own "Code Breakdown" series on the Metrics page
+    breakdown_label = "EKF tracker"
+    breakdown_color = "#f4a261"
+
     @classmethod
     def config_schema(cls) -> dict:
         return {

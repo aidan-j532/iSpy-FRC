@@ -134,6 +134,7 @@ class iSpy:
             dash = self.web_app.modules.get("dashboard")
             if dash and hasattr(dash, "set_plugins"):
                 dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
+            self._register_code_parts()
             self.web_app.set_vision_instance(self)
 
         self._silence_external_loggers()
@@ -199,6 +200,63 @@ class iSpy:
             out.append((name, settings if isinstance(settings, dict) else {}))
         return out
 
+    def _register_code_parts(self):
+        """Collect optional Code Breakdown contributions from every enabled
+        addon and pipeline and hand them to the metrics module.
+
+        Addons opt in by setting ``breakdown_label`` (and optionally
+        ``breakdown_color``); pipelines opt in by overriding
+        ``get_code_parts()``. Anything that doesn't opt in stays inside its
+        aggregate slice (vision/trackers/utilities) and never shows up here.
+        """
+        metrics = self.web_app.modules.get("metrics") if self.web_app else None
+        if metrics is None or not hasattr(metrics, "set_code_parts"):
+            return
+        parts = {}
+        for group in (self.trackers, self.utilities, self.frame_processors):
+            for name, inst in group.items():
+                label = getattr(inst, "breakdown_label", None)
+                if label is None:
+                    continue
+                key = getattr(inst, "plugin_name", name)
+                color = getattr(inst, "breakdown_color", None)
+                parts.setdefault(key, (label, color))
+        for camera in self.cameras:
+            try:
+                pipeline_parts = camera.get_code_parts() or {}
+            except Exception:
+                pipeline_parts = {}
+            for key, (label, color) in pipeline_parts.items():
+                parts.setdefault(key, (label, color))
+        metrics.set_code_parts(parts)
+
+    def _reset_frame_processor_times(self):
+        """Zero the per-tick accumulators before the vision stage runs so each
+        frame processor's Code Breakdown series only reflects this tick."""
+        for processor in self.frame_processors.values():
+            if getattr(processor, "breakdown_label", None):
+                processor._last_code_seconds = 0.0
+
+    def _merge_frame_processor_times(self, code_times: dict) -> float:
+        """Collect per-processor Code Breakdown timings recorded by the cameras
+        during the vision stage (base.get_frame self-times opted-in processors).
+
+        Returns the total measured time so callers can subtract it from the
+        aggregate "vision" slice (opted-in processors move out of the vision
+        lump into their own series).
+        """
+        total = 0.0
+        for name, processor in self.frame_processors.items():
+            if not getattr(processor, "breakdown_label", None):
+                continue
+            seconds = getattr(processor, "_last_code_seconds", None)
+            if seconds is None:
+                continue
+            key = getattr(processor, "plugin_name", name)
+            code_times[key] = seconds
+            total += seconds
+        return total
+
     def _addon_context(self, addon_cls, settings: dict) -> dict:
         ctx = dict(self._base_context)
         ctx["config"] = iSpyAddonConfig(settings, defaults=addon_cls.default_settings())
@@ -240,11 +298,19 @@ class iSpy:
         return Pose2d()
 
     def _update_utilities(self, frame_data: dict):
-        for util in self.utilities.values():
+        code_times = frame_data.setdefault("code_times", {})
+        t_util = time.perf_counter()
+        opted_utilities_s = 0.0
+        for name, util in self.utilities.items():
+            t0 = time.perf_counter()
             try:
                 util.update(frame_data)
             except Exception:
                 self.logger.exception("Utility update failed")
+            if getattr(util, "breakdown_label", None):
+                code_times[name] = time.perf_counter() - t0
+                opted_utilities_s += code_times[name]
+        code_times["utilities"] = max(0.0, time.perf_counter() - t_util - opted_utilities_s)
 
     def _update_web(self, frame_data: dict):
         if self.web_app:
@@ -323,21 +389,35 @@ class iSpy:
         camera_lag_s = camera.get_frame_age()
 
         t_vis = time.perf_counter()
+        self._reset_frame_processor_times()
         detections, frame = self.run_solo_vision(camera)
         vision_s = time.perf_counter() - t_vis
-        code_times["vision"] = vision_s
+        vision_s -= self._merge_frame_processor_times(code_times)
+        code_times["vision"] = max(0.0, vision_s)
 
         t_pose = time.perf_counter()
         pose = self._get_pose()
         code_times["pose"] = time.perf_counter() - t_pose
 
         t_track = time.perf_counter()
-        for tracker in self.trackers.values():
+        opted_trackers_s = 0.0
+        for name, tracker in self.trackers.items():
             # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
+            t0 = time.perf_counter()
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
-        code_times["trackers"] = time.perf_counter() - t_track
+            if getattr(tracker, "breakdown_label", None):
+                code_times[name] = time.perf_counter() - t0
+                opted_trackers_s += code_times[name]
+        code_times["trackers"] = max(0.0, time.perf_counter() - t_track - opted_trackers_s)
+
+        if hasattr(camera, "get_code_times"):
+            try:
+                for key, val in (camera.get_code_times() or {}).items():
+                    code_times[key] = val
+            except Exception:
+                pass
 
         loop_s = time.perf_counter() - t0
 
@@ -386,21 +466,36 @@ class iSpy:
         camera_lag_s = sum(ages) / len(ages) if ages else 0.0
 
         t_vis = time.perf_counter()
+        self._reset_frame_processor_times()
         detections, frame = self.run_multi_vision(handler)
         vision_s = time.perf_counter() - t_vis
-        code_times["vision"] = vision_s
+        vision_s -= self._merge_frame_processor_times(code_times)
+        code_times["vision"] = max(0.0, vision_s)
 
         t_pose = time.perf_counter()
         pose = self._get_pose()
         code_times["pose"] = time.perf_counter() - t_pose
 
         t_track = time.perf_counter()
-        for tracker in self.trackers.values():
+        opted_trackers_s = 0.0
+        for name, tracker in self.trackers.items():
             # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
+            t0 = time.perf_counter()
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
-        code_times["trackers"] = time.perf_counter() - t_track
+            if getattr(tracker, "breakdown_label", None):
+                code_times[name] = time.perf_counter() - t0
+                opted_trackers_s += code_times[name]
+        code_times["trackers"] = max(0.0, time.perf_counter() - t_track - opted_trackers_s)
+
+        for cam in handler.cameras:
+            if hasattr(cam, "get_code_times"):
+                try:
+                    for key, val in (cam.get_code_times() or {}).items():
+                        code_times[key] = val
+                except Exception:
+                    pass
 
         loop_s = time.perf_counter() - t0
 
@@ -454,9 +549,7 @@ class iSpy:
                 frame_data = self._run_loop_body_solo(camera)
                 last_frame_data = frame_data
 
-                t_util = time.perf_counter()
                 self._update_utilities(frame_data)
-                frame_data["code_times"]["utilities"] = time.perf_counter() - t_util
 
                 t_web = time.perf_counter()
                 self._update_web(frame_data)
@@ -503,9 +596,7 @@ class iSpy:
                 frame_data = self._run_loop_body_multi(handler)
                 last_frame_data = frame_data
 
-                t_util = time.perf_counter()
                 self._update_utilities(frame_data)
-                frame_data["code_times"]["utilities"] = time.perf_counter() - t_util
 
                 t_web = time.perf_counter()
                 self._update_web(frame_data)

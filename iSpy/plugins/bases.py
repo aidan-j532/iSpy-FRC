@@ -47,6 +47,15 @@ class AddonBase(StatusMixin):
     # e.g. supported_pipelines = ("object_detection",).
     supported_pipelines: tuple | None = None
 
+    # Code Breakdown opt-in. Set breakdown_label to a short display name to
+    # include this add-on's per-tick work as its own series in the Metrics
+    # page "Code Breakdown" chart. Small add-ons can leave it None - they
+    # stay lumped into their aggregate (trackers/utilities/vision) and never
+    # show a row of their own. breakdown_color is an optional CSS color
+    # override; metrics picks one from its palette when left as None.
+    breakdown_label: str | None = None
+    breakdown_color: str | None = None
+
     def __init__(self, context: dict):
         StatusMixin.__init__(self)
         self.context: dict = context or {}
@@ -184,6 +193,22 @@ class VisionBase(ABC):
 
     def __init__(self, context: dict):
         self.context = context
+
+    def get_code_parts(self) -> dict:
+        """Optional Code Breakdown contribution for vision pipelines.
+
+        Return ``{key: (label, color)}`` naming this pipeline's own sub-stages
+        (e.g. inference vs post-process); the framework times how long each
+        stage took last tick via :meth:`get_code_times` and shows them as
+        separate series in the Metrics "Code Breakdown" chart. Pipelines that
+        don't opt in just stay inside the aggregate "Vision" slice.
+        """
+        return {}
+
+    def get_code_times(self) -> dict:
+        """Return ``{key: seconds}`` measured during the last tick for the
+        stages named by :meth:`get_code_parts` ('' if a stage had no work)."""
+        return {}
 
     @classmethod
     def config_schema(cls) -> dict:

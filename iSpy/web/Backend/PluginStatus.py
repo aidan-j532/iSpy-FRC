@@ -189,7 +189,7 @@ class PluginStatusModule(WebModule):
     def _status(self):
         vision = self.context.get("vision_instance")
         if not vision:
-            return jsonify(plugins=[])
+            return jsonify(plugins=[], vision_running=False)
         out = []
         for group, items in (
             ("tracker", vision.trackers),
@@ -202,7 +202,7 @@ class PluginStatusModule(WebModule):
                     "type": group,
                     "status": inst.get_status() if hasattr(inst, "get_status") else "unknown",
                 })
-        return jsonify(plugins=out)
+        return jsonify(plugins=out, vision_running=True)
 
     def _vision_pipelines(self):
         return jsonify(pipelines=_build_vision_pipeline_payloads())

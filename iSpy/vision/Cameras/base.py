@@ -621,7 +621,13 @@ class CameraBase:
 
         for processor in self._frame_processors:
             try:
-                frame = processor.process(frame)
+                if getattr(processor, "breakdown_label", None):
+                    t0 = time.perf_counter()
+                    frame = processor.process(frame)
+                    dt = time.perf_counter() - t0
+                    processor._last_code_seconds = getattr(processor, "_last_code_seconds", 0.0) + dt
+                else:
+                    frame = processor.process(frame)
             except Exception as exc:
                 self.logger.warning(f"Frame processor error: {exc}")
                 break

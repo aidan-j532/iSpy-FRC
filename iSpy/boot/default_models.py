@@ -139,10 +139,12 @@ def default_models_license_text() -> str:
         "Default model license notices",
         "============================",
         "",
-        "iSpy's own source code is licensed under the PolyForm Noncommercial",
-        "1.0.0 license (see the repo root LICENSE file). The ultralytics",
-        "package is used only as an optional build-time [optimizer] dependency,",
-        "under AGPL-3.0, and is never imported at runtime.",
+        "iSpy-authored source code is licensed under the PolyForm Noncommercial",
+        "1.0.0 license (see the repo root LICENSE file). The Ultralytics package",
+        "is AGPL-3.0. The v26 fuel model was trained with Ultralytics code and",
+        "is an Ultralytics-derived AGPL-3.0 model, not a PolyForm asset.",
+        "Ultralytics is only an optional build-time [optimizer] dependency for",
+        "the runtime package and is not imported by the runtime inference path.",
         "",
         "The stock default checkpoint files in this folder are downloaded from",
         "external URLs, not bundled with iSpy. Their per-model license status",
@@ -156,7 +158,7 @@ def default_models_license_text() -> str:
 
 
 def write_default_models_license() -> Path:
-    """Write YoloModels/LICENSE.txt with the per-model status placeholder."""
+    """Write YoloModels/LICENSE.txt with the per-model license status."""
     path = _PROJECT_ROOT / "YoloModels" / "LICENSE.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(default_models_license_text(), encoding="utf-8")

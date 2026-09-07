@@ -458,6 +458,8 @@ own release assets and remain under their original AGPL-3.0 terms. If your team
 distributes them separately you must meet the AGPL-3.0 obligations for those
 model files or retrain/replace them; see
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). The default
-`_default_v26_detect_for_fuel.pt` model is trained by the iSpy project owner and
-is released under AGPL-3.0 as well (downloaded on demand from the project's own
-GitHub release, not bundled).
+`_default_v26_detect_for_fuel.pt` model was trained by the iSpy project owner
+using Ultralytics code and is therefore an Ultralytics-derived AGPL-3.0 model,
+not a PolyForm asset (downloaded on demand from the project's own GitHub
+release, not bundled). The owner's training contribution is released under
+AGPL-3.0 with the checkpoint.

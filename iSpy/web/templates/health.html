@@ -146,7 +146,7 @@ async function refresh() {
     document.getElementById('h-plugins').innerHTML = plugins.length === 0
       ? '<div class="empty-state">No plugins loaded</div>'
       : plugins.map(p => `
-        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
+        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:10px 12px;margin-bottom:6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-surface);">
           <span class="${statusDot(p.status)}"></span>
           <strong>${p.name}</strong>
           ${typeBadge(p.type)}

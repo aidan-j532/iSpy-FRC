@@ -540,7 +540,7 @@ pre {
 .text-dim { color: var(--text-dim); }
 .text-sm { font-size: 0.85rem; }
 .empty-state {
-  color: var(--text-dim); font-size: 0.85rem; padding: 12px 0;
+  color: var(--text-dim); font-size: 0.85rem; padding: 16px 4px;
 }
 .empty-state.has-icon { text-align: center; padding: 24px 12px; }
 .empty-state svg {
@@ -598,12 +598,13 @@ pre {
 .chart-card.has-data .chart-waiting { display: none; }
 
 /* Add-on health table */
-.health-tbl { display: flex; flex-direction: column; }
+.health-tbl { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .health-tbl-row {
   display: grid;
   grid-template-columns: 22px minmax(150px, 1.5fr) max-content minmax(110px, 1fr) minmax(160px, 1.3fr);
   column-gap: 18px; align-items: center;
-  padding: 11px 16px; border-bottom: 1px solid var(--border);
+  padding: 12px 16px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--bg-surface);
   font-size: 0.88rem;
 }
 .health-tbl-row .health-type { display: flex; align-items: center; }
@@ -611,8 +612,9 @@ pre {
 .health-head {
   color: var(--text-dim); font-size: 0.72rem;
   text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
-  border-bottom-color: var(--border-light);
+  border: none; background: transparent; padding: 2px 16px;
 }
+.health-col-left { text-align: left; }
 .health-dot { display: flex; align-items: center; }
 .health-dot .status-dot { margin-right: 0; }
 .health-name { font-weight: 500; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -629,7 +631,8 @@ pre {
   gap: 12px; margin-bottom: 12px; flex-wrap: wrap;
 }
 .card-head h3 { margin: 0; }
-.addon-new-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.addon-new-tabs { display: flex; gap: 4px; }
+.addon-new-tabs .settings-tab { padding: 8px 14px; }
 
 .addon-toolbar { display: flex; align-items: center; gap: 8px; }
 .addon-search { flex: 1; max-width: 240px; }
@@ -640,6 +643,7 @@ pre {
 .addon-row:last-child { border-bottom: none; }
 .addon-row.is-enabled .addon-name { color: var(--accent); }
 .addon-row-main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 4px; }
+.addon-row-main.no-toggle { grid-template-columns: minmax(0, 1fr) auto; }
 .addon-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .addon-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .addon-name { font-weight: 600; font-size: 0.9rem; }
@@ -697,9 +701,10 @@ pre {
   margin-bottom: 10px;
 }
 .addon-settings-panel .form-label { min-width: 150px; }
-.addon-settings-panel .form-row { margin-bottom: 10px; }
+.addon-settings-panel .form-row { margin-bottom: 12px; }
+.addon-settings-panel .form-row > span.form-label { margin-top: 6px; }
 .settings-toggle-row { display: flex; align-items: center; gap: 10px; }
-.addon-settings-actions { display: flex; gap: 8px; margin-top: 4px; }
+.addon-settings-actions { display: flex; gap: 8px; margin-top: 8px; }
 
 /* Source viewer */
 .modal-wide { max-width: 780px; }
