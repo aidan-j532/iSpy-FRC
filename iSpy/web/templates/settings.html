@@ -397,11 +397,12 @@ function parseValue(el) {
 
 
 
-// In-memory only: resets on page reload, but NOT when switching tabs.
-// rawOpened stays true once the editor has been unlocked this session, so
-// leaving the Raw JSON tab and coming back keeps the editor open instead of
-// making the user run the confirmation sweep again.
-let rawOpened = false;
+// Session-persisted: survives switching tabs AND navigating away/back to the
+// page within the same tab (sessionStorage). The sweep transition only runs
+// once per session - after it arms, the button reads "Continue (Risky)" and a
+// second click opens the editor. No re-doing the wait after leaving the page.
+let rawOpened = sessionStorage.getItem('raw.opened') === '1';
+let rawArmed = sessionStorage.getItem('raw.armed') === '1';
 
 function setupRawGate() {
   const btn = document.getElementById('continue-risky');
@@ -410,8 +411,21 @@ function setupRawGate() {
   btn.textContent = 'Continue (Risky)';
 }
 
+function syncRawTabState() {
+  const gate = document.getElementById('raw-gate');
+  const editor = document.getElementById('raw-editor-wrap');
+  if (rawOpened) {
+    gate.style.display = 'none';
+    editor.style.display = '';
+  } else {
+    gate.style.display = '';
+    editor.style.display = 'none';
+  }
+}
+
 function openRawEditor() {
   rawOpened = true;
+  sessionStorage.setItem('raw.opened', '1');
   snapshotBeforeFirstEdit();
   document.getElementById('raw-gate').style.display = 'none';
   document.getElementById('raw-editor-wrap').style.display = '';
@@ -420,11 +434,18 @@ function openRawEditor() {
 function onContinueClick() {
   const btn = document.getElementById('continue-risky');
   if (!btn || btn.disabled) return;
-  // Single confirmation: a horizontal line sweeps across the button once,
-  // then the editor opens. No second "click again" step.
+  // Second click (once armed this session) opens the editor directly.
+  if (rawArmed) {
+    openRawEditor();
+    return;
+  }
+  // First click: the line sweeps across the button once, then it readies
+  // as "Continue (Risky)" again for the confirming click.
   btn.disabled = true;
   runRawSweep(btn, 5000, () => {
-    openRawEditor();
+    rawArmed = true;
+    sessionStorage.setItem('raw.armed', '1');
+    setupRawGate();
   });
 }
 
@@ -707,17 +728,10 @@ function switchTab(name, btn) {
 
   if (saveBtn) saveBtn.style.display = (name === 'about') ? 'none' : '';
 
-  // Keep the raw editor open across tab switches once it's been unlocked
-  // this session (rawOpened). Only re-show the confirmation gate for a
-  // fresh page load.
+  // Keep whatever state the raw gate/editor is in when returning to the tab
+  // (persisted across tab switches and page visits via sessionStorage).
   if (name === 'raw') {
-    if (rawOpened) {
-      document.getElementById('raw-gate').style.display = 'none';
-      document.getElementById('raw-editor-wrap').style.display = '';
-    } else {
-      document.getElementById('raw-gate').style.display = '';
-      document.getElementById('raw-editor-wrap').style.display = 'none';
-    }
+    syncRawTabState();
   }
 
 }
@@ -837,6 +851,12 @@ async function load() {
   populateGpuSelect(data.gpu_count);
 
   setupRawGate();
+
+  syncRawTabState();
+
+  // If the editor was already open from a previous page visit, make sure a
+  // restore point exists for this session's edits.
+  if (rawOpened) snapshotBeforeFirstEdit();
 
   loadFormValues();
 

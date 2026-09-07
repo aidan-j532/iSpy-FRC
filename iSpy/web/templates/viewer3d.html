@@ -163,19 +163,30 @@ const gridHelper = buildFatGrid(0x2a2e38, 0x1a1d24, 1.6);
 scene.add(gridHelper);
 
 function solidAxes(size) {
-  // X red, Y green, Z blue — one solid color per axis line, as fat lines.
-  const geo = new LineSegmentsGeometry().setPositions([
-    0,0,0, size,0,0,
-    0,0,0, 0,size,0,
-    0,0,0, 0,0,size,
-  ]);
-  geo.setColors([
-    1,0,0, 1,0,0,
-    0,1,0, 0,1,0,
-    0,0,1, 0,0,1,
-  ]);
-  const mat = trackFat(new LineMaterial({ color: 0xffffff, linewidth: 2, vertexColors: true }));
-  return new LineSegments2(geo, mat);
+  // Solid-color X/Y/Z axes as 3D geometry (shaft + cone tip). Lines rendered
+  // as polylines - even the fat-line shader - calculate NaN when a segment is
+  // viewed nearly end-on, which makes them flicker/disappear while orbiting.
+  // Solid cylinders project cleanly from every angle.
+  const R = Math.max(0.015, size * 0.004);
+  function axis(len, color) {
+    const mat = new THREE.MeshStandardMaterial({
+      color, emissive: color, emissiveIntensity: 0.25, fog: false,
+    });
+    const grp = new THREE.Group();
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(R, R, len, 10), mat);
+    shaft.position.y = len / 2;
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(R * 2.4, R * 6, 10), mat);
+    tip.position.y = len + R * 3;
+    grp.add(shaft, tip);
+    return grp;
+  }
+  const x = axis(size, 0xff0000); x.rotation.z = -Math.PI / 2; // +X
+  const y = axis(size, 0x00ff00);                              // +Y
+  const z = axis(size, 0x0000ff); z.rotation.x = Math.PI / 2;  // +Z
+  const g = new THREE.Group();
+  g.add(x, y, z);
+  g.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
+  return g;
 }
 const axesHelper = solidAxes(8);
 scene.add(axesHelper);

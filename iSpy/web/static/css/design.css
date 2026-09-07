@@ -601,9 +601,9 @@ pre {
 .health-tbl { display: flex; flex-direction: column; }
 .health-tbl-row {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1.6fr) max-content minmax(0, 1.2fr) minmax(0, 1fr);
-  gap: 12px; align-items: center;
-  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  grid-template-columns: 22px minmax(150px, 1.5fr) max-content minmax(110px, 1fr) minmax(160px, 1.3fr);
+  column-gap: 18px; align-items: center;
+  padding: 11px 16px; border-bottom: 1px solid var(--border);
   font-size: 0.88rem;
 }
 .health-tbl-row .health-type { display: flex; align-items: center; }
@@ -618,7 +618,8 @@ pre {
 .health-name { font-weight: 500; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .health-state { color: var(--text-dim); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .health-metric { font-family: var(--mono); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.health-metric .metric-label { color: var(--text-dim); margin-right: 6px; }
+.health-metric .metric-label { color: var(--text-dim); margin-right: 10px; }
+.health-metric strong { font-size: 0.9rem; font-weight: 600; }
 
 /* Add-ons page */
 .page-head h1 { margin: 0; }
