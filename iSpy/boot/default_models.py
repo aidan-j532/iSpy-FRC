@@ -1,19 +1,4 @@
-"""Boot-time downloads for iSpy's stock default models.
-
-The three default checkpoints (detect, pose, and the v26 fuel-detect model)
-used to ship inside ``iSpy/assets/`` and get staged into ``YoloModels/pytorch/``
-at boot. They are third-party AGPL checkpoints, so bundling them conflicts with
-shipping the rest of iSpy under PolyForm Noncommercial 1.0.0. Instead they are
-downloaded from external URLs on a fresh/first boot, mirroring the calibration-
-image download conventions in iSpy/dataset/dataset.py (_download_release_images:
-same requests-session retry semantics, streamed to a temp file, atomic rename,
-no partial files, never crash boot on failure).
-
-A missing or None download URL is a hard stop for that one model only: it gets a
-clear warning and is skipped so the rest of boot proceeds. A failed download is
-the same. iSpy must always be able to boot, add a camera, and upload a user
-model even with zero default models on disk.
-"""
+"""Download the default models on boot."""
 
 import logging
 from pathlib import Path
@@ -59,11 +44,6 @@ def _session() -> requests.Session:
 
 
 def _download_one(name: str, url: str, target: Path) -> bool:
-    """Stream a single model to ``target`` via an atomic .part rename.
-
-    Returns True only on a complete download above the size floor. On any
-    failure the .part file is removed and False is returned.
-    """
     tmp = target.with_suffix(target.suffix + ".part")
     try:
         tmp.unlink(missing_ok=True)
@@ -102,13 +82,6 @@ def _download_one(name: str, url: str, target: Path) -> bool:
 
 
 def download_default_models(fresh: bool = False) -> dict[str, Path]:
-    """Download every configured default model into YoloModels/pytorch/.
-
-    Idempotent: a file that already exists above the size floor is left alone
-    (unless ``fresh`` forces a re-download). Returns {filename: Path} for every
-    model that is present and valid after the pass - pre-existing or freshly
-    downloaded - so callers can report what is actually available.
-    """
     _DEFAULT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
     present: dict[str, Path] = {}
 
@@ -158,7 +131,6 @@ def default_models_license_text() -> str:
 
 
 def write_default_models_license() -> Path:
-    """Write YoloModels/LICENSE.txt with the per-model license status."""
     path = _PROJECT_ROOT / "YoloModels" / "LICENSE.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(default_models_license_text(), encoding="utf-8")

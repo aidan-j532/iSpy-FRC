@@ -175,8 +175,6 @@ class TelloCamera(OpenCVCamera):
         return cap
 
     def _send_command(self, command: str, timeout: float = _COMMAND_TIMEOUT_S) -> bool:
-        """Send one AT command to the drone's UDP control socket and wait for
-        its 'OK' acknowledgement. Returns True on success."""
         try:
             with socket.create_connection(
                 (self._tello_ip, self._command_port), timeout=timeout

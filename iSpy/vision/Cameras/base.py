@@ -39,19 +39,7 @@ _open_worker_live = 0
 
 
 class CameraBase:
-    """A camera *source*: something that produces frames.
-
-    This is the low-level frame pipeline every concrete source (OpenCV USB
-    camera, DJI Tello, RTSP stream, ...) is built on. It owns the reader
-    thread, automatic reconnect while the device is missing, placeholder
-    frames, image adjustment knobs and the calibration mode / heartbeat state
-    shared with the web wizard.
-
-    Concrete sources subclass :class:`CameraBase`, set a unique ``camera_type``
-    and (optionally) override how the capture device is opened. The capture
-    machinery keeps working unchanged - the class only needs to know how to
-    *produce* the frame, exactly like a pipeline only knows how to *use* it.
-    """
+    """Base camera source."""
 
     camera_type = "generic"
 

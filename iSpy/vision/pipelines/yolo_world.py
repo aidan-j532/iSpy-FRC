@@ -350,15 +350,7 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         return self._ensure_world_model(self.model_size)
 
     def _reparameterize_world(self, weights: str) -> str | None:
-        # NOTE: This is an optional *build-time* step (like the optimizer's
-        # exporter). It bakes the text prompt's class vocabulary into a
-        # fixed-vocab .pt. The produced .pt is a plain fixed-vocab detector
-        # that the on-device loader (load_yolo_pt) consumes at runtime WITHOUT
-        # any Ultralytics dependency; Ultralytics is only required in a build
-        # environment to produce the bundled/fixed weights, never for iSpy
-        # runtime inference. That AGPL build step is isolated in a subprocess
-        # (_yoloworld_reparam_worker) so the network-serving process never
-        # imports ultralytics.
+        # build-only; runtime uses the fixed .pt without Ultralytics
         classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[:8]
         fixed = _WORLD_MODEL_DIR / "world" / f"{Path(weights).stem}-{classes_key}.pt"
         if fixed.exists() and fixed.stat().st_size >= 1024:
@@ -380,9 +372,7 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         return str(fixed)
 
     def _reparameterize_world_subprocess(self, weights: str, output: Path) -> None:
-        # Mirror the optimizer's _convert_model_subprocess: write a JSON args
-        # file, run the isolated worker, read back <args>.result.json. All
-        # ultralytics imports live inside the subprocess.
+        # same subprocess pattern as optimizer.py
         outputs_dir = Path(__file__).resolve().parents[3] / "Outputs"
         outputs_dir.mkdir(parents=True, exist_ok=True)
 

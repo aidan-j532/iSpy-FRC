@@ -1,11 +1,4 @@
-"""base classes for all iSpy add-ons (trackers, utilities, frame processors).
-
-an add-on is enabled by being present in the config (plugins.<type>.<name>);
-the entry value is that add-on's own settings dict. add-ons get a context:
-    config          -> iSpyAddonConfig view of THIS add-on's settings
-    global_config   -> the global iSpyConfig
-    cameras, flask_app, vision_instance
-"""
+"""Base classes for iSpy add-ons."""
 
 import logging
 from abc import ABC, abstractmethod
@@ -57,12 +50,6 @@ class AddonBase(StatusMixin):
     breakdown_color: str | None = None
 
     def get_breakdown_parts(self) -> dict:
-        """Return this add-on's opt-in Code Breakdown series.
-
-        Most add-ons need no individual series. A single-series add-on can set
-        ``breakdown_label``; add-ons with multiple measurable stages can
-        override this method and return ``{key: (label, color)}``.
-        """
         if not self.breakdown_label:
             return {}
         key = getattr(self, "plugin_name", self.__class__.__name__)
@@ -90,7 +77,6 @@ class AddonBase(StatusMixin):
 
     @classmethod
     def config_schema(cls) -> dict:
-        """declare this add-on's configurable settings (see examples for the format); {} if none needed"""
         return {}
 
     @classmethod
@@ -137,21 +123,13 @@ class UtilityBase(AddonBase):
         pass
 
     def get_robot_pose(self):
-        """override in the network utility to give pose; defaults to None"""
         return None
 
     def declared_output_key(self) -> str | None:
-        """this utility's normalized output_key setting, or None if unset/invalid"""
         key, _err = validate_output_key(self.config.get("output_key"))
         return key
 
     def publish_output(self, frame_data: dict, value, output_key: str | None = None) -> bool:
-        """expose a runtime value under frame_data["addon_data"][<output_key>].
-
-        Values are namespaced under "addon_data" so user-configured keys can
-        never clobber core frame_data entries (fps, detections, ...). Returns
-        True if the value was written.
-        """
         if not isinstance(frame_data, dict):
             return False
         key = output_key or self.declared_output_key()
@@ -171,11 +149,6 @@ class UtilityBase(AddonBase):
 
 
 def validate_output_key(raw) -> tuple[str | None, str | None]:
-    """validate a utility output_key setting -> (normalized_key, error_message).
-
-    Normalizes surrounding whitespace. Keys must be non-empty strings without
-    dots (dots are reserved for nested source paths like addon_data.<key>).
-    """
     if raw is None:
         return None, None
     if not isinstance(raw, str):
@@ -207,19 +180,9 @@ class VisionBase(ABC):
         self.context = context
 
     def get_code_parts(self) -> dict:
-        """Optional Code Breakdown contribution for vision pipelines.
-
-        Return ``{key: (label, color)}`` naming this pipeline's own sub-stages
-        (e.g. inference vs post-process); the framework times how long each
-        stage took last tick via :meth:`get_code_times` and shows them as
-        separate series in the Metrics "Code Breakdown" chart. Pipelines that
-        don't opt in just stay inside the aggregate "Vision" slice.
-        """
         return {}
 
     def get_code_times(self) -> dict:
-        """Return ``{key: seconds}`` measured during the last tick for the
-        stages named by :meth:`get_code_parts` ('' if a stage had no work)."""
         return {}
 
     @classmethod

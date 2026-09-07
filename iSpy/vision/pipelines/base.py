@@ -3,35 +3,7 @@ import threading
 from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
 
-# ---------------------------------------------------------------------------
-# Universal pipeline output schema
-# ---------------------------------------------------------------------------
-# Every VisionPipeline.run() returns (list[Object], frame).  Serializing an
-# Object via Object.to_dict() (or the helpers below) yields the following
-# JSON-safe shape -- identical keys regardless of which pipeline produced it:
-#
-# {
-#   "id": int,                      # stable track id
-#   "name": str,                    # class name / tag label / "depth_center"
-#   "confidence": float,            # 0..1 detector confidence (0 if N/A)
-#   "x": float, "y": float, "z": float,          # robot-frame position (meters)
-#   "roll": float, "pitch": float, "yaw": float, # robot-frame rotation (radians)
-#   "depth_source": str,            # monocular | pnp | optical_flow | depth_model
-#   "vis_type": str,                # renderer hint: generic | planar | ...
-#   "vis_meta": dict,               # pipeline-specific payload, see below
-#   "keypoints_3d": list | None,    # pose models: [[x, y, z], ...]
-#   "ray_origin": [x,y,z] | None,       # camera ray in robot frame, if known
-#   "ray_direction": [x,y,z] | None,
-# }
-#
-# vis_type contracts:
-#   generic  -- position/rotation are meaningful; vis_meta free-form.
-#               object_detection & yolo_world put {"kind": "detection", ...};
-#               optical_flow puts its velocity dict {"kind": "velocity", vx, vy,
-#               speed, heading_deg, ...}; depth_anything puts
-#               {"kind": "depth", depth_estimate, max_depth, ...}.
-#   planar   -- flat tag/code solved by PnP (april_tag / qr_code): vis_meta
-#               carries {"tag_id" | "payload", "size", ...}; rotation is exact.
+# All pipelines return (list[Object], frame) with the same JSON fields.
 OUTPUT_SCHEMA_VERSION = 1
 
 
@@ -98,13 +70,6 @@ class VisionPipeline(Camera, VisionBase):
             statuses["run"] = status
 
     def get_health(self) -> dict:
-        """Contribute a row to the Health tab (optional hook).
-
-        Only vision pipelines and utilities get health rows. The pipeline
-        picks its own color preset (green/yellow/red), reports its current
-        state string, and offers live metrics the Health page cycles through
-        every second.
-        """
         state = self.get_state()
         status = (self.get_status() or "unknown").splitlines()[0]
         level = None

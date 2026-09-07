@@ -201,14 +201,6 @@ class iSpy:
         return out
 
     def _register_code_parts(self):
-        """Collect optional Code Breakdown contributions from every enabled
-        addon and pipeline and hand them to the metrics module.
-
-        Addons opt in by setting ``breakdown_label`` (and optionally
-        ``breakdown_color``); pipelines opt in by overriding
-        ``get_code_parts()``. Anything that doesn't opt in stays inside its
-        aggregate slice (vision/trackers/utilities) and never shows up here.
-        """
         metrics = self.web_app.modules.get("metrics") if self.web_app else None
         if metrics is None or not hasattr(metrics, "set_code_parts"):
             return

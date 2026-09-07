@@ -584,19 +584,6 @@ def install_special_dependencies(auto_install: bool = False):
 
 
 def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, device=0):
-    """Export a .pt model to a compiled/optimized format.
-
-    This is optional *development tooling*, NOT part of the runtime inference
-    pipeline. It shells out to Ultralytics (AGPL-3.0) purely to produce build
-    artifacts; the resulting model file is then consumed at runtime by the
-    on-device loader, which never imports Ultralytics. Because the exporter is
-    a separate, one-time build step, Ultralytics is intentionally NOT a runtime
-    dependency of iSpy - install it on demand via the ``[optimizer]`` extra.
-
-    Raises:
-        ImportError: If Ultralytics is not installed (install the ``optimizer``
-            extra or ``pip install ultralytics`` in a build environment).
-    """
     try:
         import ultralytics  # optional dev-only dependency (AGPL) - build-time only
     except ImportError:

@@ -1,30 +1,4 @@
-"""A dependency-free (no Ultralytics) YOLOv8 loader and inference engine.
-
-The ``.pt`` SDK checkpoints shipped for iSpy are Ultralytics-style pickles whose
-``model`` object is reconstructed from classes at ``ultralytics.nn.modules.*``
-and ``ultralytics.nn.tasks.*``. Ultralytics is AGPL-3.0, so iSpy must not
-import it at runtime. This module re-implements the small subset of that
-architecture needed for *inference* (Conv, C2f, SPPF, the DFL detection head,
-and - for pose models - the keypoint head), registers those classes under the
-names the pickle expects, loads the checkpoint with ``torch.load``, then runs
-letterbox -> forward -> DFL/anchor decode -> scale -> NMS with no Ultralytics
-code anywhere.
-
-The public entry point is :func:`load_yolo_pt`, which returns a lightweight
-:class:`YoloPT` wrapper exposing the same surface the rest of iSpy uses on a
-``.pt``/``.engine``/OpenVINO/CoreML model:
-
-- ``.task``, ``.names``, ``.nc``
-- ``.model`` (the raw ``nn.Module``)
-- ``.to(device)``
-- ``__call__(frames, ...)`` -> list of results with ``.boxes`` (``.xyxy``/
-  ``.conf``/``.cls``) and (for pose) ``.keypoints.data``, mirroring the
-  fields consumed by :meth:`GenericYolo._convert_ultralytics_to_results`.
-
-Only the detection and (COCO-17 style) keypoint heads shipped in YOLOv8
-checkpoints are supported. Everything here is the MIT/BSD-style math, none
-of it is copied from the AGPL library.
-"""
+"""Small dependency-free loader for the YOLO-style .pt files iSpy uses."""
 
 from __future__ import annotations
 
@@ -38,11 +12,7 @@ import torch
 import torch.nn as nn
 
 
-# ---------------------------------------------------------------------------
-# Lightweight re-implementations of the YOLOv8 blocks the pickles reference.
-# The class names (and the module paths they live under) must MATCH the paths
-# in the pickle, but the body is written here from the (MIT) architecture.
-# ---------------------------------------------------------------------------
+# The pickle expects these Ultralytics module names.
 
 def autopad(k, p=None, d=1):
     """Same padding helper: pad so a k-stride kernel keeps the spatial size."""
@@ -54,8 +24,6 @@ def autopad(k, p=None, d=1):
 
 
 class Conv(nn.Module):
-    """Standard Conv2d + BatchNorm2d + SiLU block."""
-
     default_act = nn.SiLU()
 
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
@@ -72,8 +40,6 @@ class Conv(nn.Module):
 
 
 class Bottleneck(nn.Module):
-    """Standard residual bottleneck."""
-
     def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):
         super().__init__()
         c_ = int(c2 * e)

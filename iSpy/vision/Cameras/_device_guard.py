@@ -1,26 +1,4 @@
-"""Linux-only: free a camera devnode held by a non-iSpy process.
-
-A v4l2 camera device (/dev/videoN) can only ever be opened by one process at
-a time (with exclusive / V4L2_MODE_EXCLUSIVE semantics or simply because the
-driver refuses a second grabber). If a stray process - a webcam app, `motion`,
-``uvcvideo``-holding auto-grabber, a leftover previewer, ... - grabbed the
-device first, iSpy's reconnect loop logs a stream of
-``ioctl(VIDIOC_QUERYCAP): Inappropriate ioctl for device`` / reopen failures
-and can never recover.
-
-This module finds the PID(s) holding a camera devnode and, unless the holder
-is iSpy itself (or a process iSpy is responsible for), force-kills it
-(SIGTERM first, then SIGKILL after a grace period) so the device is released
-for the next open attempt.
-
-Detection is deliberately best-effort and per-machine ("whatever works"):
-`fuser` (procps/psmisc, present on Armbian/Debian and most distros) is the
-primary probe; a raw ``/proc/*/fd`` scan is the fallback for hosts where
-`fuser` is missing.
-
-Never run on non-Linux hosts - camera contention is a Linux USB-v4l2 concern
-and the /proc layout this depends on is Linux-specific.
-"""
+"""Best-effort cleanup for cameras held by other Linux processes."""
 
 import logging
 import os
