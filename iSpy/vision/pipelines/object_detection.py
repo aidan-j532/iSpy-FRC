@@ -115,10 +115,10 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         # settings; fall back to the legacy vision_model dict value.
         self.z_mode = str(
             camera_config.get_pipeline_setting(
-                "z_mode", vm_cfg.get("z_mode", "size_based")
+                "z_mode", vm_cfg.get("z_mode", "ground_plane")
             )
         )
-        self.z_mode = "ground_plane" if self.z_mode == "ground_plane" else "size_based"
+        self.z_mode = "ground_plane" if self.z_mode != "size_based" else "size_based"
         self.yolo_model_file = vm_filled.get("file_path", vm_cfg.get("file_path", ""))
         self.input_size = tuple(vm_filled.get("input_size", (640, 640)))
         raw_quantize = vm_filled.get("quantize", vm_cfg.get("quantize"))
@@ -657,7 +657,8 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         # return 0.8 <= aspect <= 1.2
 
     def _box_to_robot_point(
-        self, box: Box, img_w: int, img_h: int, ground_z: float = 0.0
+        self, box: Box, img_w: int, img_h: int, ground_z: float = 0.0,
+        *, return_source: bool = False,
     ):
         # unified depth model: cast the bottom-center ray and intersect it with
         # the horizontal plane the object is assumed to sit on. ground_z=0
@@ -674,15 +675,19 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         # method string is surfaced as the Object's depth_source.
         if self.z_mode == "ground_plane":
             if gp is not None:
-                return gp * scale, "ground_plane"
+                result = (gp * scale, "ground_plane")
+                return result if return_source else result[0]
             if sb is not None:
-                return sb, "size_based"
-            return None, "none"
+                result = (sb, "size_based")
+                return result if return_source else result[0]
+            return (None, "none") if return_source else None
         if sb is not None:
-            return sb, "size_based"
+            result = (sb, "size_based")
+            return result if return_source else result[0]
         if gp is not None:
-            return gp * scale, "ground_plane"
-        return None, "none"
+            result = (gp * scale, "ground_plane")
+            return result if return_source else result[0]
+        return (None, "none") if return_source else None
 
     def _size_based_point(
         self, box: Box, img_w: int, img_h: int, ground_z: float = 0.0
@@ -829,7 +834,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             pt = self._pnp_to_robot_coordinates(box.translation)
         else:
             pt, depth_source = self._box_to_robot_point(
-                box, img_w, img_h, ground_z=obj_plane_z
+                box, img_w, img_h, ground_z=obj_plane_z, return_source=True
             )
             if pt is None:
                 return None

@@ -356,7 +356,7 @@ class NetworkTableHandlerTests(unittest.TestCase):
             "camera_lag_s": 0.04, "cameras": [],
         })
         self.assertGreaterEqual(self._fake_inst.flush.call_count, 1)
-        self._fake_inst.getStructArrayTopic.assert_called()
+        self._fake_inst.getStringTopic.assert_called_with("vision_data")
 
     def test_update_with_connected_false_is_noop(self):
         mod = self._fresh_module(is_connected=False)
@@ -364,12 +364,12 @@ class NetworkTableHandlerTests(unittest.TestCase):
         handler.update({"detections": []})
         self.assertEqual(self._fake_inst.flush.call_count, 0)
 
-    def test_update_with_detection_objects_publishes_structs(self):
+    def test_update_with_detection_objects_publishes_json(self):
         handler = self._handler({})
         det = Object(1.0, 2.0, 3.0)
         handler.update({"detections": [det], "fps": 10, "detection_count": 1,
                         "camera_lag_s": 0.0, "cameras": []})
-        self._fake_inst.getStructArrayTopic.assert_called()
+        self._fake_inst.getStringTopic.assert_called_with("vision_data")
 
     def test_update_is_pipeline_agnostic(self):
         # detections from ANY pipeline (april tag, qr, depth, custom) flow
@@ -386,13 +386,13 @@ class NetworkTableHandlerTests(unittest.TestCase):
         handler.update({"detections": [tag, qr], "fps": 60,
                         "detection_count": 2, "camera_lag_s": 0.0,
                         "cameras": []})
-        self._fake_inst.getStructArrayTopic.assert_called()
+        self._fake_inst.getStringTopic.assert_called_with("vision_data")
         pub = handler._subscribers["pub/VisionData/vision_data"]
-        structs = pub.set.call_args[0][0]
-        self.assertEqual(len(structs), 2)
-        self.assertAlmostEqual(structs[0].x, 0.5)
-        self.assertAlmostEqual(structs[0].y, -1.25)
-        self.assertAlmostEqual(structs[1].z, 7.0)
+        detections = json.loads(pub.set.call_args[0][0])
+        self.assertEqual(len(detections), 2)
+        self.assertAlmostEqual(detections[0]["x"], 0.5)
+        self.assertAlmostEqual(detections[0]["y"], -1.25)
+        self.assertAlmostEqual(detections[1]["z"], 7.0)
 
     def test_get_robot_pose(self):
         handler = self._handler({})

@@ -33,7 +33,7 @@ def _get_version() -> str:
         pass
     # Fall back to pyproject.toml
     try:
-        pb = Path(_WEB_ROOT / "pyproject.toml").read_text()
+        pb = (_WEB_ROOT.parent.parent / "pyproject.toml").read_text()
         import re
         m = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', pb, re.MULTILINE)
         if m:

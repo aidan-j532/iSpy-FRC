@@ -215,13 +215,23 @@ class NetworkTableHandler(UtilityBase):
         warning instead of crashing the vision loop.
         """
         try:
-            encoded = json.dumps(value, default=str)
+            encoded = json.dumps(self._json_value(value), default=str)
         except (TypeError, ValueError) as e:
             self.logger.warning(
                 "Could not serialize JSON topic '%s': %s", nt_topic, e,
             )
             return
         self._send_data(encoded, nt_topic, "VisionData")
+
+    def _json_value(self, value):
+        """Convert pipeline objects into the shared JSON output schema."""
+        if hasattr(value, "to_dict"):
+            return self._json_value(value.to_dict())
+        if isinstance(value, dict):
+            return {key: self._json_value(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._json_value(item) for item in value]
+        return value
 
     def _publish_auto(self, value, nt_topic: str):
         """Publish with automatic scalar type detection.

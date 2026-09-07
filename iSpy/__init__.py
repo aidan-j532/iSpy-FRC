@@ -9,4 +9,4 @@ import os
 os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
 os.environ["OPENCV_VIDEOIO_LOG_LEVEL"] = "SILENT"
 
-__version__ = "0.4.0"
+__version__ = "1.2.15"

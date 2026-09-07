@@ -102,8 +102,8 @@ class AprilTagPipeline(VisionPipeline):
         self._set_status("ready")
 
     def needs_calibration_to_run(self) -> bool:
-        """AprilTag detection works without calibration — only pose is approximate."""
-        return False
+        """Block detection until the declared ChArUco calibration is present."""
+        return True
 
     def _focal_length_px_fov(self, img_w: int) -> float:
         if self.fov and self.fov > 0:

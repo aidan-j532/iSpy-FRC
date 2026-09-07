@@ -296,13 +296,13 @@ class NetworkHandlerSourceResolutionTests(unittest.TestCase):
         pub = handler._subscribers["pub/VisionData/fps"]
         pub.set.assert_called_with(60.5)
 
-    def test_struct_array_publishing_preserved(self):
+    def test_json_publishing_is_pipeline_agnostic(self):
         from iSpy.vision.Object import Object
         handler = self._handler()
         det = Object(1.0, 2.0, 3.0)
         handler.update({"detections": [det], "fps": 10,
                         "detection_count": 1, "camera_lag_s": 0.0, "cameras": []})
-        self._fake_inst.getStructArrayTopic.assert_called()
+        self._fake_inst.getStringTopic.assert_called_with("vision_data")
 
 
 class PublishSourcesApiTests(unittest.TestCase):

@@ -88,11 +88,14 @@ class VisionPipeline(Camera, VisionBase):
         return "initializing"
 
     def _set_status(self, status: str):
+        statuses = self.__dict__.setdefault(
+            "_statuses", {"run": "initializing", "build": None}
+        )
         lowered = status.lower()
         if lowered.startswith(self._BUILD_PREFIXES):
-            self._statuses["build"] = status
+            statuses["build"] = status
         else:
-            self._statuses["run"] = status
+            statuses["run"] = status
 
     def get_health(self) -> dict:
         """Contribute a row to the Health tab (optional hook).
