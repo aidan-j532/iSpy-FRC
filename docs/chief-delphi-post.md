@@ -10,6 +10,14 @@ A few people have been asking about iSpy so I figured I'd write up a proper post
 
 iSpy is a computer vision pipeline for FRC robots. It's free for noncommercial use (source-available under the PolyForm Noncommercial 1.0.0 license), and it runs on basically any hardware you want — Orange Pi, Raspberry Pi, Jetson, x86 laptops, Macs, Windows, whatever. It takes a camera feed, runs YOLO object detection on it, converts the pixel detections into real-world field coordinates, and publishes them to NetworkTables so your robot code can use them.
 
+The iSpy-authored code is PolyForm Noncommercial 1.0.0. Some optional model
+weights and build tools have separate licenses, including AGPL-3.0 for
+Ultralytics-derived models. The RKNN-Toolkit2 wheels are distributed under
+Rockchip's RKNN SDK License, not BSD-3-Clause; that license limits use and
+redistribution to applications compatible with Rockchip products and includes
+additional third-party, export-control, and termination terms. See
+`THIRD_PARTY_LICENSES.md` before redistributing those wheels.
+
 The short version: you point a camera at the field, iSpy tells your robot where the game pieces are.
 
 But that's underselling it. Here's the full picture.
@@ -477,7 +485,9 @@ This is a side project by a small team. It works and it's been tested on hardwar
 ## Get Involved
 
 - **GitHub**: [aidan-j532/iSpy-FRC](https://github.com/aidan-j532/iSpy-FRC)
-- **License**: PolyForm Noncommercial 1.0.0 (source-available; see LICENSE)
+- **License**: iSpy-authored code is PolyForm Noncommercial 1.0.0; see
+    `THIRD_PARTY_LICENSES.md` for separate Ultralytics AGPL-3.0 and Rockchip
+    RKNN SDK License terms.
 - **Python**: 3.10+
 - **Install**: `pip install iSpy-frc` or clone and `./install.sh`
 

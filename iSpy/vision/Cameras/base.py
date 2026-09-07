@@ -621,7 +621,9 @@ class CameraBase:
 
         for processor in self._frame_processors:
             try:
-                if getattr(processor, "breakdown_label", None):
+                get_parts = getattr(processor, "get_breakdown_parts", None)
+                has_breakdown = bool(get_parts and get_parts())
+                if has_breakdown:
                     t0 = time.perf_counter()
                     frame = processor.process(frame)
                     dt = time.perf_counter() - t0

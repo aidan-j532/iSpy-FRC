@@ -56,6 +56,18 @@ class AddonBase(StatusMixin):
     breakdown_label: str | None = None
     breakdown_color: str | None = None
 
+    def get_breakdown_parts(self) -> dict:
+        """Return this add-on's opt-in Code Breakdown series.
+
+        Most add-ons need no individual series. A single-series add-on can set
+        ``breakdown_label``; add-ons with multiple measurable stages can
+        override this method and return ``{key: (label, color)}``.
+        """
+        if not self.breakdown_label:
+            return {}
+        key = getattr(self, "plugin_name", self.__class__.__name__)
+        return {key: (self.breakdown_label, self.breakdown_color)}
+
     def __init__(self, context: dict):
         StatusMixin.__init__(self)
         self.context: dict = context or {}

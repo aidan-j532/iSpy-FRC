@@ -215,12 +215,16 @@ class iSpy:
         parts = {}
         for group in (self.trackers, self.utilities, self.frame_processors):
             for name, inst in group.items():
-                label = getattr(inst, "breakdown_label", None)
-                if label is None:
+                get_parts = getattr(inst, "get_breakdown_parts", None)
+                if get_parts is None:
                     continue
-                key = getattr(inst, "plugin_name", name)
-                color = getattr(inst, "breakdown_color", None)
-                parts.setdefault(key, (label, color))
+                try:
+                    addon_parts = get_parts() or {}
+                except Exception:
+                    addon_parts = {}
+                for key, value in addon_parts.items():
+                    if isinstance(value, (tuple, list)) and len(value) == 2:
+                        parts.setdefault(key, tuple(value))
         for camera in self.cameras:
             try:
                 pipeline_parts = camera.get_code_parts() or {}
@@ -234,8 +238,19 @@ class iSpy:
         """Zero the per-tick accumulators before the vision stage runs so each
         frame processor's Code Breakdown series only reflects this tick."""
         for processor in self.frame_processors.values():
-            if getattr(processor, "breakdown_label", None):
+            if self._addon_breakdown_parts(processor):
                 processor._last_code_seconds = 0.0
+
+    @staticmethod
+    def _addon_breakdown_parts(addon) -> dict:
+        get_parts = getattr(addon, "get_breakdown_parts", None)
+        if get_parts is None:
+            return {}
+        try:
+            parts = get_parts() or {}
+        except Exception:
+            return {}
+        return parts if isinstance(parts, dict) else {}
 
     def _merge_frame_processor_times(self, code_times: dict) -> float:
         """Collect per-processor Code Breakdown timings recorded by the cameras
@@ -247,13 +262,15 @@ class iSpy:
         """
         total = 0.0
         for name, processor in self.frame_processors.items():
-            if not getattr(processor, "breakdown_label", None):
+            parts = self._addon_breakdown_parts(processor)
+            if not parts:
                 continue
             seconds = getattr(processor, "_last_code_seconds", None)
             if seconds is None:
                 continue
             key = getattr(processor, "plugin_name", name)
-            code_times[key] = seconds
+            if key in parts:
+                code_times[key] = seconds
             total += seconds
         return total
 
@@ -289,10 +306,16 @@ class iSpy:
                 except Exception:
                     self.logger.exception("Error stopping plugin '%s'", name)
 
-    def _get_pose(self) -> Pose2d:
-        for util in self.utilities.values():
+    def _get_pose(self, code_times: dict | None = None) -> Pose2d:
+        for name, util in self.utilities.items():
             if hasattr(util, "get_robot_pose"):
+                t_pose = time.perf_counter()
                 pose = util.get_robot_pose()
+                addon_parts = self._addon_breakdown_parts(util)
+                if code_times is not None and addon_parts:
+                    pose_key = f"{getattr(util, 'plugin_name', name)}_pose"
+                    if pose_key in addon_parts:
+                        code_times[pose_key] = time.perf_counter() - t_pose
                 if pose is not None:
                     return pose
         return Pose2d()
@@ -307,9 +330,10 @@ class iSpy:
                 util.update(frame_data)
             except Exception:
                 self.logger.exception("Utility update failed")
-            if getattr(util, "breakdown_label", None):
-                code_times[name] = time.perf_counter() - t0
-                opted_utilities_s += code_times[name]
+            if self._addon_breakdown_parts(util):
+                key = getattr(util, "plugin_name", name)
+                code_times[key] = time.perf_counter() - t0
+                opted_utilities_s += code_times[key]
         code_times["utilities"] = max(0.0, time.perf_counter() - t_util - opted_utilities_s)
 
     def _update_web(self, frame_data: dict):
@@ -395,9 +419,7 @@ class iSpy:
         vision_s -= self._merge_frame_processor_times(code_times)
         code_times["vision"] = max(0.0, vision_s)
 
-        t_pose = time.perf_counter()
-        pose = self._get_pose()
-        code_times["pose"] = time.perf_counter() - t_pose
+        pose = self._get_pose(code_times)
 
         t_track = time.perf_counter()
         opted_trackers_s = 0.0
@@ -407,9 +429,10 @@ class iSpy:
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
-            if getattr(tracker, "breakdown_label", None):
-                code_times[name] = time.perf_counter() - t0
-                opted_trackers_s += code_times[name]
+            if self._addon_breakdown_parts(tracker):
+                key = getattr(tracker, "plugin_name", name)
+                code_times[key] = time.perf_counter() - t0
+                opted_trackers_s += code_times[key]
         code_times["trackers"] = max(0.0, time.perf_counter() - t_track - opted_trackers_s)
 
         if hasattr(camera, "get_code_times"):
@@ -472,9 +495,7 @@ class iSpy:
         vision_s -= self._merge_frame_processor_times(code_times)
         code_times["vision"] = max(0.0, vision_s)
 
-        t_pose = time.perf_counter()
-        pose = self._get_pose()
-        code_times["pose"] = time.perf_counter() - t_pose
+        pose = self._get_pose(code_times)
 
         t_track = time.perf_counter()
         opted_trackers_s = 0.0
@@ -484,9 +505,10 @@ class iSpy:
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
-            if getattr(tracker, "breakdown_label", None):
-                code_times[name] = time.perf_counter() - t0
-                opted_trackers_s += code_times[name]
+            if self._addon_breakdown_parts(tracker):
+                key = getattr(tracker, "plugin_name", name)
+                code_times[key] = time.perf_counter() - t0
+                opted_trackers_s += code_times[key]
         code_times["trackers"] = max(0.0, time.perf_counter() - t_track - opted_trackers_s)
 
         for cam in handler.cameras:

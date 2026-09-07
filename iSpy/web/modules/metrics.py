@@ -21,7 +21,6 @@ class MetricsModule(WebModule):
     CODE_PARTS = {
         "vision": ("Vision", "#e63946"),
         "trackers": ("Trackers", "#f4a261"),
-        "pose": ("Robot pose", "#2a9d8f"),
         "utilities": ("Utilities", "#457b9d"),
         "web": ("Web", "#9b5de5"),
     }

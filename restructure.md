@@ -121,12 +121,16 @@ copied from the AGPL library).
 
 ### What still references "ultralytics"
 
-Run `git grep -nE "^\s*(from ultralytics|import ultralytics)"` — only **two**
-matches remain, both explicitly marked **optional build-time tooling** (not
-runtime):
+Run `git grep -nE "^\s*(from ultralytics|import ultralytics)"` and review the
+matches. The active Python imports are explicitly marked **optional build-time
+tooling** (not runtime):
 
 - `iSpy/vision/optimizer.py` (`_export_ultralytics`, `[optimizer]` extra).
-- `iSpy/vision/pipelines/yolo_world.py` (`_reparameterize_world`, build-time).
+- `iSpy/boot/_yoloworld_reparam_worker.py` (subprocess-only YOLO-World tool).
+
+The deployment documentation also contains an explicit build-time inspection
+example. The runtime inference path must continue to use `iSpy/vision/yolo_pt.py`
+and must not import the Ultralytics package.
 
 `yolo_pt.py` uses the string `"ultralytics.nn.*"` only as **fake module names** for
 the pickle shim — it never imports the real package.

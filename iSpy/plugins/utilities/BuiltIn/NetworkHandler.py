@@ -37,6 +37,13 @@ class NetworkTableHandler(UtilityBase):
     plugin_name = "network_table_handler"
 
     @classmethod
+    def get_breakdown_parts(cls) -> dict:
+        return {
+            "network_table_handler": ("NetworkTables", "#2a9d8f"),
+            "network_table_handler_pose": ("Robot pose", "#2a9d8f"),
+        }
+
+    @classmethod
     def config_schema(cls) -> dict:
         return {
             "network_tables_ip": {
