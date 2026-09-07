@@ -607,10 +607,34 @@ class DashboardModuleTests(unittest.TestCase):
         with mock.patch("pathlib.Path.read_text", return_value="42\n"):
             self.assertEqual(mod._read_hardware_load("npu"), 42)
 
-    def test_npu_load_clamps_to_100(self):
+    def test_npu_load_rejects_raw_busy_counter(self):
+        # A raw busy-clock counter (>100) must NOT be clamped into a fake
+        # 100% - that clamp was why the NPU bar always sat at 100%.
         mod = self._make()
         with mock.patch("pathlib.Path.read_text", return_value="250"):
-            self.assertEqual(mod._read_hardware_load("npu"), 100)
+            self.assertIsNone(mod._read_hardware_load("npu"))
+
+    def test_npu_load_parses_load_at_freq(self):
+        mod = self._make()
+        with mock.patch("pathlib.Path.read_text", return_value="54@760000000\n"):
+            self.assertEqual(mod._read_hardware_load("npu"), 54)
+
+    def test_npu_load_parses_per_core_debugfs(self):
+        mod = self._make()
+        with mock.patch("pathlib.Path.read_text",
+                        return_value="NPU load:  Core0:  0%, Core1:  10%, Core2:  20%,"):
+            self.assertEqual(mod._read_hardware_load("npu"), 10)
+
+    def test_npu_load_parses_aggregate_percent(self):
+        mod = self._make()
+        with mock.patch("pathlib.Path.read_text", return_value="NPU load:  37%"):
+            self.assertEqual(mod._read_hardware_load("npu"), 37)
+
+    def test_npu_load_respects_env_override_paths(self):
+        mod = self._make()
+        with mock.patch.dict("os.environ", {"ISPY_NPU_LOAD_PATHS": "/custom/npu/load"}):
+            with mock.patch("pathlib.Path.read_text", return_value="63\n"):
+                self.assertEqual(mod._read_hardware_load("npu"), 63)
 
     def test_npu_load_none_when_sysfs_unavailable(self):
         mod = self._make()

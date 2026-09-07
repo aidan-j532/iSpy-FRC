@@ -1,3 +1,5 @@
+import glob
+import os
 import re
 import time
 import json
@@ -31,6 +33,89 @@ def _generic_camera_name(name: str) -> bool:
                or n.startswith(token + "-") for token in _GENERIC_CAMERA_TOKENS)
 
 
+#: highest value that can still be a genuine 0-100 utilization percentage.
+#: Anything above it is a raw busy-clock counter from rknpu's devfreq node,
+#: which must never be clamped into a fake 100%.
+_NPU_PERCENT_MAX = 100
+
+#: comma-separated override for where to read NPU load from, so users can
+#: point the dashboard at a custom source without code changes.
+NPU_LOAD_PATHS_ENV = "ISPY_NPU_LOAD_PATHS"
+
+#: glob patterns covering the devfreq/debugfs layouts different RKNPU boards
+#: ship with (device name varies: fdab0000.npu, fdbb0000.npu, rknpu, ...).
+_NPU_LOAD_GLOBS = (
+    "/sys/kernel/debug/rknpu/load",
+    "/sys/class/devfreq/*npu*/load",
+    "/sys/devices/platform/*npu*/devfreq/*/load",
+)
+
+#: literal fallbacks for distros where the platform path isn't glob-visible.
+_NPU_LOAD_FALLBACKS = (
+    "/sys/devices/platform/fdab0000.npu/devfreq/fdab0000.npu/load",
+    "/sys/class/devfreq/fdab0000.npu/load",
+    "/sys/devices/platform/fdab0000.npu/devfreq/rknpu/load",
+    "/sys/kernel/debug/rknpu/load",
+)
+
+_CORE_LOAD_RE = re.compile(r"Core\s*(\d+)\s*:\s*(\d+)\s*%")
+
+
+def _parse_npu_percent(text: str) -> int | None:
+    """Return a 0-100 utilization parsed from an RKNPU load file, or None.
+
+    Understands the formats seen in the wild:
+      * per-core debugfs  "NPU load:  Core0:  0%, Core1:  5%, Core2:  0%,"
+      * single aggregate "NPU load:  37%" (newer kernels)
+      * devfreq "load@freq" / bare integer where load is already a percent
+
+    Raw busy-clock counters (>100) are rejected - they are NOT percentages,
+    and clamping them produces the permanent-100% bug this replaces.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    cores = _CORE_LOAD_RE.findall(text)
+    if cores:
+        per_core = [int(v) for _, v in cores]
+        return max(0, min(sum(per_core) // len(per_core), 100))
+    if "%" in text:
+        match = re.search(r"(\d+)\s*%", text)
+    elif "@" in text:
+        match = re.search(r"(\d+)\s*@", text)
+    else:
+        match = re.search(r"(\d+)", text)
+    if not match:
+        return None
+    value = int(match.group(1))
+    if 0 <= value <= _NPU_PERCENT_MAX:
+        return value
+    return None
+
+
+def _npu_load_candidates() -> list[str]:
+    """Ordered, de-duplicated list of NPU load files to try.
+
+    Environment override wins, then glob-discovered devfreq/debugfs nodes
+    (covering fdab0000.npu, fdbb0000.npu, rknpu, ...), then literal fallbacks.
+    """
+    override = os.environ.get(NPU_LOAD_PATHS_ENV, "").strip()
+    if override:
+        return [p.strip() for p in override.split(",") if p.strip()]
+    paths: list[str] = []
+    seen: set[str] = set()
+    for pattern in _NPU_LOAD_GLOBS:
+        for matched in sorted(glob.glob(pattern)):
+            if matched not in seen:
+                seen.add(matched)
+                paths.append(matched)
+    for fallback in _NPU_LOAD_FALLBACKS:
+        if fallback not in seen:
+            seen.add(fallback)
+            paths.append(fallback)
+    return paths
+
+
 class DashboardModule(WebModule):
     plugin_name = "dashboard"
 
@@ -48,6 +133,7 @@ class DashboardModule(WebModule):
         self._detection_classes: dict = {}
         self._sse_lock = threading.Lock()
         self._sse_clients: list = []
+        self._npu_load_cache: tuple[float, list[int] | None] | None = None
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/dashboard", "dashboard_page", lambda: render_template("dashboard.html"))
@@ -210,42 +296,15 @@ class DashboardModule(WebModule):
     def _read_hardware_load(self, hardware: str) -> int | None:
         """Best-effort utilization (0-100) for a shared accelerator.
 
-        NPU: RKNPU sysfs exposes a live load percentage. GPU: NVIDIA reports
-        via nvidia-smi (throttled to every ~2s so the busy dashboard SSE
-        doesn't spawn a subprocess per tick). Returns None when the platform
-        can't report utilization.
+        NPU: RKNPU sysfs exposes load through several files with different
+        formats depending on the distro kernel - see :meth:`_read_npu_load`.
+        GPU: NVIDIA reports via nvidia-smi (throttled to every ~2s so the
+        busy dashboard SSE doesn't spawn a subprocess per tick). Returns None
+        when the platform can't report utilization.
         """
         hardware = str(hardware).lower()
         if hardware == "npu":
-            # Rockchip (RK3588/RK3576/...) exposes NPU utilization through
-            # several files with different formats depending on the distro
-            # kernel. The per-core debugfs file looks like
-            #   "NPU load:  Core0:  0%, Core1:  5%, Core2:  0%,"
-            # (needs root - wrap in a read attempt and fall through) while
-            # the devfreq load file is a bare integer or "load@freq".
-            paths = (
-                "/sys/devices/platform/fdab0000.npu/devfreq/fdab0000.npu/load",
-                "/sys/class/devfreq/fdab0000.npu/load",
-                "/sys/devices/platform/fdab0000.npu/devfreq/rknpu/load",
-                "/sys/kernel/debug/rknpu/load",
-            )
-            for path in paths:
-                try:
-                    raw = Path(path).read_text().strip()
-                except Exception:
-                    continue
-                try:
-                    if "Core" in raw:
-                        per_core = re.findall(r"Core\d+:\s*(\d+)%", raw)
-                        if per_core:
-                            values = [int(v) for v in per_core]
-                            return max(0, min(sum(values) // len(values), 100))
-                        continue
-                    value = int(raw.split("@")[0].split()[0])
-                    return max(0, min(value, 100))
-                except Exception:
-                    continue
-            return None
+            return self._read_npu_load()
         if hardware == "gpu":
             now = time.monotonic()
             cached = getattr(self, "_gpu_load_cache", None)
@@ -268,6 +327,55 @@ class DashboardModule(WebModule):
             self._gpu_load_cache = (now, value)
             return value
         return None
+
+    def _read_npu_load(self) -> int | None:
+        """Best-effort RKNPU utilization (0-100), reading every source.
+
+        Rockchip (RK3588/RK3576/...) exposes NPU load through several files
+        whose format depends on the distro kernel. This reads each candidate
+        and favors the most trustworthy reading instead of trusting one:
+
+          * per-core debugfs (needs root): "NPU load:  Core0:  0%, Core1:  5%,
+            Core2:  0%," - averaged, most accurate.
+          * devfreq "load@freq": the value before "@" is usually already a
+            percentage; a raw busy-clock counter (>>100) is rejected rather
+            than clamped, since clamping is what makes the bar sit at 100%.
+          * bare integer in 0-100 or "N%" aggregate.
+
+        Results are cached for ~1s so the frequent SSE ticks don't hammer
+        sysfs. Returns None when no usable source can be read.
+        """
+        now = time.monotonic()
+        if self._npu_load_cache and now - self._npu_load_cache[0] < 1.0:
+            return self._npu_load_cache[1]
+
+        readings: list[int] = []
+        core_average: int | None = None
+        for path in _npu_load_candidates():
+            try:
+                raw = Path(path).read_text()
+            except Exception:
+                continue
+            if not raw or not raw.strip():
+                continue
+            value = _parse_npu_percent(raw)
+            if value is None:
+                continue
+            # Prefer the per-core debugfs average over devfreq aggregate
+            # readings when both exist - it's the accurate one.
+            if _CORE_LOAD_RE.search(raw):
+                core_average = value
+            else:
+                readings.append(value)
+        result = core_average
+        if result is None and readings:
+            result = round(sum(readings) / len(readings))
+        if result is None:
+            result = None
+        else:
+            result = max(0, min(int(result), 100))
+        self._npu_load_cache = (now, result)
+        return result
 
     def _get_camera_status(self) -> list[dict]:
         cameras = self.context.get("cameras") or []

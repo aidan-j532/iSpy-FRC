@@ -1,6 +1,6 @@
 """Addon output system: utility output_key -> frame_data["addon_data"] ->
 NetworkTables publishing (auto type detection, JSON fallback, selectable
-sources). See DOCS.d/02-plugins.md."""
+sources). See the add-on source and tests for the output contract."""
 
 import json
 import unittest

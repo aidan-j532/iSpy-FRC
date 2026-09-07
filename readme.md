@@ -1,6 +1,6 @@
 # iSpy
 
-> FRC vision pipeline for object detection and field mapping - runs on Orange Pi with Rockchip NPU, supports RKNN, ONNX, OpenVINO, TFLite, and CoreML backends.
+> FRC vision pipeline for object detection and field mapping - runs on Orange Pi with Rockchip NPU and supports RKNN, ONNX, OpenVINO, TFLite, TensorRT, and CoreML backends.
 
 ---
 
@@ -101,13 +101,13 @@ chmod +x install.sh
 Run the pipeline locally (uses a webcam or image file):
 
 ```bash
-iSpy-run
+ispy-run
 ```
 
-Run the boot sequence (downloads a default model, sets up service):
+Run the boot sequence (downloads default models and sets up the service):
 
 ```bash
-iSpy-boot
+ispy-boot
 ```
 
 ---
@@ -223,9 +223,9 @@ models of one format. Actual build-tree layout:
 
 ```
 YoloModels/
-  pytorch/_default_detect.pt            # stock defaults downloaded on first use
-  pytorch/_default_pose.pt
-  pytorch/_default_pose_metadata.yaml
+    pytorch/_default_detect.pt            # stock defaults downloaded on first boot
+    pytorch/_default_pose.pt              # optional stock pose model
+    pytorch/_default_v26_detect_for_fuel.pt # optional AGPL-derived fuel model
   pytorch/world/yolov8s-worldv2.pt
   onnx/depth_anything_v2_small.onnx
   openvino/<model>_openvino_model/      # IR: <name>.xml + <name>.bin + metadata.yaml
@@ -241,8 +241,9 @@ are described by a small YAML **metadata sidecar** next to the file
 names and input size from that sidecar instead of guessing from the extension.
 
 With `auto_opt: true`, iSpy converts your `.pt` model at boot time and caches
-the result. Supported formats: `rknn`, `onnx`, `openvino`, `tflite`, `coreml`,
-`engine` (TensorRT), `hef` (Hailo).
+the result. Supported formats are `rknn`, `onnx`, `openvino`, `tflite`,
+`coreml`, and `engine` (TensorRT). Hailo/HEF conversion is not currently
+enabled.
 
 To convert manually on a dev machine:
 
@@ -391,7 +392,7 @@ game_loop.py
   └── iSpy
         ├── ObjectDetectionCamera (per camera)
         │     ├── Camera (threaded frame reader)
-        │     └── GenericYolo (RKNN / ONNX / TFLite / Ultralytics)
+        │     └── GenericYolo (dependency-free .pt / RKNN / ONNX / TFLite)
         ├── MultipleCameraHandler (merges multi-camera detections)
         ├── Trackers (object_tracker -> path_planner -> your plugins)
         ├── Utilities (rollback, network_handler, your plugins)
@@ -400,12 +401,11 @@ game_loop.py
 
 The main loop runs at whatever FPS the camera and model allow. On an Orange Pi 5 with a nano RKNN model, expect 30–60 FPS.
 
-Benchmarking I'VE tested with default models (pip install iSpy-frc, iSpy-boot -f, iSpy-run):
-| Pose (Yolov8 Nano)          | Detect (Yolov8 Nano)             | Detect (Yolov26 Nano)       |
-|-----------------------------|----------------------------------|-----------------------------|
-| Orange Pi (RK3588): ~30 fps | Orange Pi (RK3588):   Not Tested | Orange Pi (RK3588): ~60 fps |
-| Colab (2 T4's):     ~180 fps| Colab (2 T4's):       Not Tested | Colab (2 T4's):  Not tested |
-Colab v5e1 Yolov8 nano pose 47 fps, detect is 48, and fuel is 
+Benchmark results are hardware- and model-dependent. The Orange Pi 5 Pro
+(RK3588) has been tested at roughly 30 FPS for YOLO pose and roughly 60 FPS
+for the YOLO fuel detector. Treat these as indicative measurements, not
+guarantees; run `ispy-bench` with your own camera, model, and calibration data
+before relying on a number for competition planning.
 
 ---
 
@@ -444,22 +444,19 @@ Colab v5e1 Yolov8 nano pose 47 fps, detect is 48, and fuel is
 
 ## License
 
-**PolyForm Noncommercial License 1.0.0** (source-available) - see
-[LICENSE](LICENSE).
+**PolyForm Noncommercial License 1.0.0** applies to iSpy-authored source code -
+see [LICENSE](LICENSE). Third-party models, build tools, and hardware SDKs
+remain under their own terms; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 iSpy's own code is licensed under the PolyForm Noncommercial License 1.0.0: it
 is free for noncommercial use (which covers student teams, FRC use, and hobby
 projects). Commercial use requires a separate license from the authors. See
 [LICENSE](LICENSE) for the full terms.
 
-The stock default checkpoints (`_default_detect.pt`, `_default_pose.pt`) are
-NOT distributed with iSpy - they are downloaded on first use from Ultralytics'
-own release assets and remain under their original AGPL-3.0 terms. If your team
-distributes them separately you must meet the AGPL-3.0 obligations for those
-model files or retrain/replace them; see
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). The default
-`_default_v26_detect_for_fuel.pt` model was trained by the iSpy project owner
-using Ultralytics code and is therefore an Ultralytics-derived AGPL-3.0 model,
-not a PolyForm asset (downloaded on demand from the project's own GitHub
-release, not bundled). The owner's training contribution is released under
-AGPL-3.0 with the checkpoint.
+The stock default checkpoints (`_default_detect.pt`, `_default_pose.pt`, and
+`_default_v26_detect_for_fuel.pt`) are downloaded on demand and are not bundled
+in the source tree. The first two are Ultralytics AGPL-3.0 checkpoints. The v26
+fuel model was trained by the project owner using Ultralytics code and is an
+Ultralytics-derived AGPL-3.0 model, not a PolyForm asset. The owner's training
+contribution is released under AGPL-3.0 with that checkpoint. Commercial or
+redistributed use must satisfy the applicable model and build-tool licenses.
