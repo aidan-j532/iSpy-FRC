@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import platform
-import requests
 import shutil
 import subprocess
 import sys
@@ -14,7 +13,6 @@ import tempfile
 import threading
 import time as _time
 import warnings
-from functools import lru_cache
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -46,10 +44,18 @@ def _progress_spinner(label: str):
         start = _time.time()
         while not stop.is_set():
             elapsed = _time.time() - start
-            print(f"\r  {label} {frames[i % 4]} ({elapsed:.0f}s)", end="", file=_REAL_STDOUT, flush=True)
+            print(
+                f"\r  {label} {frames[i % 4]} ({elapsed:.0f}s)",
+                end="",
+                file=_REAL_STDOUT,
+                flush=True,
+            )
             i += 1
             stop.wait(0.2)
-        print(f"\r  {label} done ({_time.time() - start:.0f}s)" + " " * 10, file=_REAL_STDOUT)
+        print(
+            f"\r  {label} done ({_time.time() - start:.0f}s)" + " " * 10,
+            file=_REAL_STDOUT,
+        )
 
     t = threading.Thread(target=_spin, daemon=True)
     t.start()
@@ -101,8 +107,15 @@ keywords = ["frc game piece", "frc 2025 REBUILT", "frc 2025 fuel"]
 
 _RKNN_QUANTIZE = True
 _RKNN_KNOWN_CHIPS = (
-    "rk3588", "rk3576", "rk3399", "rk3568", "rk3566",
-    "rk3562", "rk3528", "rv1103", "rv1106",
+    "rk3588",
+    "rk3576",
+    "rk3399",
+    "rk3568",
+    "rk3566",
+    "rk3562",
+    "rk3528",
+    "rv1103",
+    "rv1106",
 )
 
 _MANUAL_POSTPROCESS_FORMATS = {"onnx", "tflite"}
@@ -183,6 +196,7 @@ _RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
     ): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
 }
 
+
 def _detect_rknn_target_platform() -> str | None:
     override = os.environ.get("ISPY_RKNN_TARGET_PLATFORM", "").strip().lower()
     if override:
@@ -201,7 +215,9 @@ def _detect_rknn_target_platform() -> str | None:
             content = open(path, "rb").read().decode(errors="ignore").lower()
             for chip in _RKNN_KNOWN_CHIPS:
                 if chip in content:
-                    logger.info("Detected RKNN target_platform: %s (from %s)", chip, path)
+                    logger.info(
+                        "Detected RKNN target_platform: %s (from %s)", chip, path
+                    )
                     return chip
         except Exception:
             continue
@@ -210,7 +226,9 @@ def _detect_rknn_target_platform() -> str | None:
         cpuinfo = open("/proc/cpuinfo").read().lower()
         for chip in _RKNN_KNOWN_CHIPS:
             if chip in cpuinfo:
-                logger.info("Detected RKNN target_platform: %s (from /proc/cpuinfo)", chip)
+                logger.info(
+                    "Detected RKNN target_platform: %s (from /proc/cpuinfo)", chip
+                )
                 return chip
     except Exception:
         pass
@@ -244,7 +262,9 @@ def _resolve_rknn_target_platform() -> tuple[str, bool]:
 _CALIB_DOWNSCALE_SIZE = 320
 
 
-def _downscale_calib_images(dataset_path: Path, calib_size: int = _CALIB_DOWNSCALE_SIZE) -> Path:
+def _downscale_calib_images(
+    dataset_path: Path, calib_size: int = _CALIB_DOWNSCALE_SIZE
+) -> Path:
     import cv2
 
     orig_txt = dataset_path / "dataset.txt"
@@ -274,7 +294,9 @@ def _downscale_calib_images(dataset_path: Path, calib_size: int = _CALIB_DOWNSCA
                 dest = resized_dir / img_path.name
                 shutil.copy2(str(img_path), str(dest))
             else:
-                resized = cv2.resize(img, (calib_size, calib_size), interpolation=cv2.INTER_LINEAR)
+                resized = cv2.resize(
+                    img, (calib_size, calib_size), interpolation=cv2.INTER_LINEAR
+                )
                 dest = resized_dir / f"{img_path.stem}_{calib_size}.jpg"
                 cv2.imwrite(str(dest), resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
             resized_lines.append(f"images/{dest.name}")
@@ -289,7 +311,9 @@ def _downscale_calib_images(dataset_path: Path, calib_size: int = _CALIB_DOWNSCA
     (tmp_dir / "dataset.txt").write_text("\n".join(resized_lines) + "\n")
     logger.info(
         "Downscaled %d calibration images from original to %dx%d (saves ~4x RAM during RKNN build)",
-        resized_count, calib_size, calib_size,
+        resized_count,
+        calib_size,
+        calib_size,
     )
     return tmp_dir
 
@@ -322,12 +346,15 @@ def _rknn_wheel_targets() -> list[tuple[str, str]]:
 
 
 def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
-    from iSpy.config.AutoOpt import has_nvidia, has_amd_gpu
+    from iSpy.config.AutoOpt import has_amd_gpu, has_nvidia
 
     if has_nvidia():
         onnx_dep = ("onnxruntime", "onnxruntime-gpu")
     elif platform.system() == "Windows":
-        onnx_dep = ("onnxruntime", "onnxruntime-directml")  # covers AMD/Intel/Nvidia on Windows
+        onnx_dep = (
+            "onnxruntime",
+            "onnxruntime-directml",
+        )  # covers AMD/Intel/Nvidia on Windows
     else:
         onnx_dep = ("onnxruntime", "onnxruntime")
         if has_amd_gpu():
@@ -343,11 +370,20 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
         "openvino": [("openvino", "openvino")],
         "coreml": [("coremltools", "coremltools")],
         "tflite": [("tflite_runtime", "tflite-runtime")],
-        "tpu": [("torch_xla", "torch_xla[tpu]", ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"])],
+        "tpu": [
+            (
+                "torch_xla",
+                "torch_xla[tpu]",
+                ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"],
+            )
+        ],
     }
     rknn_targets = _rknn_wheel_targets()
     if rknn_targets:
-        deps["rknn"] = rknn_targets + [("onnx", "onnx<1.17"), ("google.protobuf", "protobuf<4.0")]
+        deps["rknn"] = rknn_targets + [
+            ("onnx", "onnx<1.17"),
+            ("google.protobuf", "protobuf<4.0"),
+        ]
     return deps
 
 
@@ -355,9 +391,8 @@ BACKEND_DEPENDENCIES = _backend_dependencies()
 
 
 def _in_virtualenv() -> bool:
-    return (
-        hasattr(sys, "real_prefix")
-        or (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
+    return hasattr(sys, "real_prefix") or (
+        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
     )
 
 
@@ -426,7 +461,9 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
     logger.info("Running optimized-model comparison for %s...", converted_path.name)
 
     try:
-        from iSpy.validations.tests.compare_models import compare_models  # lazy: heavy import chain
+        from iSpy.validations.tests.compare_models import (
+            compare_models,
+        )  # lazy: heavy import chain
 
         results = compare_models(
             base_path=str(pt_file),
@@ -435,7 +472,9 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
             quiet=False,
         )
     except (Exception, SystemExit) as e:
-        logger.warning("Optimized-model comparison failed for %s: %s", converted_path.name, e)
+        logger.warning(
+            "Optimized-model comparison failed for %s: %s", converted_path.name, e
+        )
         return
 
     if results is None:
@@ -493,7 +532,7 @@ def _parse_pip_target(pip_target: str) -> tuple[str, str]:
 
 
 def install_special_dependencies(auto_install: bool = False):
-    from iSpy.config.AutoOpt import recommend_format, has_jetson
+    from iSpy.config.AutoOpt import has_jetson, recommend_format
 
     backend = recommend_format(ignore_dependencies=True)
     logger.info("Recommended backend: %s", backend)
@@ -529,17 +568,23 @@ def install_special_dependencies(auto_install: bool = False):
         elif constraint and not _check_version_constraint(pkg_name, constraint):
             logger.warning(
                 "Installed %s (%s) does not satisfy %s. Will reinstall.",
-                pkg_name, _get_installed_version(pkg_name), target,
+                pkg_name,
+                _get_installed_version(pkg_name),
+                target,
             )
             missing.append((mod, target, True, extra_args))
         else:
             logger.debug("Dependency %s satisfied: %s", mod, target)
 
     if not missing:
-        logger.info("All pip-installable dependencies already satisfied for %s", backend)
+        logger.info(
+            "All pip-installable dependencies already satisfied for %s", backend
+        )
         return
 
-    logger.warning("Missing dependencies for %s: %s", backend, [t for _, t, _, _ in missing])
+    logger.warning(
+        "Missing dependencies for %s: %s", backend, [t for _, t, _, _ in missing]
+    )
 
     if not auto_install:
         logger.info("auto_install=False - skipping installation")
@@ -550,26 +595,32 @@ def install_special_dependencies(auto_install: bool = False):
         if not (_IS_AARCH64 or "x86_64" in arch or "amd64" in arch):
             logger.error(
                 "RKNN wheels are only available for aarch64 and x86_64. "
-                "Your architecture (%s) is not supported.", arch,
+                "Your architecture (%s) is not supported.",
+                arch,
             )
             return
 
     if backend in {"rknn", "engine"}:
         logger.warning(
             "%s is a hardware/vendor backend - installation may require "
-            "system-level setup and can take a few minutes.", backend,
+            "system-level setup and can take a few minutes.",
+            backend,
         )
 
     for mod, target, force, extra_args in missing:
         if _pip_install(target, force_reinstall=force, extra_args=extra_args):
             logger.info("Installed %s successfully.", target)
         else:
-            logger.error("Failed to install %s. You may need to install it manually.", target)
+            logger.error(
+                "Failed to install %s. You may need to install it manually.", target
+            )
 
     logger.info("Dependency installation complete for %s", backend)
 
 
-def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, device=0):
+def _export_ultralytics(
+    model_file, target_format, input_size, data_yaml=None, device=0
+):
     try:
         import ultralytics  # optional dev-only dependency (AGPL) - build-time only
     except ImportError:
@@ -588,7 +639,13 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
     task = getattr(model, "task", None) or "detect"
 
     native_kwargs = {
-        "onnx": dict(format="onnx", imgsz=input_size, simplify=True, opset=17, dynamic=False),
+        "onnx": {
+            "format": "onnx",
+            "imgsz": input_size,
+            "simplify": True,
+            "opset": 17,
+            "dynamic": False,
+        },
         "tflite": dict(format="tflite", imgsz=input_size, int8=True),
         "openvino": dict(format="openvino", imgsz=input_size, half=True),
         "coreml": dict(format="coreml", imgsz=input_size, nms=True),
@@ -605,14 +662,16 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
             "%s has an end-to-end (dual-head) architecture - forcing "
             "end2end=False for %s export so the raw-tensor parser gets "
             "the traditional (1, nc+4, N) output instead of (1, 300, 6).",
-            Path(model_file).name, target_format,
+            Path(model_file).name,
+            target_format,
         )
     elif has_e2e:
         logger.info(
             "%s has an end-to-end architecture; leaving the default head for "
             "%s export (Ultralytics decodes it natively at runtime - no "
             "speed reason to disable it here).",
-            Path(model_file).name, target_format,
+            Path(model_file).name,
+            target_format,
         )
 
     if data_yaml and target_format in ("tflite", "openvino", "engine"):
@@ -631,9 +690,13 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
                 base = "train: images\nval: valid/images\nnc: 1\nnames: ['object']\n"
             pose_yaml.write_text(base.rstrip() + f"\nkpt_shape: {list(kpt_shape)}\n")
             effective_data_yaml = str(pose_yaml)
-            logger.info("Pose task detected - using kpt_shape-aware data.yaml: %s", pose_yaml)
+            logger.info(
+                "Pose task detected - using kpt_shape-aware data.yaml: %s", pose_yaml
+            )
 
-        kwargs = dict(format=target_format, imgsz=input_size, int8=True, data=effective_data_yaml)
+        kwargs = dict(
+            format=target_format, imgsz=input_size, int8=True, data=effective_data_yaml
+        )
         if has_e2e and target_format in _MANUAL_POSTPROCESS_FORMATS:
             kwargs["end2end"] = False
         if target_format == "engine":
@@ -641,7 +704,9 @@ def _export_ultralytics(model_file, target_format, input_size, data_yaml=None, d
             kwargs["half"] = True
 
         logger.info(
-            "Dataset-aware %s quantization enabled (data=%s)", target_format, effective_data_yaml
+            "Dataset-aware %s quantization enabled (data=%s)",
+            target_format,
+            effective_data_yaml,
         )
 
     logger.info("Exporting %s -> %s with kwargs: %s", model_file, target_format, kwargs)
@@ -668,10 +733,10 @@ def _export_rknn_metadata(
     target_platform_detected=None,
 ) -> None:
     from iSpy.vision.metadata import (
-        read_metadata,
-        metadata_from_pt,
         derive_format_metadata,
+        metadata_from_pt,
         metadata_path_for,
+        read_metadata,
         write_metadata,
     )
 
@@ -779,8 +844,8 @@ def existing_artifact_for(
     return None
 
 
-import shutil
 from pathlib import Path
+
 
 def _remove_path_for_cleanup(path: Path) -> None:
     if not path.exists():
@@ -857,9 +922,7 @@ def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
     if const_node is None:
         arr = onnx.numpy_helper.to_array(initializer_map[const_name])
     else:
-        value_attr = next(
-            (a for a in const_node.attribute if a.name == "value"), None
-        )
+        value_attr = next((a for a in const_node.attribute if a.name == "value"), None)
         if value_attr is None or value_attr.t is None:
             raise RuntimeError(
                 f"Constant node '{const_node.name}' has no 'value' tensor "
@@ -867,9 +930,7 @@ def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
             )
         arr = onnx.numpy_helper.to_array(value_attr.t)
 
-    other_consumers = [
-        n for n in graph.node if n is not node and const_name in n.input
-    ]
+    other_consumers = [n for n in graph.node if n is not node and const_name in n.input]
     new_name = f"{const_name}_iSpy_scaled"
     scaled = onnx.numpy_helper.from_array(
         arr.astype(np.float32) / float(divisor), name=new_name
@@ -881,13 +942,18 @@ def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
     logger.info(
         "Cloned constant '%s' -> '%s' (scaled by 1/%.1f) so only node '%s' is "
         "affected (%d other consumer(s) left untouched).",
-        const_name, new_name, divisor, node.name, len(other_consumers),
+        const_name,
+        new_name,
+        divisor,
+        node.name,
+        len(other_consumers),
     )
     return new_name
 
 
-def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, input_size) -> tuple[float, float | None]:
-    import numpy as np
+def _normalize_box_coords_for_quantization(
+    onnx_path: str, output_path: str, input_size
+) -> tuple[float, float | None]:
     import onnx
     import onnx.numpy_helper
 
@@ -897,11 +963,15 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     output_names = {output.name for output in graph.output}
     concat_node = None
     for node in graph.node:
-        if node.op_type == "Concat" and any(out_name in output_names for out_name in node.output):
+        if node.op_type == "Concat" and any(
+            out_name in output_names for out_name in node.output
+        ):
             concat_node = node
             break
     if concat_node is None:
-        raise RuntimeError(f"No Concat node feeding a graph output found in {onnx_path}.")
+        raise RuntimeError(
+            f"No Concat node feeding a graph output found in {onnx_path}."
+        )
 
     inputs = list(concat_node.input)
     if len(inputs) < 2:
@@ -934,7 +1004,8 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
         "Box-coordinate normalization applied: folded /%.1f into the existing "
         "stride constant feeding '%s' (Mul producing the box tensor) - no new "
         "nodes inserted, graph topology unchanged from an unmodified export.",
-        divisor, box_producer.name,
+        divisor,
+        box_producer.name,
     )
 
     kpt_coord_scale = None
@@ -951,7 +1022,11 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
 
         kpt_concat_input = kpt_reshape.input[0]
         kpt_concat = node_by_output.get(kpt_concat_input)
-        if kpt_concat is None or kpt_concat.op_type != "Concat" or len(kpt_concat.input) < 2:
+        if (
+            kpt_concat is None
+            or kpt_concat.op_type != "Concat"
+            or len(kpt_concat.input) < 2
+        ):
             raise RuntimeError(
                 f"Expected '{kpt_concat_input}' (feeding the keypoint Reshape) to "
                 f"be produced by a Concat node with >=2 inputs (xy, confidence), "
@@ -975,7 +1050,9 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
             "Keypoint-coordinate normalization applied: folded /%.1f into the "
             "existing stride constant feeding '%s' (Mul producing keypoint x/y) "
             "- confidence branch ('%s') left untouched, no new nodes inserted.",
-            divisor, xy_producer.name, conf_input,
+            divisor,
+            xy_producer.name,
+            conf_input,
         )
     else:
         logger.debug(
@@ -987,11 +1064,12 @@ def _normalize_box_coords_for_quantization(onnx_path: str, output_path: str, inp
     onnx.save(model, output_path)
     return divisor, kpt_coord_scale
 
+
 def _find_pose_output_tensors(graph, concat_node):
     node_by_output = {out: n for n in graph.node for out in n.output}
     inputs = list(concat_node.input)
 
-    box_name = inputs[0]   # always first: decoded+stride-scaled boxes
+    box_name = inputs[0]  # always first: decoded+stride-scaled boxes
     conf_name = inputs[1]  # always second: sigmoid'd confidence/class scores
     kpt_name = inputs[2] if len(inputs) > 2 else None  # pose only
 
@@ -1013,8 +1091,7 @@ def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
     if dataset_txt.exists():
         lines = [l for l in dataset_txt.read_text().splitlines() if l.strip()]
         stale = not all(
-            (Path(l) if Path(l).is_absolute() else user_ds / l).exists()
-            for l in lines
+            (Path(l) if Path(l).is_absolute() else user_ds / l).exists() for l in lines
         )
     if not stale:
         return dataset_txt
@@ -1026,7 +1103,8 @@ def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
     dataset_txt.write_text("\n".join(str(p.resolve()) for p in imgs) + "\n")
     logger.info(
         "Calibration dataset from user path %s (%d images)",
-        user_ds, len(imgs),
+        user_ds,
+        len(imgs),
     )
     return dataset_txt
 
@@ -1044,15 +1122,13 @@ def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
         names = ["object"] if nc == 1 else [f"class_{i}" for i in range(nc)]
     else:
         names = [
-            names_meta.get(i, names_meta.get(str(i), f"class_{i}"))
-            for i in range(nc)
+            names_meta.get(i, names_meta.get(str(i), f"class_{i}")) for i in range(nc)
         ]
     if not names:
         names = ["object"]
     data_yaml = user_ds / "data.yaml"
     data_yaml.write_text(
-        f"train: {user_ds}\nval: {user_ds}\nnc: {nc}\n"
-        f"names: {json.dumps(names)}\n"
+        f"train: {user_ds}\nval: {user_ds}\nnc: {nc}\nnames: {json.dumps(names)}\n"
     )
     logger.info("Calibration data.yaml written (nc=%d) at %s", nc, data_yaml)
     return str(data_yaml)
@@ -1069,23 +1145,30 @@ def _resolve_calibration_dataset(dataset_path, keywords_list, count) -> tuple:
         except FileNotFoundError:
             logger.warning(
                 "User calibration dataset %s has no images - falling back to "
-                "auto-downloading calibration images", user_ds,
+                "auto-downloading calibration images",
+                user_ds,
             )
     ds_dir = default_quantization_dataset_dir()
-    prepare_quantization_dataset(str(ds_dir), boot=True, keywords=keywords_list, count=count)
+    prepare_quantization_dataset(
+        str(ds_dir), boot=True, keywords=keywords_list, count=count
+    )
     return ds_dir, False
 
 
-def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None):
+def _convert_rknn(
+    pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None
+):
+    from iSpy.dataset.dataset import (
+        calib_count_for_format,
+    )
     from iSpy.vision.metadata import (
-        read_metadata,
-        metadata_from_pt,
         derive_format_metadata,
+        get_calibration_keywords,
+        metadata_from_pt,
         metadata_path_for,
+        read_metadata,
         write_metadata,
     )
-    from iSpy.vision.metadata import get_calibration_keywords
-    from iSpy.dataset.dataset import calib_count_for_format, prepare_quantization_dataset
 
     if quantize is None:
         quantize = _RKNN_QUANTIZE
@@ -1106,7 +1189,9 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
         pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
         format_meta = derive_format_metadata(pt_meta, "onnx")
         format_meta["input_size"] = (
-            list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)]
+            list(input_size)
+            if hasattr(input_size, "__iter__")
+            else [int(input_size), int(input_size)]
         )
         write_metadata(metadata_path_for(onnx_path), format_meta)
         logger.info("Intermediate ONNX routed to %s with sidecar", onnx_path)
@@ -1123,16 +1208,23 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
 
     try:
         from rknn.api import RKNN
+
         warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
     except ImportError:
-        raise ImportError("RKNN Toolkit not found. Install it to convert to RKNN format.")
+        raise ImportError(
+            "RKNN Toolkit not found. Install it to convert to RKNN format."
+        )
 
-    effective_kw = kw if kw is not None else get_calibration_keywords(pt_path, default=keywords)
+    effective_kw = (
+        kw if kw is not None else get_calibration_keywords(pt_path, default=keywords)
+    )
     count = calib_count_for_format("rknn")
     ds_path, _ = _resolve_calibration_dataset(dataset_path, effective_kw, count)
     dataset_txt = ds_path / "dataset.txt"
     if not dataset_txt.exists() or not dataset_txt.read_text().strip():
-        raise FileNotFoundError(f"RKNN calibration dataset could not be prepared at: {dataset_txt}")
+        raise FileNotFoundError(
+            f"RKNN calibration dataset could not be prepared at: {dataset_txt}"
+        )
 
     calib_dir = _downscale_calib_images(ds_path)
     calib_txt = calib_dir / "dataset.txt" if calib_dir != ds_path else dataset_txt
@@ -1160,7 +1252,9 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
     try:
         with _progress_spinner("RKNN build"):
             with _silence_third_party():
-                rknn = RKNN(verbose=False, )
+                rknn = RKNN(
+                    verbose=False,
+                )
             detected_format = None
             detected_layout = None
             detected_box_format = None
@@ -1193,11 +1287,17 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
                 # Detect actual output format by running a quick inference
                 try:
                     import numpy as np
+
                     rknn.init_runtime()
                     if isinstance(input_size, int):
                         h = w = input_size
                     elif isinstance(input_size, (list, tuple)):
-                        h, w = int(input_size[0]), int(input_size[1]) if len(input_size) > 1 else int(input_size[0])
+                        h, w = (
+                            int(input_size[0]),
+                            int(input_size[1])
+                            if len(input_size) > 1
+                            else int(input_size[0]),
+                        )
                     else:
                         h = w = 640
                     dummy = np.zeros((1, h, w, 3), dtype=np.uint8)
@@ -1214,13 +1314,16 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
                         t = tensor[0] if tensor.ndim == 3 else tensor
                         smaller = min(t.shape[0], t.shape[-1])
                         larger = max(t.shape[0], t.shape[-1])
-                        is_nms = (smaller == 6 and larger < 1000)
+                        is_nms = smaller == 6 and larger < 1000
                         detected_format = "hardware_nms" if is_nms else "raw"
-                        detected_layout = "anchors_first" if is_nms else "features_first"
+                        detected_layout = (
+                            "anchors_first" if is_nms else "features_first"
+                        )
                         detected_box_format = "xyxy" if is_nms else "cxcywh"
                         logger.info(
                             "RKNN output shape %s -> detected format: %s",
-                            tensor.shape, detected_format,
+                            tensor.shape,
+                            detected_format,
                         )
                 except Exception as e:
                     logger.debug("RKNN inference for format detection failed: %s", e)
@@ -1234,7 +1337,9 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
 
     logger.info("RKNN conversion successful: %s", rknn_output)
     _export_rknn_metadata(
-        pt_file, rknn_output, input_size=input_size,
+        pt_file,
+        rknn_output,
+        input_size=input_size,
         output_format=detected_format,
         output_layout=detected_layout,
         box_format=detected_box_format,
@@ -1247,16 +1352,24 @@ def _convert_rknn(pt_file, input_size, dataset_path=None, task="detect", quantiz
     return str(rknn_output)
 
 
-def convert_model(model_file, target_format, input_size, quantize=None, force=False, kw=None, dataset_path=None):
+def convert_model(
+    model_file,
+    target_format,
+    input_size,
+    quantize=None,
+    force=False,
+    kw=None,
+    dataset_path=None,
+):
+    from iSpy.dataset.dataset import calib_count_for_format
     from iSpy.vision.metadata import (
-        read_metadata,
-        metadata_from_pt,
         derive_format_metadata,
+        get_calibration_keywords,
+        metadata_from_pt,
         metadata_path_for,
+        read_metadata,
         write_metadata,
     )
-    from iSpy.vision.metadata import get_calibration_keywords
-    from iSpy.dataset.dataset import calib_count_for_format, prepare_quantization_dataset
 
     if not os.path.exists(model_file):
         logger.warning("Model file %s is missing. Skipping conversion.", model_file)
@@ -1295,7 +1408,9 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
                 if stored_quantize is not None and stored_quantize != quantize:
                     logger.info(
                         "Cached rknn model %s has quantize=%s but config says %s. Re-converting.",
-                        rknn_path.name, stored_quantize, quantize,
+                        rknn_path.name,
+                        stored_quantize,
+                        quantize,
                     )
                     _remove_path_for_cleanup(rknn_path)
                     _remove_path_for_cleanup(meta_path)
@@ -1346,7 +1461,8 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
             data_yaml = _user_calibration_data_yaml(model_file, ds_dir)
             logger.info(
                 "Calibration dataset from user path %s (data.yaml=%s)",
-                ds_dir, data_yaml,
+                ds_dir,
+                data_yaml,
             )
         else:
             # data.yaml lives inside the dataset folder that was just prepared -
@@ -1405,11 +1521,17 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
             try:
                 pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
                 format_meta = derive_format_metadata(pt_meta, target_format)
-                format_meta["input_size"] = list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)]
+                format_meta["input_size"] = (
+                    list(input_size)
+                    if hasattr(input_size, "__iter__")
+                    else [int(input_size), int(input_size)]
+                )
                 write_metadata(metadata_path_for(result_path), format_meta)
                 logger.info("Wrote metadata for converted %s", result_path.name)
             except Exception as e:
-                logger.warning("Could not write metadata for converted %s: %s", result_path.name, e)
+                logger.warning(
+                    "Could not write metadata for converted %s: %s", result_path.name, e
+                )
 
             _run_optimized_model_comparison(model_file, str(result_path))
             return str(result_path)
@@ -1418,14 +1540,24 @@ def convert_model(model_file, target_format, input_size, quantize=None, force=Fa
     return model_file
 
 
-def _convert_model_subprocess(model_file, target_format, input_size, quantize=None, force=False, kw=None, dataset_path=None) -> Path:
+def _convert_model_subprocess(
+    model_file,
+    target_format,
+    input_size,
+    quantize=None,
+    force=False,
+    kw=None,
+    dataset_path=None,
+) -> Path:
     outputs_dir = _PROJECT_ROOT / "Outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
     args = {
         "model_file": str(model_file),
         "target_format": target_format,
-        "input_size": list(input_size) if hasattr(input_size, "__iter__") else [int(input_size), int(input_size)],
+        "input_size": list(input_size)
+        if hasattr(input_size, "__iter__")
+        else [int(input_size), int(input_size)],
         "quantize": quantize,
         "force": force,
         "kw": kw,
@@ -1433,7 +1565,9 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
     if dataset_path:
         args["dataset_path"] = str(dataset_path)
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir=str(outputs_dir)) as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, dir=str(outputs_dir)
+    ) as f:
         args_path = f.name
         json.dump(args, f)
 
@@ -1457,7 +1591,9 @@ def _convert_model_subprocess(model_file, target_format, input_size, quantize=No
         if proc.returncode != 0 or not os.path.exists(result_path):
             logger.error(
                 "Conversion subprocess for %s -> %s failed (exit code %s). Falling back to .pt.",
-                Path(model_file).name, target_format, proc.returncode,
+                Path(model_file).name,
+                target_format,
+                proc.returncode,
             )
             return Path(model_file)
 

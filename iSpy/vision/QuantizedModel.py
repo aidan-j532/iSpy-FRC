@@ -33,7 +33,8 @@ def ensure_quantized_model(
     if target_format not in {"onnx", "rknn", "tflite", "openvino", "engine", "coreml"}:
         logger.warning(
             "Unsupported quantized target format %r for %s - falling back to .pt",
-            target_format, Path(source_pt).name,
+            target_format,
+            Path(source_pt).name,
         )
         return source_pt, False
 
@@ -54,14 +55,17 @@ def ensure_quantized_model(
     except Exception as exc:
         logger.warning(
             "Quantized conversion of %s -> %s failed (%s); falling back to .pt",
-            Path(source_pt).name, target_format, exc,
+            Path(source_pt).name,
+            target_format,
+            exc,
         )
         return source_pt, False
 
     if not artifact or str(artifact) == source_pt:
         logger.warning(
             "Quantized conversion of %s -> %s produced no artifact; falling back to .pt",
-            Path(source_pt).name, target_format,
+            Path(source_pt).name,
+            target_format,
         )
         return source_pt, False
 
@@ -89,13 +93,12 @@ class _CalibrationDataReader:
             return None
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = (
-            cv2.resize(img, (self._size, self._size), interpolation=cv2.INTER_CUBIC)
-            .astype(np.float32)
+            cv2.resize(
+                img, (self._size, self._size), interpolation=cv2.INTER_CUBIC
+            ).astype(np.float32)
             / 255.0
         )
-        return (
-            (img.transpose(2, 0, 1) - self._mean) / self._std
-        ).astype(np.float32)
+        return ((img.transpose(2, 0, 1) - self._mean) / self._std).astype(np.float32)
 
     def get_next(self):
         batch = []
@@ -147,7 +150,9 @@ def _quantize_static_onnx(fp32_path: Path, int8_path: Path, dataset_path, input_
         )
     logger.info(
         "Static int8 quantization of %s using %d calibration images from %s",
-        fp32_path.name, len(images), dataset_path,
+        fp32_path.name,
+        len(images),
+        dataset_path,
     )
     reader = _CalibrationDataReader(images, input_size)
     quantize_static(
@@ -251,19 +256,24 @@ def ensure_onnx_model(
                     logger.warning(
                         "static int8 quantization of %s failed (%s); "
                         "falling back to dynamic quantization.",
-                        artifact_stem, exc,
+                        artifact_stem,
+                        exc,
                     )
                     if int8_path.exists():
                         int8_path.unlink()
             if not int8_path.exists():
                 from onnxruntime.quantization import QuantType, quantize_dynamic
 
-                quantize_dynamic(str(fp32_path), str(int8_path), weight_type=QuantType.QInt8)
+                quantize_dynamic(
+                    str(fp32_path), str(int8_path), weight_type=QuantType.QInt8
+                )
             if int8_path.exists():
                 artifact = int8_path
         except Exception as exc:
             logger.warning(
-                "int8 quantization of %s failed (%s); keeping fp32 ONNX.", artifact_stem, exc
+                "int8 quantization of %s failed (%s); keeping fp32 ONNX.",
+                artifact_stem,
+                exc,
             )
             if int8_path.exists():
                 int8_path.unlink()
