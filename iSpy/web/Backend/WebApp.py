@@ -1,9 +1,9 @@
 import importlib
-import json
 import logging
 from pathlib import Path
 from flask import Flask, jsonify, render_template
 
+from iSpy import __version__
 from iSpy.web.modules.dashboard import DashboardModule
 from iSpy.web.modules.cameras import CamerasModule
 from iSpy.web.modules.models import ModelsModule
@@ -23,24 +23,11 @@ _WEB_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _get_version() -> str:
-    # Try PyPI JSON API first, fall back to pyproject.toml
-    try:
-        import urllib.request
-        with urllib.request.urlopen('https://pypi.org/pypi/ispy-frc/json', timeout=5) as resp:
-            data = json.loads(resp.read())
-        return data['info']['version']
-    except Exception:
-        pass
-    # Fall back to pyproject.toml
-    try:
-        pb = (_WEB_ROOT.parent.parent / "pyproject.toml").read_text()
-        import re
-        m = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', pb, re.MULTILINE)
-        if m:
-            return m.group(1)
-    except Exception:
-        pass
-    return "0.4.0"
+    # The version actually running on this board. Deliberately offline: boards
+    # sit on an isolated field LAN, so reaching out to PyPI here would just
+    # stall the request until it times out - and it answered the wrong question
+    # anyway (latest published release, not what this process is running).
+    return __version__
 
 
 class iSpyWebApp:
