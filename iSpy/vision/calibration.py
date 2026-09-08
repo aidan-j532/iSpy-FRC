@@ -78,7 +78,6 @@ def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
 
 
 def _build_obj_img_pairs(all_corners, all_ids, board):
-    """Map detected charuco corners to 3D board coordinates for each image."""
     try:
         board_corners = np.asarray(
             board.getChessboardCorners(), dtype=np.float64
@@ -103,7 +102,6 @@ def _build_obj_img_pairs(all_corners, all_ids, board):
 
 
 def _estimate_initial_intrinsics(all_obj, all_img, img_size):
-    """Rough intrinsics from per-image homographies, averaged."""
     w, h = img_size
     Ks = []
     for obj, img in zip(all_obj, all_img):
@@ -130,7 +128,6 @@ def _estimate_initial_intrinsics(all_obj, all_img, img_size):
 
 
 def _estimate_initial_extrinsics(all_obj, all_img, K):
-    """Per-image solvePnP to seed rotation/translation vectors."""
     rvecs = []
     tvecs = []
     for obj, img in zip(all_obj, all_img):
@@ -147,7 +144,6 @@ def _estimate_initial_extrinsics(all_obj, all_img, K):
 
 
 def _pack_params(K, dist, rvecs, tvecs):
-    """Flatten intrinsics + distortion + all extrinsics into a 1-D vector."""
     fx, fy = K[0, 0], K[1, 1]
     cx, cy = K[0, 2], K[1, 2]
     k1, k2 = dist[0], dist[1]
@@ -159,7 +155,6 @@ def _pack_params(K, dist, rvecs, tvecs):
 
 
 def _unpack_params(params, n_images):
-    """Unpack a flat parameter vector back into K, dist, rvecs, tvecs."""
     fx, fy, cx, cy, k1, k2, p1, p2, k3 = params[:9]
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
     dist = np.array([k1, k2, p1, p2, k3], dtype=np.float64)
@@ -170,7 +165,6 @@ def _unpack_params(params, n_images):
 
 
 def _calibrate_scipy_residuals(params, all_obj, all_img, n_images):
-    """Reprojection error vector for scipy.optimize.least_squares."""
     K, dist, rvecs, tvecs = _unpack_params(params, n_images)
     residuals = []
     for i in range(n_images):
@@ -183,7 +177,6 @@ def _calibrate_scipy_residuals(params, all_obj, all_img, n_images):
 
 
 def _calibrate_scipy(all_corners, all_ids, board, img_size):
-    """Joint intrinsic + extrinsic calibration via scipy Levenberg-Marquardt."""
     pairs = _build_obj_img_pairs(all_corners, all_ids, board)
     if pairs is None:
         return None

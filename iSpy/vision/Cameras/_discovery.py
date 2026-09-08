@@ -1,15 +1,3 @@
-"""Device discovery for OpenCV camera sources.
-
-Extracted from the old web module so that every camera source can enumerate
-what it can see. Discovery is platform-aware:
-
-- Linux: /dev/video* glob grouped by physical device (sysfs identity), with
-  v4l2 QUERYCAP capture-bit filtering and codec/radio/m2m node rejection.
-- Windows: the UVC device-class registry (same ordering MSMF uses for its
-  index assignments), with generic "USB Camera" names walked up to the parent
-  USB node to find the real device name.
-- Anything else (macOS ...): best-effort /dev/video glob + index probing.
-"""
 
 import contextlib
 import glob
@@ -23,15 +11,6 @@ import cv2
 
 @contextlib.contextmanager
 def _silence_stderr():
-    """Devnull fd 2 while a 3rd-party call prints straight to stderr.
-
-    Some OpenCV builds report V4L2 open failures (e.g. ``ioctl(VIDIOC_QUERYCAP):
-    Inappropriate ioctl for device`` on a Rockchip /dev/video* node that isn't a
-    capture camera) via perror() directly to fd 2, bypassing the env-controllable
-    logger - so OPENCV_LOG_LEVEL can't silence them. Redirecting fd 2 around the
-    call covers those AND any build that ignores the env vars. iSpy's own logging
-    is unaffected: it writes to the real stderr fd captured at boot.
-    """
     devnull = os.open(os.devnull, os.O_WRONLY)
     old_fd = os.dup(2)
     os.dup2(devnull, 2)
@@ -303,12 +282,6 @@ def _probe_index_devices(claimed):
 
 
 def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
-    """Enumerate the physical OpenCV camera sources currently connected.
-
-    ``claimed_sources`` is the set of sources already bound to configured
-    cameras; those are still returned (the UI marks them "active") but they are
-    not re-probed by the index loop.
-    """
     claimed = {str(s) for s in (claimed_sources or [])}
     devices = []
     system_name = platform.system()

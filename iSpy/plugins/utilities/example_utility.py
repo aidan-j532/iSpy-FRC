@@ -3,7 +3,6 @@ import logging
 from iSpy.plugins.bases import UtilityBase
 
 class YourUtility(UtilityBase):
-    """Example utility - copy this file to build your own."""
 
     plugin_name = "example_utility"
     template = True

@@ -1,10 +1,7 @@
-"""Base classes for iSpy add-ons."""
-
 import logging
 from abc import ABC, abstractmethod
 from iSpy.config.iSpyConfig import iSpyAddonConfig
 
-# settings types the add-on settings editor understands
 _SCHEMA_TYPES = ("text", "number", "toggle", "list")
 _SCHEMA_TYPE_FALLBACK = {
     bool: "toggle",
@@ -33,19 +30,10 @@ class StatusMixin:
 
 
 class AddonBase(StatusMixin):
-    # vision pipeline plugin_names this add-on is known to work with.
-    # None (default) means "works with any pipeline" - no compatibility
-    # warning is shown on the Add-ons page. Set a tuple of pipeline
-    # names to flag mismatches when a camera runs something else,
-    # e.g. supported_pipelines = ("object_detection",).
+    # Set to pipeline names to flag incompatible camera assignments.
     supported_pipelines: tuple | None = None
 
-    # Code Breakdown opt-in. Set breakdown_label to a short display name to
-    # include this add-on's per-tick work as its own series in the Metrics
-    # page "Code Breakdown" chart. Small add-ons can leave it None - they
-    # stay lumped into their aggregate (trackers/utilities/vision) and never
-    # show a row of their own. breakdown_color is an optional CSS color
-    # override; metrics picks one from its palette when left as None.
+    # Set a label to show this add-on as a separate Metrics series.
     breakdown_label: str | None = None
     breakdown_color: str | None = None
 
@@ -63,7 +51,6 @@ class AddonBase(StatusMixin):
             raw = raw if isinstance(raw, dict) else {}
             raw = iSpyAddonConfig(raw)
         self.config = raw
-        # merge schema defaults (absent keys only) so a config entry of {} still works
         for key, value in default_settings_from_schema(self.config_schema()).items():
             self.config.setdefault(key, value)
 
@@ -162,7 +149,6 @@ def validate_output_key(raw) -> tuple[str | None, str | None]:
 
 
 def find_duplicate_output_keys(utilities: dict) -> dict[str, list[str]]:
-    """map conflicting output_key -> [utility names] across enabled utilities."""
     seen: dict[str, list[str]] = {}
     for name, inst in utilities.items():
         declared = getattr(inst, "declared_output_key", lambda: None)()
@@ -190,13 +176,10 @@ class VisionBase(ABC):
         return {}
 
     def is_ready(self) -> tuple[bool, str]:
-        """(ready, status) checked every boot cycle. NEVER block on multi-minute
-        work - kick it off as a bg job and report status. defaults to ready."""
         return True, "ready"
 
     @classmethod
     def needs_model_backend(cls) -> bool:
-        """true if the pipeline needs a model/download/conversion and joins the readiness scan"""
         return False
 
     def start(self):

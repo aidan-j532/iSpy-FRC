@@ -1,10 +1,3 @@
-"""First-boot service: creates Config/config.json if missing, then exits.
-
-Run by ispy-first-boot.service (Type=oneshot, RemainAfterExit=yes) on every
-boot.  Idempotent - if Config/config.json already exists this is a no-op.
-Exit non-zero on failure so systemd reports the error and skips starting
-ispy.service.
-"""
 import logging
 import sys
 from pathlib import Path

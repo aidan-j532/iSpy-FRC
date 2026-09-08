@@ -68,12 +68,10 @@ _UNIT_LABELS = {
 
 
 def unit_to_inches(value: float, unit: str) -> float:
-    """Convert *value* from *unit* to inches (the internal math unit)."""
     return value * _UNIT_TO_INCHES.get(unit.lower().strip(), 1.0)
 
 
 def unit_label(unit: str) -> str:
-    """Return a short display label for *unit* (e.g. 'in', 'm', 'ft')."""
     return _UNIT_LABELS.get(unit.lower().strip(), unit)
 
 # legacy top-level keys folded into individual add-ons. (key, addon type,
@@ -403,14 +401,6 @@ class iSpyConfig:
             self.config.pop(legacy_key, None)
 
     def _migrate_legacy_vision_model(self, data: dict) -> None:
-        """Fold the legacy top-level 'vision_model' key into camera entries.
-
-        Old configs (pre restructure) kept model settings in a single top-level
-        ``vision_model`` dict which every model-backed camera consumed. The new
-        layout stores them per camera under ``pipeline.settings.vision_model``.
-        This is a one-way, idempotent migration: the top-level key is removed so
-        the next ``save()`` persists the new layout and the load never fails.
-        """
         vm = data.pop("vision_model", None)
         if not isinstance(vm, dict):
             return

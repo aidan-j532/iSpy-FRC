@@ -4,28 +4,6 @@ from iSpy.web.Backend.WebModule import WebModule
 
 
 class Viewer3DModule(WebModule):
-    """3D viewer backend.
-
-    Provides a generic overlay system so any add-on can contribute 3D objects
-    to the viewer without the viewer knowing about specific types.
-
-    Overlay format (JSON)::
-
-        {
-            "id": "unique_id",
-            "type": "box",           # renderer type
-            "x": 0, "y": 0, "z": 0, # position (field coords)
-            "roll": 0, "pitch": 0, "yaw": 0,
-            "label": "optional",
-            "color": "#4c8bf5",
-            "data": { ... }          # type-specific payload
-        }
-
-    Built-in renderer types:
-        box      -- data: {width, height, depth}
-        sphere   -- data: {radius}
-        group    -- data: {children: [...overlays...]}
-    """
 
     plugin_name = "viewer3d"
 
@@ -38,13 +16,10 @@ class Viewer3DModule(WebModule):
     # -- overlay API (called by add-ons) ----------------------------------
 
     def add_overlay(self, overlay_id: str, overlay: dict) -> None:
-        """Register or update an overlay.  Call from any add-on that has a
-        reference to this module (via ``context["vision_instance"].web_app``)."""
         overlay["id"] = overlay_id
         self._overlays[overlay_id] = overlay
 
     def remove_overlay(self, overlay_id: str) -> None:
-        """Remove a previously registered overlay."""
         self._overlays.pop(overlay_id, None)
 
     # -- routes ------------------------------------------------------------

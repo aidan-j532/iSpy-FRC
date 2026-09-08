@@ -1,18 +1,3 @@
-"""Select-and-track utility.
-
-Lets the web UI pick one tracked ``Object`` and keeps it selected. Selection
-itself is *shared state* that lives on the add-on context (``self.selection``,
-an ``iSpy.plugins.selection.SelectionState``), NOT on this utility - so any
-other add-on can read/set the currently selected target without depending on
-``target_selector``. This utility only owns the web routes and the
-NetworkTables publish surface for that shared state.
-
-The selected Object is published each tick under ``addon_data.<output_key>``
-so it can be wired to NetworkTables as a publish source. For a tracker to be
-selectable it must run first and give detections stable ``.id``s; this utility
-does not do its own merging, it only re-publishes one already-tracked object.
-"""
-
 import json
 import logging
 
@@ -130,11 +115,6 @@ class TargetSelector(UtilityBase):
 
     @staticmethod
     def _find_object(detections: list, selected_id: int):
-        """Locate a tracked Object by id, tolerating id-less fallback objects.
-
-        Trackers give detections stable ``.id``s; a plain (non-tracked)
-        detection or a list without a trailing tracker must never crash us.
-        """
         for det in detections:
             if not hasattr(det, "id"):
                 continue

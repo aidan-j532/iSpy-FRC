@@ -35,11 +35,6 @@ class MetricsModule(WebModule):
         self._start = time.perf_counter()
 
     def set_code_parts(self, parts: dict):
-        """Register extra Code Breakdown parts contributed by add-ons.
-
-        parts maps a unique key to ``(label, color)``. Called once at startup
-        once every addon/pipeline is loaded; safe to call again after a reload.
-        """
         for key, (label, color) in (parts or {}).items():
             if key in self._code_parts:
                 continue

@@ -115,11 +115,6 @@ class VisionPipeline(Camera, VisionBase):
 
     @staticmethod
     def serialize_detections(objects) -> list[dict]:
-        """Serialize a pipeline's Object list to the universal schema.
-
-        Pass-through for non-Object entries so partially-migrated consumers
-        keep working.
-        """
         return [
             o.to_dict() if hasattr(o, "to_dict") else o
             for o in (objects or [])
@@ -127,11 +122,6 @@ class VisionPipeline(Camera, VisionBase):
 
     @classmethod
     def serialize_frame_data(cls, frame_data: dict) -> dict:
-        """JSON-safe view of frame_data for web/NT consumers.
-
-        Detections are flattened to the universal schema; scalar metadata
-        (fps, pipeline_name, ...) is passed through unchanged.
-        """
         out = {
             k: v for k, v in frame_data.items()
             if isinstance(v, (int, float, str, bool)) or v is None
@@ -179,9 +169,6 @@ class VisionPipeline(Camera, VisionBase):
 
     @classmethod
     def requires_calibration(cls) -> bool:
-        """Whether this pipeline needs calibration configured before it will
-        emit (3D) detections. Defaults to 'any calibration_sections declared';
-        subclasses can override for finer control."""
         return bool(cls.calibration_sections)
 
     # ------------------------------------------------------------------
@@ -199,13 +186,9 @@ class VisionPipeline(Camera, VisionBase):
 
     @classmethod
     def hardware_options(cls) -> tuple[str, ...]:
-        """Every hardware target this pipeline can run on (empty = none)."""
         return cls.hardware
 
     def active_hardware(self) -> str | None:
-        """The hardware this pipeline's inference is currently using, or None
-        when it has no dedicated accelerator (its CPU usage is already shown
-        by the system CPU reading)."""
         return None
 
     @staticmethod
@@ -227,8 +210,6 @@ class VisionPipeline(Camera, VisionBase):
         return True
 
     def calibration_ready(self) -> bool:
-        """True when the pipeline may run: either it needs no calibration, or at
-        least one of its declared calibration sections is fully configured."""
         if not self.requires_calibration():
             return True
         config = getattr(self, "config", None)
@@ -246,9 +227,6 @@ class VisionPipeline(Camera, VisionBase):
         )
 
     def _calibration_processable(self) -> bool:
-        """Gate used at the top of run(): False means the camera goes back to a
-        plain frame feed until its required calibration exists. The calibration
-        wizard's live feed is always allowed through."""
         try:
             if self.in_calibration_mode():
                 return True
@@ -257,22 +235,9 @@ class VisionPipeline(Camera, VisionBase):
         return self.calibration_ready()
 
     def needs_calibration_to_run(self) -> bool:
-        """True when the pipeline **cannot produce meaningful output** without
-        calibration (e.g. pose models that need accurate 3D, or pipelines
-        whose detection math depends on camera intrinsics).
-
-        Returns False for pipelines that can still detect objects/tags/codes
-        without calibration — those show a yellow warning instead of blocking."""
         return True
 
     def calibration_status(self) -> tuple[str, str | None]:
-        """Classify calibration state for the UI dot + status text.
-
-        Returns one of:
-          ("ready", None)           — calibrated, green dot
-          ("yellow", message)       — uncalibrated but detection still runs
-          ("red", message)          — uncalibrated and pipeline is blocked
-        """
         if self.calibration_ready():
             return "ready", None
         if self.needs_calibration_to_run():
@@ -280,8 +245,6 @@ class VisionPipeline(Camera, VisionBase):
         return "yellow", "Needs Calibration for Better Accuracy"
 
     def _gate_uncalibrated(self, frame):
-        """run() top helper: returns ([], frame) passthrough when the pipeline
-        needs calibration that is not configured yet, else None."""
         level, msg = self.calibration_status()
         if level == "ready":
             return None

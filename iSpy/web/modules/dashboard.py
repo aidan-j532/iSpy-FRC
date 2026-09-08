@@ -62,16 +62,6 @@ _CORE_LOAD_RE = re.compile(r"Core\s*(\d+)\s*:\s*(\d+)\s*%")
 
 
 def _parse_npu_percent(text: str) -> int | None:
-    """Return a 0-100 utilization parsed from an RKNPU load file, or None.
-
-    Understands the formats seen in the wild:
-      * per-core debugfs  "NPU load:  Core0:  0%, Core1:  5%, Core2:  0%,"
-      * single aggregate "NPU load:  37%" (newer kernels)
-      * devfreq "load@freq" / bare integer where load is already a percent
-
-    Raw busy-clock counters (>100) are rejected - they are NOT percentages,
-    and clamping them produces the permanent-100% bug this replaces.
-    """
     text = (text or "").strip()
     if not text:
         return None
@@ -94,11 +84,6 @@ def _parse_npu_percent(text: str) -> int | None:
 
 
 def _npu_load_candidates() -> list[str]:
-    """Ordered, de-duplicated list of NPU load files to try.
-
-    Environment override wins, then glob-discovered devfreq/debugfs nodes
-    (covering fdab0000.npu, fdbb0000.npu, rknpu, ...), then literal fallbacks.
-    """
     override = os.environ.get(NPU_LOAD_PATHS_ENV, "").strip()
     if override:
         return [p.strip() for p in override.split(",") if p.strip()]
@@ -256,14 +241,6 @@ class DashboardModule(WebModule):
         }
 
     def _get_hardware(self) -> list[dict]:
-        """Aggregate each camera/pipeline's active hardware accelerator.
-
-        Pipelines with no dedicated accelerator (or not yet loaded) are
-        omitted so we don't double-report the CPU. Accelerators are grouped
-        by type (multiple cameras share one NPU/GPU), and each entry carries
-        a best-effort utilization reading for its progress bar. Returns
-        [{"hardware": "npu"|"tpu"|"gpu"|"cpu", "cameras": [...], "load_percent": int|None}]
-        """
         cams = self.context.get("cameras") or []
         grouped: dict[str, set[str]] = {}
         for cam in cams:
@@ -294,14 +271,6 @@ class DashboardModule(WebModule):
         return out
 
     def _read_hardware_load(self, hardware: str) -> int | None:
-        """Best-effort utilization (0-100) for a shared accelerator.
-
-        NPU: RKNPU sysfs exposes load through several files with different
-        formats depending on the distro kernel - see :meth:`_read_npu_load`.
-        GPU: NVIDIA reports via nvidia-smi (throttled to every ~2s so the
-        busy dashboard SSE doesn't spawn a subprocess per tick). Returns None
-        when the platform can't report utilization.
-        """
         hardware = str(hardware).lower()
         if hardware == "npu":
             return self._read_npu_load()
@@ -329,22 +298,6 @@ class DashboardModule(WebModule):
         return None
 
     def _read_npu_load(self) -> int | None:
-        """Best-effort RKNPU utilization (0-100), reading every source.
-
-        Rockchip (RK3588/RK3576/...) exposes NPU load through several files
-        whose format depends on the distro kernel. This reads each candidate
-        and favors the most trustworthy reading instead of trusting one:
-
-          * per-core debugfs (needs root): "NPU load:  Core0:  0%, Core1:  5%,
-            Core2:  0%," - averaged, most accurate.
-          * devfreq "load@freq": the value before "@" is usually already a
-            percentage; a raw busy-clock counter (>>100) is rejected rather
-            than clamped, since clamping is what makes the bar sit at 100%.
-          * bare integer in 0-100 or "N%" aggregate.
-
-        Results are cached for ~1s so the frequent SSE ticks don't hammer
-        sysfs. Returns None when no usable source can be read.
-        """
         now = time.monotonic()
         if self._npu_load_cache and now - self._npu_load_cache[0] < 1.0:
             return self._npu_load_cache[1]

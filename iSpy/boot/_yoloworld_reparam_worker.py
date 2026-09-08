@@ -1,26 +1,3 @@
-"""Subprocess worker that reparameterizes YOLO World weights.
-
-YOLO World's ``YOLOWorld.set_classes`` / ``YOLO.save`` bakes a text prompt's
-class vocabulary into a fixed-vocab ``.pt`` at build time. That step needs the
-AGPL-3.0 ``ultralytics`` package, which must never load inside the network
-serving process (the vision loop), so it runs in this isolated subprocess --
-the same pattern ``_convert_worker.py`` uses for model conversion.
-
-The produced ``.pt`` is a plain fixed-vocab detector that the on-device loader
-(``load_yolo_pt`` / ``GenericYolo``) consumes at runtime with NO Ultralytics
-dependency; Ultralytics is only required in a build environment.
-
-Usage::
-
-    python -m iSpy.boot._yoloworld_reparam_worker <args.json>
-
-``<args.json>``::
-
-    {"weights": str, "classes": [str, ...], "output_path": str}
-
-On success writes ``<args.json>.result.json`` with ``{"result": "<output>"}``;
-on failure writes ``{"error": "..."}`` and exits non-zero.
-"""
 
 import sys
 import json

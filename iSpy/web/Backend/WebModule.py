@@ -8,12 +8,6 @@ _MIN_FREE_BYTES = 100 * 1024 * 1024
 
 
 def ensure_disk_space(dest: Path, required_bytes: int = 0) -> str | None:
-    """Reject writes that would leave < _MIN_FREE_BYTES free on *dest*.
-
-    Returns an error string when the write should be refused, or None when
-    there is (apparently) enough room. Checked before an upload handler writes
-    a payload so a full disk can never truncate a model/dataset/plugin mid-save.
-    """
     try:
         target = Path(dest)
         if not target.exists():

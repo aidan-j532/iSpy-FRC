@@ -227,8 +227,6 @@ class iSpy:
         metrics.set_code_parts(parts)
 
     def _reset_frame_processor_times(self):
-        """Zero the per-tick accumulators before the vision stage runs so each
-        frame processor's Code Breakdown series only reflects this tick."""
         for processor in self.frame_processors.values():
             if self._addon_breakdown_parts(processor):
                 processor._last_code_seconds = 0.0
@@ -245,13 +243,6 @@ class iSpy:
         return parts if isinstance(parts, dict) else {}
 
     def _merge_frame_processor_times(self, code_times: dict) -> float:
-        """Collect per-processor Code Breakdown timings recorded by the cameras
-        during the vision stage (base.get_frame self-times opted-in processors).
-
-        Returns the total measured time so callers can subtract it from the
-        aggregate "vision" slice (opted-in processors move out of the vision
-        lump into their own series).
-        """
         total = 0.0
         for name, processor in self.frame_processors.items():
             parts = self._addon_breakdown_parts(processor)

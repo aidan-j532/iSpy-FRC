@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 
 def setup_camera_exposure(cap):
-    """Enables auto-exposure and resets baseline brightness/contrast on hardware."""
     # CAP_PROP_AUTO_EXPOSURE value definitions vary by OS/driver:
     # 3 (or 0.75) typically forces Auto Mode on V4L2 / DirectShow
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3) 
@@ -13,10 +12,6 @@ def setup_camera_exposure(cap):
     cap.set(cv2.CAP_PROP_CONTRAST, 128)
 
 def optimize_frame_for_detection(frame):
-    """
-    Converts frame to grayscale and applies Contrast Limited Adaptive Histogram 
-    Equalization (CLAHE) to boost AprilTag border readability dynamically.
-    """
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     return clahe.apply(gray)

@@ -236,7 +236,6 @@ class OpticalFlowPipeline(VisionPipeline):
         return True, self.get_status()
 
     def needs_calibration_to_run(self) -> bool:
-        """Optical flow runs without calibration — only velocity scale is approximate."""
         return False
 
     def run(self):

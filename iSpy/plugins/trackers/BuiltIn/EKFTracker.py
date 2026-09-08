@@ -1,13 +1,3 @@
-"""Kalman-filtered object tracker add-on.
-
-A drop-in alternative to ``ObjectTracker``: it merges detections into an
-existing track the same way (distance + same-class gating), but smooths the
-track's position with a constant-velocity Kalman filter instead of an EMA.
-Only *one* tracker add-on is enabled per camera, so this never conflicts with
-``ObjectTracker``. The filter math lives in ``KalmanTrack``; this class is the
-plugin / lifecycle wrapper.
-"""
-
 import logging
 import time
 
@@ -185,12 +175,6 @@ class EKFTracker(TrackerBase):
         return False
 
     def _extrapolate_missing(self):
-        """Velocity-extrapolate tracks that saw no measurement this tick.
-
-        Only nudges the Object's position while it is still within the stale
-        threshold; the Kalman filter itself is NOT advanced here so a later
-        re-observation re-syncs with the measured position cleanly.
-        """
         now = time.monotonic()
         for obj in self.tracked_objects:
             entry = self._filters.get(obj.id)

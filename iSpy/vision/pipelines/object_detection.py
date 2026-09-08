@@ -249,11 +249,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
     @staticmethod
     def _parse_object_heights(raw) -> dict[str, float]:
-        """Normalize the object_heights pipeline setting to {class_name: inches}.
-
-        Accepts a list of {"class_name", "height_in"} rows (UI form), a plain
-        {class_name: height} dict, or a JSON string of either.
-        """
         if not raw:
             return {}
         if isinstance(raw, str):
@@ -395,8 +390,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         return True
 
     def needs_calibration_to_run(self) -> bool:
-        """Pose models need calibration for accurate 3D — block (red).
-        Detect-only models can run without calibration — warn (yellow)."""
         vm_cfg = self.config.get_pipeline_setting("vision_model")
         task = "detect"
         if isinstance(vm_cfg, dict):

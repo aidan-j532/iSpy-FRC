@@ -1,11 +1,3 @@
-"""Camera sources: anything that produces video frames.
-
-Mirrors the pipeline registry. Each camera source is a class in
-``iSpy/vision/Cameras/`` that implements the :class:`CameraBase` contract and
-declares a unique ``camera_type``. :func:`create_camera` picks the class by
-``camera_type`` and instantiates it - exactly like ``create_pipeline`` picks a
-pipeline by name. Adding a new source is just a new class in this folder.
-"""
 
 from copy import deepcopy
 
@@ -26,12 +18,10 @@ CAMERA_TYPE_LABELS = {
 
 
 def get_camera_classes() -> dict[str, type[CameraBase]]:
-    """All registered camera-source classes, keyed by ``camera_type``."""
     return dict(BUILTIN_CAMERAS)
 
 
 def get_camera_class(camera_type: str | None = None) -> type[CameraBase]:
-    """Return the camera-source class for ``camera_type`` (default opencv)."""
     if camera_type is None:
         camera_type = "opencv"
     cls = BUILTIN_CAMERAS.get(camera_type)
@@ -50,17 +40,6 @@ def create_camera(
     camera_type: str | None = None,
     camera_source=None,
 ):
-    """Instantiate the camera source for ``camera_config``.
-
-    Source selection (first match wins):
-
-    - explicit ``camera_type`` argument,
-    - ``camera_type`` key in the camera config,
-    - otherwise the default ``opencv`` source.
-
-    ``camera_source`` overrides the ``source`` key when given (used by the web
-    UI when a discovered camera is picked).
-    """
     if isinstance(camera_config, dict):
         config = iSpyCameraConfig(deepcopy(camera_config))
     else:

@@ -90,7 +90,6 @@ class QRCodePipeline(VisionPipeline):
         self._set_status("ready")
 
     def needs_calibration_to_run(self) -> bool:
-        """QR detection works without calibration — only pose is approximate."""
         return False
 
     def _focal_length_px_fov(self, img_w: int) -> float:

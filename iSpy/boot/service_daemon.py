@@ -14,11 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 def _setup_log_file() -> None:
-    """Append daemon logs to the same Outputs/log.txt the boot process uses.
-
-    Best-effort: cwd is the project root under the systemd unit; fall back to
-    the repo root derived from this module's location for other launch modes.
-    """
     try:
         log_file = Path.cwd() / "Outputs" / "log.txt"
         if not log_file.parent.is_dir():

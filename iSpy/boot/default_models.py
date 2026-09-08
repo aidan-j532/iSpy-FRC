@@ -1,5 +1,3 @@
-"""Download the default models on boot."""
-
 import logging
 from pathlib import Path
 

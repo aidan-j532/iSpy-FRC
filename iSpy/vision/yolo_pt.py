@@ -1,4 +1,3 @@
-"""Small dependency-free loader for the YOLO-style .pt files iSpy uses."""
 
 from __future__ import annotations
 
@@ -15,7 +14,6 @@ import torch.nn as nn
 # The pickle expects these Ultralytics module names.
 
 def autopad(k, p=None, d=1):
-    """Same padding helper: pad so a k-stride kernel keeps the spatial size."""
     if d > 1:
         k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]
     if p is None:
@@ -52,7 +50,6 @@ class Bottleneck(nn.Module):
 
 
 class C2f(nn.Module):
-    """CSP bottleneck with two convolutions."""
 
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__()
@@ -71,14 +68,6 @@ class C2f(nn.Module):
 
 
 class C3(nn.Module):
-    """CSP bottleneck with 3 convolutions (Ultralytics ``C3``).
-
-    Both ``cv1`` and ``cv2`` project the input to ``c_`` hidden channels; the
-    bottleneck chain ``m`` runs on ``cv1``'s branch and the ``cv3`` fuses the
-    concatenation. **Not** a C2f-style chunk topology: this structural split is
-    required so that pickled C3k instances (whose attributes follow C3) forward
-    correctly.
-    """
 
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         super().__init__()
@@ -95,13 +84,6 @@ class C3(nn.Module):
 
 
 class C3k(C3):
-    """YOLOv11/v26 C3k block - Ultralytics' ``C3k(C3)`` variant.
-
-    Replaces the inherited bottleneck chain with ``k x k`` bottlenecks but keeps
-    the C3 topology (cv1/cv2 project to c_, cv3 fuses). The pickled instance
-    attributes of YOLO11/v26 pose/detect checkpoints follow exactly this
-    structure, so the forward rebuilt here must not assume any C2f-style split.
-    """
 
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k=3):
         super().__init__(c1, c2, n, shortcut, g, e)
@@ -112,14 +94,12 @@ class C3k(C3):
 
 
 class DWConv(Conv):
-    """Depth-wise convolution."""
 
     def __init__(self, c1, c2, k=1, s=1, d=1, act=True):
         super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), d=d, act=act)
 
 
 class C3k2(C2f):
-    """CSP bottleneck used by YOLO11/v26-family checkpoints."""
 
     def __init__(
         self,
@@ -147,7 +127,6 @@ class C3k2(C2f):
 
 
 class Attention(nn.Module):
-    """Multi-head self-attention for PSABlock."""
 
     def __init__(self, dim, num_heads=8, attn_ratio=0.5):
         super().__init__()
@@ -175,7 +154,6 @@ class Attention(nn.Module):
 
 
 class PSABlock(nn.Module):
-    """Position-sensitive attention block."""
 
     def __init__(self, c, attn_ratio=0.5, num_heads=4, shortcut=True):
         super().__init__()
@@ -190,7 +168,6 @@ class PSABlock(nn.Module):
 
 
 class C2PSA(nn.Module):
-    """C2PSA block with stacked PSABlock modules."""
 
     def __init__(self, c1, c2, n=1, e=0.5):
         super().__init__()
@@ -209,7 +186,6 @@ class C2PSA(nn.Module):
 
 
 class SPPF(nn.Module):
-    """Spatial Pyramid Pooling - Fast."""
 
     def __init__(self, c1, c2, k=5, n=3, shortcut=False):
         super().__init__()
@@ -227,7 +203,6 @@ class SPPF(nn.Module):
 
 
 class Concat(nn.Module):
-    """Concatenate a list of tensors along a dimension."""
 
     def __init__(self, dimension=1):
         super().__init__()
@@ -238,7 +213,6 @@ class Concat(nn.Module):
 
 
 class DFL(nn.Module):
-    """Distribution Focal Loss layer; decodes the box-distribution channels."""
 
     def __init__(self, c1=16):
         super().__init__()
@@ -253,24 +227,10 @@ class DFL(nn.Module):
 
 
 def _make_keypoint_conv(c1, c2, k=1):
-    """Create a keypoint convolution head.
-    
-    YOLOv8 Pose head outputs 4 (xyxy) + num_classes + num_keypoints * keypoint_dims
-    The keypoints are decoded from the last channels.
-    """
     return Conv(c1, c2, k)
 
 
 class PoseModel(nn.Module):
-    """YOLO pose *model* wrapper (mirrors Ultralytics' ``nn.tasks.PoseModel``).
-
-    The pickle reconstructs the whole pose model into this type. Like
-    ``DetectionModel``, the real graph lives in ``self.model`` (an
-    ``nn.Sequential`` whose last entry is a :class:`Pose` head). ``forward``
-    runs the layer ladder exactly like Ultralytics' ``_predict_once``; the
-    head decodes boxes + keypoints. Pose metadata (``names``, ``nc``,
-    ``kpt_shape``, ``task``) is carried through from the checkpoint.
-    """
 
     def __init__(self, *args, **kwargs):
         super().__init__()
@@ -287,7 +247,6 @@ class PoseModel(nn.Module):
 
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
-    """Build the anchor points / stride tensor for the given feature maps."""
     anchor_points, stride_tensor = [], []
     dtype, device = feats[0].dtype, feats[0].device
     for i in range(len(feats)):
@@ -302,7 +261,6 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
 
 
 def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
-    """Transform distance (ltrb) predictions to boxes."""
     lt, rb = distance.chunk(2, dim)
     x1y1 = anchor_points - lt
     x2y2 = anchor_points + rb
@@ -314,7 +272,6 @@ def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
 
 
 def xywh2xyxy(x):
-    """Convert [x, y, w, h] to [x1, y1, x2, y2]."""
     y = x.clone()
     y[..., 0] = x[..., 0] - x[..., 2] / 2  # top left x
     y[..., 1] = x[..., 1] - x[..., 3] / 2  # top left y
@@ -324,7 +281,6 @@ def xywh2xyxy(x):
 
 
 def _scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xywh=False):
-    """Rescale boxes (in-image coords) to the original image shape."""
     if ratio_pad is None:
         gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])
         pad = (
@@ -356,7 +312,6 @@ def non_max_suppression(
     nc=80,
     agnostic=False,
 ):
-    """Torch-only NMS producing [x1, y1, x2, y2, conf, cls] per detection."""
     bs = prediction.shape[0]
     xc = prediction[..., 4:4 + nc].max(2).values  # max class score per anchor
     output = [torch.zeros((0, 6), device=prediction.device) for _ in range(bs)]
@@ -423,14 +378,6 @@ def _torch_nms(boxes, scores, iou_thres):
 
 
 def _pose_nms(prediction, kpts, conf_thres, nc, num_keypoints, keypoint_dims):
-    """Pose NMS returning detections and per-box keypoint arrays aligned in index.
-
-    ``prediction`` is [B, N, 4+nc] with xyxy boxes and class scores; ``kpts`` is
-    [B, nk, N] where nk = num_keypoints * keypoint_dims (already decoded, in
-    input-space coordinates). Returns ``(dets, kp_out)`` where each ``kp_out[xi]``
-    is [N_keep, num_keypoints, keypoint_dims] in input-space, index-aligned with
-    ``dets[xi]``.
-    """
     bs = prediction.shape[0]
     max_det = 300
     dets = [torch.zeros((0, 6), device=prediction.device) for _ in range(bs)]
@@ -473,7 +420,6 @@ def _pose_nms(prediction, kpts, conf_thres, nc, num_keypoints, keypoint_dims):
 
 
 def _scale_keypoints(kpts, img0_shape, ratio, pad):
-    """Rescale keypoints [N, K, dims] from letterbox input-space to original."""
     gain = ratio
     pad_x, pad_y = pad
     kpts = kpts.clone()
@@ -483,7 +429,6 @@ def _scale_keypoints(kpts, img0_shape, ratio, pad):
 
 
 class Detect(nn.Module):
-    """YOLOv8 detection head (box cv2, class cv3, DFL decode)."""
 
     dynamic = False
     export = False
@@ -559,7 +504,6 @@ class Detect(nn.Module):
 
 
 class Pose(Detect):
-    """YOLO Pose head for keypoint models."""
 
     def __init__(self, nc=80, kpt_shape=(17, 3), reg_max=16, end2end=False, ch=()):
         super().__init__(nc, reg_max, end2end, ch)
@@ -607,11 +551,6 @@ class Pose(Detect):
 
 
 class DetectionModel(nn.Module):
-    """Marker class: the pickle reconstructs the whole graph into this type.
-
-    ``forward`` runs the module ladder exactly like Ultralytics' _predict_once
-    (perform layer i, feed stored activations into Concat/neck by index).
-    """
 
     def __init__(self, *args, **kwargs):
         super().__init__()
@@ -700,8 +639,6 @@ def _register_shim():
 
 
 class _Det:
-    """A single detection box, mirroring Ultralytics' per-box object enough for
-    GenericYolo._convert_ultralytics_to_results (`.xyxy`, `.conf`, `.cls`)."""
 
     def __init__(self, xyxy, conf, cls):
         self._xyxy = xyxy  # CPU torch tensor [4]
@@ -722,7 +659,6 @@ class _Det:
 
 
 class _Boxes:
-    """Iterable container of :class:`_Det`, matching the surface GenericYolo consumes."""
 
     def __init__(self, det, device=None):
         # det: [N, 6] (x1,y1,x2,y2,conf,cls) tensor already in orig coords
@@ -763,14 +699,12 @@ class _Boxes:
 
 
 class _Keypoints:
-    """Minimal keypoints container (data: [N, K, 2 or 3])."""
 
     def __init__(self, data):
         self.data = data.to("cpu")
 
 
 class _Result:
-    """A single-image result, mirroring Ultralytics' Results surface."""
 
     def __init__(self, boxes, keypoints, orig_shape):
         self.boxes = boxes
@@ -780,13 +714,6 @@ class _Result:
 
 
 class YoloPT:
-    """Dependency-free YOLOv8 detection/pose model.
-
-    Mirrors the Ultralytics YOLO surface iSpy relies on: ``.task``, ``.names``,
-    ``.nc``, ``.imgsz``, ``.model``, ``.to()``, and ``(model)(frames, ...)``
-    returning a list of ``_Result`` with ``.boxes`` / ``.keypoints`` /
-    ``.orig_shape``.
-    """
 
     def __init__(self, model: DetectionModel, names: dict, task: str, nc: int, imgsz: int = 640):
         self.model = model
@@ -908,7 +835,6 @@ def cv2_copyMakeBorder(img, top, bottom, left, right, pad):
 
 
 def load_yolo_pt(path: str, task: str = "detect", verbose: bool = False) -> YoloPT:
-    """Load a YOLOv8 detection checkpoint (.pt) without Ultralytics."""
     register_shim()
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     model = ckpt.get("model", ckpt)
@@ -950,7 +876,6 @@ def load_yolo_pt(path: str, task: str = "detect", verbose: bool = False) -> Yolo
 
 
 def register_shim():
-    """Build and install the Ultralytics-namespace shim (idempotent)."""
     if "ultralytics.nn.tasks" in sys.modules:
         return
     _register_shim()

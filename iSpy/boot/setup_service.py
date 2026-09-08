@@ -24,12 +24,6 @@ MDNS_HOSTNAME_ENV = "ISPY_MDNS_HOSTNAME"
 
 
 def _board_identifier() -> str:
-    """Stable string unique to this physical board.
-
-    Prefers /etc/machine-id (persists across reboots); falls back to the
-    first physical MAC address from sysfs, then the OS hostname. Used only to
-    salt the mDNS hostname, never for anything security-sensitive.
-    """
     for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
         try:
             with open(path) as f:
@@ -57,14 +51,6 @@ def _board_identifier() -> str:
 
 
 def default_mdns_hostname() -> str:
-    """Unique per-board mDNS hostname: ``ispy-<id>``.
-
-    Two coprocessors on the same field network must not both claim
-    ``ispy.local``; the suffix is stable across reboots and OS re-installs
-    (MAC-derived when machine-id is absent), so every board advertises its
-    own ``ispy-<hex>.local``. Override with ISPY_MDNS_HOSTNAME to force a
-    specific name.
-    """
     override = os.environ.get(MDNS_HOSTNAME_ENV, "").strip()
     if override:
         return override
@@ -73,10 +59,6 @@ def default_mdns_hostname() -> str:
 
 
 def setup_mdns(hostname: str | None = None) -> None:
-    """Make the board reachable at http://<hostname>.local
-
-    Defaults to a unique per-board name (default_mdns_hostname()).
-    """
     hostname = hostname or default_mdns_hostname()
     platform_kind = get_platform()
 
@@ -114,13 +96,6 @@ def setup_mdns(hostname: str | None = None) -> None:
 
 
 def _setup_mdns_macos(hostname: str | None = None) -> None:
-    """macOS ships Bonjour natively - just set the Bonjour hostname via scutil.
-
-    No daemon install needed. scutil --set HostName sets the "real" hostname;
-    ComputerName/LocalHostName control what shows up in Finder/Bonjour. We set
-    all three so <hostname>.local resolves consistently and the Sharing prefpane
-    shows something sane.
-    """
     hostname = hostname or default_mdns_hostname()
     current = run(["scutil", "--get", "LocalHostName"], check=False).stdout.strip()
     if current == hostname:
@@ -144,12 +119,6 @@ def _setup_mdns_macos(hostname: str | None = None) -> None:
     print(f"mDNS ready - board will be reachable at http://{hostname}.local:5000")
 
 def _configure_dhcp_hostname(hostname: str) -> None:
-    """Best-effort: configure DHCP client to advertise hostname.
-
-    Routers that publish DHCP client hostnames into local DNS will then
-    resolve ``<hostname>`` (without .local) — useful for Windows clients
-    that lack Bonjour/mDNS.  Failures are non-fatal.
-    """
     # Try dhcpcd first (common on Raspberry Pi OS / Armbian).
     dhcpcd_conf = "/etc/dhcpcd.conf"
     if os.path.exists(dhcpcd_conf):
@@ -220,19 +189,12 @@ def get_platform():
 
 
 def _make_python() -> str:
-    """Capture the interpreter this install will bake into the units.
-
-    Also persists it to the repo-root marker so watchdog.py and
-    service_daemon.py can spawn children with the exact same interpreter
-    later, instead of independently re-resolving sys.executable.
-    """
     python = sys.executable
     record_python(python)
     return python
 
 
 def setup_first_boot_service(project_root: str | None = None) -> None:
-    """Write and enable the ispy-first-boot.service oneshot unit."""
     python = _make_python()
     workdir = project_root or os.getcwd()
 
@@ -271,15 +233,6 @@ WantedBy=multi-user.target
 
 
 def _service_user() -> str:
-    """Pick the user the iSpy.service unit should run as.
-
-    iSpy used to hardcode user='pi', which broke on Orange Pi ('orangepi'),
-    Ubuntu ('ubuntu'), and any other SBC image. Resolution order:
-      1. root + SUDO_USER set (installer ran under sudo) -> that user
-      2. root (no sudo wrapper) -> "root"
-      3. the invoking user
-      4. "pi" as a last resort
-    """
     if hasattr(os, "geteuid"):
         try:
             if os.geteuid() == 0:

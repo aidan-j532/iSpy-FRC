@@ -17,7 +17,6 @@ class DatasetManager(UtilityBase):
         pass
 
     def update(self, frame_data: dict):
-        """Store frame data with timestamp and optional annotations."""
         key = self.declared_output_key()
         if not key:
             return False

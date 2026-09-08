@@ -184,14 +184,6 @@ _RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
 }
 
 def _detect_rknn_target_platform() -> str | None:
-    """Return the detected Rockchip SoC, or None when it cannot be determined.
-
-    An explicit override via ISPY_RKNN_TARGET_PLATFORM always wins (users
-    who know the board do not have to rely on device-tree heuristics).
-    Returning None instead of a silent 'rk3588' default is deliberate: the
-    caller stamps a visible warning and puts it in the metadata sidecar so a
-    wrong-target artifact can never be produced unnoticed (Day 6).
-    """
     override = os.environ.get("ISPY_RKNN_TARGET_PLATFORM", "").strip().lower()
     if override:
         logger.info(
@@ -231,12 +223,6 @@ def _detect_rknn_target_platform() -> str | None:
 
 
 def _resolve_rknn_target_platform() -> tuple[str, bool]:
-    """(target_platform, detected) for RKNN builds.
-
-    When the SoC cannot be detected the build falls back to 'rk3588' but the
-    failure is made unmissable: a hard print (surfaces in the conversion log
-    the UI streams), a logger warning, and a metadata sidecar stamp via
-    _export_rknn_metadata. Set ISPY_RKNN_TARGET_PLATFORM to opt out."""
     target = _detect_rknn_target_platform()
     if target:
         return target, True

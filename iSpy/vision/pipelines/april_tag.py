@@ -102,7 +102,6 @@ class AprilTagPipeline(VisionPipeline):
         self._set_status("ready")
 
     def needs_calibration_to_run(self) -> bool:
-        """Block detection until the declared ChArUco calibration is present."""
         return True
 
     def _focal_length_px_fov(self, img_w: int) -> float:

@@ -1,19 +1,3 @@
-"""Compatibility facade over the camera-source classes in ``Cameras/``.
-
-The real frame machinery now lives in ``iSpy/vision/Cameras/`` (see
-``CameraBase``, ``OpenCVCamera`` and ``TelloCamera``). ``Camera`` is kept as a
-self-delegating proxy so pipelines, the vision loop, the web module and all
-existing tests keep working without renames:
-
-- constructing ``Camera(...)`` builds the right camera source (picked from the
-  config's ``camera_type``) and stores it as ``self._delegate``,
-- every attribute read falls through to the delegate via ``__getattr__``
-  (``frame``, ``cap``, ``get_frame()``, ``calibration_*``, ...),
-- writes forward to the delegate when the source owns that attribute, so the
-  source's own state (``stopped``, ``cap``, ...) is shared - pipeline-private
-  attributes that the source never defines stay local to the pipeline instance.
-"""
-
 import time
 
 from iSpy.vision.Cameras import create_camera
@@ -23,12 +7,6 @@ from iSpy.vision.Object import Object
 
 
 class Camera:
-    """A camera *source* facade: each instance wraps a real ``Cameras/`` source.
-
-    Kept source-agnostic so pipelines branch by ``camera_type`` only when they
-    care, and never need to know which class actually produces the frames.
-    """
-
     _CALIBRATION_HEARTBEAT_TIMEOUT = 10.0
 
     # Real class-level methods - needed by schema/discovery tooling and by

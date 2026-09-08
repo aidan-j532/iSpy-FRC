@@ -125,12 +125,6 @@ def _camera_present(cam_cfg: dict, probed_ids: set, probed_paths: set,
 
 
 def cleanup_missing_cameras(config: iSpyConfig) -> None:
-    """Boot-time cleanup: retire configured cameras whose hardware is gone.
-
-    A retired camera's full entry is stashed in Save/camera_profiles.json under
-    its device_id - the same store the web ui reads when re-adding a device -
-    so plugging it back in and re-creating it restores the previous settings.
-    """
     cams = {
         k: v for k, v in (config.get("camera_configs") or {}).items()
         if isinstance(v, dict)
@@ -468,8 +462,6 @@ def _any_camera_uses_csi() -> bool:
 
 
 def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    """Attach the flags shared between `python -m iSpy.boot.boot` and the
-    `ispy` CLI (iSpy.cli), so both entry points stay in lockstep."""
     parser.add_argument("-s", "--service", action="store_true",
                          help="Install and start the watchdog service")
     parser.add_argument("-w", "--wait", action="store_true",

@@ -39,8 +39,6 @@ _open_worker_live = 0
 
 
 class CameraBase:
-    """Base camera source."""
-
     camera_type = "generic"
 
     _PLACEHOLDER_W = 640
@@ -81,21 +79,10 @@ class CameraBase:
 
     @classmethod
     def config_schema(cls) -> dict:
-        """Schema describing which config keys configure this camera source.
-
-        Mirrors the pipeline config_schema() convention: {key: {...field}}.
-        Consumed by the web UI to render the per-source field section.
-        """
         return {}
 
     @classmethod
     def discover(cls, claimed_sources: set | None = None) -> list[dict]:
-        """Enumerate the sources this camera type can currently see.
-
-        Returns a list of ``{"path", "name", "device_id", ...}`` dicts suitable
-        for the web discovery endpoint. Defaults to nothing - only sources that
-        can actually be enumerated override it.
-        """
         return []
 
     def __init__(
@@ -452,7 +439,6 @@ class CameraBase:
         self._frame_processors = []
 
     def _attempt_reconnect(self) -> bool:
-        """Try to open the capture device; keep searching if it's absent."""
         if self.stopped:
             return False
         try:
@@ -511,12 +497,6 @@ class CameraBase:
             return False
 
     def _sleep_stopping(self, seconds: float, poll: float) -> bool:
-        """Sleep, but abort early when `stopped` so destroy() join is reliable.
-
-        Returns False once stopping has begun (caller should return from the
-        reader loop). Makes a leaked reader stop promptly instead of polling a
-        bogus source (e.g. /dev/video99) through interpreter shutdown.
-        """
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             if self.stopped:

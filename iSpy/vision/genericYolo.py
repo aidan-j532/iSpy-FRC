@@ -17,30 +17,6 @@ import zipfile
 
 
 def torch_load(path, trusted: bool = True):
-    """Load an Ultralytics-style ``.pt`` checkpoint without Ultralytics.
-
-    Registers the dependency-free namespace shim (see :mod:`iSpy.vision.yolo_pt`)
-    so ``torch.load`` can reconstruct the model graph from our re-implemented
-    blocks, then returns the raw loaded object (dict or ``nn.Module``) exactly as
-    :func:`load_yolo_pt` does internally.
-
-    ``trusted`` selects how far the pickle is allowed to run:
-
-    * ``True`` (default) - the historical behaviour: ``torch.load`` with
-      ``weights_only=False``, i.e. full pickle execution. This is appropriate
-      for checkpoints already sitting on disk, where the operator (or the
-      train/export toolchain that produced the file) is the party executing.
-      The runtime inference path keeps using this.
-    * ``False`` - restricted unpickling via ``weights_only=True``. The
-      checkpoint is first scanned for the pickled globals it references; each
-      one is allowed **only** if it resolves to a dependency-free shim class,
-      a plain ``torch.nn`` data container/layer, or a torch builtin. Arbitrary
-      pickle payloads (``__reduce__`` gadgets that reach ``os.system`` / ``eval``
-      / ``subprocess`` / ``__import__``, ...) are never in that set and raise a
-      ``pickle.UnpicklingError`` instead of executing. This is what the model
-      *upload* path uses, so a user-supplied ``.pt`` bytes cannot run code on
-      the web server before it is validated.
-    """
     from iSpy.vision.yolo_pt import register_shim
     register_shim()
     if not trusted:
@@ -52,12 +28,6 @@ def torch_load(path, trusted: bool = True):
 
 
 def _checkpoint_pickle_bytes(path) -> bytes:
-    """Return the pickle payload of a ``.pt`` file.
-
-    torch-zip archives keep the object graph in a ``data.pkl`` entry; legacy
-    single-file checkpoints are the pickle (plus possibly trailing tensor data)
-    outright. Anything we cannot read as a checkpoint is rejected.
-    """
     if zipfile.is_zipfile(str(path)):
         with zipfile.ZipFile(str(path)) as zf:
             entry = next((n for n in zf.namelist() if n.endswith("data.pkl")), None)
@@ -71,24 +41,6 @@ def _checkpoint_pickle_bytes(path) -> bytes:
 
 
 def _safe_globals_for_checkpoint(raw: bytes):
-    """Build the ``(obj, full_path)`` allowlist entries a checkpoint needs.
-
-    We sweep the pickle opcodes for every ``GLOBAL`` it references and allow
-    each one only if it is:
-
-    * already handled by ``torch``'s own ``weights_only`` defaults (which are
-      safe by construction), or
-    * ``builtins.getattr`` (used by some YOLOv11-family checkpoints; see
-      ``_resolve_safe_global`` for why this is a controlled exception), or
-    * a dependency-free shim class, matched by its ``ultralytics.*`` namespace
-      (see ``_resolve_safe_global``), or
-    * a plain ``torch.nn`` class resolved from the installed torch.
-
-    Anything else fails the upload. The returned list is passed to
-    :func:`torch.serialization.add_safe_globals` and torch's restricted
-    unpickler then refuses to touch a single other global - the pickle can only
-    ever reach the objects we vetted above.
-    """
     try:
         globals_in_file = set()
         waiting_stack_global = 0
@@ -145,7 +97,6 @@ def _torch_global_path(module: str) -> str:
 
 
 def _resolve_safe_global(module: str, name: str):
-    """Resolve one pickled global to an object we permit (or a sentinel)."""
     from iSpy.vision.yolo_pt import register_shim
     from torch._utils import NAME_MAPPING, IMPORT_MAPPING
 
@@ -253,8 +204,6 @@ except ImportError:
     RKNN_FOUND = False
 
     class RKNNLite:
-        """Dummy RKNNLite class for when rknnlite is not installed.
-        Allows tests to mock this attribute."""
         def __init__(self, *args, **kwargs):
             raise RuntimeError("RKNNLite not available - rknnlite not installed")
 

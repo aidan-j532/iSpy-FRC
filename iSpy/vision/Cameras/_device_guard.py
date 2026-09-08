@@ -1,4 +1,3 @@
-"""Best-effort cleanup for cameras held by other Linux processes."""
 
 import logging
 import os
@@ -27,12 +26,6 @@ def _is_linux() -> bool:
 
 
 def _devnode(target) -> Path:
-    """Coerce a camera source into a /dev/videoN devnode path.
-
-    Accepts an integer index (0 -> /dev/video0), an already-absolute device
-    path (/dev/video99), or a ("v4l2", path) tuple. Returns None when the
-    source is not a local v4l2 devnode we can reason about.
-    """
     if isinstance(target, str) and target.startswith("/dev/video"):
         return Path(target)
     if isinstance(target, tuple) and len(target) == 2 and target[0] == "v4l2":
@@ -51,7 +44,6 @@ def _process_cmdline(pid: int) -> str:
 
 
 def _is_ispy_process(cmdline: str) -> bool:
-    """True when the holder is iSpy itself or one of the pre-spawned helpers."""
     if not cmdline:
         return False
     low = cmdline.lower()
@@ -61,7 +53,6 @@ def _is_ispy_process(cmdline: str) -> bool:
 
 
 def _own_pids() -> set:
-    """The current process plus every ancestor (the iSpy launch chain)."""
     pids = set()
     pid = os.getpid()
     while pid and pid > 1:
@@ -91,7 +82,6 @@ def _holders_via_fuser(devnode: Path) -> list[int]:
 
 
 def _holders_via_proc(devnode: Path) -> list[int]:
-    """Scan /proc/*/fd for a fd whose target is the given devnode."""
     try:
         dev_str = str(devnode)
     except Exception:
@@ -143,12 +133,6 @@ def _killable(pid: int) -> bool:
 
 
 def free_camera_device(target, log_noop: bool = False) -> list[int]:
-    """Free a camera devnode by killing any non-iSpy holder.
-
-    Returns the PIDs that were killed. ``target`` is the camera source (int
-    index, "/dev/videoN", or a ("v4l2", path) tuple). Only meaningful on Linux
-    for real devnodes - everything else is a no-op.
-    """
     if not _is_linux():
         return []
     devnode = _devnode(target)

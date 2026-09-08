@@ -276,7 +276,6 @@ def _is_host_reachable(host: str, timeout: int = 3) -> bool:
         return False
 
 def _search_fallback_allowed() -> bool:
-    """Search-engine HTML scraping is opt-in (ISPY_ALLOW_SEARCH_FALLBACK=1)."""
     return os.environ.get(_SEARCH_FALLBACK_ENV, "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -656,7 +655,6 @@ def add_validate_images(
 
 
 def _find_train_images(ds: Path) -> list[Path]:
-    """Calibration images only - the internal valid/ split is excluded."""
     return [
         p for p in _find_images(ds)
         if "valid" not in p.relative_to(ds).parts

@@ -1,23 +1,15 @@
-"""Any device OpenCV can read frames from - USB webcams, RTSP/HTTP streams,
-static image files, camera indices.
-
-This is the classic iSpy camera. ``source`` may be an integer device index, a
-``/dev/video*`` path, an ``rtsp://``/``http://`` URL or an image file path.
-"""
 
 from iSpy.vision.Cameras import _discovery
 from iSpy.vision.Cameras.base import CameraBase
 
 
 class OpenCVCamera(CameraBase):
-    """An OpenCV camera source (USB device, index, stream URL or image)."""
 
     camera_type = "opencv"
     plugin_name = "opencv"
 
     @classmethod
     def config_schema(cls) -> dict:
-        """Config keys that configure *this* camera source + its tuning."""
         source_help = (
             "Device index (0), a /dev/video* path, an rtsp:// or http:// "
             "stream URL, or a static image file path."
@@ -94,5 +86,4 @@ class OpenCVCamera(CameraBase):
 
     @classmethod
     def discover(cls, claimed_sources: set | None = None) -> list[dict]:
-        """Enumerate the OpenCV sources currently connected."""
         return _discovery.probe_opencv_devices(claimed_sources)

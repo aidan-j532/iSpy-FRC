@@ -101,22 +101,6 @@ class HealthModule(WebModule):
         }, healthy
 
     def _collect_addon_health(self) -> list:
-        """Collect health rows from vision pipelines and utilities.
-
-        Only vision pipelines and utilities may contribute to the Health tab;
-        trackers and frame processors don't get a row. Each contributor
-        returns a dict::
-
-            {
-                "color": "green" | "yellow" | "red",   # preset, their choice
-                "state": str,                           # their own state text
-                "metrics": [{"label", "value"}, ...],   # live values, cycled
-            }
-
-        The legacy {"ok", "title", "info", "rows"} shape is still honored so
-        older add-ons degrade gracefully instead of breaking the page.
-        Contributors that raise are reported as a red "error" row.
-        """
         vision = self.context.get("vision_instance")
         collected = []
         groups = []

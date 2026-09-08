@@ -22,9 +22,6 @@ def _is_local_request() -> bool:
 
 
 def require_local_or_token(f):
-    """Decorator: allow the request if it originates from localhost OR carries
-    a valid X-iSpy-Admin-Token header matching the ISPY_ADMIN_TOKEN env var.
-    If ISPY_ADMIN_TOKEN is not set, only local requests are permitted."""
     @wraps(f)
     def wrapper(*args, **kwargs):
         if _is_local_request():
@@ -148,7 +145,6 @@ def _build_vision_pipeline_payloads():
 
 
 def _active_pipeline_names(config) -> set:
-    """pipeline plugin_names currently assigned to at least one camera"""
     names = set()
     try:
         cameras = getattr(config, "camera_configs", None) or {}
@@ -270,13 +266,6 @@ class PluginStatusModule(WebModule):
         return jsonify(available=available)
 
     def _publish_sources(self):
-        """Selectable NetworkTables publish sources.
-
-        Core frame_data sources plus every enabled utility's DECLARED
-        output_key (from its configured/schema output_key setting) as
-        addon_data.<key> - declared outputs are listed even before the
-        utility has produced its first value.
-        """
         config = self.context.get("config")
         addon_sources = []
         try:

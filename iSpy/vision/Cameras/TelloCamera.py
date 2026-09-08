@@ -1,12 +1,3 @@
-"""A DJI Tello / Tello Edu camera source.
-
-Only differs from :class:`OpenCVCamera` in how the capture device is opened:
-it first negotiates with the drone over its UDP command socket (``command`` +
-``streamon``) so that the video stream is actually running, then hands the
-``udp://`` source to OpenCV through the FFmpeg backend. Everything else
-(reader thread, placeholder frame, automatic reconnection while the drone is
-absent, image adjustments) is inherited.
-"""
 
 import logging
 import socket
@@ -39,16 +30,6 @@ _QUICK_COMMAND_TIMEOUT_S = 1.5
 
 
 class TelloCamera(OpenCVCamera):
-    """Camera source for a DJI Tello / Tello Edu.
-
-    The video source is a URL (default ``udp://0.0.0.0:<video_port>``). The
-    drone's command socket is configurable through the camera config::
-
-        "camera_type": "tello",
-        "tello_ip": "192.168.10.1",
-        "tello_command_port": 8889,
-        "tello_video_port": 11111
-    """
 
     camera_type = "tello"
     plugin_name = "tello_edu"
@@ -58,7 +39,6 @@ class TelloCamera(OpenCVCamera):
 
     @classmethod
     def config_schema(cls) -> dict:
-        """Config keys that configure the Tello connection + its tuning."""
         return {
             "source": {
                 "type": "text",
@@ -206,11 +186,6 @@ class TelloCamera(OpenCVCamera):
             return False
 
     def _ensure_stream(self, quick: bool = False) -> bool:
-        """Turn the drone's video stream on so the UDP feed is live.
-
-        Retries the handshake a few times - the drone only answers once it is
-        ready, and a freshly-connected access point can be slow to respond.
-        """
         retries = _QUICK_HANDSHAKE_RETRIES if quick else _HANDSHAKE_RETRIES
         timeout = _QUICK_COMMAND_TIMEOUT_S if quick else _COMMAND_TIMEOUT_S
         for attempt in range(retries):

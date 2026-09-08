@@ -1,15 +1,3 @@
-"""Restored boot-time unit-test subset (Day 5).
-
-The regression subset that runs during `validate_system` / boot. Modules
-are covered by `tests/` in the pytest suite; this file keeps a real,
-fast, dependency-light subset runnable in the `iSpy.validations`
-discovery used by `ez.unit_tests()` and `validate_system.run_unit_tests()`.
-
-Hardware backends (rknnlite, tflite_runtime, torch, scipy) are faked at
-import time so tests behave identically on any machine. Ultralytics is
-not faked: it is never a runtime dependency (only an optional build-time
-exporter), so nothing imports it at module load.
-"""
 import os
 import sys
 import threading
@@ -97,7 +85,6 @@ class _FakeTensorIOMode:
 
 
 class _FakeEngineContext:
-    """Mimics trt.IExecutionContext just enough for GenericYolo._run_engine."""
 
     def __init__(self, shapes, output_name):
         self._shapes = dict(shapes)
@@ -545,15 +532,6 @@ class TestModelMetadata(unittest.TestCase):
 # ─── Pose-checkpoint regression (BUG 1) ──────────────────────────────────────
 
 class TestPosePtRegression(unittest.TestCase):
-    """Real _default_pose.pt load + inference regression.
-
-    The import-time fake 'torch' shim above cannot load a real ``.pt``, so
-    this class swaps the REAL torch package back in (when the machine has it
-    installed) and re-imports yolo_pt against it. Guards the C3k topology
-    regression: a v26 pose checkpoint's C3k instances must forward through the
-    C3-style graph (cv1/cv2 -> c_ channels, cv3 fuses), not a C2f chunk.
-    Machines without torch skip the test.
-    """
 
     _yolo_pt = None
 
@@ -604,7 +582,6 @@ class TestPosePtRegression(unittest.TestCase):
 # ─── validate_system() regression (BUG 2) ────────────────────────────────────
 
 class TestValidateSystemRegression(unittest.TestCase):
-    """A failing validator must flip validate_system() to False."""
 
     def test_broken_model_file_path_flips_validate_system_to_false(self):
         from iSpy.validations.validate_system import validate_system
@@ -627,7 +604,6 @@ class TestValidateSystemRegression(unittest.TestCase):
 # ─── object_detection pipeline config-normalization regression (BUG 6) ───────
 
 class _QuietLogging:
-    """Temporarily silence INFO/DEBUG logs during pipeline construction."""
 
     def __init__(self):
         self._stack = ExitStack()
@@ -646,13 +622,6 @@ class _QuietLogging:
 
 
 class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
-    """BUG 6: fill_missing_config raising ValueError must not skip the camera.
-
-    A malformed metadata sidecar (e.g. ``nc: not_an_int``) makes
-    fill_missing_config raise ValueError before the GenericYolo block. The
-    pipeline must still construct (self.model is None) so the camera shows an
-    error status instead of silently vanishing from self.cameras.
-    """
 
     @staticmethod
     def _restore_scipy_optimize(had_optimize, prior_optimize):
@@ -762,12 +731,6 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
 
 
 class TestEKFTracker(unittest.TestCase):
-    """F1: the EKF tracker smooths a constant-velocity target's position.
-
-    Feeds a synthetic target moving at constant velocity with Gaussian
-    position noise and asserts the Kalman-smoothed track's RMSE to the true
-    path is lower than the raw noisy measurements' RMSE.
-    """
 
     def _make_tracker(self):
         from iSpy.plugins.trackers.BuiltIn.EKFTracker import EKFTracker
@@ -836,7 +799,6 @@ class TestEKFTracker(unittest.TestCase):
 
 
 class TestSelectionState(unittest.TestCase):
-    """F2a: the shared selection primitive must be a standalone, modular class."""
 
     def test_basic_lifecycle(self):
         from iSpy.plugins.selection import SelectionState
@@ -860,11 +822,6 @@ class TestSelectionState(unittest.TestCase):
 
 
 class TestTargetSelector(unittest.TestCase):
-    """F2a: target_selector reads/publishes the selected tracked Object.
-
-    Selection state lives on the shared context (SelectionState), not on the
-    utility - the utility only publishes and owns the web routes.
-    """
 
     def _make_selector(self, reacquire_timeout_s: float = 1.0,
                        output_key: str = "selected_target"):
@@ -928,8 +885,6 @@ class TestTargetSelector(unittest.TestCase):
 # ─── calibration gating: yellow vs red (detection vs pose) ──────────────────
 
 class TestCalibrationGating(unittest.TestCase):
-    """Uncalibrated detect pipelines run with a yellow warning; pose pipelines
-    block (red) until calibration exists."""
 
     @staticmethod
     def _restore_scipy_optimize(had_optimize, prior_optimize):
@@ -976,7 +931,6 @@ class TestCalibrationGating(unittest.TestCase):
             return ObjectDetectionPipeline(cam_cfg, config)
 
     def test_detect_uncalibrated_is_yellow_and_runs(self):
-        """Detect-task model without calibration -> yellow warning, not blocked."""
         camera = self._build_detect_pipeline("detect")
         try:
             level, msg = camera.calibration_status()
@@ -988,7 +942,6 @@ class TestCalibrationGating(unittest.TestCase):
             camera.destroy()
 
     def test_pose_uncalibrated_is_red_and_blocks(self):
-        """Pose-task model without calibration -> red warning, pipeline blocked."""
         camera = self._build_detect_pipeline("pose")
         try:
             level, msg = camera.calibration_status()
@@ -1004,7 +957,6 @@ class TestCalibrationGating(unittest.TestCase):
             camera.destroy()
 
     def test_calibrated_detect_is_green(self):
-        """A calibrated pipeline (fov > 0) reports ready, not yellow."""
         from iSpy import vision as _vision
         scipy_optimize = types.ModuleType("scipy.optimize")
         scipy_optimize.least_squares = MagicMock()

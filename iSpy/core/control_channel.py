@@ -1,13 +1,3 @@
-"""Local control channel between the service daemon and the vision process.
-
-The vision subprocess opens a loopback TCP server on start and publishes its
-port in Outputs/service_state.json. VisionSupervisor connects to send
-PAUSE/RESUME/SHUTDOWN instead of writing to the subprocess's stdin pipe.
-
-Protocol: newline-delimited command per connection; the server replies
-"OK\\n" or "ERR <reason>\\n" and closes. Only loopback connections are
-accepted.
-"""
 
 import json
 import logging
@@ -35,12 +25,6 @@ def read_service_state() -> dict:
 
 
 def update_service_state(**fields) -> None:
-    """Merge-write fields into the shared state file.
-
-    Both processes write to this file (the daemon owns status/pid/last_error,
-    the vision process owns control_port), so each side merges into whatever
-    is currently on disk instead of overwriting the whole document.
-    """
     path = state_file_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,8 +38,6 @@ def update_service_state(**fields) -> None:
 
 
 class ControlServer:
-    """In-process TCP server executing control commands via callbacks."""
-
     def __init__(self, handlers: dict[str, callable]):
         self._handlers = handlers
         self._server: socket.socket | None = None
@@ -137,7 +119,6 @@ class ControlServer:
 
 
 def send_command(cmd: str, port: int, timeout: float = 3.0) -> tuple[bool, str]:
-    """Send a single command to a ControlServer. Returns (ok, detail)."""
     cmd = cmd.strip().upper()
     if cmd not in COMMANDS:
         return False, f"unknown command {cmd!r}"
@@ -160,8 +141,6 @@ def send_command(cmd: str, port: int, timeout: float = 3.0) -> tuple[bool, str]:
 
 
 class SupervisorControlClient:
-    """Daemon-side handle to the vision process's control channel."""
-
     def __init__(self, stale_after_s: float = 30.0):
         self._stale_after_s = stale_after_s
         self._cached_port: int | None = None

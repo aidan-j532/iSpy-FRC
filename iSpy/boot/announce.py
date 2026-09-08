@@ -1,15 +1,3 @@
-"""UDP broadcast announcer for iSpy board discovery.
-
-Beams a small UDP packet on the local subnet every ~5 seconds so that
-tools/find_ispy.py (and similar clients) can find the board even when
-mDNS (.local) and DHCP hostname resolution both fail.
-
-The packet is:
-    b"ISPY_DISCOVER:" + json({"hostname": <str>, "ip": <str>, "port": 5000})
-
-This module can be run as a standalone service (``python -m iSpy.boot.announce``)
-or imported and started in a background thread via :func:`start_announcer`.
-"""
 import json
 import logging
 import socket
@@ -27,7 +15,6 @@ WEB_PORT = 5000                 # iSpy Flask default
 
 
 def _local_ip() -> str:
-    """Return the preferred outbound IP without sending any traffic."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("10.255.255.255", 1))
@@ -43,7 +30,6 @@ def _hostname() -> str:
 
 
 def _broadcast_addr(ip: str) -> str:
-    """Derive the broadcast address for a /24 subnet."""
     parts = ip.split(".")
     if len(parts) != 4:
         return "255.255.255.255"
@@ -52,7 +38,6 @@ def _broadcast_addr(ip: str) -> str:
 
 
 def build_payload() -> bytes:
-    """Build the announce payload bytes."""
     data = {
         "hostname": _hostname(),
         "ip": _local_ip(),
@@ -62,7 +47,6 @@ def build_payload() -> bytes:
 
 
 def send_announcement(sock: socket.socket, payload: bytes) -> None:
-    """Send one broadcast datagram."""
     ip = _local_ip()
     bcast = _broadcast_addr(ip)
     try:
@@ -72,7 +56,6 @@ def send_announcement(sock: socket.socket, payload: bytes) -> None:
 
 
 def announce_loop(stop_event: threading.Event | None = None) -> None:
-    """Blocking loop that broadcasts every BROADCAST_INTERVAL_S seconds."""
     stop = stop_event or threading.Event()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -90,10 +73,6 @@ def announce_loop(stop_event: threading.Event | None = None) -> None:
 
 
 def start_announcer(daemon: bool = True) -> threading.Event:
-    """Start the announce loop in a background thread.
-
-    Returns a :class:`threading.Event` that can be set to stop the announcer.
-    """
     stop_event = threading.Event()
     t = threading.Thread(target=announce_loop, args=(stop_event,), daemon=daemon)
     t.start()
@@ -101,7 +80,6 @@ def start_announcer(daemon: bool = True) -> threading.Event:
 
 
 def main() -> None:
-    """Standalone entry point for running as a systemd service."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",

@@ -1,12 +1,3 @@
-"""pip-installable `ispy` command line entry point (`setup` / `start`).
-
-Thin wrappers around iSpy.boot.boot.on_boot() so the pre-existing
-`python -m iSpy.boot.boot [-f]` invocation keeps working exactly as-is for
-anyone with it in a systemd unit, install script, or docs. Helpers beyond
-setup/start (status, stop, ...) are intentionally out of scope - the service
-daemon already exposes those over HTTP (`/service/*`).
-"""
-
 import argparse
 import logging
 import os

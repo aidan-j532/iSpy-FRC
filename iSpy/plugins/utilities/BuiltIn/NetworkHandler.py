@@ -112,11 +112,6 @@ class NetworkTableHandler(UtilityBase):
         return self.inst.isConnected()
 
     def get_health(self) -> dict:
-        """Contribute a NetworkTables row to the Health tab.
-
-        Implemented via the optional add-on health hook so the core Health
-        page no longer hard-codes NetworkTables.
-        """
         connected = self.isConnected()
         ip = self.config.get("network_tables_ip", "10.0.0.2")
         return {
@@ -177,7 +172,6 @@ class NetworkTableHandler(UtilityBase):
         self._update_viewer_overlay(frame_data)
 
     def _publish_entry(self, entry: dict, frame_data: dict):
-        """Publish a single configured entry to NetworkTables."""
         name = entry.get("name", "")
         source = entry.get("source", "")
         nt_topic = entry.get("nt_topic", name)
@@ -207,13 +201,6 @@ class NetworkTableHandler(UtilityBase):
             self.logger.error("Failed to publish '%s': %s", name, e)
 
     def _publish_json(self, value, nt_topic: str):
-        """Publish arbitrary structured data as a single JSON-string topic.
-
-        Every pipeline flattens its detections to the universal schema, so a
-        list of Objects JSON-serializes cleanly; robot code only needs to parse
-        one string topic. Any value that can't be serialized is dropped with a
-        warning instead of crashing the vision loop.
-        """
         try:
             encoded = json.dumps(self._json_value(value), default=str)
         except (TypeError, ValueError) as e:
@@ -224,7 +211,6 @@ class NetworkTableHandler(UtilityBase):
         self._send_data(encoded, nt_topic, "VisionData")
 
     def _json_value(self, value):
-        """Convert pipeline objects into the shared JSON output schema."""
         if hasattr(value, "to_dict"):
             return self._json_value(value.to_dict())
         if isinstance(value, dict):
@@ -234,12 +220,6 @@ class NetworkTableHandler(UtilityBase):
         return value
 
     def _publish_auto(self, value, nt_topic: str):
-        """Publish with automatic scalar type detection.
-
-        bool must be tested before int (bool is a subclass of int). Dicts,
-        lists, tuples, and anything else non-scalar fall back to a JSON
-        string - arbitrary values are never turned into NT4 structs.
-        """
         if isinstance(value, bool):
             self._send_data(bool(value), nt_topic, "VisionData")
         elif isinstance(value, (int, float)):
@@ -258,12 +238,6 @@ class NetworkTableHandler(UtilityBase):
             self._send_data(encoded, nt_topic, "VisionData")
 
     def _resolve_source(self, source: str, frame_data: dict):
-        """Resolve a dotted source key against frame_data.
-
-        Supports dotted paths like ``debug_data.fps`` and utility outputs
-        via ``addon_data.<output_key>``, plus special-case ``detections``
-        which returns the raw detection list.
-        """
         if source == "detections":
             return frame_data.get("detections", [])
 
@@ -284,12 +258,6 @@ class NetworkTableHandler(UtilityBase):
         return self._tables[table_name]
 
     def _send_detections(self, detections: list):
-        """Publish detections as struct[] using the universal output schema.
-
-        Every entry is flattened via Object.to_dict() (or passed through if
-        already a schema dict), so ANY pipeline's output -- object detection,
-        april tags, qr codes, optical flow, depth -- publishes identically.
-        """
         table = self._get_table("VisionData")
         pub_key = "pub/VisionData/vision_data"
         structs = []
@@ -332,7 +300,6 @@ class NetworkTableHandler(UtilityBase):
     # -- viewer overlay ----------------------------------------------------
 
     def _update_viewer_overlay(self, frame_data: dict):
-        """Push a robot overlay to the 3D viewer via the generic overlay API."""
         if self._viewer is None:
             return
         pose = frame_data.get("robot_pose")

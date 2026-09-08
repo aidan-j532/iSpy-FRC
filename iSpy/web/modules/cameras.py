@@ -1733,7 +1733,6 @@ class CamerasModule(WebModule):
         return jsonify(devices=devices)
 
     def _sources(self):
-        """Return all discoverable camera sources, grouped by camera_type."""
         claimed = set()
         config = self.context.get("config")
         if config:
@@ -1755,8 +1754,6 @@ class CamerasModule(WebModule):
         )
 
     def _probe_devices(self):
-        """Delegate to the OpenCVCamera discovery logic so the module-level
-        test mock in test_boot_camera_cleanup.py continues to work."""
         with self.lock:
             claimed = {s for s in self.sources.values() if s}
         return OpenCVCamera.discover(claimed_sources=claimed)

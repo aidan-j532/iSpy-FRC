@@ -1,24 +1,3 @@
-"""Shared optimization/model-backend machinery for model-backed pipelines.
-
-Model-backed pipelines (object_detection, yolo_world, depth_anything) all
-need the same pieces: optimization settings in their config schema, target
-format resolution, a "should we build an optimized artifact" check and a
-background build runner. This module extracts that machinery into one mixin
-so a fix lands everywhere at once instead of being hand-duplicated three
-times.
-
-Subclasses set these attributes in __init__ BEFORE calling anything here:
-
-    self.logger            logging.Logger
-    self.quantize          bool   - int8 quantization requested
-    self._auto_opt         bool|str - optimize requested; a str may be a
-                              concrete target format ("onnx"/"engine"/...) or a
-                              truthy/falsy word (legacy auto_opt folded in)
-    self._requested_format str    - explicit target format or "auto"
-    self._target_format    str|None    - resolved lazily, leave None
-    self._optimizing       bool        - build in flight, leave False
-    self._optimize_error   str|None    - last build failure, leave None
-"""
 
 import logging
 from pathlib import Path
@@ -33,7 +12,6 @@ SUPPORTED_TARGET_FORMATS = ("onnx", "rknn", "tflite", "openvino", "engine", "cor
 
 
 class OptimizableModelPipeline:
-    """Mixin for pipelines backed by a convertible/quantizable model."""
 
     #: extra config-schema keys surfaced by get_optimization_options()
     _OPT_OPTIONS_EXTRA: tuple[str, ...] = ()
@@ -64,17 +42,6 @@ class OptimizableModelPipeline:
         return True
 
     def active_hardware(self) -> str | None:
-        """Resolve the hardware this pipeline's loaded model is running on.
-
-        Priority:
-          1. unambiguous runtime descriptors (model_type tpu/rknn)
-          2. the active model file's format (engine/coreml/openvino/tflite/
-             onnx/pytorch)
-          3. the raw-model device (yolo / bare torch model on CUDA -> gpu)
-
-        Returns None when no dedicated accelerator is identifiable (its CPU
-        usage is already reported by the system CPU reading).
-        """
         model = getattr(self, "model", None)
         mt = getattr(model, "model_type", None)
         if mt == "tpu":
@@ -120,11 +87,6 @@ class OptimizableModelPipeline:
         input_size_help: str = "Letterbox resolution used for the optimized "
                                "model conversion and inference.",
     ) -> dict:
-        """Common optimization fields shared by every model-backed pipeline.
-
-        model_size stays per-pipeline (each downloads different weight sets);
-        everything here has identical semantics across pipelines.
-        """
         schema = {
             "optimize": {
                 "type": "select",
@@ -231,14 +193,6 @@ class OptimizableModelPipeline:
     # ------------------------------------------------------------------
 
     def _optimization_requested(self) -> bool:
-        """True when an optimized artifact should exist and be active.
-
-        Honors both current keys (quantize/optimize) and legacy aliases
-        (quantized/auto_opt); subclasses reading a vision_model block get
-        that block checked too. optimize/auto_opt can be a boolean or a
-        string: "auto", "onnx", etc. are truthy; "off" or False
-        are falsy.
-        """
         if bool(getattr(self, "quantize", False)):
             return True
         auto_opt = getattr(self, "_auto_opt", False)
@@ -264,13 +218,6 @@ class OptimizableModelPipeline:
 
     @staticmethod
     def _normalize_auto_opt(raw_optimize) -> bool | str:
-        """Normalize the optimize/auto_opt setting.
-
-        Can be a boolean, or a string: "auto", "onnx", etc. (format
-        selectors), "off"/"false"/"0" (disabled), or "true"/"yes"/"on" (auto).
-        A bare truthy boolean means "auto". Returns the raw format string
-        when a concrete format is given, else a bool.
-        """
         if raw_optimize is None:
             return False
         if isinstance(raw_optimize, str):
@@ -285,12 +232,6 @@ class OptimizableModelPipeline:
         return bool(raw_optimize)
 
     def _auto_opt_to_target_format(self) -> str | None:
-        """Resolve the _auto_opt string value to a concrete target format.
-
-        When _auto_opt is a string like "onnx" or "engine", return it directly.
-        When _auto_opt is True or "auto", return None (caller should use
-        recommended_format()). When _auto_opt is False/"off", return None.
-        """
         auto_opt = getattr(self, "_auto_opt", False)
         if isinstance(auto_opt, str):
             val = auto_opt.lower().strip()
