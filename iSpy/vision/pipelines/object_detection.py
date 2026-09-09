@@ -21,6 +21,7 @@ from iSpy.vision.genericYolo import Box, GenericYolo, ModelFileError, Results
 from iSpy.vision.Object import Object
 from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
+from iSpy.vision._safe_imports import ensure_torch_imported
 
 
 class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
@@ -252,6 +253,9 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 self._cam_name,
                 self._target_format_cached(),
             )
+            # import torch now so the bg thread doesn't race the main thread's
+            # scipy.stats -> torch import (partial module / clobbered logging)
+            ensure_torch_imported()
             threading.Thread(
                 target=self._optimize_runner,
                 daemon=True,

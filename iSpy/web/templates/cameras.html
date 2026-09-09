@@ -898,12 +898,12 @@ async function openCameraModal(mode, arg) {
         showTimeWarning({
           header: 'YOLO World selected',
           duration: 5,
-          description: 'YOLO World is not recommended for gameplay - inference latency may be high.',
+          description: 'YOLO World is not recommended for gameplay - detection may be poor, and latency may be high.',
           continueMessage: 'I understand',
         });
       } else {
         warnEl.className = 'pill warning-pill';
-        warnEl.textContent = 'YOLO World not recommended for gameplay - inference latency may be high';
+        warnEl.textContent = 'YOLO World not recommended for gameplay - detection may be poor, and latency may be high.';
         setTimeout(() => {
           warnEl.textContent = '';
           warnEl.className = 'pill warning-pill hidden';

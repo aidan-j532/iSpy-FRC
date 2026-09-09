@@ -15,6 +15,7 @@ from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline, SUPPORTED_TARGET_FORMATS
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
+from iSpy.vision._safe_imports import ensure_torch_imported
 
 _WORLD_MODEL_DIR = Path(__file__).resolve().parents[3] / "YoloModels" / "pytorch"
 
@@ -158,6 +159,9 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 "Camera '%s': optimization requested - building %s artifact",
                 self.config.get("name", "?"), self._target_format_cached(),
             )
+            # import torch now so the bg thread doesn't race the main thread's
+            # scipy.stats -> torch import (partial module / clobbered logging)
+            ensure_torch_imported()
             threading.Thread(
                 target=self._optimize_runner,
                 daemon=True,

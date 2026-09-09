@@ -21,6 +21,11 @@ def main():
 
     out_path = Path(sys.argv[1] + ".result.json")
     try:
+        # import torch first (also repairs the logging tables rknn tools clobber)
+        from iSpy.vision._safe_imports import ensure_torch_imported
+
+        ensure_torch_imported()
+
         # lazy import so a bad args file fails fast without paying the
         # (possibly absent-in-this-env) ultralytics import cost
         from ultralytics import YOLOWorld, YOLO  # optional build-time tool (AGPL)

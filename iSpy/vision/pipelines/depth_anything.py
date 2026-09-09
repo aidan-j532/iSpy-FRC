@@ -10,6 +10,7 @@ from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
+from iSpy.vision._safe_imports import ensure_torch_imported, import_rknnlite
 
 _DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 _DEPTH_INPUT_SIZE = 518
@@ -188,6 +189,9 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
                 "Camera '%s': optimization requested - building %s artifact",
                 self.config.get("name", "?"), self._target_format_cached(),
             )
+            # import torch now so the bg thread doesn't race the main thread's
+            # scipy.stats -> torch import (partial module / clobbered logging)
+            ensure_torch_imported()
             threading.Thread(
                 target=self._optimize_runner,
                 daemon=True,
@@ -645,9 +649,9 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
                 finally:
                     rknn.release()
 
-            from rknnlite.api import RKNNLite
+            from iSpy.vision._safe_imports import import_rknnlite
 
-            rknn_lite = RKNNLite(verbose=False)
+            rknn_lite = import_rknnlite()(verbose=False)
             if rknn_lite.load_rknn(str(rknn_path)) != 0:
                 raise RuntimeError(f"Failed to load RKNN model: {rknn_path}")
             if rknn_lite.init_runtime() != 0:

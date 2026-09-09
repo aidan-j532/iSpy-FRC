@@ -10,6 +10,11 @@ def main():
     with open(sys.argv[1]) as f:
         args = json.load(f)
 
+    # import torch first (also repairs the logging tables rknn tools clobber)
+    from iSpy.vision._safe_imports import ensure_torch_imported
+
+    ensure_torch_imported()
+
     # lazy import so a bad args file fails fast w/o paying boot.py's heavy import cost
     from iSpy.vision.optimizer import convert_model
 

@@ -206,23 +206,32 @@
         btn.addEventListener('click', finish);
         overlay.addEventListener('click', e => e.stopPropagation());
 
+        const endTime = Date.now() + duration * 1000;
+
         function update() {
-          if (remaining > 0) {
-            timerEl.textContent = fmt(remaining);
-            barEl.style.width = Math.max(0, (remaining / duration) * 100) + '%';
-            btn.textContent = continueMessage + ' (' + remaining + ')';
-            remaining -= 1;
-          } else {
+          const remainingMs = Math.max(0, endTime - Date.now());
+          const remaining = Math.ceil(remainingMs / 1000);
+
+          timerEl.textContent = fmt(remaining);
+          barEl.style.width = duration
+            ? (remainingMs / (duration * 1000) * 100) + '%'
+            : '0%';
+
+          if (remainingMs <= 0) {
             timerEl.textContent = '0s';
             barEl.style.width = '0%';
             btn.disabled = false;
             btn.textContent = continueMessage;
-            clearInterval(tick); tick = null;
+            clearInterval(tick);
+            tick = null;
             btn.focus();
           }
         }
+
+        btn.addEventListener('click', finish);
+
         update();
-        if (duration > 0) tick = setInterval(update, 1000);
+        if (duration > 0) tick = setInterval(update, 100);
       }
 
       window.showTimeWarning = function (opts) {

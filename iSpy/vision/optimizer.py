@@ -1207,8 +1207,13 @@ def _convert_rknn(
                 onnx_path = raw_onnx
 
     try:
+        from iSpy.vision._safe_imports import repair_standard_log_levels
+        repair_standard_log_levels()
         from rknn.api import RKNN
 
+        # rknn toolkits clobber the logging level-name table on import - put
+        # the canonical names back so a later torch import can't blow up
+        repair_standard_log_levels()
         warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
     except ImportError:
         raise ImportError(

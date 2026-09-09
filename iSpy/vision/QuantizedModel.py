@@ -186,7 +186,11 @@ def ensure_onnx_model(
     force=False,
     dataset_path=None,
 ):
-    import torch
+    # repair the logging tables (rknnlite may have clobbered them) and pull
+    # torch in once, before any export work starts
+    from iSpy.vision._safe_imports import ensure_torch_imported
+
+    ensure_torch_imported()
     import torch.nn as nn
 
     if hasattr(input_size, "__iter__"):

@@ -162,7 +162,10 @@ def _validate_model_file(path: str) -> None:
         raise ModelFileError(f"Model file '{p}' is only {size} bytes - empty or truncated")
 
 try:
-    from rknnlite.api import RKNNLite
+    # rknnlite clobbers stdlib logging level names on import, which breaks
+    # torch's setLevel('WARNING') bootstrap later - use the guarded importer
+    from iSpy.vision._safe_imports import import_rknnlite
+    RKNNLite = import_rknnlite()
     warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
 
     RKNN_FOUND = True
