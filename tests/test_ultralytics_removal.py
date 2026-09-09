@@ -9,7 +9,21 @@ from unittest import mock
 import cv2
 import numpy as np
 
-from iSpy.vision.yolo_pt import load_yolo_pt, register_shim, YoloPT
+# torch is a build-time dependency ([dev] / [optimizer] extras), not a runtime
+# one - deploy boards install without it. Skip rather than report a false pass:
+# without torch these assertions are satisfied by the ModuleNotFoundError
+# itself, so they would go green without exercising anything.
+try:
+    import torch  # noqa: F401
+
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
+
+requires_torch = unittest.skipUnless(_HAS_TORCH, "torch is not installed")
+
+if _HAS_TORCH:
+    from iSpy.vision.yolo_pt import load_yolo_pt, register_shim, YoloPT
 from iSpy.vision.genericYolo import GenericYolo, torch_load
 from iSpy.vision.metadata import metadata_from_pt
 from iSpy.vision.ModelInspector import _inspect_ultralytics
@@ -31,6 +45,7 @@ def _make_noise_frame() -> np.ndarray:
     return (rng.rand(480, 640, 3) * 255).astype(np.uint8)
 
 
+@requires_torch
 class UltralyticsRemovalTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

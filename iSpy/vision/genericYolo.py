@@ -6,8 +6,12 @@ import numpy as np
 from iSpy.vision.ModelInspector import fill_missing_config
 import threading
 import queue
-import torch
 import warnings
+# NOTE: torch is deliberately NOT imported at module scope. It is a build-time
+# dependency ([dev]/[optimizer] extras), not a runtime one - deploy boards run
+# `pip install .` and infer through RKNN/ONNX/TFLite without it. A top-level
+# import here makes `import iSpy.vision.pipelines` fail on every such board.
+# Import it inside the functions that need it, as the rest of iSpy already does.
 from pathlib import Path
 import importlib
 import functools
@@ -17,6 +21,8 @@ import zipfile
 
 
 def torch_load(path, trusted: bool = True):
+    import torch
+
     from iSpy.vision.yolo_pt import register_shim
     register_shim()
     if not trusted:
@@ -1082,6 +1088,7 @@ class GenericYolo:
         self.logger.info("TPU model loaded on %s", self._tpu_device)
 
     def _run_tpu(self, frame: np.ndarray, orig_shape) -> "Results":
+        import torch
         import torch_xla.core.xla_model as xm
 
         tensor = self._preprocess_tpu(frame)
