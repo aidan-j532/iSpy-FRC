@@ -1,10 +1,8 @@
 import os
 import sys
-import threading
-import time
+import tempfile
 import types
 import unittest
-import tempfile
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -83,7 +81,6 @@ class _FakeTensorIOMode:
 
 
 class _FakeEngineContext:
-
     def __init__(self, shapes, output_name):
         self._shapes = dict(shapes)
         self._output_name = output_name
@@ -129,7 +126,7 @@ class _FakeTensorRTRuntime:
     def __init__(self, *args, **kwargs):
         self.engine = _FakeEngine("images", "output0", 5)
 
-    def deserialize_cuda_engine(self, data):  # noqa: ARG001
+    def deserialize_cuda_engine(self, data):
         return self.engine
 
 
@@ -155,7 +152,7 @@ class _FakeCompiledModel:
         self._feat_w = feat_w
         self.inputs = [_FakeOutput("images")]
 
-    def __call__(self, feed):  # noqa: ARG001
+    def __call__(self, feed):
         return {"output0": np.empty((1, 0, self._feat_w), dtype=np.float32)}
 
 
@@ -165,16 +162,16 @@ class _FakeOpenVINOCore:
     def __init__(self, *args, **kwargs):
         pass
 
-    def compile_model(self, model_path, device="AUTO", *args, **kwargs):  # noqa: ARG001
+    def compile_model(self, model_path, device="AUTO", *args, **kwargs):
         return _FakeCompiledModel(5)
 
 
 ov_mod.Core = _FakeOpenVINOCore
 sys.modules["openvino"] = ov_mod
 
-from iSpy.config.AutoOpt import SUPPORTED_FORMATS, recommend_format  # noqa: E402
-from iSpy.vision.genericYolo import Box, GenericYolo, ModelFileError, Results  # noqa: E402
-from iSpy.vision.metadata import (  # noqa: E402
+from iSpy.config.AutoOpt import SUPPORTED_FORMATS
+from iSpy.vision.genericYolo import Box, GenericYolo, ModelFileError, Results
+from iSpy.vision.metadata import (
     derive_format_metadata,
     metadata_path_for,
     read_metadata,
@@ -217,7 +214,6 @@ def _recommend(**overrides):
 
 
 class TestAutoOpt(unittest.TestCase):
-
     def test_returns_string(self):
         self.assertIsInstance(_recommend(), str)
 
@@ -240,14 +236,10 @@ class TestAutoOpt(unittest.TestCase):
         self.assertEqual(_recommend(has_edge_tpu=True), "tflite")
 
     def test_nvidia_without_tensorrt_falls_back_to_onnx(self):
-        self.assertEqual(
-            _recommend(has_nvidia=True, has_tensorrt=False), "onnx"
-        )
+        self.assertEqual(_recommend(has_nvidia=True, has_tensorrt=False), "onnx")
 
     def test_nvidia_with_tensorrt_uses_engine(self):
-        self.assertEqual(
-            _recommend(has_nvidia=True, has_tensorrt=True), "engine"
-        )
+        self.assertEqual(_recommend(has_nvidia=True, has_tensorrt=True), "engine")
 
     def test_intel_gpu_uses_openvino(self):
         self.assertEqual(_recommend(has_intel_gpu=True), "openvino")
@@ -299,9 +291,7 @@ class TestAutoOpt(unittest.TestCase):
         )
 
 
-
 class TestBoxResults(unittest.TestCase):
-
     def test_box_stores_values(self):
         b = Box([10, 20, 50, 60], 0.95)
         self.assertEqual(b.xyxy, [10, 20, 50, 60])
@@ -331,12 +321,11 @@ class TestBoxResults(unittest.TestCase):
         self.assertFalse(np.array_equal(out, frame))
 
 
-
 class TestGenericYoloModelSelection(unittest.TestCase):
-
     def setUp(self):
         # Patch genericYolo.RKNNLite and RKNN_FOUND directly so tests work regardless of import order
         from iSpy import vision
+
         self._original_rknnlite = vision.genericYolo.RKNNLite
         self._original_rknn_found = vision.genericYolo.RKNN_FOUND
         vision.genericYolo.RKNNLite = FakeRKNNLite
@@ -345,6 +334,7 @@ class TestGenericYoloModelSelection(unittest.TestCase):
     def tearDown(self):
         # Restore original RKNNLite and RKNN_FOUND
         from iSpy import vision
+
         vision.genericYolo.RKNNLite = self._original_rknnlite
         vision.genericYolo.RKNN_FOUND = self._original_rknn_found
 
@@ -360,9 +350,7 @@ class TestGenericYoloModelSelection(unittest.TestCase):
         # graceful-degradation contract: boot catches ModelFileError and runs
         # the camera without detection instead of crashing the whole app
         with self.assertRaises(ModelFileError):
-            GenericYolo(
-                {"file_path": "does/not/exist.rknn", "task": "detect"}
-            )
+            GenericYolo({"file_path": "does/not/exist.rknn", "task": "detect"})
 
     def test_empty_model_file_raises_model_file_error(self):
         path = self._dummy_model(size=0)
@@ -387,9 +375,7 @@ class TestGenericYoloModelSelection(unittest.TestCase):
         w.model.release.assert_called_once()
 
 
-
 class TestCompiledFormatGenericYolo(unittest.TestCase):
-
     def _complete_cfg(self, path):
         return {
             "file_path": path,
@@ -471,9 +457,7 @@ class TestCompiledFormatGenericYolo(unittest.TestCase):
         self.assertEqual(w.model_type, "openvino")
 
 
-
 class TestModelMetadata(unittest.TestCase):
-
     def test_rknn_metadata_contract(self):
         m = derive_format_metadata(
             {"task": "detect", "nc": 1, "input_size": [640, 640]}, "rknn"
@@ -517,9 +501,7 @@ class TestModelMetadata(unittest.TestCase):
             self.assertIsNone(read_metadata(Path(d) / "nope.rknn"))
 
 
-
 class TestPosePtRegression(unittest.TestCase):
-
     _yolo_pt = None
 
     @classmethod
@@ -536,7 +518,9 @@ class TestPosePtRegression(unittest.TestCase):
         import importlib
 
         # Restore the REAL torch (the fake above only satisfies import-time).
-        for _m in [m for m in list(sys.modules) if m == "torch" or m.startswith("torch.")]:
+        for _m in [
+            m for m in list(sys.modules) if m == "torch" or m.startswith("torch.")
+        ]:
             sys.modules.pop(_m, None)
         try:
             real_torch = importlib.import_module("torch")
@@ -559,16 +543,15 @@ class TestPosePtRegression(unittest.TestCase):
         self.assertEqual(len(results), 1)
         r = results[0]
         self.assertIsNotNone(
-            r.keypoints, "low-threshold run produced no candidate - pose decode never exercised"
+            r.keypoints,
+            "low-threshold run produced no candidate - pose decode never exercised",
         )
         kd = r.keypoints.data
         self.assertEqual(kd.ndim, 3)
         self.assertEqual(kd.shape[1:], (17, 3))
 
 
-
 class TestValidateSystemRegression(unittest.TestCase):
-
     def test_broken_model_file_path_flips_validate_system_to_false(self):
         from iSpy.validations.validate_system import validate_system
 
@@ -587,14 +570,13 @@ class TestValidateSystemRegression(unittest.TestCase):
         self.assertFalse(validate_system())
 
 
-
 class _QuietLogging:
-
     def __init__(self):
         self._stack = ExitStack()
 
     def __enter__(self):
         import logging
+
         logger = logging.getLogger("iSpy")
         self._stack.__enter__()
         self._stack.enter_context(patch.object(logger, "debug", MagicMock()))
@@ -607,7 +589,6 @@ class _QuietLogging:
 
 
 class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
-
     @staticmethod
     def _restore_scipy_optimize(had_optimize, prior_optimize):
         if had_optimize:
@@ -620,7 +601,6 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
         # the object_detection -> calibration import chain needs scipy.optimize.
         # Register a fake submodule (and clean it up) so the pipeline module
         # imports on machines where real scipy is absent.
-        from iSpy import vision as _vision
 
         scipy_optimize = types.ModuleType("scipy.optimize")
         scipy_optimize.least_squares = MagicMock()
@@ -629,7 +609,7 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
         sys.modules["scipy.optimize"] = scipy_optimize
         self.addCleanup(self._restore_scipy_optimize, had_optimize, prior_optimize)
 
-        from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+        from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
         from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
 
         config = iSpyConfig()
@@ -637,14 +617,24 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
             "name": "bug6_cam",
             "source": 99,
             "fps_cap": 1000,
-            "yaw": 0, "pitch": 0, "height": 1.0,
-            "x": 0, "y": 0,
+            "yaw": 0,
+            "pitch": 0,
+            "height": 1.0,
+            "x": 0,
+            "y": 0,
             "grayscale": False,
             "subsystem": "test",
-            "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
+            "calibration": {
+                "distance": 1.0,
+                "game_piece_size": 1.0,
+                "size": 100,
+                "fov": 90,
+            },
             "pipeline": {
                 "name": "object_detection",
-                "settings": {"vision_model": {"file_path": model_path, "task": "detect"}},
+                "settings": {
+                    "vision_model": {"file_path": model_path, "task": "detect"}
+                },
             },
         }
         config.set("camera_configs", {"bug6_cam": cam_entry})
@@ -658,7 +648,9 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
         tmp_dir = Path(tmp.name)
 
         weight = tmp_dir / "corrupt.pt"
-        weight.write_bytes(b"\x00" * 512)  # under the load floor -> ModelFileError later
+        weight.write_bytes(
+            b"\x00" * 512
+        )  # under the load floor -> ModelFileError later
 
         sidecar = tmp_dir / "corrupt_metadata.yaml"
         sidecar.write_text("nc: not_an_int\n", encoding="utf-8")
@@ -716,18 +708,20 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
 
 
 class TestEKFTracker(unittest.TestCase):
-
     def _make_tracker(self):
         from iSpy.plugins.trackers.BuiltIn.EKFTracker import EKFTracker
-        return EKFTracker({
-            "config": {
-                "process_noise": 0.5,
-                "measurement_noise": 0.1,
-                "distance_threshold": 1.0,
-                "stale_threshold": 2.0,
-            },
-            "global_config": None,
-        })
+
+        return EKFTracker(
+            {
+                "config": {
+                    "process_noise": 0.5,
+                    "measurement_noise": 0.1,
+                    "distance_threshold": 1.0,
+                    "stale_threshold": 2.0,
+                },
+                "global_config": None,
+            }
+        )
 
     def test_ekf_smoothes_better_than_raw_measurements(self):
         from iSpy.vision.Object import Object
@@ -760,10 +754,13 @@ class TestEKFTracker(unittest.TestCase):
         sm_arr = np.array(smoothed_path)
 
         raw_rmse = float(np.sqrt(raw_sq / n))
-        smoothed_rmse = float(np.sqrt(np.mean(np.sum((sm_arr - true_arr) ** 2, axis=1))))
+        smoothed_rmse = float(
+            np.sqrt(np.mean(np.sum((sm_arr - true_arr) ** 2, axis=1)))
+        )
 
         self.assertLess(
-            smoothed_rmse, raw_rmse,
+            smoothed_rmse,
+            raw_rmse,
             msg=f"EKF ({smoothed_rmse:.4f}) must beat raw noise ({raw_rmse:.4f})",
         )
 
@@ -784,9 +781,9 @@ class TestEKFTracker(unittest.TestCase):
 
 
 class TestSelectionState(unittest.TestCase):
-
     def test_basic_lifecycle(self):
         from iSpy.plugins.selection import SelectionState
+
         s = SelectionState()
         self.assertIsNone(s.selected_id)
         self.assertIsNone(s.age_s())
@@ -799,6 +796,7 @@ class TestSelectionState(unittest.TestCase):
 
     def test_addon_base_exposes_selection(self):
         from iSpy.plugins.bases import AddonBase
+
         self.assertTrue(hasattr(AddonBase, "selection"))
         ctx = {"selection": object()}
         inst = AddonBase.__new__(AddonBase)
@@ -807,24 +805,28 @@ class TestSelectionState(unittest.TestCase):
 
 
 class TestTargetSelector(unittest.TestCase):
-
-    def _make_selector(self, reacquire_timeout_s: float = 1.0,
-                       output_key: str = "selected_target"):
+    def _make_selector(
+        self, reacquire_timeout_s: float = 1.0, output_key: str = "selected_target"
+    ):
         from iSpy.plugins.selection import SelectionState
         from iSpy.plugins.utilities.BuiltIn.TargetSelector import TargetSelector
+
         selection = SelectionState()
-        selector = TargetSelector({
-            "config": {
-                "reacquire_timeout_s": reacquire_timeout_s,
-                "output_key": output_key,
-            },
-            "flask_app": None,
-            "selection": selection,
-        })
+        selector = TargetSelector(
+            {
+                "config": {
+                    "reacquire_timeout_s": reacquire_timeout_s,
+                    "output_key": output_key,
+                },
+                "flask_app": None,
+                "selection": selection,
+            }
+        )
         return selector, selection
 
     def test_nothing_selected_publishes_none(self):
         from iSpy.vision.Object import Object
+
         selector, _selection = self._make_selector()
         frame_data = {"detections": [Object(x=1.0, y=2.0, z=3.0, id=9)]}
         selector.update(frame_data)
@@ -832,6 +834,7 @@ class TestTargetSelector(unittest.TestCase):
 
     def test_publishes_selected_object(self):
         from iSpy.vision.Object import Object
+
         selector, selection = self._make_selector()
         obj = Object(x=1.0, y=2.0, z=3.0, id=5, name="cone")
         selection.select(5)
@@ -844,6 +847,7 @@ class TestTargetSelector(unittest.TestCase):
 
     def test_holds_lock_inside_reacquire_timeout(self):
         from iSpy.vision.Object import Object
+
         selector, selection = self._make_selector(reacquire_timeout_s=5.0)
         selection.select(5)
         frame_data = {"detections": [Object(x=1.0, y=2.0, z=3.0, id=5)]}
@@ -856,7 +860,6 @@ class TestTargetSelector(unittest.TestCase):
         self.assertNotIn("selected_target", frame_data2.get("addon_data", {}))
 
     def test_idless_objects_noop_no_raise(self):
-        from iSpy.vision.Object import Object
         selector, selection = self._make_selector()
         selection.select(5)
         # Object always has an id; simulate a plain id-less fallback dict
@@ -867,9 +870,7 @@ class TestTargetSelector(unittest.TestCase):
         self.assertIsNone(published)
 
 
-
 class TestCalibrationGating(unittest.TestCase):
-
     @staticmethod
     def _restore_scipy_optimize(had_optimize, prior_optimize):
         if had_optimize:
@@ -883,7 +884,6 @@ class TestCalibrationGating(unittest.TestCase):
         return calib
 
     def _build_detect_pipeline(self, task):
-        from iSpy import vision as _vision
         scipy_optimize = types.ModuleType("scipy.optimize")
         scipy_optimize.least_squares = MagicMock()
         had = "scipy.optimize" in sys.modules
@@ -891,7 +891,7 @@ class TestCalibrationGating(unittest.TestCase):
         sys.modules["scipy.optimize"] = scipy_optimize
         self.addCleanup(self._restore_scipy_optimize, had, prior)
 
-        from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+        from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
         from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
 
         config = iSpyConfig()
@@ -899,14 +899,19 @@ class TestCalibrationGating(unittest.TestCase):
             "name": "calib_cam",
             "source": 99,
             "fps_cap": 1000,
-            "yaw": 0, "pitch": 0, "height": 1.0,
-            "x": 0, "y": 0,
+            "yaw": 0,
+            "pitch": 0,
+            "height": 1.0,
+            "x": 0,
+            "y": 0,
             "grayscale": False,
             "subsystem": "test",
             "calibration": self._calibration(),
             "pipeline": {
                 "name": "object_detection",
-                "settings": {"vision_model": {"file_path": "does/not/exist.pt", "task": task}},
+                "settings": {
+                    "vision_model": {"file_path": "does/not/exist.pt", "task": task}
+                },
             },
         }
         config.set("camera_configs", {"calib_cam": cam_entry})
@@ -921,7 +926,9 @@ class TestCalibrationGating(unittest.TestCase):
             self.assertEqual(level, "yellow")
             self.assertIn("Needs Calibration for Better Accuracy", msg)
             # _gate_uncalibrated must NOT block a detect pipeline
-            self.assertIsNone(camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8)))
+            self.assertIsNone(
+                camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8))
+            )
         finally:
             camera.destroy()
 
@@ -941,7 +948,6 @@ class TestCalibrationGating(unittest.TestCase):
             camera.destroy()
 
     def test_calibrated_detect_is_green(self):
-        from iSpy import vision as _vision
         scipy_optimize = types.ModuleType("scipy.optimize")
         scipy_optimize.least_squares = MagicMock()
         had = "scipy.optimize" in sys.modules
@@ -949,7 +955,7 @@ class TestCalibrationGating(unittest.TestCase):
         sys.modules["scipy.optimize"] = scipy_optimize
         self.addCleanup(self._restore_scipy_optimize, had, prior)
 
-        from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
+        from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
         from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
 
         config = iSpyConfig()
@@ -957,14 +963,19 @@ class TestCalibrationGating(unittest.TestCase):
             "name": "calib_cam",
             "source": 99,
             "fps_cap": 1000,
-            "yaw": 0, "pitch": 0, "height": 1.0,
-            "x": 0, "y": 0,
+            "yaw": 0,
+            "pitch": 0,
+            "height": 1.0,
+            "x": 0,
+            "y": 0,
             "grayscale": False,
             "subsystem": "test",
             "calibration": self._calibration(fov=90),
             "pipeline": {
                 "name": "object_detection",
-                "settings": {"vision_model": {"file_path": "does/not/exist.pt", "task": "detect"}},
+                "settings": {
+                    "vision_model": {"file_path": "does/not/exist.pt", "task": "detect"}
+                },
             },
         }
         config.set("camera_configs", {"calib_cam": cam_entry})
@@ -976,7 +987,9 @@ class TestCalibrationGating(unittest.TestCase):
             self.assertEqual(level, "ready")
             # calibrated gate lets the pipeline through (model missing -> not
             # processable, but that's a separate concern from calibration)
-            self.assertIsNone(camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8)))
+            self.assertIsNone(
+                camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8))
+            )
         finally:
             camera.destroy()
 

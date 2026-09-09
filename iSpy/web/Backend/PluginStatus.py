@@ -3,16 +3,20 @@ import logging
 import os
 import re
 from functools import wraps
-from flask import jsonify, render_template, request
 from pathlib import Path
-from iSpy.web.Backend.WebModule import WebModule
-from iSpy.plugins._loader import load_plugins
-from iSpy.plugins.bases import (
-    TrackerBase, UtilityBase, FrameProcessorBase, VisionBase,
-    validate_output_key,
-)
+
+from flask import jsonify, render_template, request
 
 import iSpy.plugins as _plugins_pkg
+from iSpy.plugins._loader import load_plugins
+from iSpy.plugins.bases import (
+    FrameProcessorBase,
+    TrackerBase,
+    UtilityBase,
+    VisionBase,
+    validate_output_key,
+)
+from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +32,16 @@ def require_local_or_token(f):
             return f(*args, **kwargs)
         admin_token = os.environ.get("ISPY_ADMIN_TOKEN")
         if not admin_token:
-            return jsonify(error="Admin API is local-only. Set ISPY_ADMIN_TOKEN to enable remote access."), 403
+            return jsonify(
+                error="Admin API is local-only. Set ISPY_ADMIN_TOKEN to enable remote access."
+            ), 403
         provided = request.headers.get("X-iSpy-Admin-Token", "")
         if provided != admin_token:
             return jsonify(error="Invalid or missing admin token."), 403
         return f(*args, **kwargs)
+
     return wrapper
+
 
 _PLUGIN_ROOT = Path(_plugins_pkg.__file__).resolve().parent
 
@@ -43,14 +51,20 @@ _PLUGIN_ROOT = Path(_plugins_pkg.__file__).resolve().parent
 _TYPE_MAP = {
     "tracker": ("trackers", TrackerBase, "TrackerBase", "update"),
     "utility": ("utilities", UtilityBase, "UtilityBase", "update"),
-    "frame_processor": ("frame_processors", FrameProcessorBase, "FrameProcessorBase", "process"),
+    "frame_processor": (
+        "frame_processors",
+        FrameProcessorBase,
+        "FrameProcessorBase",
+        "process",
+    ),
     "vision_pipeline": ("pipelines", VisionBase, "VisionBase", "run"),
 }
 
 _NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 _ADDON_TYPES_FROM_PTYPE = {
-    "tracker": "trackers", "utility": "utilities",
+    "tracker": "trackers",
+    "utility": "utilities",
     "frame_processor": "frame_processors",
 }
 
@@ -83,7 +97,9 @@ def _coerce_setting_value(value, defn: dict):
                 f"'{defn.get('label', 'value')}' must be a number, got {value!r}"
             ) from None
         # numbers stay ints when the JSON payload was an int
-        return int(num) if isinstance(value, int) and not isinstance(value, bool) else num
+        return (
+            int(num) if isinstance(value, int) and not isinstance(value, bool) else num
+        )
     if stype == "toggle":
         if isinstance(value, str):
             return value.strip().lower() in ("1", "true", "yes", "on")
@@ -97,7 +113,9 @@ def _coerce_setting_value(value, defn: dict):
         clean = []
         for idx, row in enumerate(value):
             if not isinstance(row, dict):
-                raise ValueError(f"Row {idx + 1} of '{defn.get('label', 'value')}' must be an object")
+                raise ValueError(
+                    f"Row {idx + 1} of '{defn.get('label', 'value')}' must be an object"
+                )
             clean_row = {}
             for fkey, fdefn in fields.items():
                 if fkey in row:
@@ -109,6 +127,7 @@ def _coerce_setting_value(value, defn: dict):
 
 def _build_vision_pipeline_payloads():
     from iSpy.vision.pipelines import get_pipeline_classes
+
     pipelines = []
     try:
         vision_classes = get_pipeline_classes()
@@ -120,7 +139,9 @@ def _build_vision_pipeline_payloads():
         try:
             schema = cls.config_schema()
         except Exception:
-            logger.warning("Failed to load config schema for vision pipeline '%s'", name)
+            logger.warning(
+                "Failed to load config schema for vision pipeline '%s'", name
+            )
             continue
         if schema is None:
             schema = {}
@@ -128,7 +149,9 @@ def _build_vision_pipeline_payloads():
             "name": name,
             "class_name": cls.__name__,
             "config_schema": schema,
-            "show_common_fields": bool(getattr(cls, "show_common_fields", lambda: True)()),
+            "show_common_fields": bool(
+                getattr(cls, "show_common_fields", lambda: True)()
+            ),
             "show_calibration": bool(getattr(cls, "show_calibration", lambda: True)()),
             "calibration_sections": getattr(cls, "calibration_sections", ["charuco"]),
             "requires_calibration": bool(cls.requires_calibration()),
@@ -163,20 +186,56 @@ class PluginStatusModule(WebModule):
     plugin_name = "plugin_status"
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/addons", "addons_page", lambda: render_template("addons.html"))
-        # Back-compat alias
-        flask_app.add_url_rule("/plugins", "plugins_page", lambda: render_template("addons.html"))
-
-        flask_app.add_url_rule("/api/plugins/status", "api_plugins_status", self._status)
-        flask_app.add_url_rule("/api/plugins/available", "api_plugins_available", self._available)
-        flask_app.add_url_rule("/api/plugins/toggle", "api_plugins_toggle", self._toggle, methods=["POST"])
-        flask_app.add_url_rule("/api/plugins/settings", "api_plugins_settings", self._save_settings, methods=["POST"])
-        flask_app.add_url_rule("/api/plugins/upload", "api_plugins_upload", require_local_or_token(self._upload), methods=["POST"])
-        flask_app.add_url_rule("/api/plugins/create", "api_plugins_create", require_local_or_token(self._create), methods=["POST"])
-        flask_app.add_url_rule("/api/plugins/<ptype>/<name>", "api_plugins_delete", require_local_or_token(self._delete), methods=["DELETE"])
-        flask_app.add_url_rule("/api/plugins/<ptype>/<name>/source", "api_plugins_source", self._source, methods=["GET"])
         flask_app.add_url_rule(
-            "/api/plugins/publish-sources", "api_plugins_publish_sources",
+            "/addons", "addons_page", lambda: render_template("addons.html")
+        )
+        # Back-compat alias
+        flask_app.add_url_rule(
+            "/plugins", "plugins_page", lambda: render_template("addons.html")
+        )
+
+        flask_app.add_url_rule(
+            "/api/plugins/status", "api_plugins_status", self._status
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/available", "api_plugins_available", self._available
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/toggle", "api_plugins_toggle", self._toggle, methods=["POST"]
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/settings",
+            "api_plugins_settings",
+            self._save_settings,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/upload",
+            "api_plugins_upload",
+            require_local_or_token(self._upload),
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/create",
+            "api_plugins_create",
+            require_local_or_token(self._create),
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/<ptype>/<name>",
+            "api_plugins_delete",
+            require_local_or_token(self._delete),
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/<ptype>/<name>/source",
+            "api_plugins_source",
+            self._source,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/publish-sources",
+            "api_plugins_publish_sources",
             self._publish_sources,
         )
 
@@ -193,11 +252,15 @@ class PluginStatusModule(WebModule):
             ("frame_processor", vision.frame_processors),
         ):
             for name, inst in items.items():
-                out.append({
-                    "name": name,
-                    "type": group,
-                    "status": inst.get_status() if hasattr(inst, "get_status") else "unknown",
-                })
+                out.append(
+                    {
+                        "name": name,
+                        "type": group,
+                        "status": inst.get_status()
+                        if hasattr(inst, "get_status")
+                        else "unknown",
+                    }
+                )
         return jsonify(plugins=out, vision_running=True)
 
     def _vision_pipelines(self):
@@ -213,23 +276,28 @@ class PluginStatusModule(WebModule):
                 # built-in pipelines are core code, listed from the static
                 # registry instead of a dir scan - shown read-only
                 from iSpy.vision.pipelines import get_pipeline_classes
+
                 for name, cls in sorted(get_pipeline_classes().items()):
-                    available.append({
-                        "name": name,
-                        "type": ptype,
-                        "enabled": False,
-                        "builtin": True,
-                        "beta": bool(getattr(cls, "beta", False)),
-                        "doc": (cls.__doc__ or "").strip()[:200],
-                        "filename": f"{name}.py",
-                    })
+                    available.append(
+                        {
+                            "name": name,
+                            "type": ptype,
+                            "enabled": False,
+                            "builtin": True,
+                            "beta": bool(getattr(cls, "beta", False)),
+                            "doc": (cls.__doc__ or "").strip()[:200],
+                            "filename": f"{name}.py",
+                        }
+                    )
                 continue
             discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
             for name, cls in discovered.items():
                 settings = {}
                 enabled = False
                 if config:
-                    addon_settings = config.get_addon_settings(_TYPE_MAP[ptype][0], name)
+                    addon_settings = config.get_addon_settings(
+                        _TYPE_MAP[ptype][0], name
+                    )
                     if addon_settings is not None:
                         enabled = True
                         settings = addon_settings
@@ -248,21 +316,23 @@ class PluginStatusModule(WebModule):
                 )
                 supported = getattr(cls, "supported_pipelines", None)
                 supported = list(supported) if supported else []
-                available.append({
-                    "name": name,
-                    "type": ptype,
-                    "enabled": enabled,
-                    "builtin": is_builtin,
-                    "template": bool(getattr(cls, "template", False)),
-                    "doc": (cls.__doc__ or "").strip()[:200],
-                    "filename": filename,
-                    "config_schema": schema if isinstance(schema, dict) else {},
-                    "settings": settings,
-                    "supported_pipelines": supported,
-                    "pipeline_warning": sorted(
-                        active_pipelines - set(supported)
-                    ) if supported else [],
-                })
+                available.append(
+                    {
+                        "name": name,
+                        "type": ptype,
+                        "enabled": enabled,
+                        "builtin": is_builtin,
+                        "template": bool(getattr(cls, "template", False)),
+                        "doc": (cls.__doc__ or "").strip()[:200],
+                        "filename": filename,
+                        "config_schema": schema if isinstance(schema, dict) else {},
+                        "settings": settings,
+                        "supported_pipelines": supported,
+                        "pipeline_warning": sorted(active_pipelines - set(supported))
+                        if supported
+                        else [],
+                    }
+                )
         return jsonify(available=available)
 
     def _publish_sources(self):
@@ -282,15 +352,19 @@ class PluginStatusModule(WebModule):
                 schema = cls.config_schema() or {}
             except Exception:
                 logger.warning("Failed to load config schema for add-on '%s'", name)
-            raw = settings.get("output_key", schema.get("output_key", {}).get("default"))
+            raw = settings.get(
+                "output_key", schema.get("output_key", {}).get("default")
+            )
             key, _err = validate_output_key(raw)
             if not key:
                 continue
-            addon_sources.append({
-                "source": f"addon_data.{key}",
-                "label": f"{key} ({name})",
-                "utility": name,
-            })
+            addon_sources.append(
+                {
+                    "source": f"addon_data.{key}",
+                    "label": f"{key} ({name})",
+                    "utility": name,
+                }
+            )
         by_source: dict[str, list[dict]] = {}
         for entry in addon_sources:
             by_source.setdefault(entry["source"], []).append(entry)
@@ -298,9 +372,10 @@ class PluginStatusModule(WebModule):
             if len(group) > 1:
                 for entry in group:
                     entry["duplicate"] = True
-        return jsonify(sources=_CORE_PUBLISH_SOURCES + sorted(
-            addon_sources, key=lambda e: e["source"]
-        ))
+        return jsonify(
+            sources=_CORE_PUBLISH_SOURCES
+            + sorted(addon_sources, key=lambda e: e["source"])
+        )
 
     def _filename_for(self, subdir: str, plugin_name: str) -> str | None:
         # best-effort: find the file whose plugin_name matches so the UI
@@ -328,7 +403,7 @@ class PluginStatusModule(WebModule):
         if ptype == "vision_pipeline":
             return jsonify(
                 error="Built-in vision pipelines are bundled with iSpy - "
-                      "their source is not viewable from the web UI."
+                "their source is not viewable from the web UI."
             ), 403
         subdir = info[0]
         # resolve the real file by plugin name - handles both custom
@@ -360,7 +435,7 @@ class PluginStatusModule(WebModule):
         if plugin_type == "vision_pipeline":
             return jsonify(
                 error="Vision pipelines are selected per camera in Camera "
-                      "Settings - they are not toggled here."
+                "Settings - they are not toggled here."
             ), 400
 
         subdir, base_cls, _, _ = _TYPE_MAP[plugin_type]
@@ -374,8 +449,11 @@ class PluginStatusModule(WebModule):
 
         # plugins.<type> is a dict of enabled add-on -> settings; presence IS
         # the enabled state, so toggling adds/removes the entry
-        config_type = {"tracker": "trackers", "utility": "utilities",
-                       "frame_processor": "frame_processors"}[plugin_type]
+        config_type = {
+            "tracker": "trackers",
+            "utility": "utilities",
+            "frame_processor": "frame_processors",
+        }[plugin_type]
 
         if enable:
             # write the schema defaults into the config entry so settings
@@ -395,8 +473,11 @@ class PluginStatusModule(WebModule):
             config.disable_addon(config_type, name, save=False)
         config.save()
 
-        return jsonify(success=True, enabled=config.is_addon_enabled(config_type, name),
-                       needs_restart=True)
+        return jsonify(
+            success=True,
+            enabled=config.is_addon_enabled(config_type, name),
+            needs_restart=True,
+        )
 
     # settings (edit an enabled add-on's settings)
 
@@ -411,7 +492,7 @@ class PluginStatusModule(WebModule):
         if plugin_type == "vision_pipeline":
             return jsonify(
                 error="Vision pipelines are configured per camera - their "
-                      "settings are not edited here."
+                "settings are not edited here."
             ), 400
         if not isinstance(settings, dict):
             return jsonify(error="settings must be a JSON object"), 400
@@ -426,12 +507,15 @@ class PluginStatusModule(WebModule):
         if not config:
             return jsonify(error="No config available"), 500
 
-        config_type = {"tracker": "trackers", "utility": "utilities",
-                       "frame_processor": "frame_processors"}[plugin_type]
+        config_type = {
+            "tracker": "trackers",
+            "utility": "utilities",
+            "frame_processor": "frame_processors",
+        }[plugin_type]
         if not config.is_addon_enabled(config_type, name):
             return jsonify(
                 error=f"'{name}' is not enabled - enable it first, then edit "
-                      f"its settings."
+                f"its settings."
             ), 409
 
         # validate + coerce against the schema so bad values never hit config;
@@ -444,7 +528,9 @@ class PluginStatusModule(WebModule):
         for key, value in settings.items():
             defn = schema.get(key)
             if defn is None:
-                return jsonify(error=f"Unknown setting '{key}' for add-on '{name}'"), 400
+                return jsonify(
+                    error=f"Unknown setting '{key}' for add-on '{name}'"
+                ), 400
             try:
                 clean[key] = _coerce_setting_value(value, defn)
             except ValueError as e:
@@ -459,8 +545,11 @@ class PluginStatusModule(WebModule):
         config.update_addon_settings(config_type, name, clean, save=False)
         config.save()
 
-        return jsonify(success=True, settings=config.get_addon_settings(config_type, name),
-                       needs_restart=True)
+        return jsonify(
+            success=True,
+            settings=config.get_addon_settings(config_type, name),
+            needs_restart=True,
+        )
 
     # create / upload / delete
 
@@ -477,14 +566,24 @@ class PluginStatusModule(WebModule):
             return None
         return target
 
-    def _validate_addon_source(self, ptype: str, code: str, expected_class_name: str | None) -> str | None:
+    def _validate_addon_source(
+        self, ptype: str, code: str, expected_class_name: str | None
+    ) -> str | None:
         subdir, base_cls, base_name, _ = _TYPE_MAP[ptype]
 
         if len(code) > 200_000:
             return "File too large."
 
         # Reject dangerous builtins before AST parsing
-        _DANGEROUS = ("eval(", "exec(", "__import__(", "subprocess.", "os.system(", "pty.", "socket.")
+        _DANGEROUS = (
+            "eval(",
+            "exec(",
+            "__import__(",
+            "subprocess.",
+            "os.system(",
+            "pty.",
+            "socket.",
+        )
         for pat in _DANGEROUS:
             if pat in code:
                 return f"Add-on source contains forbidden pattern: {pat.rstrip('(')}"
@@ -512,7 +611,9 @@ class PluginStatusModule(WebModule):
                 break
 
         if not found_subclass:
-            return f"Add-on must subclass {base_name} (import it from iSpy.plugins.bases)."
+            return (
+                f"Add-on must subclass {base_name} (import it from iSpy.plugins.bases)."
+            )
 
         # Check plugin_name is assigned inside the subclass body
         has_plugin_name = False
@@ -529,7 +630,10 @@ class PluginStatusModule(WebModule):
                     for item in node.body:
                         if isinstance(item, ast.Assign):
                             for target in item.targets:
-                                if isinstance(target, ast.Name) and target.id == "plugin_name":
+                                if (
+                                    isinstance(target, ast.Name)
+                                    and target.id == "plugin_name"
+                                ):
                                     has_plugin_name = True
                                     break
                     break
@@ -548,11 +652,13 @@ class PluginStatusModule(WebModule):
         filename = data.get("filename") or data.get("name")
 
         if ptype not in _TYPE_MAP:
-            return jsonify(error="type must be tracker, utility, or frame_processor"), 400
+            return jsonify(
+                error="type must be tracker, utility, or frame_processor"
+            ), 400
         if ptype == "vision_pipeline":
             return jsonify(
                 error="Vision pipelines are built into iSpy and selected per "
-                      "camera - user-authored pipelines are not supported."
+                "camera - user-authored pipelines are not supported."
             ), 400
         if not filename:
             return jsonify(error="filename/name required"), 400
@@ -570,6 +676,7 @@ class PluginStatusModule(WebModule):
         if path.exists():
             return jsonify(error=f"'{path.name}' already exists"), 409
         from iSpy.web.Backend.WebModule import ensure_disk_space
+
         space_err = ensure_disk_space(path, len(code.encode("utf-8")))
         if space_err:
             return jsonify(error=space_err), 503
@@ -588,11 +695,13 @@ class PluginStatusModule(WebModule):
         f = request.files.get("file")
 
         if ptype not in _TYPE_MAP:
-            return jsonify(error="type must be tracker, utility, or frame_processor"), 400
+            return jsonify(
+                error="type must be tracker, utility, or frame_processor"
+            ), 400
         if ptype == "vision_pipeline":
             return jsonify(
                 error="Vision pipelines are built into iSpy and selected per "
-                      "camera - user-authored pipelines are not supported."
+                "camera - user-authored pipelines are not supported."
             ), 400
         if not f or not f.filename.endswith(".py"):
             return jsonify(error="Upload a .py file"), 400
@@ -607,8 +716,11 @@ class PluginStatusModule(WebModule):
         if path is None:
             return jsonify(error="Invalid filename"), 400
         if path.exists():
-            return jsonify(error=f"'{path.name}' already exists. Delete it first or rename your file."), 409
+            return jsonify(
+                error=f"'{path.name}' already exists. Delete it first or rename your file."
+            ), 409
         from iSpy.web.Backend.WebModule import ensure_disk_space
+
         space_err = ensure_disk_space(path, len(code.encode("utf-8")))
         if space_err:
             return jsonify(error=space_err), 503

@@ -1,7 +1,9 @@
-import time
-import threading
 import logging
+import threading
+import time
+
 from flask import jsonify, render_template
+
 from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
@@ -38,9 +40,13 @@ class HealthModule(WebModule):
         # minimal stable contract for watchdogs - external tooling may depend on the shape
         flask_app.add_url_rule("/health", "health", self._health_route)
         # fuller payload: uptime, loop_count, per-cam detail
-        flask_app.add_url_rule("/health/detailed", "health_detailed", self._detailed_route)
+        flask_app.add_url_rule(
+            "/health/detailed", "health_detailed", self._detailed_route
+        )
         # human-facing page: everything above + live plugin status
-        flask_app.add_url_rule("/health-page", "health_page", lambda: render_template("health.html"))
+        flask_app.add_url_rule(
+            "/health-page", "health_page", lambda: render_template("health.html")
+        )
         flask_app.add_url_rule("/api/health", "api_health", self._api_health)
 
     def update(self, frame_data: dict):
@@ -60,17 +66,29 @@ class HealthModule(WebModule):
             try:
                 age = cam.get_frame_age()
                 ok = age < self._stale_threshold
-                name = cam.config.get("name", str(cam.source)) if hasattr(cam, "config") else str(cam.source)
-                cameras_data.append({
-                    "name": name, "source": str(getattr(cam, "source", "?")),
-                    "ok": ok, "frame_age_ms": round(age * 1000, 1),
-                })
+                name = (
+                    cam.config.get("name", str(cam.source))
+                    if hasattr(cam, "config")
+                    else str(cam.source)
+                )
+                cameras_data.append(
+                    {
+                        "name": name,
+                        "source": str(getattr(cam, "source", "?")),
+                        "ok": ok,
+                        "frame_age_ms": round(age * 1000, 1),
+                    }
+                )
                 all_ok = all_ok and ok
             except Exception:
-                cameras_data.append({
-                    "name": str(getattr(cam, "source", "?")), "source": "?",
-                    "ok": False, "frame_age_ms": None,
-                })
+                cameras_data.append(
+                    {
+                        "name": str(getattr(cam, "source", "?")),
+                        "source": "?",
+                        "ok": False,
+                        "frame_age_ms": None,
+                    }
+                )
                 all_ok = False
         return cameras_data, all_ok
 
@@ -129,10 +147,9 @@ class HealthModule(WebModule):
             if color not in COLOR_PRESETS:
                 color = "green" if bool(data.get("ok", True)) else "red"
 
-            state = str(data.get("state")
-                        or data.get("info")
-                        or data.get("title")
-                        or name)
+            state = str(
+                data.get("state") or data.get("info") or data.get("title") or name
+            )
 
             metrics = data.get("metrics") or data.get("rows") or []
             normalized = []
@@ -141,18 +158,22 @@ class HealthModule(WebModule):
                     continue
                 label = str(metric.get("label") or "")
                 value = metric.get("value")
-                normalized.append({
-                    "label": label,
-                    "value": "" if value is None else str(value),
-                })
+                normalized.append(
+                    {
+                        "label": label,
+                        "value": "" if value is None else str(value),
+                    }
+                )
 
-            collected.append({
-                "name": name,
-                "type": group,
-                "color": color,
-                "state": state,
-                "metrics": normalized,
-            })
+            collected.append(
+                {
+                    "name": name,
+                    "type": group,
+                    "color": color,
+                    "state": state,
+                    "metrics": normalized,
+                }
+            )
         return collected
 
     def _plugin_statuses(self):
@@ -166,16 +187,23 @@ class HealthModule(WebModule):
             ("frame_processor", vision.frame_processors),
         ):
             for name, inst in items.items():
-                out.append({
-                    "name": name, "type": group,
-                    "status": inst.get_status() if hasattr(inst, "get_status") else "unknown",
-                })
+                out.append(
+                    {
+                        "name": name,
+                        "type": group,
+                        "status": inst.get_status()
+                        if hasattr(inst, "get_status")
+                        else "unknown",
+                    }
+                )
         return out
 
     def _health_route(self):
         payload, healthy = self._build_payload()
         # keep the body minimal/stable for watchdogs
-        return jsonify(status=payload["status"], uptime_s=payload["uptime_s"]), (200 if healthy else 503)
+        return jsonify(status=payload["status"], uptime_s=payload["uptime_s"]), (
+            200 if healthy else 503
+        )
 
     def _detailed_route(self):
         payload, healthy = self._build_payload()

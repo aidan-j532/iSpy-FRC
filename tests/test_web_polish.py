@@ -39,7 +39,9 @@ class TestGlobalChrome(unittest.TestCase):
 
 
 class TestSetupWizardPage(unittest.TestCase):
-    SOURCE = (ROOT / "iSpy" / "web" / "Backend" / "SetupWizard.py").read_text(encoding="utf-8")
+    SOURCE = (ROOT / "iSpy" / "web" / "Backend" / "SetupWizard.py").read_text(
+        encoding="utf-8"
+    )
 
     def test_links_design_system_and_favicon(self):
         self.assertIn("/static/css/design.css", self.SOURCE)
@@ -50,7 +52,13 @@ class TestSetupWizardPage(unittest.TestCase):
         self.assertNotIn("#f44", self.SOURCE)
 
     def test_uses_design_system_classes(self):
-        for cls in ("btn-ok", "setup-alert", "form-row", "form-label", "settings-section"):
+        for cls in (
+            "btn-ok",
+            "setup-alert",
+            "form-row",
+            "form-label",
+            "settings-section",
+        ):
             self.assertIn(cls, self.SOURCE)
 
     def test_submit_has_loading_state(self):

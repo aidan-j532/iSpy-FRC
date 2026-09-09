@@ -1,10 +1,11 @@
 from pathlib import Path
+
 from flask import jsonify, render_template
+
 from iSpy.web.Backend.WebModule import WebModule
 
 
 class Viewer3DModule(WebModule):
-
     plugin_name = "viewer3d"
 
     def __init__(self, context: dict):
@@ -25,12 +26,13 @@ class Viewer3DModule(WebModule):
     # routes
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/viewer3d", "viewer3d_page",
-                               lambda: render_template("viewer3d.html"))
-        flask_app.add_url_rule("/api/detections/latest", "api_detections_latest",
-                               self._latest)
-        flask_app.add_url_rule("/api/overlays", "api_overlays",
-                               self._overlays_endpoint)
+        flask_app.add_url_rule(
+            "/viewer3d", "viewer3d_page", lambda: render_template("viewer3d.html")
+        )
+        flask_app.add_url_rule(
+            "/api/detections/latest", "api_detections_latest", self._latest
+        )
+        flask_app.add_url_rule("/api/overlays", "api_overlays", self._overlays_endpoint)
 
     # update (called every vision tick)
 
@@ -41,6 +43,7 @@ class Viewer3DModule(WebModule):
             vm = {}
             if config:
                 from iSpy.config.iSpyConfig import get_pipeline_settings
+
                 for cam in config.get("camera_configs", {}).values():
                     if not isinstance(cam, dict):
                         continue
@@ -96,6 +99,7 @@ class Viewer3DModule(WebModule):
                 return 17
         try:
             import yaml
+
             with open(meta_path) as f:
                 meta = yaml.safe_load(f) or {}
             ks = meta.get("kpt_shape")

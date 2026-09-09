@@ -4,11 +4,11 @@ import unittest
 import cv2
 
 from iSpy.plugins.bases import VisionBase
-from iSpy.vision.pipelines.april_tag import AprilTagPipeline
-from iSpy.vision.pipelines.qr_code import QRCodePipeline
-from iSpy.vision.pipelines.depth_anything import DepthAnythingPipeline
-from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 from iSpy.vision.Camera import Camera
+from iSpy.vision.pipelines.april_tag import AprilTagPipeline
+from iSpy.vision.pipelines.depth_anything import DepthAnythingPipeline
+from iSpy.vision.pipelines.qr_code import QRCodePipeline
+from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 
 
 class VisionPipelineSchemaTests(unittest.TestCase):
@@ -24,7 +24,9 @@ class VisionPipelineSchemaTests(unittest.TestCase):
 
     def test_object_detection_pipeline_is_exposed(self):
         pipelines = _build_vision_pipeline_payloads()
-        object_detection = next((p for p in pipelines if p["name"] == "object_detection"), None)
+        object_detection = next(
+            (p for p in pipelines if p["name"] == "object_detection"), None
+        )
         self.assertIsNotNone(object_detection)
         self.assertTrue(object_detection["show_common_fields"])
 
@@ -75,7 +77,8 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         # planar PnP feeds need only the ChArUco intrinsics (camera matrix)
         for name in ("april_tag", "qr_code"):
             self.assertEqual(
-                by_name[name]["calibration_sections"], ["charuco"],
+                by_name[name]["calibration_sections"],
+                ["charuco"],
                 f"{name} should declare exactly the ChArUco calibration",
             )
 
@@ -88,7 +91,8 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         # monocular depth and zero-shot detection use no camera calibration
         for name in ("depth_anything", "yolo_world"):
             self.assertEqual(
-                by_name[name]["calibration_sections"], [],
+                by_name[name]["calibration_sections"],
+                [],
                 f"{name} should declare no calibration sections",
             )
 
@@ -111,7 +115,9 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         frame = np.zeros((10, 10, 3), dtype=np.uint8)
         annotated = AprilTagPipeline.__new__(AprilTagPipeline).plot(frame)
         self.assertIsNotNone(annotated)
-        self.assertTrue(np.array_equal(annotated, frame) or annotated.shape == frame.shape)
+        self.assertTrue(
+            np.array_equal(annotated, frame) or annotated.shape == frame.shape
+        )
 
     def test_windows_capture_backend_candidates_use_msmf_only(self):
         candidates = Camera._get_capture_backend_candidates("Windows")
@@ -140,7 +146,9 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         camera = AprilTagPipeline.__new__(AprilTagPipeline)
         camera.get_frame = lambda: np.zeros((20, 20, 3), dtype=np.uint8)
         camera.detector = DummyDetector()
-        camera.get_demo_objects = lambda frame: [Object(0.0, 0.0, 0.0, name="demo", vis_type="planar")]
+        camera.get_demo_objects = lambda frame: [
+            Object(0.0, 0.0, 0.0, name="demo", vis_type="planar")
+        ]
 
         objects, frame = camera.run()
         self.assertEqual(objects, [])

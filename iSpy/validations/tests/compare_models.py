@@ -9,8 +9,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 import cv2
+import numpy as np
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parent.parent.resolve()
@@ -19,10 +19,11 @@ if not (_PROJECT_ROOT / "iSpy").is_dir():
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 # same pipeline iSpy runs in prod - not re-implemented here.
-from iSpy.vision.genericYolo import GenericYolo, Box  # noqa: E402
+from iSpy.vision.genericYolo import Box, GenericYolo
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
 
 @contextlib.contextmanager
 def _quiet_ispy_logging():
@@ -33,6 +34,7 @@ def _quiet_ispy_logging():
         yield
     finally:
         ispy_logger.setLevel(old_level)
+
 
 class C:
     RESET = "\033[0m"
@@ -113,7 +115,10 @@ def _load_config_paths(
             optimized_path = optimized_path or vm.get("file_path")
             base_path = base_path or vm.get("source_pt")
         else:
-            logger.warning("Config file not found: %s (falling back to --base/--optimized)", cfg_file)
+            logger.warning(
+                "Config file not found: %s (falling back to --base/--optimized)",
+                cfg_file,
+            )
 
     if not base_path or not optimized_path:
         logger.error(
@@ -139,7 +144,10 @@ def _load_config_paths(
         logger.error("Optimized model not found: %s", optimized_path)
         sys.exit(1)
 
-    if Path(base_path).suffix.lower() == ".pt" and Path(optimized_path).suffix.lower() == ".pt":
+    if (
+        Path(base_path).suffix.lower() == ".pt"
+        and Path(optimized_path).suffix.lower() == ".pt"
+    ):
         logger.error(
             "Both the base and optimized model are .pt files (%s vs %s) - "
             "there's nothing to compare here. Point --optimized (or "
@@ -153,7 +161,9 @@ def _load_config_paths(
     return base_path, optimized_path
 
 
-def _find_test_images(images_dir: Path, num_images: int, seed: int | None) -> list[Path]:
+def _find_test_images(
+    images_dir: Path, num_images: int, seed: int | None
+) -> list[Path]:
     exts = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
     found: set[Path] = set()
     for ext in exts:
@@ -202,7 +212,9 @@ def _match_boxes(ref_boxes: list[Box], test_boxes: list[Box], iou_thresh: float)
     return matches
 
 
-def _measure_speed(model: GenericYolo, frames: list[np.ndarray], duration: float) -> dict:
+def _measure_speed(
+    model: GenericYolo, frames: list[np.ndarray], duration: float
+) -> dict:
     for f in frames[: min(3, len(frames))]:
         model.predict(f, orig_shape=f.shape)  # warm up
 
@@ -235,7 +247,9 @@ def _path_size(path: Path) -> int:
 def _summarize_detection_quality(tp: int, fp: int, fn: int) -> dict:
     precision = tp / (tp + fp) if (tp + fp) else 1.0 if tp == 0 and fp == 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 1.0 if tp == 0 and fn == 0 else 0.0
-    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+    f1 = (
+        (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+    )
     return {
         "true_positives": tp,
         "false_positives": fp,
@@ -244,7 +258,6 @@ def _summarize_detection_quality(tp: int, fp: int, fn: int) -> dict:
         "recall": recall,
         "f1": f1,
     }
-
 
 
 @dataclass
@@ -273,6 +286,7 @@ def run_comparison(
             base_path, optimized_path, images, core_mask, speed_duration, iou_thresh
         )
 
+
 def _run_comparison_body(
     base_path: str,
     optimized_path: str,
@@ -291,16 +305,26 @@ def _run_comparison_body(
         logger.info("Loading base model (this may take a few seconds): %s", base_path)
         with _quiet_native():
             base_model = GenericYolo({"file_path": base_path}, core_mask=None)
-        logger.info("Loaded base model: %s", getattr(base_model, "model_type", "<unknown>"))
+        logger.info(
+            "Loaded base model: %s", getattr(base_model, "model_type", "<unknown>")
+        )
     except Exception as e:
         logger.error("Failed to load base model: %s", e)
         sys.exit(1)
 
     try:
-        logger.info("Loading optimized model (this may take a while on some backends): %s", optimized_path)
+        logger.info(
+            "Loading optimized model (this may take a while on some backends): %s",
+            optimized_path,
+        )
         with _quiet_native():
-            optimized_model = GenericYolo({"file_path": optimized_path}, core_mask=core_mask)
-        logger.info("Loaded optimized model: %s", getattr(optimized_model, "model_type", "<unknown>"))
+            optimized_model = GenericYolo(
+                {"file_path": optimized_path}, core_mask=core_mask
+            )
+        logger.info(
+            "Loaded optimized model: %s",
+            getattr(optimized_model, "model_type", "<unknown>"),
+        )
     except Exception as e:
         logger.error("Failed to load optimized model: %s", e)
         try:
@@ -319,7 +343,9 @@ def _run_comparison_body(
         results.file_size = {
             "base_mb": round(base_size / (1024 * 1024), 2),
             "optimized_mb": round(opt_size / (1024 * 1024), 2),
-            "reduction_pct": round((1 - opt_size / base_size) * 100, 1) if base_size else 0.0,
+            "reduction_pct": round((1 - opt_size / base_size) * 100, 1)
+            if base_size
+            else 0.0,
         }
     except Exception:
         pass
@@ -339,7 +365,9 @@ def _run_comparison_body(
 
     # warm up the optimized model once so the first real inference delay is visible
     try:
-        logger.info("Warming optimized model with one inference (may take several seconds)...")
+        logger.info(
+            "Warming optimized model with one inference (may take several seconds)..."
+        )
         with _quiet_native():
             _ = optimized_model.predict(loaded[0][1], orig_shape=loaded[0][1].shape)
         logger.info("Optimized model warmup complete.")
@@ -376,9 +404,13 @@ def _run_comparison_body(
                 "base_boxes": n_base,
                 "optimized_boxes": n_opt,
                 "matched": matched,
-                "match_rate": (matched / n_base) if n_base else (1.0 if n_opt == 0 else 0.0),
+                "match_rate": (matched / n_base)
+                if n_base
+                else (1.0 if n_opt == 0 else 0.0),
                 "mean_iou": float(np.mean(img_ious)) if img_ious else 0.0,
-                "mean_conf_delta": float(np.mean(img_conf_deltas)) if img_conf_deltas else 0.0,
+                "mean_conf_delta": float(np.mean(img_conf_deltas))
+                if img_conf_deltas
+                else 0.0,
             }
         )
 
@@ -398,17 +430,23 @@ def _run_comparison_body(
         )
 
     overlap_pct = (
-        (total_matched / total_base_boxes * 100) if total_base_boxes else (100.0 if total_opt_boxes == 0 else 0.0)
+        (total_matched / total_base_boxes * 100)
+        if total_base_boxes
+        else (100.0 if total_opt_boxes == 0 else 0.0)
     )
     mean_iou = float(np.mean(all_ious)) if all_ious else 0.0
     mean_conf_delta = float(np.mean(all_conf_deltas)) if all_conf_deltas else 0.0
     class_agreement_pct = (class_agree / class_total * 100) if class_total else 100.0
     box_count_diff_pct = (
-        abs(total_opt_boxes - total_base_boxes) / total_base_boxes * 100 if total_base_boxes else 0.0
+        abs(total_opt_boxes - total_base_boxes) / total_base_boxes * 100
+        if total_base_boxes
+        else 0.0
     )
     false_positives = max(total_opt_boxes - total_matched, 0)
     false_negatives = max(total_base_boxes - total_matched, 0)
-    quality_metrics = _summarize_detection_quality(total_matched, false_positives, false_negatives)
+    quality_metrics = _summarize_detection_quality(
+        total_matched, false_positives, false_negatives
+    )
 
     print()
     subline("Images tested", str(len(per_image)))
@@ -425,13 +463,41 @@ def _run_comparison_body(
         "PASS" if overlap_pct >= 85 else ("WARN" if overlap_pct >= 70 else "FAIL"),
     )
     subline("True positives", str(total_matched))
-    subline("False positives", str(false_positives), "PASS" if false_positives == 0 else "WARN")
-    subline("False negatives", str(false_negatives), "PASS" if false_negatives == 0 else "WARN")
-    subline("Precision", f"{quality_metrics['precision']:.1%}", "PASS" if quality_metrics['precision'] >= 0.85 else "WARN")
-    subline("Recall", f"{quality_metrics['recall']:.1%}", "PASS" if quality_metrics['recall'] >= 0.85 else "WARN")
-    subline("F1 score", f"{quality_metrics['f1']:.3f}", "PASS" if quality_metrics['f1'] >= 0.8 else "WARN")
-    subline("Mean IoU on matched boxes", f"{mean_iou:.3f}", "PASS" if mean_iou >= 0.75 else "WARN")
-    subline("Mean confidence delta", f"{mean_conf_delta:.3f}", "PASS" if mean_conf_delta <= 0.1 else "WARN")
+    subline(
+        "False positives",
+        str(false_positives),
+        "PASS" if false_positives == 0 else "WARN",
+    )
+    subline(
+        "False negatives",
+        str(false_negatives),
+        "PASS" if false_negatives == 0 else "WARN",
+    )
+    subline(
+        "Precision",
+        f"{quality_metrics['precision']:.1%}",
+        "PASS" if quality_metrics["precision"] >= 0.85 else "WARN",
+    )
+    subline(
+        "Recall",
+        f"{quality_metrics['recall']:.1%}",
+        "PASS" if quality_metrics["recall"] >= 0.85 else "WARN",
+    )
+    subline(
+        "F1 score",
+        f"{quality_metrics['f1']:.3f}",
+        "PASS" if quality_metrics["f1"] >= 0.8 else "WARN",
+    )
+    subline(
+        "Mean IoU on matched boxes",
+        f"{mean_iou:.3f}",
+        "PASS" if mean_iou >= 0.75 else "WARN",
+    )
+    subline(
+        "Mean confidence delta",
+        f"{mean_conf_delta:.3f}",
+        "PASS" if mean_conf_delta <= 0.1 else "WARN",
+    )
     subline(
         "Class agreement (matched boxes)",
         f"{class_agreement_pct:.1f}%",
@@ -468,16 +534,22 @@ def _run_comparison_body(
 
     subline(
         "Base FPS",
-        f"{base_speed['fps']:.1f}  ({base_speed['inference_ms']:.1f} ms/frame)" if base_speed["frames"] else "N/A",
+        f"{base_speed['fps']:.1f}  ({base_speed['inference_ms']:.1f} ms/frame)"
+        if base_speed["frames"]
+        else "N/A",
     )
     subline(
         "Optimized FPS",
-        f"{opt_speed['fps']:.1f}  ({opt_speed['inference_ms']:.1f} ms/frame)" if opt_speed["frames"] else "N/A",
+        f"{opt_speed['fps']:.1f}  ({opt_speed['inference_ms']:.1f} ms/frame)"
+        if opt_speed["frames"]
+        else "N/A",
     )
 
     speedup = (opt_speed["fps"] / base_speed["fps"]) if base_speed.get("fps") else None
     if speedup is not None:
-        subline("Speedup vs base", f"{speedup:.2f}x", "PASS" if speedup >= 1.0 else "WARN")
+        subline(
+            "Speedup vs base", f"{speedup:.2f}x", "PASS" if speedup >= 1.0 else "WARN"
+        )
 
     results.speed = {"base": base_speed, "optimized": opt_speed, "speedup": speedup}
 
@@ -518,16 +590,22 @@ def _verdict(results: ComparisonResults) -> None:
         reasons.append(f"Detection quality is weak (F1={f1:.2f}, recall={recall:.2%})")
     elif f1 < 0.8 or overlap < 70:
         verdict = "REVIEW RECOMMENDED"
-        reasons.append(f"Detection quality is borderline (F1={f1:.2f}, overlap={overlap:.1f}%)")
+        reasons.append(
+            f"Detection quality is borderline (F1={f1:.2f}, overlap={overlap:.1f}%)"
+        )
 
     if agg.get("total_matched", 0) > 0 and agg.get("mean_iou", 0) < 0.6:
         verdict = "NOT READY"
-        reasons.append(f"Mean IoU on matched boxes is low ({agg.get('mean_iou', 0):.2f})")
+        reasons.append(
+            f"Mean IoU on matched boxes is low ({agg.get('mean_iou', 0):.2f})"
+        )
 
     if agg.get("box_count_diff_pct", 0) > 30:
         if verdict == "READY":
             verdict = "REVIEW RECOMMENDED"
-        reasons.append(f"Box count differs significantly from base ({agg.get('box_count_diff_pct', 0):.1f}%)")
+        reasons.append(
+            f"Box count differs significantly from base ({agg.get('box_count_diff_pct', 0):.1f}%)"
+        )
 
     speedup = results.speed.get("speedup")
     if speedup is not None and speedup < 1.0:
@@ -537,9 +615,13 @@ def _verdict(results: ComparisonResults) -> None:
         )
 
     if not reasons:
-        reasons.append("Optimized model closely matches base .pt on all checked metrics.")
+        reasons.append(
+            "Optimized model closely matches base .pt on all checked metrics."
+        )
 
-    color = {"READY": C.GREEN, "REVIEW RECOMMENDED": C.YELLOW, "NOT READY": C.RED}.get(verdict, C.DIM)
+    color = {"READY": C.GREEN, "REVIEW RECOMMENDED": C.YELLOW, "NOT READY": C.RED}.get(
+        verdict, C.DIM
+    )
     print(_c(f"  VERDICT: {verdict}", C.BOLD + color))
     for r in reasons:
         print(f"    - {r}")
@@ -592,13 +674,23 @@ def upsert_json_report(results: ComparisonResults, out_path: Path) -> None:
                 # back-compat: file was previously a bare list of entries
                 ledger = {"models": loaded}
             else:
-                logger.warning("Existing report at %s has an unexpected shape - starting a fresh ledger.", out_path)
+                logger.warning(
+                    "Existing report at %s has an unexpected shape - starting a fresh ledger.",
+                    out_path,
+                )
         except Exception as e:
-            logger.warning("Could not read existing report at %s (%s) - starting a fresh ledger.", out_path, e)
+            logger.warning(
+                "Could not read existing report at %s (%s) - starting a fresh ledger.",
+                out_path,
+                e,
+            )
 
     found = False
     for i, existing in enumerate(ledger["models"]):
-        if existing.get("base_model") == entry["base_model"] and existing.get("optimized_model") == entry["optimized_model"]:
+        if (
+            existing.get("base_model") == entry["base_model"]
+            and existing.get("optimized_model") == entry["optimized_model"]
+        ):
             ledger["models"][i] = entry
             found = True
             break
@@ -617,7 +709,6 @@ def upsert_json_report(results: ComparisonResults, out_path: Path) -> None:
 save_json_report = upsert_json_report
 
 
-
 def compare_models(
     base_path: str,
     optimized_path: str,
@@ -633,13 +724,20 @@ def compare_models(
 ) -> ComparisonResults | None:
     images_dir = Path(images_dir)
     if not images_dir.exists():
-        logger.warning("Comparison images dir not found (%s) - skipping optimized-model comparison.", images_dir)
+        logger.warning(
+            "Comparison images dir not found (%s) - skipping optimized-model comparison.",
+            images_dir,
+        )
         return None
 
     base_p = Path(base_path)
     opt_p = Path(optimized_path)
     if not base_p.exists() or not opt_p.exists():
-        logger.warning("Base (%s) or optimized (%s) model missing - skipping comparison.", base_p, opt_p)
+        logger.warning(
+            "Base (%s) or optimized (%s) model missing - skipping comparison.",
+            base_p,
+            opt_p,
+        )
         return None
     if base_p.suffix.lower() == ".pt" and opt_p.suffix.lower() == ".pt":
         logger.info("Both models are .pt - nothing to compare, skipping.")
@@ -648,10 +746,16 @@ def compare_models(
     try:
         images = _find_test_images(images_dir, num_images, seed)
     except SystemExit:
-        logger.warning("No test images found under %s - skipping comparison.", images_dir)
+        logger.warning(
+            "No test images found under %s - skipping comparison.", images_dir
+        )
         return None
 
-    out_path = Path(output) if output else (_PROJECT_ROOT / "Outputs" / "optimized_model_report.json")
+    out_path = (
+        Path(output)
+        if output
+        else (_PROJECT_ROOT / "Outputs" / "optimized_model_report.json")
+    )
 
     try:
         cm = contextlib.nullcontext() if not quiet else _suppress_stdout()
@@ -694,7 +798,6 @@ def _suppress_stdout():
         sys.stdout = old_stdout
 
 
-
 def main():
     parser = argparse.ArgumentParser(
         description="Compare a base .pt model against an optimized/converted model "
@@ -706,24 +809,57 @@ def main():
         help="Config file with vision_model.source_pt (base) and vision_model.file_path "
         "(optimized). Default: Config/config.json",
     )
-    parser.add_argument("--base", default=None, help="Explicit path to base .pt model (overrides config)")
-    parser.add_argument("--optimized", default=None, help="Explicit path to optimized model (overrides config)")
+    parser.add_argument(
+        "--base",
+        default=None,
+        help="Explicit path to base .pt model (overrides config)",
+    )
+    parser.add_argument(
+        "--optimized",
+        default=None,
+        help="Explicit path to optimized model (overrides config)",
+    )
     parser.add_argument(
         "--images-dir",
         default=str(_PROJECT_ROOT / "QuantizeDataset" / "valid"),
         help="Directory to pull random test images from (default: QuantizeDataset/valid)",
     )
-    parser.add_argument("--num-images", type=int, default=5, help="Number of random images to test")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed for image selection (for reproducibility)")
-    parser.add_argument("--core-mask", type=int, default=7, help="RKNN NPU core mask (ignored for non-RKNN backends)")
-    parser.add_argument("--iou-thresh", type=float, default=0.5, help="IoU threshold to count two boxes as a match")
     parser.add_argument(
-        "--speed-duration", type=float, default=5.0, help="Seconds to run each model for the speed benchmark"
+        "--num-images", type=int, default=5, help="Number of random images to test"
     )
-    parser.add_argument("--output", default=str(_PROJECT_ROOT / "Outputs" / "optimized_model_report.json"))
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for image selection (for reproducibility)",
+    )
+    parser.add_argument(
+        "--core-mask",
+        type=int,
+        default=7,
+        help="RKNN NPU core mask (ignored for non-RKNN backends)",
+    )
+    parser.add_argument(
+        "--iou-thresh",
+        type=float,
+        default=0.5,
+        help="IoU threshold to count two boxes as a match",
+    )
+    parser.add_argument(
+        "--speed-duration",
+        type=float,
+        default=5.0,
+        help="Seconds to run each model for the speed benchmark",
+    )
+    parser.add_argument(
+        "--output",
+        default=str(_PROJECT_ROOT / "Outputs" / "optimized_model_report.json"),
+    )
     args = parser.parse_args()
 
-    base_path, optimized_path = _load_config_paths(args.config, args.base, args.optimized)
+    base_path, optimized_path = _load_config_paths(
+        args.config, args.base, args.optimized
+    )
 
     images_dir = Path(args.images_dir)
     if not images_dir.exists():

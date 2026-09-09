@@ -30,12 +30,23 @@ class TestSettingsPageKeys(unittest.TestCase):
     def test_no_removed_keys_as_data_key(self):
         keys = data_keys(SETTINGS_HTML)
         for key in REMOVED_KEYS:
-            self.assertNotIn(key, keys, f"removed global key {key!r} still a settings field")
+            self.assertNotIn(
+                key, keys, f"removed global key {key!r} still a settings field"
+            )
 
     def test_all_settings_fields_are_still_valid_global_keys(self):
-        valid = {"optimize", "unit", "frame_sync", "metrics", "debug_mode",
-                 "log_level", "health_stale_threshold"}
-        self.assertTrue(set(data_keys(SETTINGS_HTML)) <= valid, data_keys(SETTINGS_HTML))
+        valid = {
+            "optimize",
+            "unit",
+            "frame_sync",
+            "metrics",
+            "debug_mode",
+            "log_level",
+            "health_stale_threshold",
+        }
+        self.assertTrue(
+            set(data_keys(SETTINGS_HTML)) <= valid, data_keys(SETTINGS_HTML)
+        )
 
     def test_bool_key_set_no_longer_contains_removed_keys(self):
         for key in ("record_mode", "use_network_tables"):
