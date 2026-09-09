@@ -34,8 +34,6 @@ def _quiet_ispy_logging():
     finally:
         ispy_logger.setLevel(old_level)
 
-# ─── Console formatting ───────────────────────────────────────────────────────
-
 class C:
     RESET = "\033[0m"
     BOLD = "\033[1m"
@@ -98,8 +96,6 @@ def _quiet_native():
         os.close(old_out)
         os.close(old_err)
 
-
-# ─── Config / model path resolution ──────────────────────────────────────────
 
 def _load_config_paths(
     config_path: str | None, base_override: str | None, optimized_override: str | None
@@ -176,8 +172,6 @@ def _find_test_images(images_dir: Path, num_images: int, seed: int | None) -> li
     return random.sample(found_list, num_images)
 
 
-# ─── IoU / matching helpers ───────────────────────────────────────────────────
-
 def _iou(a, b) -> float:
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
@@ -207,8 +201,6 @@ def _match_boxes(ref_boxes: list[Box], test_boxes: list[Box], iou_thresh: float)
             matches.append((rb, test_boxes[best_idx], best_iou))
     return matches
 
-
-# ─── Speed test ───────────────────────────────────────────────────────────────
 
 def _measure_speed(model: GenericYolo, frames: list[np.ndarray], duration: float) -> dict:
     for f in frames[: min(3, len(frames))]:
@@ -254,7 +246,6 @@ def _summarize_detection_quality(tp: int, fp: int, fn: int) -> dict:
     }
 
 
-# ─── Results container ────────────────────────────────────────────────────────
 
 @dataclass
 class ComparisonResults:
@@ -269,7 +260,6 @@ class ComparisonResults:
     verdict_reasons: list = field(default_factory=list)
 
 
-# ─── Main comparison ──────────────────────────────────────────────────────────
 def run_comparison(
     base_path: str,
     optimized_path: str,
@@ -627,7 +617,6 @@ def upsert_json_report(results: ComparisonResults, out_path: Path) -> None:
 save_json_report = upsert_json_report
 
 
-# ─── Programmatic entry point (used by boot.py's convert_model) ─────────────
 
 def compare_models(
     base_path: str,
@@ -705,7 +694,6 @@ def _suppress_stdout():
         sys.stdout = old_stdout
 
 
-# ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(

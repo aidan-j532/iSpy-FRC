@@ -13,7 +13,7 @@ class Viewer3DModule(WebModule):
         self._cached_num_keypoints = None
         self._overlays: dict[str, dict] = {}
 
-    # -- overlay API (called by add-ons) ----------------------------------
+    # overlay API (called by add-ons)
 
     def add_overlay(self, overlay_id: str, overlay: dict) -> None:
         overlay["id"] = overlay_id
@@ -22,7 +22,7 @@ class Viewer3DModule(WebModule):
     def remove_overlay(self, overlay_id: str) -> None:
         self._overlays.pop(overlay_id, None)
 
-    # -- routes ------------------------------------------------------------
+    # routes
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule("/viewer3d", "viewer3d_page",
@@ -32,7 +32,7 @@ class Viewer3DModule(WebModule):
         flask_app.add_url_rule("/api/overlays", "api_overlays",
                                self._overlays_endpoint)
 
-    # -- update (called every vision tick) ---------------------------------
+    # update (called every vision tick)
 
     def update(self, frame_data: dict):
         detections = frame_data.get("detections", [])

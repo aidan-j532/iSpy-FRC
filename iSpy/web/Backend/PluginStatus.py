@@ -180,7 +180,7 @@ class PluginStatusModule(WebModule):
             self._publish_sources,
         )
 
-    # ---------- read ----------
+    # read
 
     def _status(self):
         vision = self.context.get("vision_instance")
@@ -346,7 +346,7 @@ class PluginStatusModule(WebModule):
             return jsonify(error="Not found"), 404
         return jsonify(source=path.read_text(errors="ignore"), filename=rel)
 
-    # ---------- toggle (enable/disable in config) ----------
+    # toggle (enable/disable in config)
 
     def _toggle(self):
         data = request.get_json(force=True)
@@ -398,7 +398,7 @@ class PluginStatusModule(WebModule):
         return jsonify(success=True, enabled=config.is_addon_enabled(config_type, name),
                        needs_restart=True)
 
-    # ---------- settings (edit an enabled add-on's settings) ----------
+    # settings (edit an enabled add-on's settings)
 
     def _save_settings(self):
         data = request.get_json(force=True)
@@ -462,7 +462,7 @@ class PluginStatusModule(WebModule):
         return jsonify(success=True, settings=config.get_addon_settings(config_type, name),
                        needs_restart=True)
 
-    # ---------- create / upload / delete ----------
+    # create / upload / delete
 
     def _resolve_safe_path(self, subdir: str, filename: str) -> Path | None:
         base = (_PLUGIN_ROOT / subdir).resolve()

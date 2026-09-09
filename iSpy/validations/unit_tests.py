@@ -11,8 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-# ─── Fake out hardware imports so tests run on any machine ───────────────────
-
 # Fake rknnlite (import-order-dependent: monkeypatch sys.modules;
 # works if this file is the FIRST import of iSpy.vision.genericYolo)
 rknnlite_mod = types.ModuleType("rknnlite")
@@ -174,8 +172,6 @@ class _FakeOpenVINOCore:
 ov_mod.Core = _FakeOpenVINOCore
 sys.modules["openvino"] = ov_mod
 
-# ─── Modules under test ──────────────────────────────────────────────────────
-
 from iSpy.config.AutoOpt import SUPPORTED_FORMATS, recommend_format  # noqa: E402
 from iSpy.vision.genericYolo import Box, GenericYolo, ModelFileError, Results  # noqa: E402
 from iSpy.vision.metadata import (  # noqa: E402
@@ -185,8 +181,6 @@ from iSpy.vision.metadata import (  # noqa: E402
     write_metadata,
 )
 
-
-# ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def make_frame(w=320, h=320):
     frame = np.zeros((h, w, 3), dtype=np.uint8)
@@ -221,8 +215,6 @@ def _recommend(**overrides):
             stack.enter_context(patch.object(ao, name, return_value=value))
         return ao.recommend_format(runtime_supported=runtime_supported)
 
-
-# ─── AutoOpt tests ───────────────────────────────────────────────────────────
 
 class TestAutoOpt(unittest.TestCase):
 
@@ -307,7 +299,6 @@ class TestAutoOpt(unittest.TestCase):
         )
 
 
-# ─── Box / Results tests ─────────────────────────────────────────────────────
 
 class TestBoxResults(unittest.TestCase):
 
@@ -340,7 +331,6 @@ class TestBoxResults(unittest.TestCase):
         self.assertFalse(np.array_equal(out, frame))
 
 
-# ─── GenericYolo model handling (missing / broken / valid) ──────────────────
 
 class TestGenericYoloModelSelection(unittest.TestCase):
 
@@ -397,7 +387,6 @@ class TestGenericYoloModelSelection(unittest.TestCase):
         w.model.release.assert_called_once()
 
 
-# ─── Compiled formats (.engine / .xml) runtime (Bug 7) ──────────────────────
 
 class TestCompiledFormatGenericYolo(unittest.TestCase):
 
@@ -482,7 +471,6 @@ class TestCompiledFormatGenericYolo(unittest.TestCase):
         self.assertEqual(w.model_type, "openvino")
 
 
-# ─── RKNN / ONNX metadata round-trip ─────────────────────────────────────────
 
 class TestModelMetadata(unittest.TestCase):
 
@@ -529,7 +517,6 @@ class TestModelMetadata(unittest.TestCase):
             self.assertIsNone(read_metadata(Path(d) / "nope.rknn"))
 
 
-# ─── Pose-checkpoint regression (BUG 1) ──────────────────────────────────────
 
 class TestPosePtRegression(unittest.TestCase):
 
@@ -579,7 +566,6 @@ class TestPosePtRegression(unittest.TestCase):
         self.assertEqual(kd.shape[1:], (17, 3))
 
 
-# ─── validate_system() regression (BUG 2) ────────────────────────────────────
 
 class TestValidateSystemRegression(unittest.TestCase):
 
@@ -601,7 +587,6 @@ class TestValidateSystemRegression(unittest.TestCase):
         self.assertFalse(validate_system())
 
 
-# ─── object_detection pipeline config-normalization regression (BUG 6) ───────
 
 class _QuietLogging:
 
@@ -882,7 +867,6 @@ class TestTargetSelector(unittest.TestCase):
         self.assertIsNone(published)
 
 
-# ─── calibration gating: yellow vs red (detection vs pose) ──────────────────
 
 class TestCalibrationGating(unittest.TestCase):
 

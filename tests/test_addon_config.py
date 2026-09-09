@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 from iSpy.config.iSpyConfig import (
-    iSpyConfig,
     iSpyAddonConfig,
+    iSpyConfig,
 )
 
 
@@ -22,7 +22,8 @@ class AddonDefaultConfigTests(unittest.TestCase):
         cfg = iSpyConfig()
         for addon_type in ("trackers", "utilities", "frame_processors"):
             self.assertIsInstance(
-                cfg.config["plugins"][addon_type], dict,
+                cfg.config["plugins"][addon_type],
+                dict,
                 f"plugins.{addon_type} must be a dict",
             )
             self.assertEqual(cfg.config["plugins"][addon_type], {})
@@ -30,15 +31,28 @@ class AddonDefaultConfigTests(unittest.TestCase):
     def test_default_config_has_no_legacy_global_keys(self):
         cfg = iSpyConfig()
         for key in (
-            "dbscan", "distance_threshold", "stale_threshold", "record_mode",
-            "record_dir", "use_network_tables", "network_tables_ip",
+            "dbscan",
+            "distance_threshold",
+            "stale_threshold",
+            "record_mode",
+            "record_dir",
+            "use_network_tables",
+            "network_tables_ip",
         ):
             self.assertNotIn(key, cfg.config, f"legacy key '{key}' still present")
 
     def test_default_config_still_has_shared_global_keys(self):
         cfg = iSpyConfig()
-        for key in ("num_gpus", "device", "unit", "max_fps", "app_mode",
-                    "camera_configs", "log_level", "log_file"):
+        for key in (
+            "num_gpus",
+            "device",
+            "unit",
+            "max_fps",
+            "app_mode",
+            "camera_configs",
+            "log_level",
+            "log_file",
+        ):
             self.assertIn(key, cfg.config)
 
 
@@ -69,11 +83,13 @@ class AddonMigrationTests(unittest.TestCase):
             return iSpyConfig(str(path), create=False)
 
     def test_legacy_lists_become_dicts(self):
-        data = {"plugins": {
-            "trackers": ["object_tracker", "path_planner"],
-            "utilities": ["video_recorder", "network_table_handler"],
-            "frame_processors": [],
-        }}
+        data = {
+            "plugins": {
+                "trackers": ["object_tracker", "path_planner"],
+                "utilities": ["video_recorder", "network_table_handler"],
+                "frame_processors": [],
+            }
+        }
         cfg = self._load(data)
         self.assertEqual(
             cfg.config["plugins"]["trackers"],
@@ -113,8 +129,13 @@ class AddonMigrationTests(unittest.TestCase):
     def test_legacy_global_keys_are_removed(self):
         cfg = self._load(self._legacy_config())
         for key in (
-            "dbscan", "distance_threshold", "stale_threshold", "record_mode",
-            "record_dir", "use_network_tables", "network_tables_ip",
+            "dbscan",
+            "distance_threshold",
+            "stale_threshold",
+            "record_mode",
+            "record_dir",
+            "use_network_tables",
+            "network_tables_ip",
         ):
             self.assertNotIn(key, cfg.config)
 
@@ -148,7 +169,7 @@ class AddonMigrationTests(unittest.TestCase):
 
     def test_new_dict_layout_loads_and_folds_merged_health_addons(self):
         # health_reporter no longer exists as an add-on; its stale_threshold
-        # migrates to the top-level health_stale_threshold key (PROMPT 5)
+        # migrates to the top-level health_stale_threshold key
         data = {
             "plugins": {
                 "trackers": {"object_tracker": {"distance_threshold": 0.9}},
@@ -165,8 +186,7 @@ class AddonMigrationTests(unittest.TestCase):
             {"distance_threshold": 0.9},
         )
         self.assertIsNone(cfg.get_addon_settings("utilities", "health_reporter"))
-        self.assertNotIn("health_reporter",
-                         cfg.config["plugins"]["utilities"])
+        self.assertNotIn("health_reporter", cfg.config["plugins"]["utilities"])
         self.assertAlmostEqual(cfg.config["health_stale_threshold"], 0.7)
 
     def test_malformed_addon_values_do_not_crash(self):
@@ -204,14 +224,13 @@ class AddonConfigHelperTests(unittest.TestCase):
     def test_enable_addon_adds_entry(self):
         self.cfg.enable_addon("utilities", "video_recorder", save=False)
         self.assertTrue(self.cfg.is_addon_enabled("utilities", "video_recorder"))
-        self.assertEqual(
-            self.cfg.get_addon_settings("utilities", "video_recorder"), {}
-        )
+        self.assertEqual(self.cfg.get_addon_settings("utilities", "video_recorder"), {})
 
     def test_enable_addon_keeps_existing_settings(self):
         self.cfg.enable_addon("utilities", "video_recorder", save=False)
-        self.cfg.update_addon_settings("utilities", "video_recorder",
-                                       {"record_dir": "Clips"}, save=False)
+        self.cfg.update_addon_settings(
+            "utilities", "video_recorder", {"record_dir": "Clips"}, save=False
+        )
         self.cfg.enable_addon("utilities", "video_recorder", save=False)
         self.assertEqual(
             self.cfg.get_addon_settings("utilities", "video_recorder"),
@@ -220,12 +239,15 @@ class AddonConfigHelperTests(unittest.TestCase):
 
     def test_enable_addon_with_settings(self):
         self.cfg.enable_addon(
-            "utilities", "network_table_handler",
-            settings={"network_tables_ip": "1.2.3.4"}, save=False,
+            "utilities",
+            "network_table_handler",
+            settings={"network_tables_ip": "1.2.3.4"},
+            save=False,
         )
         self.assertEqual(
             self.cfg.get_addon_setting(
-                "utilities", "network_table_handler", "network_tables_ip"),
+                "utilities", "network_table_handler", "network_tables_ip"
+            ),
             "1.2.3.4",
         )
 
@@ -237,16 +259,18 @@ class AddonConfigHelperTests(unittest.TestCase):
     def test_set_addon_settings_requires_enabled(self):
         self.cfg.set_addon_settings("utilities", "nope", {"a": 1}, save=False)
         self.assertIsNone(self.cfg.get_addon_settings("utilities", "nope"))
-        self.cfg.set_addon_settings("trackers", "object_tracker",
-                                    {"distance_threshold": 1.0}, save=False)
+        self.cfg.set_addon_settings(
+            "trackers", "object_tracker", {"distance_threshold": 1.0}, save=False
+        )
         self.assertEqual(
             self.cfg.get_addon_settings("trackers", "object_tracker"),
             {"distance_threshold": 1.0},
         )
 
     def test_update_addon_settings_merges(self):
-        self.cfg.update_addon_settings("trackers", "object_tracker",
-                                       {"stale_threshold": 3.0}, save=False)
+        self.cfg.update_addon_settings(
+            "trackers", "object_tracker", {"stale_threshold": 3.0}, save=False
+        )
         self.assertEqual(
             self.cfg.get_addon_settings("trackers", "object_tracker"),
             {"distance_threshold": 0.6, "stale_threshold": 3.0},
@@ -255,12 +279,14 @@ class AddonConfigHelperTests(unittest.TestCase):
     def test_get_addon_setting_with_enabled_and_disabled(self):
         self.assertEqual(
             self.cfg.get_addon_setting(
-                "trackers", "object_tracker", "distance_threshold", 0.5),
+                "trackers", "object_tracker", "distance_threshold", 0.5
+            ),
             0.6,
         )
         self.assertEqual(
             self.cfg.get_addon_setting(
-                "trackers", "missing", "distance_threshold", 0.5),
+                "trackers", "missing", "distance_threshold", 0.5
+            ),
             0.5,
         )
 
@@ -272,8 +298,7 @@ class AddonConfigHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             cfg = iSpyConfig(str(path), create=True)
-            cfg.enable_addon("trackers", "object_tracker",
-                             {"distance_threshold": 1.1})
+            cfg.enable_addon("trackers", "object_tracker", {"distance_threshold": 1.1})
             loaded = iSpyConfig(str(path), create=False)
             self.assertEqual(
                 loaded.get_addon_settings("trackers", "object_tracker"),
@@ -289,14 +314,16 @@ class AddonConfigHelperTests(unittest.TestCase):
 
 class iSpyAddonConfigTests(unittest.TestCase):
     def test_empty_settings_apply_defaults(self):
-        ac = iSpyAddonConfig({}, defaults={"distance_threshold": 0.5,
-                                           "stale_threshold": 1.0})
+        ac = iSpyAddonConfig(
+            {}, defaults={"distance_threshold": 0.5, "stale_threshold": 1.0}
+        )
         self.assertEqual(ac.get("distance_threshold"), 0.5)
         self.assertEqual(ac.get("missing", "fallback"), "fallback")
 
     def test_explicit_settings_win_over_defaults(self):
-        ac = iSpyAddonConfig({"distance_threshold": 9.0},
-                             defaults={"distance_threshold": 0.5})
+        ac = iSpyAddonConfig(
+            {"distance_threshold": 9.0}, defaults={"distance_threshold": 0.5}
+        )
         self.assertEqual(ac.get("distance_threshold"), 9.0)
 
     def test_raw_dict_wrapping_and_mutation(self):

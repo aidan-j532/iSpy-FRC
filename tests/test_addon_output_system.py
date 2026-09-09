@@ -5,16 +5,15 @@ sources). See the add-on source and tests for the output contract."""
 
 import json
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from iSpy.config.iSpyConfig import iSpyAddonConfig, iSpyConfig
 from iSpy.plugins.bases import (
     UtilityBase,
-    validate_output_key,
     find_duplicate_output_keys,
+    validate_output_key,
 )
-from iSpy.plugins._loader import load_plugins
-from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "iSpy" / "plugins"
 
@@ -36,6 +35,7 @@ def addon_context(cls, settings=None):
 def _temp_recordings_dir(self):
     import shutil
     import tempfile
+
     path = tempfile.mkdtemp(prefix="ispy_rollback_")
     self.addCleanup(shutil.rmtree, path, ignore_errors=True)
     return path
@@ -120,8 +120,7 @@ class UtilityPublishOutputTests(unittest.TestCase):
         self.assertNotIn("addon_data", frame_data)
 
     def test_blank_configured_key_is_ignored_at_runtime(self):
-        inst = _OutputUtility(
-            addon_context(_OutputUtility, {"output_key": "   "}))
+        inst = _OutputUtility(addon_context(_OutputUtility, {"output_key": "   "}))
         frame_data = {}
         self.assertFalse(inst.publish_output(frame_data, 1))
         self.assertNotIn("addon_data", frame_data)
@@ -143,14 +142,17 @@ class DuplicateOutputKeyTests(unittest.TestCase):
 
     def test_vision_instance_warns_at_boot(self):
         from iSpy.iSpy import iSpy
+
         cfg = iSpyConfig()
         cfg.config["app_mode"] = False
         cfg.config["plugins"] = {
             "trackers": {},
             "utilities": {
                 "example_utility": {"output_key": "clash"},
-                "rollback": {"output_key": "clash",
-                             "data_dir": _temp_recordings_dir(self)},
+                "rollback": {
+                    "output_key": "clash",
+                    "data_dir": _temp_recordings_dir(self),
+                },
             },
             "frame_processors": {},
         }
@@ -172,6 +174,7 @@ class NetworkHandlerSourceResolutionTests(unittest.TestCase):
     def _fresh_module(self, is_connected=True):
         import importlib
         import sys
+
         sys.modules.pop("iSpy.plugins.utilities.BuiltIn.NetworkHandler", None)
         fake = mock.Mock()
         fake.isConnected.return_value = is_connected
@@ -189,7 +192,8 @@ class NetworkHandlerSourceResolutionTests(unittest.TestCase):
         ntcore_fake.NetworkTableInstance.getDefault.return_value = fake
         with mock.patch.dict(sys.modules, {"ntcore": ntcore_fake}):
             return importlib.import_module(
-                "iSpy.plugins.utilities.BuiltIn.NetworkHandler")
+                "iSpy.plugins.utilities.BuiltIn.NetworkHandler"
+            )
 
     def _handler(self, settings=None):
         mod = self._fresh_module()
@@ -198,21 +202,20 @@ class NetworkHandlerSourceResolutionTests(unittest.TestCase):
 
     def test_existing_top_level_source_resolves(self):
         handler = self._handler()
-        self.assertEqual(
-            handler._resolve_source("fps", {"fps": 42.5}), 42.5)
+        self.assertEqual(handler._resolve_source("fps", {"fps": 42.5}), 42.5)
 
     def test_special_case_detections_still_works(self):
         handler = self._handler()
         dets = [object()]
-        self.assertIs(
-            handler._resolve_source("detections", {"detections": dets}), dets)
+        self.assertIs(handler._resolve_source("detections", {"detections": dets}), dets)
         self.assertEqual(handler._resolve_source("detections", {}), [])
 
     def test_addon_data_dotted_source_resolves(self):
         handler = self._handler()
         frame_data = {"addon_data": {"robot_speed": 3.4}}
         self.assertEqual(
-            handler._resolve_source("addon_data.robot_speed", frame_data), 3.4)
+            handler._resolve_source("addon_data.robot_speed", frame_data), 3.4
+        )
 
     def test_missing_sources_fail_safely_as_none(self):
         handler = self._handler()
@@ -222,10 +225,18 @@ class NetworkHandlerSourceResolutionTests(unittest.TestCase):
         self.assertIsNone(handler._resolve_source("addon_data.anything", {"fps": 1}))
 
     def _auto_handler(self, key):
-        return self._handler({"publish": [
-            {"name": key, "data_type": "auto",
-             "source": f"addon_data.{key}", "nt_topic": key},
-        ]})
+        return self._handler(
+            {
+                "publish": [
+                    {
+                        "name": key,
+                        "data_type": "auto",
+                        "source": f"addon_data.{key}",
+                        "nt_topic": key,
+                    },
+                ]
+            }
+        )
 
     def test_auto_publishes_bool_as_boolean_not_number(self):
         handler = self._auto_handler("flag")
@@ -290,26 +301,45 @@ class NetworkHandlerSourceResolutionTests(unittest.TestCase):
 
     def test_manual_types_still_publish(self):
         # existing manually configured behavior is untouched
-        handler = self._handler({"publish": [
-            {"name": "fps", "data_type": "number", "source": "fps", "nt_topic": "fps"},
-        ]})
+        handler = self._handler(
+            {
+                "publish": [
+                    {
+                        "name": "fps",
+                        "data_type": "number",
+                        "source": "fps",
+                        "nt_topic": "fps",
+                    },
+                ]
+            }
+        )
         handler.update({"fps": 60.5, "cameras": []})
         pub = handler._subscribers["pub/VisionData/fps"]
         pub.set.assert_called_with(60.5)
 
     def test_json_publishing_is_pipeline_agnostic(self):
         from iSpy.vision.Object import Object
+
         handler = self._handler()
         det = Object(1.0, 2.0, 3.0)
-        handler.update({"detections": [det], "fps": 10,
-                        "detection_count": 1, "camera_lag_s": 0.0, "cameras": []})
+        handler.update(
+            {
+                "detections": [det],
+                "fps": 10,
+                "detection_count": 1,
+                "camera_lag_s": 0.0,
+                "cameras": [],
+            }
+        )
         self._fake_inst.getStringTopic.assert_called_with("vision_data")
 
 
 class PublishSourcesApiTests(unittest.TestCase):
     def _module(self, plugins=None):
         import flask
+
         from iSpy.web.Backend.PluginStatus import PluginStatusModule
+
         cfg = iSpyConfig()
         cfg.config["app_mode"] = False
         if plugins is not None:
@@ -330,31 +360,42 @@ class PublishSourcesApiTests(unittest.TestCase):
             self.assertIn(expected, sources)
 
     def test_enabled_utility_outputs_declared_even_before_first_frame(self):
-        mod, cfg, ctx = self._module({
-            "trackers": {}, "utilities": {"example_utility": {}},
-            "frame_processors": {},
-        })
+        mod, cfg, ctx = self._module(
+            {
+                "trackers": {},
+                "utilities": {"example_utility": {}},
+                "frame_processors": {},
+            }
+        )
         with ctx:
             payload = mod._publish_sources().get_json()
-        entry = next(s for s in payload["sources"]
-                     if s["source"] == "addon_data.example_output")
+        entry = next(
+            s for s in payload["sources"] if s["source"] == "addon_data.example_output"
+        )
         self.assertEqual(entry["utility"], "example_utility")
 
     def test_disabled_utilities_excluded(self):
-        mod, _cfg, ctx = self._module({
-            "trackers": {}, "utilities": {}, "frame_processors": {},
-        })
+        mod, _cfg, ctx = self._module(
+            {
+                "trackers": {},
+                "utilities": {},
+                "frame_processors": {},
+            }
+        )
         with ctx:
             payload = mod._publish_sources().get_json()
         self.assertFalse(
-            any(s["source"].startswith("addon_data.") for s in payload["sources"]))
+            any(s["source"].startswith("addon_data.") for s in payload["sources"])
+        )
 
     def test_customized_output_key_used_from_config(self):
-        mod, cfg, ctx = self._module({
-            "trackers": {},
-            "utilities": {"example_utility": {"output_key": "my_counter"}},
-            "frame_processors": {},
-        })
+        mod, cfg, ctx = self._module(
+            {
+                "trackers": {},
+                "utilities": {"example_utility": {"output_key": "my_counter"}},
+                "frame_processors": {},
+            }
+        )
         with ctx:
             payload = mod._publish_sources().get_json()
         sources = [s["source"] for s in payload["sources"]]
@@ -362,31 +403,39 @@ class PublishSourcesApiTests(unittest.TestCase):
         self.assertNotIn("addon_data.example_output", sources)
 
     def test_duplicate_declared_outputs_flagged(self):
-        mod, cfg, ctx = self._module({
-            "trackers": {},
-            "utilities": {
-                "example_utility": {"output_key": "clash"},
-                "rollback": {"output_key": "clash",
-                             "data_dir": _temp_recordings_dir(self)},
-            },
-            "frame_processors": {},
-        })
-        with mock.patch(
-            "iSpy.web.Backend.PluginStatus.load_plugins",
-            return_value={
-                "example_utility": _OutputUtility,
-                "rollback": _OutputUtility,
-            },
+        mod, cfg, ctx = self._module(
+            {
+                "trackers": {},
+                "utilities": {
+                    "example_utility": {"output_key": "clash"},
+                    "rollback": {
+                        "output_key": "clash",
+                        "data_dir": _temp_recordings_dir(self),
+                    },
+                },
+                "frame_processors": {},
+            }
+        )
+        with (
+            mock.patch(
+                "iSpy.web.Backend.PluginStatus.load_plugins",
+                return_value={
+                    "example_utility": _OutputUtility,
+                    "rollback": _OutputUtility,
+                },
+            ),
+            ctx,
         ):
-            with ctx:
-                payload = mod._publish_sources().get_json()
+            payload = mod._publish_sources().get_json()
         clashes = [s for s in payload["sources"] if s["source"] == "addon_data.clash"]
         self.assertEqual(len(clashes), 2)
         self.assertTrue(all(s.get("duplicate") for s in clashes))
 
     def test_route_registered(self):
         import flask
+
         from iSpy.web.Backend.PluginStatus import PluginStatusModule
+
         app = flask.Flask(__name__)
         mod = PluginStatusModule({"config": iSpyConfig()})
         mod.register_routes(app)
@@ -396,19 +445,25 @@ class PublishSourcesApiTests(unittest.TestCase):
 
 class SaveSettingsOutputKeyValidationTests(unittest.TestCase):
     def _save(self, settings):
-        import flask
         from unittest.mock import Mock
+
+        import flask
+
         from iSpy.web.Backend.PluginStatus import PluginStatusModule
+
         cfg = iSpyConfig()
         cfg.config["app_mode"] = False
         cfg.config["plugins"] = {
-            "trackers": {}, "utilities": {"example_utility": {}},
+            "trackers": {},
+            "utilities": {"example_utility": {}},
             "frame_processors": {},
         }
         mod = PluginStatusModule({"config": cfg, "vision_instance": Mock()})
         req = Mock()
         req.get_json.return_value = {
-            "name": "example_utility", "type": "utility", "settings": settings,
+            "name": "example_utility",
+            "type": "utility",
+            "settings": settings,
         }
         with flask.Flask(__name__).app_context():
             with mock.patch("iSpy.web.Backend.PluginStatus.request", req):
@@ -424,8 +479,9 @@ class SaveSettingsOutputKeyValidationTests(unittest.TestCase):
     def test_empty_key_rejected_400(self):
         resp, cfg = self._save({"output_key": ""})
         self.assertEqual(resp[1], 400)
-        self.assertNotIn("output_key",
-                         cfg.get_addon_settings("utilities", "example_utility"))
+        self.assertNotIn(
+            "output_key", cfg.get_addon_settings("utilities", "example_utility")
+        )
 
     def test_whitespace_only_key_rejected_400(self):
         resp, _cfg = self._save({"output_key": "   \n\t"})
@@ -438,5 +494,3 @@ class SaveSettingsOutputKeyValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

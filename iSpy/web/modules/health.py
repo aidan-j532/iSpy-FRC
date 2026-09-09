@@ -26,7 +26,7 @@ class HealthModule(WebModule):
         self._loop_count = 0
         self._last_tick = time.perf_counter()
         self._uptime_start = time.perf_counter()
-        # single canonical health implementation (PROMPT 5 merged the old
+        # single canonical health implementation merged the old
         # health_reporter/status_reporter add-ons into this always-on module)
         self._stale_threshold = float(config.get("health_stale_threshold", 1.0) or 1.0)
 
