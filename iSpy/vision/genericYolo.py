@@ -1,23 +1,24 @@
+import functools
+import importlib
 import logging
 import math
 import os
+import pickletools
+import queue
+import sys
+import threading
+import warnings
+import zipfile
+from pathlib import Path
+from typing import TYPE_CHECKING
+
 import cv2
 import numpy as np
+
 from iSpy.vision.ModelInspector import fill_missing_config
-import threading
-import queue
-import warnings
-# NOTE: torch is deliberately NOT imported at module scope. It is a build-time
-# dependency ([dev]/[optimizer] extras), not a runtime one - deploy boards run
-# `pip install .` and infer through RKNN/ONNX/TFLite without it. A top-level
-# import here makes `import iSpy.vision.pipelines` fail on every such board.
-# Import it inside the functions that need it, as the rest of iSpy already does.
-from pathlib import Path
-import importlib
-import functools
-import pickletools
-import sys
-import zipfile
+
+if TYPE_CHECKING:
+    import torch
 
 
 def torch_load(path, trusted: bool = True):
@@ -916,7 +917,8 @@ class GenericYolo:
             name = engine.get_tensor_name(idx)
             shape = context.get_tensor_shape(name)
             if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                bindings.append(np.ascontiguousarray(inp).ctypes.data)
+                inp_contig = np.ascontiguousarray(inp)
+                bindings.append(inp_contig.ctypes.data)
             else:
                 out = np.empty(tuple(shape), dtype=np.float32)
                 bindings.append(out.ctypes.data)

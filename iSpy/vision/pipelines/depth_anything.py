@@ -829,7 +829,8 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             name = engine.get_tensor_name(idx)
             shape = context.get_tensor_shape(name)
             if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                bindings.append(np.array(pixel_values).ctypes.data)
+                pixel_values_contig = np.ascontiguousarray(pixel_values)
+                bindings.append(pixel_values_contig.ctypes.data)
             else:
                 out = np.empty(tuple(shape), dtype=np.float32)
                 bindings.append(out.ctypes.data)

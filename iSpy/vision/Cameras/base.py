@@ -239,6 +239,10 @@ class CameraBase:
 
     def _open_capture_bounded(self, backend):
         global _open_worker_live
+        if self.stopped:
+            raise CameraOpenTimeout(
+                f"Camera {self.source}: stopping - aborting open with backend {backend}"
+            )
         holder = {"cap": None, "error": None, "abandoned": False}
 
         with _open_worker_guard:
@@ -253,10 +257,6 @@ class CameraBase:
             global _open_worker_live
             try:
                 try:
-                    # OpenCV's v4l2 backend prints some open failures via
-                    # perror() straight to fd 2 (see _silence_stderr) - silence
-                    # it here so a non-camera /dev/video* node can't spam the
-                    # log on every open/reconnect attempt.
                     with _silence_stderr():
                         cap = (
                             cv2.VideoCapture(self.source)
@@ -282,10 +282,6 @@ class CameraBase:
             daemon=True,
             name=f"CapOpen-{self.source}-{backend}",
         )
-        if self.stopped:
-            raise CameraOpenTimeout(
-                f"Camera {self.source}: stopping - aborting open with backend {backend}"
-            )
         try:
             opener.start()
         except Exception:

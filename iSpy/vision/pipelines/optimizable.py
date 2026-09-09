@@ -1,4 +1,3 @@
-
 import logging
 from pathlib import Path
 
@@ -8,11 +7,18 @@ from pathlib import Path
 # Original: ("onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu", "hef")
 # "hef" removed so 'auto' resolution, schema options, and auto_opt validation
 # can never select the disabled Hailo backend.
-SUPPORTED_TARGET_FORMATS = ("onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu")
+SUPPORTED_TARGET_FORMATS = (
+    "onnx",
+    "rknn",
+    "tflite",
+    "openvino",
+    "engine",
+    "coreml",
+    "tpu",
+)
 
 
 class OptimizableModelPipeline:
-
     #: extra config-schema keys surfaced by get_optimization_options()
     _OPT_OPTIONS_EXTRA: tuple[str, ...] = ()
 
@@ -29,8 +35,8 @@ class OptimizableModelPipeline:
         # HAILO DISABLED - see <reason>
         # "hef": "npu",      # Hailo NPU
         "tpu": "tpu",
-        "engine": "gpu",    # NVIDIA TensorRT
-        "coreml": "gpu",    # Apple GPU
+        "engine": "gpu",  # NVIDIA TensorRT
+        "coreml": "gpu",  # Apple GPU
         "openvino": "gpu",  # Intel GPU/VPU
         "tflite": "cpu",
         "onnx": "cpu",
@@ -85,7 +91,7 @@ class OptimizableModelPipeline:
         target_formats: tuple[str, ...] = ("auto", "onnx"),
         input_size_default: int | None = None,
         input_size_help: str = "Letterbox resolution used for the optimized "
-                               "model conversion and inference.",
+        "model conversion and inference.",
     ) -> dict:
         schema = {
             "optimize": {
@@ -97,12 +103,12 @@ class OptimizableModelPipeline:
                 "default": "off",
                 "optimize_toggle": True,
                 "help": "Auto-detect and build the best backend artifact for this "
-                        "device (rknn on Rockchip NPU, engine on "
-                        "NVIDIA, onnx elsewhere, etc.) in the background. "
-                        "'auto' picks the best format via recommend_format(). "
-                        "Set 'onnx' to force a specific backend. "
-                        "'off' disables optimization. Falls back to the top-level "
-                        "config 'optimize' when unset.",
+                "device (rknn on Rockchip NPU, engine on "
+                "NVIDIA, onnx elsewhere, etc.) in the background. "
+                "'auto' picks the best format via recommend_format(). "
+                "Set 'onnx' to force a specific backend. "
+                "'off' disables optimization. Falls back to the top-level "
+                "config 'optimize' when unset.",
             },
             "target_format": {
                 "type": "select",
@@ -111,7 +117,7 @@ class OptimizableModelPipeline:
                 "default": "auto",
                 "quantization": True,
                 "help": "'auto' picks the best backend for this device via "
-                        "recommend_format(). Set an explicit format to override.",
+                "recommend_format(). Set an explicit format to override.",
             },
             "quantize": {
                 "type": "toggle",
@@ -119,7 +125,7 @@ class OptimizableModelPipeline:
                 "default": False,
                 "quantization": True,
                 "help": "Quantize the optimized artifact (int8). Only meaningful "
-                        "with optimize or target_format set.",
+                "with optimize or target_format set.",
             },
             "quantization_dataset": {
                 "type": "browse",
@@ -130,8 +136,8 @@ class OptimizableModelPipeline:
                 "quantization": True,
                 "gated_by": "quantize",
                 "help": "Optional folder of calibration images used for "
-                        "quantization. Leave empty to auto-download images "
-                        "from the model's calibration keywords.",
+                "quantization. Leave empty to auto-download images "
+                "from the model's calibration keywords.",
             },
         }
         if input_size_default is not None:
@@ -159,8 +165,12 @@ class OptimizableModelPipeline:
 
     def get_optimization_options(self) -> dict:
         schema = self.config_schema()
-        keys = ("optimize", "target_format", "quantize", "quantization_dataset") \
-            + self._OPT_OPTIONS_EXTRA
+        keys = (
+            "optimize",
+            "target_format",
+            "quantize",
+            "quantization_dataset",
+        ) + self._OPT_OPTIONS_EXTRA
         return {key: schema[key] for key in keys if key in schema}
 
     # ------------------------------------------------------------------
@@ -178,12 +188,29 @@ class OptimizableModelPipeline:
             target = self.recommended_format()
         if target not in SUPPORTED_TARGET_FORMATS:
             self.logger.warning(
-                "Recommended target format %r unsupported - using onnx", target,
+                "Recommended target format %r unsupported - using onnx",
+                target,
             )
             return "onnx"
         return target
 
     def _target_format_cached(self) -> str:
+        requested_format = getattr(self, "_requested_format", "")
+        auto_opt = getattr(self, "_auto_opt", False)
+        vm_getter = getattr(self, "_current_vm_config", None)
+        if vm_getter is not None:
+            vm = vm_getter()
+            if isinstance(vm, dict):
+                if "target_format" in vm:
+                    requested_format = vm.get("target_format")
+                auto_opt = vm.get("optimize", vm.get("auto_opt", auto_opt))
+        requested_format = str(requested_format or "auto").strip().lower()
+        cache_key = (requested_format, str(auto_opt).strip().lower())
+        if cache_key != getattr(self, "_target_format_request", None):
+            self._requested_format = requested_format
+            self._auto_opt = self._normalize_auto_opt(auto_opt)
+            self._target_format_request = cache_key
+            self._target_format = None
         if self._target_format is None:
             self._target_format = self._resolve_target_format()
         return self._target_format
@@ -193,6 +220,19 @@ class OptimizableModelPipeline:
     # ------------------------------------------------------------------
 
     def _optimization_requested(self) -> bool:
+        vm_getter = getattr(self, "_current_vm_config", None)
+        if vm_getter is not None:
+            vm = vm_getter()
+            if isinstance(vm, dict):
+                opt_val = vm.get("optimize", vm.get("auto_opt", False))
+                if isinstance(opt_val, str):
+                    if opt_val.lower().strip() in ("off", "false", "0", ""):
+                        opt_val = False
+                    else:
+                        opt_val = True
+                q_val = vm.get("quantize", vm.get("quantized", False))
+                return bool(opt_val) or bool(q_val)
+
         if bool(getattr(self, "quantize", False)):
             return True
         auto_opt = getattr(self, "_auto_opt", False)
@@ -202,18 +242,6 @@ class OptimizableModelPipeline:
             return True
         if auto_opt:
             return True
-        vm_getter = getattr(self, "_current_vm_config", None)
-        if vm_getter is not None:
-            vm = vm_getter()
-            if isinstance(vm, dict):
-                opt_val = vm.get("optimize") or vm.get("auto_opt")
-                if isinstance(opt_val, str):
-                    if opt_val.lower().strip() in ("off", "false", "0", ""):
-                        opt_val = False
-                    else:
-                        opt_val = True
-                q_val = vm.get("quantize") or vm.get("quantized")
-                return bool(opt_val) or bool(q_val)
         return False
 
     @staticmethod
@@ -302,13 +330,17 @@ class OptimizableModelPipeline:
         if source is None or not current or current_stem == source_stem:
             return
         from iSpy.vision.optimizer import existing_artifact_for
+
         artifact = existing_artifact_for(source, self._target_format_cached())
         preferred = artifact or str(self._resolve_model_path(source) or source)
         if self._resolve_model_path(current) != self._resolve_model_path(preferred):
             self.logger.warning(
                 "Camera '%s': vision_model.file_path (%s) doesn't match "
                 "source_pt (%s) - correcting to %s and persisting.",
-                getattr(self, "_cam_name", "?"), current, source, preferred,
+                getattr(self, "_cam_name", "?"),
+                current,
+                source,
+                preferred,
             )
             self.yolo_model_file = preferred
             self._persist_file_path(preferred, config)

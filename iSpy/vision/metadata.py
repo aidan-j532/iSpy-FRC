@@ -1,12 +1,12 @@
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
+
 METADATA_SCHEMA = {
     "task": str,
     "nc": int,
     "names": dict,
     "input_size": list,
     "kpt_shape": list,
-
     "output_format": str,
     "output_layout": str,
     "box_format": str,
@@ -17,7 +17,6 @@ METADATA_SCHEMA = {
     "quantization": str,
     "quant_scale": float,
     "box_coord_scale": float,
-
     "input_layout": str,
     "input_dtype": str,
     "input_letterbox": bool,
@@ -34,7 +33,7 @@ def metadata_path_for(model_path: Path) -> Path:
     return model_path.parent / f"{model_path.stem}_metadata.yaml"
 
 
-def write_metadata(path: Path, meta: Dict[str, Any]) -> None:
+def write_metadata(path: Path, meta: dict[str, Any]) -> None:
     try:
         from ruamel.yaml import YAML
     except Exception:
@@ -45,29 +44,36 @@ def write_metadata(path: Path, meta: Dict[str, Any]) -> None:
         yaml.dump(meta, f)
 
 
-def read_metadata(model_path: Path) -> Dict[str, Any] | None:
+def read_metadata(model_path: Path) -> dict[str, Any] | None:
     mp = metadata_path_for(model_path)
     if not mp.exists():
         return None
     try:
         from ruamel.yaml import YAML
+
         return YAML(typ="safe").load(mp) or {}
     except Exception:
         return None
-    
-def get_calibration_keywords(pt_path: Path, default: list[str] | None = None) -> list[str]:
+
+
+def get_calibration_keywords(
+    pt_path: Path, default: list[str] | None = None
+) -> list[str]:
     meta = read_metadata(pt_path)
     if meta and meta.get("calibration_keywords"):
         return list(meta["calibration_keywords"])
     return list(default) if default else []
+
 
 def set_calibration_keywords(pt_path: Path, keywords: list[str]) -> None:
     meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
     meta["calibration_keywords"] = list(keywords)
     write_metadata(metadata_path_for(pt_path), meta)
 
-def metadata_from_pt(pt_path: Path, trusted: bool = True) -> Dict[str, Any]:
+
+def metadata_from_pt(pt_path: Path, trusted: bool = True) -> dict[str, Any]:
     import torch
+
     from iSpy.vision.genericYolo import torch_load
 
     ckpt = torch_load(pt_path, trusted=trusted)
@@ -114,7 +120,7 @@ def metadata_from_pt(pt_path: Path, trusted: bool = True) -> Dict[str, Any]:
     except Exception:
         input_size = [640, 640]
 
-    meta: Dict[str, Any] = {
+    meta: dict[str, Any] = {
         "task": task,
         "nc": nc,
         "names": names,
@@ -151,98 +157,100 @@ def metadata_from_pt(pt_path: Path, trusted: bool = True) -> Dict[str, Any]:
     return meta
 
 
-def derive_format_metadata(pt_meta: Dict[str, Any], target_format: str) -> Dict[str, Any]:
+def derive_format_metadata(
+    pt_meta: dict[str, Any], target_format: str
+) -> dict[str, Any]:
     base = dict(pt_meta)
 
     FORMAT_CONTRACTS = {
         "rknn": {
-            "output_format":      "raw",
-            "output_layout":      "features_first",
-            "box_format":         "cxcywh",
-            "score_mode":         "objectness" if pt_meta.get("nc", 1) == 1 else "multi_class",
-            "scores_are_logits":  False,
+            "output_format": "raw",
+            "output_layout": "features_first",
+            "box_format": "cxcywh",
+            "score_mode": "objectness" if pt_meta.get("nc", 1) == 1 else "multi_class",
+            "scores_are_logits": False,
             "apply_software_nms": True,
-            "quantization":       "int8",
-            "quant_scale":        255.0,
-            "input_layout":       "nhwc",
-            "input_dtype":        "uint8",
-            "input_letterbox":    True,
-            "input_pad_value":    114,
-            "input_normalize":    False,
+            "quantization": "int8",
+            "quant_scale": 255.0,
+            "input_layout": "nhwc",
+            "input_dtype": "uint8",
+            "input_letterbox": True,
+            "input_pad_value": 114,
+            "input_normalize": False,
         },
         "onnx": {
-            "output_format":      "raw",
-            "output_layout":      "features_first",
-            "box_format":         "cxcywh",
-            "score_mode":         "objectness" if pt_meta.get("nc", 1) == 1 else "multi_class",
-            "scores_are_logits":  False,
+            "output_format": "raw",
+            "output_layout": "features_first",
+            "box_format": "cxcywh",
+            "score_mode": "objectness" if pt_meta.get("nc", 1) == 1 else "multi_class",
+            "scores_are_logits": False,
             "apply_software_nms": True,
-            "quantization":       "none",
-            "input_layout":       "nchw",
-            "input_dtype":        "float32",
-            "input_letterbox":    True,
-            "input_pad_value":    114,
-            "input_normalize":    True,
-            "input_scale":        255.0,
+            "quantization": "none",
+            "input_layout": "nchw",
+            "input_dtype": "float32",
+            "input_letterbox": True,
+            "input_pad_value": 114,
+            "input_normalize": True,
+            "input_scale": 255.0,
         },
         "tflite": {
-            "output_format":      "raw",
-            "output_layout":      "anchors_first",
-            "box_format":         "cxcywh",
-            "score_mode":         "objectness" if pt_meta.get("nc", 1) == 1 else "multi_class",
-            "scores_are_logits":  False,
+            "output_format": "raw",
+            "output_layout": "anchors_first",
+            "box_format": "cxcywh",
+            "score_mode": "objectness" if pt_meta.get("nc", 1) == 1 else "multi_class",
+            "scores_are_logits": False,
             "apply_software_nms": True,
-            "quantization":       "int8",
-            "quant_scale":        255.0,
-            "input_layout":       "nhwc",
-            "input_dtype":        "uint8",
-            "input_letterbox":    True,
-            "input_pad_value":    114,
-            "input_normalize":    False,
+            "quantization": "int8",
+            "quant_scale": 255.0,
+            "input_layout": "nhwc",
+            "input_dtype": "uint8",
+            "input_letterbox": True,
+            "input_pad_value": 114,
+            "input_normalize": False,
         },
         "openvino": {
-            "output_format":      "hardware_nms",
-            "output_layout":      "anchors_first",
-            "box_format":         "xyxy",
-            "score_mode":         "objectness",
-            "scores_are_logits":  False,
+            "output_format": "hardware_nms",
+            "output_layout": "anchors_first",
+            "box_format": "xyxy",
+            "score_mode": "objectness",
+            "scores_are_logits": False,
             "apply_software_nms": False,
-            "quantization":       "none",
-            "input_layout":       "nhwc",
-            "input_dtype":        "uint8",
-            "input_letterbox":    True,
-            "input_pad_value":    114,
-            "input_normalize":    False,
+            "quantization": "none",
+            "input_layout": "nhwc",
+            "input_dtype": "uint8",
+            "input_letterbox": True,
+            "input_pad_value": 114,
+            "input_normalize": False,
         },
         "coreml": {
-            "output_format":      "hardware_nms",
-            "output_layout":      "anchors_first",
-            "box_format":         "xyxy",
-            "score_mode":         "objectness",
-            "scores_are_logits":  False,
+            "output_format": "hardware_nms",
+            "output_layout": "anchors_first",
+            "box_format": "xyxy",
+            "score_mode": "objectness",
+            "scores_are_logits": False,
             "apply_software_nms": False,
-            "quantization":       "none",
-            "input_layout":       "nhwc",
-            "input_dtype":        "float32",
-            "input_letterbox":    True,
-            "input_pad_value":    114,
-            "input_normalize":    True,
-            "input_scale":        255.0,
+            "quantization": "none",
+            "input_layout": "nhwc",
+            "input_dtype": "float32",
+            "input_letterbox": True,
+            "input_pad_value": 114,
+            "input_normalize": True,
+            "input_scale": 255.0,
         },
         "engine": {
-            "output_format":      "hardware_nms",
-            "output_layout":      "anchors_first",
-            "box_format":         "xyxy",
-            "score_mode":         "objectness",
-            "scores_are_logits":  False,
+            "output_format": "hardware_nms",
+            "output_layout": "anchors_first",
+            "box_format": "xyxy",
+            "score_mode": "objectness",
+            "scores_are_logits": False,
             "apply_software_nms": False,
-            "quantization":       "none",
-            "input_layout":       "nchw",
-            "input_dtype":        "float32",
-            "input_letterbox":    True,
-            "input_pad_value":    114,
-            "input_normalize":    True,
-            "input_scale":        255.0,
+            "quantization": "none",
+            "input_layout": "nchw",
+            "input_dtype": "float32",
+            "input_letterbox": True,
+            "input_pad_value": 114,
+            "input_normalize": True,
+            "input_scale": 255.0,
         },
     }
 

@@ -9,12 +9,11 @@ from unittest import mock
 
 import flask
 
-from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
-from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
 from iSpy.vision.optimizer import existing_artifact_for
+from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
 from iSpy.web.modules.cameras import _resolve_vision_model_files
 from iSpy.web.modules.models import ModelsModule
-
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -31,12 +30,9 @@ def _make_source_tree(tmp: Path, names=("pose",)) -> Path:
 
 
 class _RootPatched(unittest.TestCase):
-
     def setUp(self):
         self.tmp = _make_source_tree(Path(tempfile.mkdtemp()))
-        self._root_patch = mock.patch(
-            "iSpy.vision.optimizer._PROJECT_ROOT", self.tmp
-        )
+        self._root_patch = mock.patch("iSpy.vision.optimizer._PROJECT_ROOT", self.tmp)
         self._root_patch.start()
 
     def tearDown(self):
@@ -66,7 +62,11 @@ class ExistingArtifactTests(_RootPatched):
 
     def test_ignores_non_pt_input(self):
         pt = self.tmp / "YoloModels" / "pytorch" / "pose.pt"
-        self.assertIsNone(existing_artifact_for(self.tmp / "YoloModels" / "rknn" / "pose.rknn", "rknn"))
+        self.assertIsNone(
+            existing_artifact_for(
+                self.tmp / "YoloModels" / "rknn" / "pose.rknn", "rknn"
+            )
+        )
         self.assertIsNone(existing_artifact_for(None, "rknn"))
         self.assertIsNone(existing_artifact_for("", "rknn"))
         self.assertEqual(existing_artifact_for(pt, None), "YoloModels/rknn/pose.rknn")
@@ -107,11 +107,12 @@ class ResolveVisionModelFilesTests(_RootPatched):
             },
         }
         _resolve_vision_model_files(settings)
-        self.assertEqual(settings["vision_model"]["file_path"], "YoloModels/rknn/pose.rknn")
+        self.assertEqual(
+            settings["vision_model"]["file_path"], "YoloModels/rknn/pose.rknn"
+        )
 
 
 class ModelsSelectTests(unittest.TestCase):
-
     _MODEL = "YoloModels/pytorch/_boot_test_pose.pt"
     _ARTIFACT = "YoloModels/rknn/_boot_test_pose.rknn"
 
@@ -125,7 +126,10 @@ class ModelsSelectTests(unittest.TestCase):
             f = self._repo_root / rel
             if f.exists():
                 f.unlink()
-        for d in (self._repo_root / "YoloModels" / "rknn", self._repo_root / "YoloModels" / "pytorch"):
+        for d in (
+            self._repo_root / "YoloModels" / "rknn",
+            self._repo_root / "YoloModels" / "pytorch",
+        ):
             if d.exists() and not any(d.iterdir()):
                 d.rmdir()
 
@@ -145,10 +149,18 @@ class ModelsSelectTests(unittest.TestCase):
                     "name": "object_detection",
                     "settings": {
                         "target_format": target_format,
-                        "vision_model": {"file_path": self._MODEL, "source_pt": self._MODEL},
+                        "vision_model": {
+                            "file_path": self._MODEL,
+                            "source_pt": self._MODEL,
+                        },
                     },
                 },
-                "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
+                "calibration": {
+                    "distance": 1.0,
+                    "game_piece_size": 1.0,
+                    "size": 100,
+                    "fov": 90,
+                },
             }
         }
         return cfg
@@ -156,7 +168,9 @@ class ModelsSelectTests(unittest.TestCase):
     def _select(self, cfg):
         app = flask.Flask(__name__)
         pt = self._repo_root / self._MODEL
-        with app.test_request_context("/api/models/select", json={"file_path": str(pt)}):
+        with app.test_request_context(
+            "/api/models/select", json={"file_path": str(pt)}
+        ):
             mod = ModelsModule({"config": cfg})
             return mod._select()
 
@@ -165,14 +179,18 @@ class ModelsSelectTests(unittest.TestCase):
         cfg = self._config("rknn")
         resp = self._select(cfg)
         self.assertTrue(resp.json["success"])
-        vm = cfg.config["camera_configs"]["cam_0"]["pipeline"]["settings"]["vision_model"]
+        vm = cfg.config["camera_configs"]["cam_0"]["pipeline"]["settings"][
+            "vision_model"
+        ]
         self.assertEqual(vm["source_pt"], self._MODEL)
         self.assertEqual(vm["file_path"], self._ARTIFACT)
 
     def test_select_falls_back_to_source_pt(self):
         cfg = self._config("engine")
         self._select(cfg)
-        vm = cfg.config["camera_configs"]["cam_0"]["pipeline"]["settings"]["vision_model"]
+        vm = cfg.config["camera_configs"]["cam_0"]["pipeline"]["settings"][
+            "vision_model"
+        ]
         self.assertEqual(vm["source_pt"], self._MODEL)
         self.assertEqual(vm["file_path"], self._MODEL)
 
@@ -185,7 +203,6 @@ class _FakeModel:
 
 
 class OptimizedActiveTests(unittest.TestCase):
-
     _PT = "YoloModels/pytorch/_boot_test_pose.pt"
     _ARTIFACT = "YoloModels/rknn/_boot_test_pose.rknn"
     _STALE = "YoloModels/rknn/_boot_test_stale_fuel.rknn"
@@ -205,12 +222,24 @@ class OptimizedActiveTests(unittest.TestCase):
                 d.rmdir()
 
     def _cam(self, file_path, source_pt):
-        cam_cfg = iSpyCameraConfig({
-            "name": "cam", "source": 0,
-            "pipeline": {"name": "object_detection", "settings": {"vision_model": {
-                "file_path": file_path, "source_pt": source_pt}}},
-            "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
-        })
+        cam_cfg = iSpyCameraConfig(
+            {
+                "name": "cam",
+                "source": 0,
+                "pipeline": {
+                    "name": "object_detection",
+                    "settings": {
+                        "vision_model": {"file_path": file_path, "source_pt": source_pt}
+                    },
+                },
+                "calibration": {
+                    "distance": 1.0,
+                    "game_piece_size": 1.0,
+                    "size": 100,
+                    "fov": 90,
+                },
+            }
+        )
         cam = ObjectDetectionPipeline.__new__(ObjectDetectionPipeline)
         cam.config = cam_cfg
         cam.model = SimpleNamespace(model_type="rknn")
@@ -236,9 +265,48 @@ class OptimizedActiveTests(unittest.TestCase):
         cam = self._cam(str(_REPO / self._ARTIFACT), str(_REPO / self._PT))
         self.assertTrue(cam._optimized_active())
 
+    def test_live_optimize_setting_overrides_cached_instance_state(self):
+        cam = self._cam(str(_REPO / self._PT), str(_REPO / self._PT))
+        cam.quantize = True
+        cam._auto_opt = True
+        cam.config.get_pipeline_setting("vision_model")["optimize"] = False
+        cam.config.get_pipeline_setting("vision_model")["quantize"] = False
+        self.assertFalse(cam._optimization_requested())
+
+    def test_target_format_cache_invalidates_when_live_setting_changes(self):
+        cam = self._cam(str(_REPO / self._PT), str(_REPO / self._PT))
+        vm = cam.config.get_pipeline_setting("vision_model")
+        vm["target_format"] = "rknn"
+        self.assertEqual(cam._target_format_cached(), "rknn")
+        vm["target_format"] = "onnx"
+        self.assertEqual(cam._target_format_cached(), "onnx")
+
+    def test_activation_preserves_unquantized_request(self):
+        cam = self._cam(str(_REPO / self._PT), str(_REPO / self._PT))
+        cam._ispy_config = None
+        cam.core_mask = None
+        cam._cam_name = "cam"
+        cam.source = 0
+        cam.stopped = True
+        cam._preproc_thread = None
+        cam._use_pipeline = False
+        with (
+            mock.patch(
+                "iSpy.vision.pipelines.object_detection.GenericYolo",
+                return_value=_FakeModel(),
+            ),
+            mock.patch(
+                "iSpy.vision.ModelInspector.fill_missing_config",
+                side_effect=lambda model_config: dict(model_config),
+            ),
+        ):
+            cam._activate_optimized_model(str(_REPO / self._ARTIFACT))
+        vm = cam.config.get_pipeline_setting("vision_model")
+        self.assertFalse(vm["quantize"])
+        self.assertFalse(cam.quantize)
+
 
 class BootLoadTests(unittest.TestCase):
-
     _PT = "YoloModels/pytorch/_boot_test_pose.pt"
     _ARTIFACT = "YoloModels/rknn/_boot_test_pose.rknn"
     _STALE = "YoloModels/rknn/_boot_test_stale_fuel.rknn"
@@ -261,38 +329,75 @@ class BootLoadTests(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         config = iSpyConfig(file_path=str(tmp / "config.json"))
         config.config["app_mode"] = False
-        cam_cfg = iSpyCameraConfig({
-            "name": "cam", "source": 99, "fps_cap": 1000,
-            "yaw": 0, "pitch": 0, "height": 1.0, "x": 0, "y": 0,
-            "grayscale": False, "subsystem": "bench",
-            "calibration": {"distance": 1.0, "game_piece_size": 1.0, "size": 100, "fov": 90},
-            "pipeline": {"name": "object_detection", "settings": {"vision_model": dict(vm_cfg)}},
-        })
-        with mock.patch("iSpy.vision.pipelines.object_detection.GenericYolo", return_value=_FakeModel()), \
-             mock.patch("iSpy.vision.ModelInspector.fill_missing_config", side_effect=lambda m: dict(m)), \
-             mock.patch.object(ObjectDetectionPipeline, "_optimize_runner", lambda self: None):
+        cam_cfg = iSpyCameraConfig(
+            {
+                "name": "cam",
+                "source": 99,
+                "fps_cap": 1000,
+                "yaw": 0,
+                "pitch": 0,
+                "height": 1.0,
+                "x": 0,
+                "y": 0,
+                "grayscale": False,
+                "subsystem": "bench",
+                "calibration": {
+                    "distance": 1.0,
+                    "game_piece_size": 1.0,
+                    "size": 100,
+                    "fov": 90,
+                },
+                "pipeline": {
+                    "name": "object_detection",
+                    "settings": {"vision_model": dict(vm_cfg)},
+                },
+            }
+        )
+        with (
+            mock.patch(
+                "iSpy.vision.pipelines.object_detection.GenericYolo",
+                return_value=_FakeModel(),
+            ),
+            mock.patch(
+                "iSpy.vision.ModelInspector.fill_missing_config",
+                side_effect=lambda m: dict(m),
+            ),
+            mock.patch.object(
+                ObjectDetectionPipeline, "_optimize_runner", lambda self: None
+            ),
+        ):
             cam = ObjectDetectionPipeline(cam_cfg, config)
             return cam
 
     def test_prefers_existing_artifact_over_stale_file_path(self):
         (_REPO / self._ARTIFACT).write_bytes(b"fake artifact")
         (_REPO / self._STALE).write_bytes(b"fake stale")
-        cam = self._build({
-            "file_path": self._STALE,
-            "source_pt": self._PT,
-            "optimize": True, "target_format": "rknn",
-            "min_conf": 0.5, "input_size": (640, 640), "margin": 0,
-        })
+        cam = self._build(
+            {
+                "file_path": self._STALE,
+                "source_pt": self._PT,
+                "optimize": True,
+                "target_format": "rknn",
+                "min_conf": 0.5,
+                "input_size": (640, 640),
+                "margin": 0,
+            }
+        )
         self.assertTrue(Path(cam.yolo_model_file).name == "_boot_test_pose.rknn")
 
     def test_falls_back_to_source_pt_when_no_artifact(self):
         (_REPO / self._STALE).write_bytes(b"fake stale")
-        cam = self._build({
-            "file_path": self._STALE,
-            "source_pt": self._PT,
-            "optimize": True, "target_format": "rknn",
-            "min_conf": 0.5, "input_size": (640, 640), "margin": 0,
-        })
+        cam = self._build(
+            {
+                "file_path": self._STALE,
+                "source_pt": self._PT,
+                "optimize": True,
+                "target_format": "rknn",
+                "min_conf": 0.5,
+                "input_size": (640, 640),
+                "margin": 0,
+            }
+        )
         self.assertTrue(Path(cam.yolo_model_file).name == "_boot_test_pose.pt")
 
 
