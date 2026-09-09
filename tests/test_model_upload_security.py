@@ -17,6 +17,19 @@ from iSpy.vision.genericYolo import torch_load
 from iSpy.vision.metadata import metadata_from_pt
 from iSpy.web.modules.models import ModelsModule
 
+# torch is a build-time dependency ([dev] / [optimizer] extras), not a runtime
+# one - deploy boards install without it. Skip rather than report a false pass:
+# without torch these assertions are satisfied by the ModuleNotFoundError
+# itself, so they would go green without exercising anything.
+try:
+    import torch  # noqa: F401
+
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
+
+requires_torch = unittest.skipUnless(_HAS_TORCH, "torch is not installed")
+
 
 _REPO = Path(__file__).resolve().parents[1]
 _DEFAULT_DETECT_PT = _REPO / "YoloModels" / "pytorch" / "_default_detect.pt"
@@ -33,6 +46,7 @@ class _EvilPickle:
         return (os.system, (f"echo pwned >> {self._marker}",))
 
 
+@requires_torch
 class RestrictedTorchLoadTests(unittest.TestCase):
     """BUG 4: torch_load(trusted=False) must never run pickle gadgets."""
 
@@ -134,6 +148,7 @@ class ModelUploadAccessTests(unittest.TestCase):
         self.assertEqual(r.status_code, 403)
         self.assertFalse(self.marker.exists())
 
+    @requires_torch
     def test_local_upload_evil_bytes_rejected_without_side_effect(self):
         r = self.client.post(
             "/api/models/upload",
@@ -145,6 +160,7 @@ class ModelUploadAccessTests(unittest.TestCase):
         self.assertFalse(self.marker.exists())
         self.assertFalse(any(self.pytorch_dir.glob("*")))
 
+    @requires_torch
     def test_remote_with_valid_token_still_rejects_evil_bytes(self):
         with mock.patch.dict(os.environ, {"ISPY_ADMIN_TOKEN": "sekrit"}):
             r = self.client.post(
