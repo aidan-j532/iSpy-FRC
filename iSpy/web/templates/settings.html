@@ -70,6 +70,33 @@ block content %}
       </span>
     </div>
   </div>
+
+  <div class="settings-section">
+    <h3>Performance</h3>
+
+    <div class="form-row">
+      <span
+        class="form-label"
+        title="Hard cap on the detection loop rate across all cameras. 0 = uncapped."
+        >Max FPS</span
+      >
+
+      <input
+        class="form-input"
+        type="number"
+        data-key="max_fps"
+        step="1"
+        min="0"
+        placeholder="0"
+      />
+
+      <span
+        id="max-fps-note"
+        class="text-dim"
+        style="margin-left: 8px; font-size: 0.8rem"
+      ></span>
+    </div>
+  </div>
 </div>
 
 <div id="tab-camera" class="settings-tab-content" style="display: none">
@@ -702,6 +729,10 @@ block content %}
         : defaultsData.frame_sync,
     );
 
+    updateMaxFpsNote(
+      configData.max_fps !== undefined ? configData.max_fps : defaultsData.max_fps,
+    );
+
     fetch("/api/version")
       .then((r) => r.json())
       .then((j) => {
@@ -786,6 +817,17 @@ block content %}
 
   function frameSyncBool(v) {
     return v === true || v === "true";
+  }
+
+  function updateMaxFpsNote(value) {
+    const note = document.getElementById("max-fps-note");
+
+    if (!note || value === undefined || value === null) return;
+
+    const n = Number(value);
+
+    note.textContent =
+      !(n > 0) ? "0 = uncapped" : "Detection loop capped at " + n + " FPS";
   }
 
   function updateFrameSyncNote(value) {

@@ -106,6 +106,19 @@ def _silence_third_party():
 keywords = ["frc game piece", "frc 2025 REBUILT", "frc 2025 fuel"]
 
 _RKNN_QUANTIZE = True
+_RKNN_QUANTIZE_ENV = "ISPY_RKNN_QUANTIZE"
+
+
+def _rknn_quantize_allowed() -> bool:
+    """True unless ISPY_RKNN_QUANTIZE is explicitly set to a false-y value.
+
+    int8 calibration is the heaviest RKNN build phase and commonly the OOM
+    victim on a memory-constrained robot, so let operators skip it up front.
+    """
+    val = os.environ.get(_RKNN_QUANTIZE_ENV)
+    if val is None:
+        return True
+    return val.strip().lower() not in ("0", "false", "off", "no", "")
 _RKNN_KNOWN_CHIPS = (
     "rk3588",
     "rk3576",
@@ -1171,7 +1184,7 @@ def _convert_rknn(
     )
 
     if quantize is None:
-        quantize = _RKNN_QUANTIZE
+        quantize = _RKNN_QUANTIZE and _rknn_quantize_allowed()
     pt_path = Path(pt_file)
 
     raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
@@ -1399,7 +1412,7 @@ def convert_model(
 
     if target_format == "rknn":
         if quantize is None:
-            quantize = _RKNN_QUANTIZE
+            quantize = _RKNN_QUANTIZE and _rknn_quantize_allowed()
         rknn_path = _desired_output_path(pt_path, "rknn")
         if rknn_path.exists() and not force:
             meta_path = metadata_path_for(rknn_path)
@@ -1558,6 +1571,18 @@ def _convert_model_subprocess(
     outputs_dir = _PROJECT_ROOT / "Outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
+    # int8 calibration is the heaviest build phase by far - it gets OOM-killed
+    # (exit code -9) on memory-constrained robots with the pipeline already
+    # running. ISPY_RKNN_QUANTIZE=0 bypasses it up front (via the unquantized
+    # retry path below) instead of watching the doomed attempt run first.
+    if quantize and not _rknn_quantize_allowed():
+        logger.warning(
+            "ISPY_RKNN_QUANTIZE=0 - skipping int8 quantization for %s -> %s.",
+            Path(model_file).name,
+            target_format,
+        )
+        quantize = False
+
     args = {
         "model_file": str(model_file),
         "target_format": target_format,
@@ -1571,7 +1596,9 @@ def _convert_model_subprocess(
     if dataset_path:
         args["dataset_path"] = str(dataset_path)
 
-    def _run_once(quantize) -> Path | None:
+    last_code = None
+
+    def _run_once(quantize, log_failure=True) -> Path | None:
         args["quantize"] = quantize
 
         with tempfile.NamedTemporaryFile(
@@ -1588,6 +1615,8 @@ def _convert_model_subprocess(
                 capture_output=True,
                 text=True,
             )
+            nonlocal last_code
+            last_code = proc.returncode
 
             # surface the worker's own logging - it just runs in a subprocess,
             # it shouldnt run silently
@@ -1597,12 +1626,13 @@ def _convert_model_subprocess(
                 print(proc.stderr, file=_REAL_STDERR, end="")
 
             if proc.returncode != 0 or not os.path.exists(result_path):
-                logger.error(
-                    "Conversion subprocess for %s -> %s failed (exit code %s).",
-                    Path(model_file).name,
-                    target_format,
-                    proc.returncode,
-                )
+                if log_failure:
+                    logger.error(
+                        "Conversion subprocess for %s -> %s failed (exit code %s).",
+                        Path(model_file).name,
+                        target_format,
+                        proc.returncode,
+                    )
                 return None
 
             with open(result_path) as f:
@@ -1615,24 +1645,31 @@ def _convert_model_subprocess(
                 except OSError:
                     pass
 
-    result = _run_once(quantize)
-    if result is not None:
-        return result
-
     # a killed/failed quantized build (rknn toolkit's int8 calibration is the
     # usual OOM casualty - its worker dies with a signal exit code) degrades to
     # an unquantized build before conceding to the .pt on-CPU fallback, so the
-    # NPU artifact still exists instead of silently running the model in torch
+    # NPU artifact still exists instead of silently running the model in torch.
+    # Only the single coherent message below is emitted for that path - the
+    # doomed quantized attempt itself logs nothing.
     if quantize:
+        result = _run_once(quantize, log_failure=False)
+        if result is not None:
+            return result
         logger.warning(
-            "Quantized conversion of %s -> %s failed - retrying without "
-            "quantization so an artifact is still produced.",
+            "Quantized conversion of %s -> %s failed (exit code %s) - the "
+            "int8 calibration phase was likely killed by the OS. Retrying "
+            "without quantization so an artifact is still produced.",
             Path(model_file).name,
             target_format,
+            last_code,
         )
-        result = _run_once(False)
+        result = _run_once(False, log_failure=False)
         if result is not None:
             logger.info("Unquantized retry succeeded: %s", result)
+            return result
+    else:
+        result = _run_once(quantize, log_failure=True)
+        if result is not None:
             return result
 
     logger.error(

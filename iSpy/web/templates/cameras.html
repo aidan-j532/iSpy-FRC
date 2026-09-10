@@ -751,7 +751,19 @@ function populatePipelineSelect() {
   const sel = $id(fieldId('pipeline'));
   if (!sel) return;
   sel.innerHTML = '';
-  const keys = Object.keys(pipelineSchemas);
+  const preferredOrder = [
+    'object_detection',
+    'april_tag',
+    'qr_code',
+    'optical_flow',
+    'depth_anything',
+    'yolo_world',
+  ];
+
+  const keys = [
+    ...preferredOrder.filter(name => pipelineSchemas[name]),
+    ...Object.keys(pipelineSchemas).filter(name => !preferredOrder.includes(name))
+  ];
   keys.forEach(name => {
     const option = document.createElement('option');
     option.value = name;

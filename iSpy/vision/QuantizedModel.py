@@ -191,6 +191,7 @@ def ensure_onnx_model(
     from iSpy.vision._safe_imports import ensure_torch_imported
 
     ensure_torch_imported()
+    import torch
     import torch.nn as nn
 
     if hasattr(input_size, "__iter__"):

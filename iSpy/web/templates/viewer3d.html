@@ -2,8 +2,20 @@
 {% block title %}3D Viewer - iSpy{% endblock %}
 {% block head %}
 <style>
-#scene-container { width:100%; height:65vh; background:#0a0a0f; border-radius:var(--radius); position:relative; overflow:hidden; }
+.viewer-layout { display:flex; gap:12px; align-items:stretch; }
+#scene-container { flex:1; min-width:0; height:65vh; background:#0a0a0f; border-radius:var(--radius); position:relative; overflow:hidden; }
 #scene-container canvas { display:block; }
+.viewer-panel { width:190px; flex:none; height:65vh; display:flex; flex-direction:column; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px; overflow-y:auto; }
+.panel-title { font-size:0.72rem; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-dim); margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid var(--border); }
+.scale-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.axis { width:20px; height:20px; flex:none; display:inline-flex; align-items:center; justify-content:center; border-radius:var(--radius-sm); font-size:0.72rem; font-weight:700; color:#f7f8fa; }
+.axis-x { background:#ff4d4d; }
+.axis-y { background:#3ddc84; }
+.axis-z { background:#4d7eff; }
+.scale-row input[type=range] { flex:1; min-width:0; accent-color:var(--accent); }
+.scale-row input[type=number] { width:60px; flex:none; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:4px 6px; border-radius:var(--radius-sm); font-family:var(--mono); font-size:0.8rem; }
+.scale-hint { font-size:0.72rem; color:var(--text-muted); line-height:1.5; margin-top:2px; }
+#scale-reset { margin-top:auto; }
 .viewer-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
 .viewer-toolbar label { color:var(--text-dim); font-size:0.85rem; display:flex; align-items:center; gap:6px; }
 .viewer-toolbar select { background:var(--bg); color:var(--text); border:1px solid var(--border); padding:4px 8px; border-radius:var(--radius); }
@@ -39,7 +51,29 @@
     <input type="checkbox" id="show-overlays" checked onchange="toggleOverlays()"> Overlays
   </label>
 </div>
-<div id="scene-container"></div>
+<div class="viewer-layout">
+  <div id="scene-container"></div>
+  <div class="viewer-panel">
+    <div class="panel-title">View Scale</div>
+    <div class="scale-row">
+      <span class="axis axis-x">X</span>
+      <input type="range" id="scale-x-range" min="-10" max="10" step="0.1" value="1" aria-label="X scale">
+      <input type="number" id="scale-x-value" value="1" step="0.1" aria-label="X scale value">
+    </div>
+    <div class="scale-row">
+      <span class="axis axis-y">Y</span>
+      <input type="range" id="scale-y-range" min="-10" max="10" step="0.1" value="1" aria-label="Y scale">
+      <input type="number" id="scale-y-value" value="1" step="0.1" aria-label="Y scale value">
+    </div>
+    <div class="scale-row">
+      <span class="axis axis-z">Z</span>
+      <input type="range" id="scale-z-range" min="-10" max="10" step="0.1" value="1" aria-label="Z scale">
+      <input type="number" id="scale-z-value" value="1" step="0.1" aria-label="Z scale value">
+    </div>
+    <div class="scale-hint">Scale detections per axis. Set a negative value to flip an axis.</div>
+    <button type="button" class="btn" id="scale-reset">Reset Scale</button>
+  </div>
+</div>
 <div class="card" style="margin-top:12px;">
   <h3>Detections &amp; Overlays</h3>
   <div id="object-list">
@@ -190,6 +224,11 @@ function solidAxes(size) {
 }
 const axesHelper = solidAxes(8);
 scene.add(axesHelper);
+
+// detections and overlays live in this group so the per-axis scale controls
+// can transform them without touching the grid or axes.
+const worldGroup = new THREE.Group();
+scene.add(worldGroup);
 
 window.toggleGrid = function() {
   gridHelper.visible = document.getElementById('show-grid').checked;
@@ -371,7 +410,7 @@ function createBoxForDetection(o) {
   const renderer = VIS_RENDERERS[visType] || VIS_RENDERERS.generic;
   const obj3d = renderer.create(o);
   obj3d.userData.visType = visType;
-  scene.add(obj3d);
+  worldGroup.add(obj3d);
   return obj3d;
 }
 
@@ -521,7 +560,7 @@ function syncOverlays(overlays) {
     if (!overlayMeshes[id]) {
       const mesh = renderer.create(o);
       mesh.userData.overlayId = id;
-      scene.add(mesh);
+      worldGroup.add(mesh);
       overlayMeshes[id] = { mesh, type: o.type };
     } else if (overlayMeshes[id].type === o.type) {
       renderer.update(overlayMeshes[id].mesh, o);
@@ -589,6 +628,37 @@ document.getElementById('obj-tbody').addEventListener('click', (ev) => {
   const id = tr.getAttribute('data-id');
   if (id == null) return;
   selectRowById(Number(id));
+});
+
+// ============================================================
+// Per-axis view scale
+// ============================================================
+
+const SCALE_MIN = -10;
+const SCALE_MAX = 10;
+
+function setAxisScale(axis, value) {
+  const v = Math.min(SCALE_MAX, Math.max(SCALE_MIN, value));
+  worldGroup.scale[axis] = v;
+  const range = document.getElementById(`scale-${axis}-range`);
+  const num = document.getElementById(`scale-${axis}-value`);
+  range.value = v;
+  num.value = v;
+}
+
+function bindScale(axis) {
+  const range = document.getElementById(`scale-${axis}-range`);
+  const num = document.getElementById(`scale-${axis}-value`);
+  range.addEventListener('input', () => setAxisScale(axis, parseFloat(range.value)));
+  num.addEventListener('change', () => {
+    const v = parseFloat(num.value);
+    setAxisScale(axis, isFinite(v) ? v : 1);
+  });
+}
+
+['x', 'y', 'z'].forEach(bindScale);
+document.getElementById('scale-reset').addEventListener('click', () => {
+  ['x', 'y', 'z'].forEach(a => setAxisScale(a, 1));
 });
 
 // ============================================================
