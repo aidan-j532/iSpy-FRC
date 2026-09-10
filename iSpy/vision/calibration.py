@@ -6,6 +6,7 @@ import scipy.optimize
 
 logger = logging.getLogger(__name__)
 
+
 # OpenCV 4.9+ moved several aruco helpers out of the cv2.aruco namespace into
 # the main cv2 namespace (the old aliases were deleted there). Resolve each
 # from whichever namespace the installed build exposes so the same code runs
@@ -71,7 +72,9 @@ def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
         fn = getattr(obj, name, None)
         if fn is not None:
             return fn(all_corners, all_ids, board, img_size, *extra)
-    result = _calibrate_charuco_via_calibrate_camera(all_corners, all_ids, board, img_size)
+    result = _calibrate_charuco_via_calibrate_camera(
+        all_corners, all_ids, board, img_size
+    )
     if result is None:
         raise cv2.error("ChArUco calibration unavailable in this OpenCV build")
     return result
@@ -133,7 +136,9 @@ def _estimate_initial_extrinsics(all_obj, all_img, K):
     for obj, img in zip(all_obj, all_img):
         obj3 = obj.astype(np.float64)
         img2 = img.astype(np.float64).reshape(-1, 1, 2)
-        ok, rvec, tvec = cv2.solvePnP(obj3, img2, K, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+        ok, rvec, tvec = cv2.solvePnP(
+            obj3, img2, K, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE
+        )
         if ok:
             rvecs.append(rvec.flatten())
             tvecs.append(tvec.flatten())
@@ -168,9 +173,7 @@ def _calibrate_scipy_residuals(params, all_obj, all_img, n_images):
     K, dist, rvecs, tvecs = _unpack_params(params, n_images)
     residuals = []
     for i in range(n_images):
-        proj, _ = cv2.projectPoints(
-            all_obj[i], rvecs[i], tvecs[i], K, dist
-        )
+        proj, _ = cv2.projectPoints(all_obj[i], rvecs[i], tvecs[i], K, dist)
         err = proj.reshape(-1, 2) - all_img[i]
         residuals.append(err.ravel())
     return np.concatenate(residuals)
@@ -206,10 +209,11 @@ def _calibrate_scipy(all_corners, all_ids, board, img_size):
     for i in range(n_images):
         proj, _ = cv2.projectPoints(all_obj[i], rvecs[i], tvecs[i], K, dist)
         err = np.linalg.norm(proj.reshape(-1, 2) - all_img[i], axis=1)
-        total_err += float((err ** 2).sum())
+        total_err += float((err**2).sum())
         total_pts += len(err)
     rms = float(np.sqrt(total_err / max(total_pts, 1)))
     return rms, K, dist, None, None
+
 
 DEFAULT_CHARUCO_PATTERN = (7, 9)  # squares wide x squares tall
 DEFAULT_CHARUCO_DICT = cv2.aruco.DICT_4X4_50
@@ -256,7 +260,11 @@ def draw_corners_into(out, corners, color):
 
 
 def draw_corners(frame, corners, color):
-    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    out = (
+        frame.copy()
+        if len(frame.shape) == 3
+        else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    )
     return draw_corners_into(out, corners, color)
 
 
@@ -270,7 +278,11 @@ def draw_markers_into(out, corners, color):
 
 
 def draw_markers(frame, corners, color):
-    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    out = (
+        frame.copy()
+        if len(frame.shape) == 3
+        else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    )
     return draw_markers_into(out, corners, color)
 
 
@@ -289,7 +301,11 @@ def draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=None)
 
 
 def draw_charuco(frame, corners, ids, marker_corners, marker_ids, color=None):
-    out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    out = (
+        frame.copy()
+        if len(frame.shape) == 3
+        else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    )
     return draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=color)
 
 
@@ -349,7 +365,10 @@ def _charuco_captures_degenerate(all_corners: list, all_ids: list) -> bool:
     for corners, ids in zip(all_corners[1:], all_ids[1:]):
         for id_val, corner in zip(ids.flat, corners):
             r = ref.get(int(id_val))
-            if r is not None and np.linalg.norm(np.asarray(corner) - np.asarray(r)) > 1.0:
+            if (
+                r is not None
+                and np.linalg.norm(np.asarray(corner) - np.asarray(r)) > 1.0
+            ):
                 return False
     return True
 
@@ -362,7 +381,9 @@ def make_charuco_board(
     dictionary_id: int = DEFAULT_CHARUCO_DICT,
 ):
     dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
-    return cv2.aruco.CharucoBoard((cols, rows), square_length, marker_length, dictionary)
+    return cv2.aruco.CharucoBoard(
+        (cols, rows), square_length, marker_length, dictionary
+    )
 
 
 def detect_charuco(
@@ -560,7 +581,9 @@ def intrinsics_for_frame(calib: dict, frame_w: int, frame_h: int):
         cy = float(m[1, 2]) * sy
     except (TypeError, ValueError, IndexError, ZeroDivisionError):
         return None
-    cam_mat = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float64)
+    cam_mat = np.array(
+        [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float64
+    )
     return cam_mat, np.asarray(d, dtype=np.float64).ravel()
 
 

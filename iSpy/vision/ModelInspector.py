@@ -17,7 +17,12 @@ def inspect_model(model_path: str, task: str = "detect") -> dict:
         return _inspect_rknn(model_path, task)
     elif ext == ".tflite":
         return _inspect_tflite(model_path, task)
-    elif ext == ".pt" or "openvino_model" in suffix or ext == ".mlpackage" or ext == ".engine":
+    elif (
+        ext == ".pt"
+        or "openvino_model" in suffix
+        or ext == ".mlpackage"
+        or ext == ".engine"
+    ):
         return _inspect_ultralytics(model_path, task)
     else:
         raise ValueError(f"Unsupported model extension: {ext}")
@@ -52,7 +57,7 @@ def print_detected_config(result: dict) -> None:
 def _inspect_onnx(model_path: str, task: str) -> dict:
     try:
         import onnxruntime as ort
-        
+
         ort.set_default_logger_severity(4)
     except ImportError:
         raise ImportError(
@@ -79,6 +84,7 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
     if meta_path.exists():
         try:
             from ruamel.yaml import YAML
+
             meta = YAML(typ="safe").load(meta_path)
             if isinstance(meta, dict):
                 meta_task = meta.get("task", task)
@@ -98,11 +104,11 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
     certain += ["input.layout", "input_size"]
 
     ORT_DTYPE_MAP = {
-        "tensor(float)":   "float32",
+        "tensor(float)": "float32",
         "tensor(float32)": "float32",
-        "tensor(double)":  "float32",
-        "tensor(uint8)":   "uint8",
-        "tensor(int8)":    "uint8",
+        "tensor(double)": "float32",
+        "tensor(uint8)": "uint8",
+        "tensor(int8)": "uint8",
     }
     dtype = ORT_DTYPE_MAP.get(inp_type, "float32")
     certain.append("input.dtype")
@@ -110,7 +116,9 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
     normalize = dtype == "float32"
     certain.append("input.normalize")
     if normalize:
-        warnings.append("input.dtype is float32 -> normalize=true, scale=255.0 assumed.")
+        warnings.append(
+            "input.dtype is float32 -> normalize=true, scale=255.0 assumed."
+        )
 
     out_meta = out_metas[0]
     out_shape = out_meta.shape
@@ -137,7 +145,9 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
     if num_classes is not None:
         detected.append("num_classes")
     else:
-        manual.append("num_classes  (could not be inferred - check your model's output width)")
+        manual.append(
+            "num_classes  (could not be inferred - check your model's output width)"
+        )
         num_classes = 1
 
     scores_are_logits = False
@@ -170,8 +180,7 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
         else:
             warnings.append(
                 "metadata said output_format=%r but tensor shape %s shows hardware_nms "
-                "(6 columns) — trusting tensor"
-                % (meta_output_format, out_shape)
+                "(6 columns) — trusting tensor" % (meta_output_format, out_shape)
             )
     if meta_output_layout:
         out_layout = meta_output_layout
@@ -199,10 +208,15 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
             "nms_iou": 0.45,
             "quantization": quant,
             **({"quant_scale": 255.0} if quant != "none" else {}),
-            **({"num_keypoints": meta_kpt_shape[0],
-                "keypoint_dims": meta_kpt_shape[1],
-                "keypoint_scores_are_logits": False}
-               if meta_kpt_shape else {}),
+            **(
+                {
+                    "num_keypoints": meta_kpt_shape[0],
+                    "keypoint_dims": meta_kpt_shape[1],
+                    "keypoint_scores_are_logits": False,
+                }
+                if meta_kpt_shape
+                else {}
+            ),
         },
         "input": {
             "layout": layout,
@@ -214,7 +228,8 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
         },
         "_certain_fields": certain,
         "_detected_fields": detected,
-        "_manual_fields": manual + [
+        "_manual_fields": manual
+        + [
             "min_conf              (default 0.5 - adjust for your use-case)",
             "output.nms_iou        (default 0.45 - standard YOLO value)",
         ],
@@ -233,37 +248,38 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
     from pathlib import Path
     from typing import Any
     import logging as _logging
+
     _logger = _logging.getLogger(__name__)
- 
+
     warnings_list = []
     manual = []
- 
+
     # Hardware contracts - always correct, no metadata needed
     certain_fields = [
-        "input.layout",    # RKNN runtime always NHWC
-        "input.dtype",     # RKNN runtime always uint8
-        "input.normalize", # uint8 -> never normalise in Python
+        "input.layout",  # RKNN runtime always NHWC
+        "input.dtype",  # RKNN runtime always uint8
+        "input.normalize",  # uint8 -> never normalise in Python
     ]
     detected_fields: list[str] = []
- 
+
     # defaults tuned for RKNN TOOLKIT export (ONNX -> rknn.build());
     # the ultralytics rknn export path isnt used here, its values would be wrong
     result: dict[str, Any] = {
         "file_path": model_path,
         "task": task,
         "num_classes": 1,
-        "input_size": [640, 640],   # overridden below if metadata has it
+        "input_size": [640, 640],  # overridden below if metadata has it
         "min_conf": 0.5,
         "output": {
-            "format": "raw",              # Toolkit: raw tensor, NOT end-to-end NMS
-            "layout": "features_first",   # Ultralytics ONNX -> Toolkit: (feat, anchors)
-            "box_format": "cxcywh",       # Ultralytics ONNX internal encoding
+            "format": "raw",  # Toolkit: raw tensor, NOT end-to-end NMS
+            "layout": "features_first",  # Ultralytics ONNX -> Toolkit: (feat, anchors)
+            "box_format": "cxcywh",  # Ultralytics ONNX internal encoding
             "score_mode": "objectness",
-            "scores_are_logits": False,   # Ultralytics applies sigmoid before ONNX export
-            "apply_software_nms": True,   # required for raw format
+            "scores_are_logits": False,  # Ultralytics applies sigmoid before ONNX export
+            "apply_software_nms": True,  # required for raw format
             "nms_iou": 0.45,
-            "quantization": "int8",       # overridden by metadata when available; int8 = quantized, none = unquantized
-            "quant_scale": 255.0,         # 255 for quantized, 1.0 for unquantized
+            "quantization": "int8",  # overridden by metadata when available; int8 = quantized, none = unquantized
+            "quant_scale": 255.0,  # 255 for quantized, 1.0 for unquantized
         },
         "input": {
             "layout": "nhwc",
@@ -273,13 +289,14 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
             "normalize": False,
         },
     }
- 
+
     meta_path = Path(model_path).parent / f"{Path(model_path).stem}_metadata.yaml"
     has_metadata = meta_path.exists()
- 
+
     if has_metadata:
         try:
             from ruamel.yaml import YAML
+
             meta = YAML(typ="safe").load(meta_path)
             if isinstance(meta, dict):
                 # task
@@ -287,7 +304,7 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                 if rknn_task:
                     result["task"] = rknn_task
                     certain_fields.append("task")
- 
+
                 # pose keypoints
                 if rknn_task == "pose":
                     kpt_shape = meta.get("kpt_shape")
@@ -304,7 +321,7 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                             "output.keypoint_scores_are_logits",
                             "output.score_mode",
                         ]
- 
+
                 # num_classes -> drives score_mode
                 names = meta.get("names")
                 if isinstance(names, dict):
@@ -315,14 +332,14 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                         "objectness" if nc == 1 else "multi_class"
                     )
                     certain_fields.append("output.score_mode")
- 
+
                 # output format fields written by _export_rknn_metadata
                 for meta_key, cfg_path in (
-                    ("output_format",   "output.format"),
-                    ("output_layout",   "output.layout"),
-                    ("box_format",      "output.box_format"),
-                    ("quantization",    "output.quantization"),
-                    ("quant_scale",     "output.quant_scale"),
+                    ("output_format", "output.format"),
+                    ("output_layout", "output.layout"),
+                    ("box_format", "output.box_format"),
+                    ("quantization", "output.quantization"),
+                    ("quant_scale", "output.quant_scale"),
                     ("box_coord_scale", "output.box_coord_scale"),
                     ("kpt_coord_scale", "output.kpt_coord_scale"),
                 ):
@@ -334,16 +351,16 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                             d = d[p]
                         d[parts[-1]] = val
                         certain_fields.append(cfg_path)
- 
+
                 # input_size - now saved by updated _export_rknn_metadata
                 saved_size = meta.get("input_size")
                 if saved_size and len(saved_size) == 2:
                     result["input_size"] = [int(x) for x in saved_size]
                     certain_fields.append("input_size")
- 
+
         except Exception as e:
             warnings_list.append(f"Failed to parse {meta_path.name}: {e}")
- 
+
     # When no metadata - every output field is a guess, warn loudly
     if not has_metadata:
         _logger.warning(
@@ -385,9 +402,13 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
         for field, reason in _MUST_VERIFY:
             _logger.warning("  %-28s  %s", field, reason)
             manual.append(f"{field}  -  {reason}")
-        _logger.warning("--------------------------------------------------------------")
-        warnings_list.append("No metadata - output fields are defaults. See warnings above.")
- 
+        _logger.warning(
+            "--------------------------------------------------------------"
+        )
+        warnings_list.append(
+            "No metadata - output fields are defaults. See warnings above."
+        )
+
     # Even with metadata: input_size is unverifiable if it wasn't saved
     if "input_size" not in certain_fields:
         manual.append(
@@ -395,14 +416,14 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
             "Verify it matches your training/export resolution. "
             "(Re-run boot.py conversion to save this automatically.)"
         )
- 
+
     result["_certain_fields"] = certain_fields
     result["_detected_fields"] = detected_fields
     result["_manual_fields"] = manual
     result["_warnings"] = warnings_list
     return result
- 
-  
+
+
 def fill_missing_config(model_config: dict) -> dict:
     import os
     from pathlib import Path
@@ -423,7 +444,10 @@ def fill_missing_config(model_config: dict) -> dict:
         return _apply_metadata_to_config(sidecar, model_config)
 
     # --- Step 2: tensor inspection (existing logic) ---
-    logger.info("No metadata file for %s - falling back to tensor inspection", Path(model_path).name)
+    logger.info(
+        "No metadata file for %s - falling back to tensor inspection",
+        Path(model_path).name,
+    )
     task = model_config.get("task", "detect")
 
     if model_path.endswith(".engine"):
@@ -433,7 +457,9 @@ def fill_missing_config(model_config: dict) -> dict:
                 pt_info = inspect_model(pt_path, "detect")
                 pt_task = pt_info.get("task")
                 if pt_task and pt_task != task:
-                    logger.info("Detected task=%s from source .pt (%s)", pt_task, pt_path)
+                    logger.info(
+                        "Detected task=%s from source .pt (%s)", pt_task, pt_path
+                    )
                     task = pt_task
             except Exception:
                 pass
@@ -495,7 +521,11 @@ def fill_missing_config(model_config: dict) -> dict:
                     logger.info("Removed stale output.%s (task=%s)", key, actual_task)
 
     out = merged.get("output")
-    if out and out.get("score_mode") == "objectness" and merged.get("num_classes", 1) > 1:
+    if (
+        out
+        and out.get("score_mode") == "objectness"
+        and merged.get("num_classes", 1) > 1
+    ):
         if not model_config.get("output", {}).get("score_mode") == "multi_class":
             logger.info(
                 "Corrected    output.score_mode  'objectness' -> 'multi_class' (num_classes=%d)",
@@ -506,7 +536,9 @@ def fill_missing_config(model_config: dict) -> dict:
     # RKNN-specific guard
     if model_path.endswith(".rknn"):
         merged_out = merged.get("output", {})
-        if merged_out.get("format") == "raw" and not merged_out.get("apply_software_nms", True):
+        if merged_out.get("format") == "raw" and not merged_out.get(
+            "apply_software_nms", True
+        ):
             logger.warning(
                 "RKNN MISCONFIGURATION: output.format='raw' but apply_software_nms=False. Auto-correcting to apply_software_nms=True."
             )
@@ -523,11 +555,17 @@ def _apply_metadata_to_config(sidecar: dict, model_config: dict) -> dict:
 
     output_format = sidecar.get("output_format")
     if output_format is None:
-        output_format = "hardware_nms" if Path(model_config.get("file_path", "")).suffix.lower() == ".pt" else "raw"
+        output_format = (
+            "hardware_nms"
+            if Path(model_config.get("file_path", "")).suffix.lower() == ".pt"
+            else "raw"
+        )
 
     output_layout = sidecar.get("output_layout")
     if output_layout is None:
-        output_layout = "anchors_first" if output_format == "hardware_nms" else "features_first"
+        output_layout = (
+            "anchors_first" if output_format == "hardware_nms" else "features_first"
+        )
 
     box_format = sidecar.get("box_format")
     if box_format is None:
@@ -543,13 +581,25 @@ def _apply_metadata_to_config(sidecar: dict, model_config: dict) -> dict:
             "box_format": box_format,
             "score_mode": score_mode,
             "scores_are_logits": sidecar.get("scores_are_logits", False),
-            "apply_software_nms": sidecar.get("apply_software_nms", output_format != "hardware_nms"),
+            "apply_software_nms": sidecar.get(
+                "apply_software_nms", output_format != "hardware_nms"
+            ),
             "nms_iou": sidecar.get("nms_iou", 0.45),
             "quantization": sidecar.get("quantization", "none"),
         },
         "input": {
-            "layout": sidecar.get("input_layout", "nhwc" if Path(model_config.get("file_path", "")).suffix.lower() == ".pt" else "nchw"),
-            "dtype": sidecar.get("input_dtype", "uint8" if Path(model_config.get("file_path", "")).suffix.lower() == ".pt" else "float32"),
+            "layout": sidecar.get(
+                "input_layout",
+                "nhwc"
+                if Path(model_config.get("file_path", "")).suffix.lower() == ".pt"
+                else "nchw",
+            ),
+            "dtype": sidecar.get(
+                "input_dtype",
+                "uint8"
+                if Path(model_config.get("file_path", "")).suffix.lower() == ".pt"
+                else "float32",
+            ),
             "letterbox": sidecar.get("input_letterbox", True),
             "pad_value": sidecar.get("input_pad_value", 114),
             "normalize": sidecar.get("input_normalize", False),
@@ -628,9 +678,13 @@ def _flatten_config_to_metadata(cfg: dict) -> dict:
 
     # Pose-specific
     if out.get("num_keypoints") is not None and out.get("keypoint_dims") is not None:
-        meta["kpt_shape"] = [int(out.get("num_keypoints")), int(out.get("keypoint_dims"))]
+        meta["kpt_shape"] = [
+            int(out.get("num_keypoints")),
+            int(out.get("keypoint_dims")),
+        ]
 
     return meta
+
 
 def _inspect_tflite(model_path: str, task: str) -> dict:
     certain, detected, manual, warnings = [], [], [], []
@@ -653,6 +707,7 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
         certain += ["input.layout", "input_size"]  # TFLite is always NHWC
 
         import numpy as np
+
         dtype = "float32" if inp_det["dtype"] == np.float32 else "uint8"
         certain.append("input.dtype")
 
@@ -662,9 +717,11 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
         quant_params = out_det.get("quantization_parameters", {})
         has_quant = bool(quant_params.get("scales", []))
         quant = (
-            "int8"  if out_det["dtype"] == np.int8  else
-            "uint8" if out_det["dtype"] == np.uint8 else
-            "none"
+            "int8"
+            if out_det["dtype"] == np.int8
+            else "uint8"
+            if out_det["dtype"] == np.uint8
+            else "none"
         )
         certain.append("output.quantization")
         certain.append("output.layout")  # read from actual tensor shape
@@ -691,10 +748,16 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
         quant_scale = float(quant_params["scales"][0]) if has_quant else 255.0
 
     except Exception as e:
-        warnings.append(f"Could not fully inspect TFLite model ({e}). Using safe defaults.")
+        warnings.append(
+            f"Could not fully inspect TFLite model ({e}). Using safe defaults."
+        )
         w, h, dtype, normalize = 640, 640, "uint8", False
         out_layout, fmt, num_classes, score_mode, box_format = (
-            "anchors_first", "raw", 1, "objectness", "cxcywh",
+            "anchors_first",
+            "raw",
+            1,
+            "objectness",
+            "cxcywh",
         )
         quant, quant_scale = "none", 255.0
         manual += ["input_size", "num_classes", "output.format", "output.score_mode"]
@@ -726,7 +789,8 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
         },
         "_certain_fields": certain,
         "_detected_fields": detected,
-        "_manual_fields": manual + ["min_conf", "output.nms_iou", "output.scores_are_logits"],
+        "_manual_fields": manual
+        + ["min_conf", "output.nms_iou", "output.scores_are_logits"],
         "_warnings": warnings,
     }
 
@@ -736,6 +800,7 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
 def _inspect_ultralytics(model_path: str, task: str) -> dict:
     try:
         from .yolo_pt import load_yolo_pt
+
         # load_yolo_pt handles its own inference; here we only read metadata.
         model = load_yolo_pt(str(model_path), task=task)
         model_task = model.task or task
@@ -821,6 +886,7 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
         "input/output config fields are informational only and not used at runtime."
     ]
     return base
+
 
 def _parse_input_shape(shape) -> tuple[str, int, int, int]:
     def _to_int(v, fallback=640):
@@ -918,7 +984,6 @@ def _set_dotpath(d: dict, dotpath: str, value) -> None:
     d[keys[-1]] = value
 
 
-
 def _deep_merge_missing(base: dict, override: dict) -> dict:
     result = dict(base)
     for k, v in override.items():
@@ -929,7 +994,9 @@ def _deep_merge_missing(base: dict, override: dict) -> dict:
     return result
 
 
-def _print_dict(d: dict, indent: int, certain_fields: list, detected_fields: list, prefix: str = ""):
+def _print_dict(
+    d: dict, indent: int, certain_fields: list, detected_fields: list, prefix: str = ""
+):
     for k, v in d.items():
         full_key = f"{prefix}.{k}" if prefix else k
         pad = "  " * indent

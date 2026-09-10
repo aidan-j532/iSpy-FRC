@@ -21,6 +21,7 @@ Usage:
 
 Requirements: Python 3.10+ (stdlib only — no pip installs needed).
 """
+
 import argparse
 import json
 import socket
@@ -61,7 +62,7 @@ def listen(once: bool = False, timeout: float | None = None) -> None:
                 continue
 
             try:
-                payload = json.loads(data[len(MAGIC):])
+                payload = json.loads(data[len(MAGIC) :])
             except json.JSONDecodeError:
                 continue
 
@@ -98,11 +99,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--once", action="store_true",
+        "--once",
+        action="store_true",
         help="Print the first board found and exit.",
     )
     parser.add_argument(
-        "--timeout", type=float, default=None, metavar="SECS",
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SECS",
         help="Stop listening after SECS seconds (default: listen forever).",
     )
     args = parser.parse_args()

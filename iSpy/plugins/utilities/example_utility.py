@@ -2,8 +2,8 @@ import logging
 
 from iSpy.plugins.bases import UtilityBase
 
-class YourUtility(UtilityBase):
 
+class YourUtility(UtilityBase):
     plugin_name = "example_utility"
     template = True
 
@@ -18,8 +18,7 @@ class YourUtility(UtilityBase):
             "output_key": {
                 "type": "text",
                 "label": "Output Key",
-                "description": "The key used to expose this utility's "
-                               "runtime output.",
+                "description": "The key used to expose this utility's runtime output.",
                 "default": "example_output",
             },
         }

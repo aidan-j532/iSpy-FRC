@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 def cv2_has_gstreamer() -> bool:
     try:
         import cv2
+
         return bool(re.search(r"GStreamer:\s*YES", cv2.getBuildInformation()))
     except Exception:
         return False
@@ -28,12 +29,22 @@ def _apt_install_python3_opencv() -> bool:
     env = {"DEBIAN_FRONTEND": "noninteractive"}
     cmd = ["sudo", "apt-get", "install", "-y", "python3-opencv"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600, env=env
+        )
         if result.returncode == 0:
             return True
         logger.warning("python3-opencv install failed, retrying after apt-get update")
-        subprocess.run(["sudo", "apt-get", "update"], capture_output=True, text=True, timeout=300, env=env)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
+        subprocess.run(
+            ["sudo", "apt-get", "update"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
+        )
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600, env=env
+        )
         return result.returncode == 0
     except Exception as e:
         logger.error("apt install of python3-opencv failed: %s", e)
@@ -43,16 +54,23 @@ def _apt_install_python3_opencv() -> bool:
 def _find_system_cv2_path() -> Path | None:
     try:
         result = subprocess.run(
-            [_system_python(), "-c",
-             "import cv2, os; print(os.path.dirname(os.path.abspath(cv2.__file__)))"],
-            capture_output=True, text=True, timeout=30,
+            [
+                _system_python(),
+                "-c",
+                "import cv2, os; print(os.path.dirname(os.path.abspath(cv2.__file__)))",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode != 0:
             return None
         path = Path(result.stdout.strip())
         if path.name == "cv2" and (path / "__init__.py").exists():
             return path  # package-style install
-        candidates = list(path.glob("cv2*.so")) + list(path.glob("cv2*.pyd")) # Added .pyd for Windows safety
+        candidates = list(path.glob("cv2*.so")) + list(
+            path.glob("cv2*.pyd")
+        )  # Added .pyd for Windows safety
         return candidates[0] if candidates else None
     except Exception:
         return None
@@ -73,7 +91,7 @@ def _current_cv2_targets() -> tuple[Path, list[Path]]:
         if (d / "cv2").exists():
             existing.append(d / "cv2")
         existing.extend(d.glob("cv2*.so"))
-        existing.extend(d.glob("cv2*.pyd")) # Added .pyd for Windows safety
+        existing.extend(d.glob("cv2*.pyd"))  # Added .pyd for Windows safety
         existing.extend(d.glob("opencv_python*"))
     return purelib, existing
 
@@ -95,12 +113,16 @@ def ensure_csi_capable_opencv(auto_fix: bool = True) -> bool:
 
     system_cv2 = _find_system_cv2_path()
     if system_cv2 is None:
-        logger.error("apt install succeeded but couldn't locate the resulting cv2 module.")
+        logger.error(
+            "apt install succeeded but couldn't locate the resulting cv2 module."
+        )
         return False
 
     check = subprocess.run(
         [_system_python(), "-c", "import cv2; print(cv2.getBuildInformation())"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     if not re.search(r"GStreamer:\s*YES", check.stdout):
         logger.error("apt's python3-opencv build lacks GStreamer too - can't auto-fix.")

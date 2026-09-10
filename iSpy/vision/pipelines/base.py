@@ -42,9 +42,23 @@ class VisionPipeline(Camera, VisionBase):
     def get_status(self) -> str:
         build = getattr(self, "_statuses", {}).get("build")
         run = getattr(self, "_statuses", {}).get("run") or "initializing"
-        if build:
-            return f"{build}\n{run}"
-        return run
+        if not build:
+            return run
+        lowered = run.lower()
+        # build-style messages (optimizing / downloading / ...) already carry
+        # the lifecycle story, so a generic run-slot message sitting on top of
+        # them (the default "initializing", or a preparing/loading sibling) is
+        # just noise - never surface e.g. "optimizing\ninitializing". Terminal
+        # run states (ready / error) instead supersede a finished build message.
+        # Real run info like a calibration warning still shows through next to
+        # the build message, so the UI keeps that overlap.
+        if lowered.startswith(
+            self._BUILD_PREFIXES + ("initializing", "preparing", "loading", "working")
+        ):
+            return build
+        if lowered.startswith(("ready", "using", "error", "failed", "stopped")):
+            return run
+        return f"{build}\n{run}"
 
     def get_state(self) -> str:
         status = self.get_status()
@@ -80,7 +94,11 @@ class VisionPipeline(Camera, VisionBase):
 
         if state == "error" or level == "red":
             color = "red"
-        elif level == "yellow" or state in ("optimizing", "downloading", "initializing"):
+        elif level == "yellow" or state in (
+            "optimizing",
+            "downloading",
+            "initializing",
+        ):
             color = "yellow"
         else:
             color = "green"
@@ -115,19 +133,16 @@ class VisionPipeline(Camera, VisionBase):
 
     @staticmethod
     def serialize_detections(objects) -> list[dict]:
-        return [
-            o.to_dict() if hasattr(o, "to_dict") else o
-            for o in (objects or [])
-        ]
+        return [o.to_dict() if hasattr(o, "to_dict") else o for o in (objects or [])]
 
     @classmethod
     def serialize_frame_data(cls, frame_data: dict) -> dict:
         out = {
-            k: v for k, v in frame_data.items()
+            k: v
+            for k, v in frame_data.items()
             if isinstance(v, (int, float, str, bool)) or v is None
         }
-        out["detections"] = cls.serialize_detections(
-            frame_data.get("detections"))
+        out["detections"] = cls.serialize_detections(frame_data.get("detections"))
         out["schema_version"] = OUTPUT_SCHEMA_VERSION
         return out
 
@@ -200,9 +215,10 @@ class VisionPipeline(Camera, VisionBase):
             )
         if section == "focal":
             try:
-                return float(calibration.get("focal_length_pixels") or 0) > 0 or float(
-                    calibration.get("fov") or 0
-                ) > 0
+                return (
+                    float(calibration.get("focal_length_pixels") or 0) > 0
+                    or float(calibration.get("fov") or 0) > 0
+                )
             except (TypeError, ValueError):
                 return False
         if section == "pnp":

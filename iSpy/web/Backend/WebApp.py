@@ -50,7 +50,7 @@ class iSpyWebApp:
             "flask_app": self.flask_app,
             "vision_instance": None,  # set later via set_vision_instance()
         }
-        
+
         self.context = context
 
         self.modules: dict[str, WebModule] = {
@@ -73,10 +73,14 @@ class iSpyWebApp:
             try:
                 mod.register_routes(self.flask_app)
             except Exception:
-                self.logger.exception("Failed to register routes for web module '%s'", name)
+                self.logger.exception(
+                    "Failed to register routes for web module '%s'", name
+                )
 
         self.context["dashboard_module"] = self.modules.get("dashboard")
-        self.flask_app.add_url_rule("/", "root", lambda: render_template("dashboard.html"))
+        self.flask_app.add_url_rule(
+            "/", "root", lambda: render_template("dashboard.html")
+        )
         self.flask_app.add_url_rule(
             "/api/version", "api_version", lambda: jsonify(version=_get_version())
         )

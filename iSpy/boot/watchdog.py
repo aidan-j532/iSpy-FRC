@@ -39,11 +39,15 @@ def main(argv=None) -> int:
         logger.warning(
             "watchdog launched under %r (prefix=%r) but the install marker "
             "says %r; children will run under the marked interpreter.",
-            launcher, sys.prefix, marked,
+            launcher,
+            sys.prefix,
+            marked,
         )
     logger.info(
         "watchdog interpreter: launcher=%r prefix=%r child_python=%r",
-        launcher, sys.prefix, python,
+        launcher,
+        sys.prefix,
+        python,
     )
 
     restarts = 0
@@ -55,7 +59,9 @@ def main(argv=None) -> int:
             logger.info("Script exited cleanly, stopping watchdog.")
             return 0
 
-        logger.warning(f"Script crashed (code {result.returncode}), restarting in 5s...")
+        logger.warning(
+            f"Script crashed (code {result.returncode}), restarting in 5s..."
+        )
         restarts += 1
         if restarts < MAX_RESTARTS:
             time.sleep(5)

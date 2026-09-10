@@ -40,5 +40,6 @@ def unit_tests(verbosity: int = 2) -> bool:
 def main() -> int:
     return 0 if unit_tests() else 1
 
+
 if __name__ == "__main__":
     raise SystemExit(main())

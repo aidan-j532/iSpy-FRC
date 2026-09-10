@@ -1,5 +1,6 @@
 from iSpy.plugins.bases import TrackerBase
 
+
 class YourTracker(TrackerBase):
     plugin_name = "example_tracker"
     template = True

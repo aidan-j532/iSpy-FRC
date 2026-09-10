@@ -1,4 +1,3 @@
-
 from copy import deepcopy
 
 from iSpy.config.iSpyConfig import iSpyCameraConfig

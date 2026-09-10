@@ -25,11 +25,31 @@ class ObjectStruct:
 # "vis_type". The struct[] form remains available for back-compat via the
 # data_type dropdown.
 DEFAULT_PUBLISH = [
-    {"name": "fps",            "data_type": "number",  "source": "fps",             "nt_topic": "fps"},
-    {"name": "num_detections", "data_type": "number",  "source": "detection_count",  "nt_topic": "num_detections"},
-    {"name": "camera_lag",     "data_type": "number",  "source": "camera_lag_s",     "nt_topic": "camera_lag"},
-    {"name": "vision_data",    "data_type": "json",    "source": "detections",       "nt_topic": "vision_data"},
-    {"name": "selected_target", "data_type": "json",   "source": "addon_data.selected_target", "nt_topic": "selected_target"},
+    {"name": "fps", "data_type": "number", "source": "fps", "nt_topic": "fps"},
+    {
+        "name": "num_detections",
+        "data_type": "number",
+        "source": "detection_count",
+        "nt_topic": "num_detections",
+    },
+    {
+        "name": "camera_lag",
+        "data_type": "number",
+        "source": "camera_lag_s",
+        "nt_topic": "camera_lag",
+    },
+    {
+        "name": "vision_data",
+        "data_type": "json",
+        "source": "detections",
+        "nt_topic": "vision_data",
+    },
+    {
+        "name": "selected_target",
+        "data_type": "json",
+        "source": "addon_data.selected_target",
+        "nt_topic": "selected_target",
+    },
 ]
 
 
@@ -50,18 +70,18 @@ class NetworkTableHandler(UtilityBase):
                 "type": "text",
                 "label": "Robot IP",
                 "hint": "IP address of the robot's NetworkTables server "
-                        "(usually the roboRIO).",
+                "(usually the roboRIO).",
                 "default": "10.0.0.2",
             },
             "publish": {
                 "type": "list",
                 "label": "Publish to NetworkTables",
                 "hint": "Data entries published every tick. Sources are "
-                        "frame_data keys (fps, detection_count, camera_lag_s, "
-                        "detections) plus utility outputs as "
-                        "addon_data.<output_key>. Type 'auto' detects bool / "
-                        "number / string from the value; dicts and lists are "
-                        "published as a JSON string.",
+                "frame_data keys (fps, detection_count, camera_lag_s, "
+                "detections) plus utility outputs as "
+                "addon_data.<output_key>. Type 'auto' detects bool / "
+                "number / string from the value; dicts and lists are "
+                "published as a JSON string.",
                 "default": DEFAULT_PUBLISH,
                 "fields": {
                     "name": {
@@ -71,7 +91,14 @@ class NetworkTableHandler(UtilityBase):
                     "data_type": {
                         "type": "select",
                         "label": "Type",
-                        "options": ["auto", "number", "boolean", "string", "json", "struct[]"],
+                        "options": [
+                            "auto",
+                            "number",
+                            "boolean",
+                            "string",
+                            "json",
+                            "struct[]",
+                        ],
                         "default": "auto",
                     },
                     "source": {
@@ -100,8 +127,8 @@ class NetworkTableHandler(UtilityBase):
         # is reported transitionally from update() instead.
         self._conn_state = None
         self.logger.info(
-            "NetworkTables client started (server %s) - connecting in the "
-            "background.", ip
+            "NetworkTables client started (server %s) - connecting in the background.",
+            ip,
         )
 
         self._subscribers: dict = {}
@@ -119,7 +146,10 @@ class NetworkTableHandler(UtilityBase):
             "state": "Connected" if connected else "Disconnected",
             "metrics": [
                 {"label": "Robot IP", "value": str(ip)},
-                {"label": "Status", "value": "Connected" if connected else "Disconnected"},
+                {
+                    "label": "Status",
+                    "value": "Connected" if connected else "Disconnected",
+                },
             ],
         }
 
@@ -205,7 +235,9 @@ class NetworkTableHandler(UtilityBase):
             encoded = json.dumps(self._json_value(value), default=str)
         except (TypeError, ValueError) as e:
             self.logger.warning(
-                "Could not serialize JSON topic '%s': %s", nt_topic, e,
+                "Could not serialize JSON topic '%s': %s",
+                nt_topic,
+                e,
             )
             return
         self._send_data(encoded, nt_topic, "VisionData")
@@ -232,7 +264,8 @@ class NetworkTableHandler(UtilityBase):
             except (TypeError, ValueError) as e:
                 self.logger.warning(
                     "Could not serialize addon output for topic '%s': %s",
-                    nt_topic, e,
+                    nt_topic,
+                    e,
                 )
                 return
             self._send_data(encoded, nt_topic, "VisionData")
@@ -265,14 +298,16 @@ class NetworkTableHandler(UtilityBase):
             data = entry.to_dict() if hasattr(entry, "to_dict") else entry
             if not isinstance(data, dict):
                 continue
-            structs.append(ObjectStruct(
-                x=float(data.get("x", 0.0)),
-                y=float(data.get("y", 0.0)),
-                z=float(data.get("z", 0.0)),
-                roll=float(data.get("roll", 0.0)),
-                pitch=float(data.get("pitch", 0.0)),
-                yaw=float(data.get("yaw", 0.0)),
-            ))
+            structs.append(
+                ObjectStruct(
+                    x=float(data.get("x", 0.0)),
+                    y=float(data.get("y", 0.0)),
+                    z=float(data.get("z", 0.0)),
+                    roll=float(data.get("roll", 0.0)),
+                    pitch=float(data.get("pitch", 0.0)),
+                    yaw=float(data.get("yaw", 0.0)),
+                )
+            )
         if pub_key not in self._subscribers:
             self._subscribers[pub_key] = table.getStructArrayTopic(
                 "vision_data", ObjectStruct
@@ -305,18 +340,21 @@ class NetworkTableHandler(UtilityBase):
         pose = frame_data.get("robot_pose")
         if not pose or not isinstance(pose, dict):
             return
-        self._viewer.add_overlay("robot", {
-            "type": "box",
-            "x": pose["x"],
-            "y": pose["y"],
-            "z": 0.15,
-            "roll": 0,
-            "pitch": 0,
-            "yaw": pose["heading"],
-            "color": "#4c8bf5",
-            "label": "Robot",
-            "data": {"width": 0.76, "height": 0.30, "depth": 0.69},
-        })
+        self._viewer.add_overlay(
+            "robot",
+            {
+                "type": "box",
+                "x": pose["x"],
+                "y": pose["y"],
+                "z": 0.15,
+                "roll": 0,
+                "pitch": 0,
+                "yaw": pose["heading"],
+                "color": "#4c8bf5",
+                "label": "Robot",
+                "data": {"width": 0.76, "height": 0.30, "depth": 0.69},
+            },
+        )
 
     def stop(self):
         pass

@@ -12,7 +12,10 @@ import numpy as np
 import requests
 
 from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
-from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline, SUPPORTED_TARGET_FORMATS
+from iSpy.vision.pipelines.optimizable import (
+    OptimizableModelPipeline,
+    SUPPORTED_TARGET_FORMATS,
+)
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 from iSpy.vision._safe_imports import ensure_torch_imported
@@ -47,7 +50,11 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 self._set_status("ready")
                 return True, "ready"
             reason = getattr(self, "_load_error", None)
-            status = f"error: {reason}" if reason else "error: model weights not downloaded/loaded"
+            status = (
+                f"error: {reason}"
+                if reason
+                else "error: model weights not downloaded/loaded"
+            )
             self._set_status(status)
             return False, status
 
@@ -66,7 +73,9 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
 
     def _set_load_error(self, reason: str):
         self._load_error = reason
-        self.logger.error("YOLO World camera '%s': %s", self.config.get("name", "?"), reason)
+        self.logger.error(
+            "YOLO World camera '%s': %s", self.config.get("name", "?"), reason
+        )
 
     @classmethod
     def config_schema(cls) -> dict:
@@ -84,10 +93,20 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 "help": "YOLO World v2 weights are downloaded automatically from Ultralytics on first use.",
             },
         }
-        schema.update(cls._optimization_schema(
-            target_formats=("auto", "onnx", "rknn", "tflite", "openvino", "engine", "coreml"),
-            input_size_default=640,
-        ))
+        schema.update(
+            cls._optimization_schema(
+                target_formats=(
+                    "auto",
+                    "onnx",
+                    "rknn",
+                    "tflite",
+                    "openvino",
+                    "engine",
+                    "coreml",
+                ),
+                input_size_default=640,
+            )
+        )
         return schema
 
     @staticmethod
@@ -100,21 +119,25 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             lower = token.lower()
             for article in ("a ", "an ", "the "):
                 if lower.startswith(article):
-                    token = token[len(article):]
+                    token = token[len(article) :]
                     break
             token = token.strip()
             if token and token not in classes:
                 classes.append(token)
         return classes or ["object"]
 
-    def __init__(self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None):
+    def __init__(
+        self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None
+    ):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
         self._ispy_config = config
         self.core_mask = core_mask
         self.prompt = str(camera_config.get_pipeline_setting("prompt") or "A dog.")
         self.classes = self._parse_classes(self.prompt)
-        self.model_size = str(camera_config.get_pipeline_setting("model_size") or "s").lower()
+        self.model_size = str(
+            camera_config.get_pipeline_setting("model_size") or "s"
+        ).lower()
 
         raw_quantize = camera_config.get_pipeline_setting("quantize")
         if raw_quantize is None:
@@ -128,9 +151,15 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         # same name the mixin contract expects (_requested_format); the raw
         # setting ("auto" allowed) - resolution happens lazily via
         # _target_format_cached()
-        self._requested_format = str(camera_config.get_pipeline_setting("target_format") or "auto").lower()
-        self._quantization_dataset = camera_config.get_pipeline_setting("quantization_dataset") or None
-        self._model_input_size = int(camera_config.get_pipeline_setting("input_size") or 640)
+        self._requested_format = str(
+            camera_config.get_pipeline_setting("target_format") or "auto"
+        ).lower()
+        self._quantization_dataset = (
+            camera_config.get_pipeline_setting("quantization_dataset") or None
+        )
+        self._model_input_size = int(
+            camera_config.get_pipeline_setting("input_size") or 640
+        )
 
         raw_optimize = camera_config.get_pipeline_setting("optimize")
         if raw_optimize is None:
@@ -146,7 +175,9 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         self._optimizing = False
         self._optimize_error: str | None = None
         self._target_format: str | None = None
-        super().__init__(camera_config, (640, 480), camera_config.get("grayscale", False))
+        super().__init__(
+            camera_config, (640, 480), camera_config.get("grayscale", False)
+        )
 
         # file_path drift guard - see OptimizableModelPipeline._resync_stale_model_file_path
         if self._optimization_requested():
@@ -157,7 +188,8 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         if self._optimization_requested() and not self._optimized_active():
             self.logger.info(
                 "Camera '%s': optimization requested - building %s artifact",
-                self.config.get("name", "?"), self._target_format_cached(),
+                self.config.get("name", "?"),
+                self._target_format_cached(),
             )
             # import torch now so the bg thread doesn't race the main thread's
             # scipy.stats -> torch import (partial module / clobbered logging)
@@ -202,7 +234,10 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             self._optimize_error = None
             self._set_status("ready")
             return "ready"
-        status = self._optimize_error or "error: quantized build failed - no artifact produced"
+        status = (
+            self._optimize_error
+            or "error: quantized build failed - no artifact produced"
+        )
         self._optimize_error = status
         self._set_status(status)
         return status
@@ -224,7 +259,10 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             self._optimize_error = None
             self._set_status("ready")
             return "ready"
-        status = self._optimize_error or "error: quantized build failed - no artifact produced"
+        status = (
+            self._optimize_error
+            or "error: quantized build failed - no artifact produced"
+        )
         self._optimize_error = status
         self._set_status(status)
         return status
@@ -243,16 +281,20 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             # model-backed pipelines, a dependency-less guess here could
             # disagree with the artifact the quantized build produces)
             from iSpy.config.AutoOpt import recommend_format
+
             target = recommend_format()
         if target not in SUPPORTED_TARGET_FORMATS:
             self.logger.warning(
-                "Recommended target format %r unsupported - using onnx", target,
+                "Recommended target format %r unsupported - using onnx",
+                target,
             )
             return "onnx"
         return target
 
     def _optimized_active(self) -> bool:
-        if getattr(self, "model", None) is None or not getattr(self, "_quantized", False):
+        if getattr(self, "model", None) is None or not getattr(
+            self, "_quantized", False
+        ):
             return False
         if getattr(self.model, "model_type", "") == "tpu":
             return True
@@ -302,7 +344,9 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 weights = downloaded
         if weights is None:
             return None
-        classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[:8]
+        classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[
+            :8
+        ]
         fixed = _WORLD_MODEL_DIR / "world" / f"{weights.stem}-{classes_key}.pt"
         if fixed.exists() and fixed.stat().st_size >= 1024:
             return fixed
@@ -323,7 +367,9 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         if target.exists() and target.stat().st_size >= 1024:
             return str(target)
 
-        self.logger.info("Downloading YOLO World weights %s to %s ...", filename, target)
+        self.logger.info(
+            "Downloading YOLO World weights %s to %s ...", filename, target
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".part")
         try:
@@ -342,7 +388,9 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return None
 
         if target.stat().st_size < 1024:
-            self.logger.error("YOLO World weights appear truncated (%s bytes).", target.stat().st_size)
+            self.logger.error(
+                "YOLO World weights appear truncated (%s bytes).", target.stat().st_size
+            )
             return None
         return str(target)
 
@@ -355,7 +403,9 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
 
     def _reparameterize_world(self, weights: str) -> str | None:
         # build-only; runtime uses the fixed .pt without Ultralytics
-        classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[:8]
+        classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[
+            :8
+        ]
         fixed = _WORLD_MODEL_DIR / "world" / f"{Path(weights).stem}-{classes_key}.pt"
         if fixed.exists() and fixed.stat().st_size >= 1024:
             return str(fixed)
@@ -368,11 +418,14 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
 
         if not (fixed.exists() and fixed.stat().st_size >= 1024):
             self.logger.error(
-                "Reparameterized YOLO World model missing/empty at %s", fixed,
+                "Reparameterized YOLO World model missing/empty at %s",
+                fixed,
             )
             return None
 
-        self.logger.info("Reparameterized YOLO World model -> %s (classes=%s)", fixed, self.classes)
+        self.logger.info(
+            "Reparameterized YOLO World model -> %s (classes=%s)", fixed, self.classes
+        )
         return str(fixed)
 
     def _reparameterize_world_subprocess(self, weights: str, output: Path) -> None:
@@ -386,7 +439,11 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             "output_path": str(output),
         }
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, dir=str(outputs_dir), encoding="utf-8"
+            mode="w",
+            suffix=".json",
+            delete=False,
+            dir=str(outputs_dir),
+            encoding="utf-8",
         ) as f:
             args_path = f.name
             json.dump(args, f)
@@ -394,13 +451,20 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         result_path = args_path + ".result.json"
         try:
             proc = subprocess.run(
-                [sys.executable, "-m", "iSpy.boot._yoloworld_reparam_worker", args_path],
+                [
+                    sys.executable,
+                    "-m",
+                    "iSpy.boot._yoloworld_reparam_worker",
+                    args_path,
+                ],
                 cwd=str(Path(__file__).resolve().parents[3]),
                 capture_output=True,
                 text=True,
             )
             if proc.stderr:
-                self.logger.debug("yoloworld reparam worker stderr: %s", proc.stderr.strip())
+                self.logger.debug(
+                    "yoloworld reparam worker stderr: %s", proc.stderr.strip()
+                )
             if proc.returncode != 0 or not Path(result_path).exists():
                 detail = ""
                 try:
@@ -414,7 +478,9 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             with open(result_path, encoding="utf-8") as f:
                 result = json.load(f)
             if "error" in result:
-                raise RuntimeError(f"yolo_world reparameterization failed: {result['error']}")
+                raise RuntimeError(
+                    f"yolo_world reparameterization failed: {result['error']}"
+                )
             if result.get("result") != str(output):
                 raise RuntimeError(
                     f"yolo_world reparameterization produced unexpected path {result.get('result')}"
@@ -460,6 +526,7 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 return
 
             from iSpy.vision.genericYolo import GenericYolo
+
             self.model = GenericYolo(
                 {
                     "file_path": fixed,
@@ -475,6 +542,7 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             self._load_error = None
 
             from iSpy.vision.metadata import read_metadata
+
             meta = read_metadata(Path(fixed))
             if meta and isinstance(meta.get("names"), dict):
                 self._class_names = {int(k): str(v) for k, v in meta["names"].items()}
@@ -482,7 +550,8 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 self._class_names = {i: name for i, name in enumerate(self.classes)}
             self.logger.info(
                 "Loaded YOLO World model from %s (classes=%s)",
-                fixed, self.classes,
+                fixed,
+                self.classes,
             )
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
             self._set_load_error(f"failed to load YOLO World model: {exc}")
@@ -546,6 +615,7 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
 
             from iSpy.vision.genericYolo import GenericYolo
             from iSpy.vision.metadata import read_metadata
+
             self.model = GenericYolo(
                 {
                     "file_path": artifact,
@@ -564,7 +634,8 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 self._class_names = {int(k): str(v) for k, v in meta["names"].items()}
             self.logger.info(
                 "Loaded quantized YOLO World model from %s (classes=%s)",
-                artifact, self.classes,
+                artifact,
+                self.classes,
             )
         except Exception as exc:  # pragma: no cover - runtime dependency fallback
             self._set_load_error(f"failed to load quantized YOLO World model: {exc}")
@@ -607,7 +678,10 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                             },
                         )
                     )
-                if getattr(results, "boxes", None) is not None and len(results.boxes) > 0:
+                if (
+                    getattr(results, "boxes", None) is not None
+                    and len(results.boxes) > 0
+                ):
                     drawn = results.plot(frame.copy())
                     if drawn is not None:
                         annotated = drawn
@@ -621,11 +695,18 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return None
         try:
             overlay = frame.copy()
-            cv2.putText(overlay, "YOLO World", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+            cv2.putText(
+                overlay,
+                "YOLO World",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 255, 0),
+                2,
+            )
             return overlay
         except Exception:
             return frame
 
     def destroy(self):
         super().destroy()
-

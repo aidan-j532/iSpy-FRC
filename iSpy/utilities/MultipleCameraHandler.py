@@ -15,8 +15,12 @@ class MultipleCameraHandler:
         self.cameras = cameras
         self.logger = logging.getLogger(__name__)
         self._stopped = False
-        self._max_residual = (config.get("triangulation_max_residual", 0.5) if config else 0.5)
-        self._match_gate = (config.get("triangulation_match_distance", 2.0) if config else 2.0)
+        self._max_residual = (
+            config.get("triangulation_max_residual", 0.5) if config else 0.5
+        )
+        self._match_gate = (
+            config.get("triangulation_match_distance", 2.0) if config else 2.0
+        )
 
         self._objects: list[list[Object]] = [[] for _ in cameras]
         self._frames = [None] * len(cameras)
@@ -27,9 +31,7 @@ class MultipleCameraHandler:
 
         for i, cam in enumerate(cameras):
             self._threads.append(
-                threading.Thread(
-                    target=self._camera_loop, args=(i, cam), daemon=True
-                )
+                threading.Thread(target=self._camera_loop, args=(i, cam), daemon=True)
             )
             self._threads[-1].start()
 
@@ -46,7 +48,7 @@ class MultipleCameraHandler:
             except Exception as e:
                 self.logger.warning(f"Camera {camera.source} error: {e}")
                 objects, frame = [], camera.get_frame()
-                time.sleep(0.05) # Dont starve CPU
+                time.sleep(0.05)  # Dont starve CPU
             try:
                 with self._locks[i]:
                     self._objects[i] = objects if objects is not None else []
@@ -68,7 +70,9 @@ class MultipleCameraHandler:
 
         return self._merge_with_triangulation(per_camera)
 
-    def _merge_with_triangulation(self, per_camera: list[list["Object"]]) -> list["Object"]:
+    def _merge_with_triangulation(
+        self, per_camera: list[list["Object"]]
+    ) -> list["Object"]:
         used: set[tuple[int, int]] = set()
         merged: list[Object] = []
 
@@ -87,8 +91,12 @@ class MultipleCameraHandler:
                             rough = math.hypot(obj_a.x - obj_b.x, obj_a.y - obj_b.y)
                             if rough > self._match_gate:
                                 continue
-                            ray_a = triangulation.Ray(obj_a.ray_origin, obj_a.ray_direction)
-                            ray_b = triangulation.Ray(obj_b.ray_origin, obj_b.ray_direction)
+                            ray_a = triangulation.Ray(
+                                obj_a.ray_origin, obj_a.ray_direction
+                            )
+                            ray_b = triangulation.Ray(
+                                obj_b.ray_origin, obj_b.ray_direction
+                            )
                             result = triangulation.closest_point_between_rays(
                                 ray_a, ray_b, max_residual=self._max_residual
                             )
@@ -100,7 +108,11 @@ class MultipleCameraHandler:
 
                 if best is not None:
                     residual, cam_b, idx_b, point = best
-                    obj_a.x, obj_a.y, obj_a.z = float(point[0]), float(point[1]), float(point[2])
+                    obj_a.x, obj_a.y, obj_a.z = (
+                        float(point[0]),
+                        float(point[1]),
+                        float(point[2]),
+                    )
                     obj_a.depth_source = "triangulated"
                     used.add((cam_b, idx_b))
 
@@ -149,7 +161,11 @@ class MultipleCameraHandler:
                 f = self._frames[i]
             if f is None:
                 continue
-            name = cam.config.get("name", f"Camera {i+1}") if hasattr(cam, "config") else f"Camera {i+1}"
+            name = (
+                cam.config.get("name", f"Camera {i + 1}")
+                if hasattr(cam, "config")
+                else f"Camera {i + 1}"
+            )
             result[name] = f.copy()
         return result
 

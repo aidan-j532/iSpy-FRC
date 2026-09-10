@@ -9,9 +9,9 @@ import time as _time
 logger = logging.getLogger(__name__)
 
 MAGIC = b"ISPY_DISCOVER:"
-BROADCAST_PORT = 37429          # arbitrary high port unlikely to collide
+BROADCAST_PORT = 37429  # arbitrary high port unlikely to collide
 BROADCAST_INTERVAL_S = 5.0
-WEB_PORT = 5000                 # iSpy Flask default
+WEB_PORT = 5000  # iSpy Flask default
 
 
 def _local_ip() -> str:
@@ -62,7 +62,9 @@ def announce_loop(stop_event: threading.Event | None = None) -> None:
     payload = build_payload()
     logger.info(
         "announce: broadcasting on port %d every %.0fs — %s",
-        BROADCAST_PORT, BROADCAST_INTERVAL_S, payload.decode("utf-8", errors="replace"),
+        BROADCAST_PORT,
+        BROADCAST_INTERVAL_S,
+        payload.decode("utf-8", errors="replace"),
     )
     try:
         while not stop.is_set():

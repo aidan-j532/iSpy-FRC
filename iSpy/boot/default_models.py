@@ -53,7 +53,9 @@ def _download_one(name: str, url: str, target: Path) -> bool:
                 fh.write(chunk)
         tmp.replace(target)
     except Exception as exc:
-        logger.warning("Failed to download default model %s from %s: %s (skipping)", name, url, exc)
+        logger.warning(
+            "Failed to download default model %s from %s: %s (skipping)", name, url, exc
+        )
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
@@ -67,7 +69,8 @@ def _download_one(name: str, url: str, target: Path) -> bool:
     if size < _MIN_MODEL_BYTES:
         logger.warning(
             "Downloaded default model %s appears truncated (%s bytes) - removing.",
-            name, size,
+            name,
+            size,
         )
         try:
             target.unlink()

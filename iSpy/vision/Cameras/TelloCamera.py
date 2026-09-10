@@ -1,4 +1,3 @@
-
 import logging
 import socket
 import time
@@ -30,7 +29,6 @@ _QUICK_COMMAND_TIMEOUT_S = 1.5
 
 
 class TelloCamera(OpenCVCamera):
-
     camera_type = "tello"
     plugin_name = "tello_edu"
 
@@ -45,7 +43,7 @@ class TelloCamera(OpenCVCamera):
                 "label": "Source",
                 "default": f"udp://0.0.0.0:{_TELLO_DEFAULT_VIDEO_PORT}",
                 "help": "Video stream URL. Auto-filled with the drone's UDP "
-                        "feed; leave it unless you know what you are doing.",
+                "feed; leave it unless you know what you are doing.",
             },
             "tello_ip": {
                 "type": "text",
@@ -103,7 +101,9 @@ class TelloCamera(OpenCVCamera):
         )
         try:
             self._command_port = int(
-                str(camera_config.get("tello_command_port", _TELLO_DEFAULT_COMMAND_PORT))
+                str(
+                    camera_config.get("tello_command_port", _TELLO_DEFAULT_COMMAND_PORT)
+                )
             )
             self._video_port = int(
                 str(camera_config.get("tello_video_port", _TELLO_DEFAULT_VIDEO_PORT))
@@ -126,7 +126,9 @@ class TelloCamera(OpenCVCamera):
             # "tello_source", point it at the default UDP stream so the
             # subclass just works out of the box.
             merged = deepcopy(
-                camera_config.data if hasattr(camera_config, "data") else dict(camera_config)
+                camera_config.data
+                if hasattr(camera_config, "data")
+                else dict(camera_config)
             )
             merged["source"] = self._default_stream_url()
             camera_config = iSpyCameraConfig(merged)
@@ -175,13 +177,18 @@ class TelloCamera(OpenCVCamera):
                         return True
                 self.logger.warning(
                     "Tello '%s': no 'OK' for command '%s' (got %r).",
-                    self._tello_source_label, command, buf[:64],
+                    self._tello_source_label,
+                    command,
+                    buf[:64],
                 )
                 return False
         except OSError as exc:
             self.logger.debug(
                 "Tello '%s': command socket to %s:%s failed: %s",
-                self._tello_source_label, self._tello_ip, self._command_port, exc,
+                self._tello_source_label,
+                self._tello_ip,
+                self._command_port,
+                exc,
             )
             return False
 
@@ -201,7 +208,8 @@ class TelloCamera(OpenCVCamera):
                 time.sleep(_HANDSHAKE_RETRY_DELAY_S)
         self.logger.warning(
             "Tello '%s': could not start video stream after %d handshake attempts.",
-            self._tello_source_label, retries,
+            self._tello_source_label,
+            retries,
         )
         return False
 
@@ -229,7 +237,11 @@ class TelloCamera(OpenCVCamera):
         actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
         self.logger.info(
             "Tello '%s': stream %dx%d @ %.1f FPS via %s",
-            self._tello_source_label, actual_w, actual_h, actual_fps, self.source,
+            self._tello_source_label,
+            actual_w,
+            actual_h,
+            actual_fps,
+            self.source,
         )
         self._frame_processors = []
         self._first_open_attempt = False

@@ -43,6 +43,7 @@ def ensure_torch_imported() -> None:
             return
         repair_standard_log_levels()
         import torch  # noqa: F401
+
         _torch_imported = True
 
 

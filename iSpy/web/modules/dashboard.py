@@ -11,6 +11,7 @@ from iSpy.web.Backend.WebModule import WebModule
 
 try:
     import psutil
+
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
@@ -20,17 +21,34 @@ logger = logging.getLogger(__name__)
 #: camera-name tokens that say nothing useful about which pipeline owns an
 #: accelerator ("default_cam", "Camera 0", "video0", ...) - hidden from the
 #: System card's hardware rows instead of cluttering them.
-_GENERIC_CAMERA_TOKENS = ("default", "camera", "cam", "webcam", "video", "usb", "unnamed")
+_GENERIC_CAMERA_TOKENS = (
+    "default",
+    "camera",
+    "cam",
+    "webcam",
+    "video",
+    "usb",
+    "unnamed",
+)
 
 
 def _generic_camera_name(name: str) -> bool:
     n = str(name or "").strip().lower()
     if not n:
         return True
-    if n.replace("_", " ").replace("-", " ").split() and n.split()[-1].isdigit() and len(n.split()) == 1:
+    if (
+        n.replace("_", " ").replace("-", " ").split()
+        and n.split()[-1].isdigit()
+        and len(n.split()) == 1
+    ):
         return True
-    return any(token == n or n.startswith(token + " ") or n.startswith(token + "_")
-               or n.startswith(token + "-") for token in _GENERIC_CAMERA_TOKENS)
+    return any(
+        token == n
+        or n.startswith(token + " ")
+        or n.startswith(token + "_")
+        or n.startswith(token + "-")
+        for token in _GENERIC_CAMERA_TOKENS
+    )
 
 
 #: highest value that can still be a genuine 0-100 utilization percentage.
@@ -108,20 +126,29 @@ class DashboardModule(WebModule):
         super().__init__(context)
         self._data_lock = threading.Lock()
         self._latest: dict = {
-            "fps": 0, "vision_ms": 0, "camera_lag_ms": 0,
-            "detections": 0, "loop_s": 0,
+            "fps": 0,
+            "vision_ms": 0,
+            "camera_lag_ms": 0,
+            "detections": 0,
+            "loop_s": 0,
         }
         self._vision_last_tick: float = 0
         self._start_time = time.perf_counter()
         self._model_info: dict = {}
-        self._plugin_info: dict = {"trackers": [], "utilities": [], "frame_processors": []}
+        self._plugin_info: dict = {
+            "trackers": [],
+            "utilities": [],
+            "frame_processors": [],
+        }
         self._detection_classes: dict = {}
         self._sse_lock = threading.Lock()
         self._sse_clients: list = []
         self._npu_load_cache: tuple[float, list[int] | None] | None = None
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/dashboard", "dashboard_page", lambda: render_template("dashboard.html"))
+        flask_app.add_url_rule(
+            "/dashboard", "dashboard_page", lambda: render_template("dashboard.html")
+        )
         flask_app.add_url_rule("/api/status", "api_status", self._api_status)
         flask_app.add_url_rule("/api/system", "api_system", self._api_system)
         flask_app.add_url_rule("/api/events", "api_events", self._sse_stream)
@@ -148,15 +175,21 @@ class DashboardModule(WebModule):
             if not self._model_info:
                 self._refresh_model_info_unlocked()
 
-        vision_running = (time.perf_counter() - self._vision_last_tick) < 5.0 if self._vision_last_tick else False
-        self._push_sse({
-            "type": "tick",
-            **tick,
-            "vision_running": vision_running,
-            "detection_classes": det_classes,
-            "cameras": self._get_camera_status(),
-            "system": self._get_system_metrics(),
-        })
+        vision_running = (
+            (time.perf_counter() - self._vision_last_tick) < 5.0
+            if self._vision_last_tick
+            else False
+        )
+        self._push_sse(
+            {
+                "type": "tick",
+                **tick,
+                "vision_running": vision_running,
+                "detection_classes": det_classes,
+                "cameras": self._get_camera_status(),
+                "system": self._get_system_metrics(),
+            }
+        )
 
     def _refresh_model_info_unlocked(self):
         try:
@@ -165,6 +198,7 @@ class DashboardModule(WebModule):
                 return
             # models are per-camera now - just report the first model-backed cam's
             from iSpy.config.iSpyConfig import get_pipeline_settings
+
             cams = config.get("camera_configs", {})
             model_cfg = None
             for cam in cams.values():
@@ -180,7 +214,9 @@ class DashboardModule(WebModule):
             file_path = model_cfg.get("file_path", "")
             if file_path:
                 p = Path(file_path)
-                size_mb = round(p.stat().st_size / (1024 * 1024), 2) if p.exists() else 0
+                size_mb = (
+                    round(p.stat().st_size / (1024 * 1024), 2) if p.exists() else 0
+                )
                 self._model_info = {
                     "name": p.stem,
                     "format": p.suffix.lstrip("."),
@@ -200,8 +236,14 @@ class DashboardModule(WebModule):
 
     def _get_system_metrics(self) -> dict:
         if not PSUTIL_AVAILABLE:
-            return {"cpu_percent": None, "memory_percent": None, "memory_used_mb": None,
-                    "memory_total_mb": None, "temperature": None, "hardware": self._get_hardware()}
+            return {
+                "cpu_percent": None,
+                "memory_percent": None,
+                "memory_used_mb": None,
+                "memory_total_mb": None,
+                "temperature": None,
+                "hardware": self._get_hardware(),
+            }
 
         try:
             cpu = psutil.cpu_percent(interval=None)
@@ -262,11 +304,13 @@ class DashboardModule(WebModule):
         out = []
         for hardware, names in grouped.items():
             meaningful = sorted(n for n in names if not _generic_camera_name(n))
-            out.append({
-                "hardware": hardware,
-                "cameras": meaningful,
-                "load_percent": self._read_hardware_load(hardware),
-            })
+            out.append(
+                {
+                    "hardware": hardware,
+                    "cameras": meaningful,
+                    "load_percent": self._read_hardware_load(hardware),
+                }
+            )
         out.sort(key=lambda entry: entry["hardware"])
         return out
 
@@ -281,13 +325,19 @@ class DashboardModule(WebModule):
                 return cached[1]
             import shutil
             import subprocess
+
             value = None
             try:
                 if shutil.which("nvidia-smi"):
                     result = subprocess.run(
-                        ["nvidia-smi", "--query-gpu=utilization.gpu",
-                         "--format=csv,noheader,nounits"],
-                        capture_output=True, text=True, timeout=2,
+                        [
+                            "nvidia-smi",
+                            "--query-gpu=utilization.gpu",
+                            "--format=csv,noheader,nounits",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
                     )
                     if result.returncode == 0 and result.stdout.strip():
                         value = max(0, min(int(result.stdout.split()[0]), 100))
@@ -336,31 +386,49 @@ class DashboardModule(WebModule):
         for cam in cameras:
             try:
                 age = cam.get_frame_age()
-                name = cam.config.get("name", str(cam.source)) if hasattr(cam, "config") else str(cam.source)
+                name = (
+                    cam.config.get("name", str(cam.source))
+                    if hasattr(cam, "config")
+                    else str(cam.source)
+                )
                 resolution = None
                 try:
                     frame = cam.get_frame() if hasattr(cam, "get_frame") else None
                     if frame is not None:
                         import numpy as np
+
                         if isinstance(frame, np.ndarray):
                             h, w = frame.shape[:2]
                             resolution = f"{w}x{h}"
                 except Exception:
                     pass
-                cam_status.append({
-                    "name": name,
-                    "ok": age < 1.0,
-                    "stale": 1.0 <= age < 3.0,
-                    "frame_age_ms": round(age * 1000, 1),
-                    "resolution": resolution,
-                })
+                cam_status.append(
+                    {
+                        "name": name,
+                        "ok": age < 1.0,
+                        "stale": 1.0 <= age < 3.0,
+                        "frame_age_ms": round(age * 1000, 1),
+                        "resolution": resolution,
+                    }
+                )
             except Exception:
-                cam_status.append({"name": "unknown", "ok": False, "stale": False,
-                                   "frame_age_ms": None, "resolution": None})
+                cam_status.append(
+                    {
+                        "name": "unknown",
+                        "ok": False,
+                        "stale": False,
+                        "frame_age_ms": None,
+                        "resolution": None,
+                    }
+                )
         return cam_status
 
     def _build_full_payload(self) -> dict:
-        vision_running = (time.perf_counter() - self._vision_last_tick) < 5.0 if self._vision_last_tick else False
+        vision_running = (
+            (time.perf_counter() - self._vision_last_tick) < 5.0
+            if self._vision_last_tick
+            else False
+        )
         with self._data_lock:
             latest = dict(self._latest)
             detection_classes = dict(self._detection_classes)
@@ -381,11 +449,13 @@ class DashboardModule(WebModule):
         return jsonify(self._build_full_payload())
 
     def _api_system(self):
-        return jsonify({
-            "system": self._get_system_metrics(),
-            "cameras": self._get_camera_status(),
-            "uptime_s": round(time.perf_counter() - self._start_time, 1),
-        })
+        return jsonify(
+            {
+                "system": self._get_system_metrics(),
+                "cameras": self._get_camera_status(),
+                "uptime_s": round(time.perf_counter() - self._start_time, 1),
+            }
+        )
 
     def _sse_stream(self):
         def generate():
@@ -406,8 +476,11 @@ class DashboardModule(WebModule):
                     if q in self._sse_clients:
                         self._sse_clients.remove(q)
 
-        return Response(generate(), mimetype="text/event-stream",
-                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     def _push_sse(self, payload: dict):
         with self._sse_lock:

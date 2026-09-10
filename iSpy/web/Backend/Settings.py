@@ -5,14 +5,22 @@ from iSpy.web.Backend.WebModule import WebModule
 from iSpy.validations.recommendations import get_structured_recommendations
 
 _RESTART_REQUIRED_KEYS = {
-    "unit", "debug_mode", "frame_sync", "log_level",
-    "metrics", "plugins", "camera_configs", "device", "num_gpus",
+    "unit",
+    "debug_mode",
+    "frame_sync",
+    "log_level",
+    "metrics",
+    "plugins",
+    "camera_configs",
+    "device",
+    "num_gpus",
 }
 
 
 def _detect_gpu_count() -> int:
     try:
         import torch
+
         if torch.cuda.is_available():
             return int(torch.cuda.device_count())
         return 0
@@ -24,49 +32,86 @@ class SettingsModule(WebModule):
     plugin_name = "settings"
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/settings", "settings_page", lambda: render_template("settings.html"))
-        flask_app.add_url_rule("/api/settings", "api_settings_get", self._get, methods=["GET"])
-        flask_app.add_url_rule("/api/settings", "api_settings_post", self._post, methods=["POST"])
-        flask_app.add_url_rule("/api/settings/compare", "api_settings_compare", self._compare, methods=["POST"])
-        flask_app.add_url_rule("/api/settings/snapshot", "api_settings_snapshot", self._snapshot, methods=["POST"])
-        flask_app.add_url_rule("/api/settings/restore", "api_settings_restore", self._restore, methods=["POST"])
-        flask_app.add_url_rule("/api/settings/raw-unlock", "api_settings_raw_unlock", self._raw_unlock, methods=["POST"])
+        flask_app.add_url_rule(
+            "/settings", "settings_page", lambda: render_template("settings.html")
+        )
+        flask_app.add_url_rule(
+            "/api/settings", "api_settings_get", self._get, methods=["GET"]
+        )
+        flask_app.add_url_rule(
+            "/api/settings", "api_settings_post", self._post, methods=["POST"]
+        )
+        flask_app.add_url_rule(
+            "/api/settings/compare",
+            "api_settings_compare",
+            self._compare,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/settings/snapshot",
+            "api_settings_snapshot",
+            self._snapshot,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/settings/restore",
+            "api_settings_restore",
+            self._restore,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/settings/raw-unlock",
+            "api_settings_raw_unlock",
+            self._raw_unlock,
+            methods=["POST"],
+        )
 
     def _get(self):
         from iSpy.web.Backend.save_store import read
+
         config = self.context["config"]
         return jsonify(
             config=config.config,
             defaults=config.default_config,
             gpu_count=_detect_gpu_count(),
-            raw_json_unlocked=bool((read("raw_json_unlocked") or {}).get("unlocked", False)),
+            raw_json_unlocked=bool(
+                (read("raw_json_unlocked") or {}).get("unlocked", False)
+            ),
         )
 
     def _raw_unlock(self):
         from iSpy.web.Backend.save_store import write
+
         write("raw_json_unlocked", {"unlocked": True})
         return jsonify(success=True)
 
     def _snapshot(self):
         from iSpy.web.Backend.save_store import write
+
         config = self.context["config"]
         write("config_snapshot", {"config": config.config, "taken": True})
         return jsonify(success=True)
 
     def _restore(self):
         from iSpy.web.Backend.save_store import read, write
+
         snap = read("config_snapshot")
         if not snap or not snap.get("taken"):
-            return jsonify(error="No snapshot available (already used, or none was taken)"), 404
+            return jsonify(
+                error="No snapshot available (already used, or none was taken)"
+            ), 404
         config = self.context["config"]
         config.config = snap["config"]
         # whole config dict was swapped underneath the camera wrappers -
         # normalize + rebuild them like _update_config does
         from iSpy.config.iSpyConfig import ensure_camera_entries_ready
+
         ensure_camera_entries_ready(config.config.get("camera_configs", {}))
         config._rebuild_camera_configs()
         config.save()
-        write("config_snapshot", {"config": None, "taken": False})  # one-shot: consume it
+        write(
+            "config_snapshot", {"config": None, "taken": False}
+        )  # one-shot: consume it
         return jsonify(success=True, config=config.config)
 
     def _post(self):
@@ -82,7 +127,9 @@ class SettingsModule(WebModule):
             config.save()
 
             changed_keys = self._find_changed_keys(old_config, config.config)
-            needs_restart = bool(changed_keys & (_RESTART_REQUIRED_KEYS | frontend_restart_keys))
+            needs_restart = bool(
+                changed_keys & (_RESTART_REQUIRED_KEYS | frontend_restart_keys)
+            )
 
             # push critical post-save recommendations to the dashboard via SSE so
             # they show up in real time, not only when someone visits
@@ -91,12 +138,16 @@ class SettingsModule(WebModule):
             critical = [r for r in recs if r["severity"] == "critical"]
             dash = self.context.get("dashboard_module")
             if critical and dash:
-                dash._push_sse({
-                    "type": "config_warning",
-                    "messages": [r["message"] for r in critical],
-                })
+                dash._push_sse(
+                    {
+                        "type": "config_warning",
+                        "messages": [r["message"] for r in critical],
+                    }
+                )
 
-            return jsonify(success=True, needs_restart=needs_restart, changed=list(changed_keys))
+            return jsonify(
+                success=True, needs_restart=needs_restart, changed=list(changed_keys)
+            )
         except ValueError as e:
             return jsonify(error=str(e)), 400
         except Exception as e:

@@ -2,6 +2,7 @@ import sys
 import json
 from pathlib import Path
 
+
 def main():
     if len(sys.argv) != 2:
         print("Usage: python -m iSpy.boot._convert_worker <args.json>", file=sys.stderr)
@@ -30,6 +31,7 @@ def main():
 
     out_path = Path(sys.argv[1] + ".result.json")
     out_path.write_text(json.dumps({"result": result}))
+
 
 if __name__ == "__main__":
     main()

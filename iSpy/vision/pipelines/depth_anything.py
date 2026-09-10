@@ -47,7 +47,11 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
                 self._set_status("ready")
                 return True, "ready"
             reason = getattr(self, "_load_error", None)
-            status = f"error: {reason}" if reason else "error: model weights not downloaded/loaded"
+            status = (
+                f"error: {reason}"
+                if reason
+                else "error: model weights not downloaded/loaded"
+            )
             self._set_status(status)
             return False, status
 
@@ -92,12 +96,14 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
                 "step": 1,
             },
         }
-        schema.update(cls._optimization_schema(
-            target_formats=("auto", "onnx"),
-            input_size_default=_DEPTH_INPUT_SIZE,
-            input_size_help="Square resolution used for the optimized ONNX export "
-                            "and inference.",
-        ))
+        schema.update(
+            cls._optimization_schema(
+                target_formats=("auto", "onnx"),
+                input_size_default=_DEPTH_INPUT_SIZE,
+                input_size_help="Square resolution used for the optimized ONNX export "
+                "and inference.",
+            )
+        )
         return schema
 
     def __init__(
@@ -123,7 +129,9 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         self.unit = config.get("unit", "meter")
         self.max_depth = float(camera_config.get_pipeline_setting("max_depth", 10.0))
-        self.estimate_depth = bool(camera_config.get_pipeline_setting("estimate_depth", True))
+        self.estimate_depth = bool(
+            camera_config.get_pipeline_setting("estimate_depth", True)
+        )
 
         raw_quantize = camera_config.get_pipeline_setting("quantize")
         if raw_quantize is None:
@@ -134,10 +142,16 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             raw_quantize = raw_quantize.strip().lower() in ("1", "true", "yes", "on")
         self.quantize = bool(raw_quantize)
 
-        self._requested_format = str(camera_config.get_pipeline_setting("target_format") or "auto").lower()
-        self._quantization_dataset = camera_config.get_pipeline_setting("quantization_dataset") or None
+        self._requested_format = str(
+            camera_config.get_pipeline_setting("target_format") or "auto"
+        ).lower()
+        self._quantization_dataset = (
+            camera_config.get_pipeline_setting("quantization_dataset") or None
+        )
         try:
-            self._input_size = int(camera_config.get_pipeline_setting("input_size") or _DEPTH_INPUT_SIZE)
+            self._input_size = int(
+                camera_config.get_pipeline_setting("input_size") or _DEPTH_INPUT_SIZE
+            )
         except (TypeError, ValueError):
             self._input_size = _DEPTH_INPUT_SIZE
         self._target_format: str | None = None
@@ -145,18 +159,26 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         # max_depth is in meters; scale z into the configured unit so
         # every pipeline emits the same unit.
         self._z_scale = {
-            "meter": 1.0, "meters": 1.0,
-            "inch": 39.37007874, "inches": 39.37007874,
-            "foot": 3.280839895, "feet": 3.280839895,
-            "centimeter": 100.0, "centimeters": 100.0,
+            "meter": 1.0,
+            "meters": 1.0,
+            "inch": 39.37007874,
+            "inches": 39.37007874,
+            "foot": 3.280839895,
+            "feet": 3.280839895,
+            "centimeter": 100.0,
+            "centimeters": 100.0,
             # FRC/WPILib convention: meters out
             "frc": 1.0,
         }.get(self.unit, 1.0)
         self._unit_label = {
-            "meter": "m", "meters": "m",
-            "inch": "in", "inches": "in",
-            "foot": "ft", "feet": "ft",
-            "centimeter": "cm", "centimeters": "cm",
+            "meter": "m",
+            "meters": "m",
+            "inch": "in",
+            "inches": "in",
+            "foot": "ft",
+            "feet": "ft",
+            "centimeter": "cm",
+            "centimeters": "cm",
             "frc": "m",
         }.get(self.unit, self.unit)
 
@@ -168,7 +190,9 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         self._auto_opt = self._normalize_auto_opt(raw_optimize)
 
         try:
-            self._every = max(1, int(camera_config.get_pipeline_setting("process_every", 5)))
+            self._every = max(
+                1, int(camera_config.get_pipeline_setting("process_every", 5))
+            )
         except (TypeError, ValueError):
             self._every = 5
 
@@ -187,7 +211,8 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         if self._optimization_requested() and not self._optimized_active():
             self.logger.info(
                 "Camera '%s': optimization requested - building %s artifact",
-                self.config.get("name", "?"), self._target_format_cached(),
+                self.config.get("name", "?"),
+                self._target_format_cached(),
             )
             # import torch now so the bg thread doesn't race the main thread's
             # scipy.stats -> torch import (partial module / clobbered logging)
@@ -231,7 +256,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._optimize_error = None
             self._set_status("ready")
             return "ready"
-        status = self._optimize_error or "error: optimized ONNX build failed - no artifact produced"
+        status = (
+            self._optimize_error
+            or "error: optimized ONNX build failed - no artifact produced"
+        )
         self._optimize_error = status
         self._set_status(status)
         return status
@@ -253,7 +281,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._optimize_error = None
             self._set_status("ready")
             return "ready"
-        status = self._optimize_error or "error: optimized ONNX build failed - no artifact produced"
+        status = (
+            self._optimize_error
+            or "error: optimized ONNX build failed - no artifact produced"
+        )
         self._optimize_error = status
         self._set_status(status)
         return status
@@ -338,7 +369,8 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             return self._load_tpu(force)
 
         self.logger.warning(
-            "Unknown optimized target format %r - falling back to onnx", target,
+            "Unknown optimized target format %r - falling back to onnx",
+            target,
         )
         return self._load_onnx(force)
 
@@ -383,8 +415,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             # YoloModels/openvino/<stem>_openvino_model/<stem>_openvino_model.xml
             return _YOLO_MODELS_DIR / "openvino" / f"{stem}_openvino_model"
         ext = {  # every other backend keeps a single artifact file
-            "engine": ".engine", "coreml": ".mlpackage",
-            "rknn": ".rknn", "tflite": ".tflite",
+            "engine": ".engine",
+            "coreml": ".mlpackage",
+            "rknn": ".rknn",
+            "tflite": ".tflite",
         }.get(target, f".{target}")
         return _YOLO_MODELS_DIR / target / f"{stem}{ext}"
 
@@ -397,7 +431,11 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         import onnxruntime as ort
 
-        providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in ort.get_available_providers()]
+        providers = [
+            p
+            for p in ("CUDAExecutionProvider", "CPUExecutionProvider")
+            if p in ort.get_available_providers()
+        ]
         self._session = ort.InferenceSession(artifact, providers=providers)
         self._infer = self._infer_depth_onnx
         self._load_error = None
@@ -421,15 +459,20 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
             device = resolve_openvino_device()
             if device.startswith("intel:"):
-                device = device.split(":", 1)[1]  # OpenVINO wants 'GPU', not 'intel:gpu'
+                device = device.split(":", 1)[
+                    1
+                ]  # OpenVINO wants 'GPU', not 'intel:gpu'
             core = ov.Core()
-            core.set_property({"CACHE_DIR": str(_YOLO_MODELS_DIR / "openvino" / ".cache")})
+            core.set_property(
+                {"CACHE_DIR": str(_YOLO_MODELS_DIR / "openvino" / ".cache")}
+            )
 
             ir_dir = self._artifact_path("openvino")
             ir_xml = ir_dir / f"{ir_dir.name}.xml"
             if not ir_xml.exists() or force:
                 self.logger.info(
-                    "Converting Depth Anything ONNX -> OpenVINO IR in %s ...", ir_dir,
+                    "Converting Depth Anything ONNX -> OpenVINO IR in %s ...",
+                    ir_dir,
                 )
                 ir_dir.mkdir(parents=True, exist_ok=True)
                 ov.save_model(core.read_model(str(artifact)), str(ir_xml))
@@ -448,18 +491,22 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             if registered is None:
                 self.logger.warning(
                     "OpenVINO device %r not registered (%s) - using AUTO",
-                    device, core.available_devices,
+                    device,
+                    core.available_devices,
                 )
                 registered = "AUTO"
             self._session = self._compile_openvino(core, ir_xml, registered)
             self._infer = self._infer_depth_openvino
             self._load_error = None
             self.logger.info(
-                "Loaded optimized Depth Anything OpenVINO (%s) from %s", registered, ir_dir,
+                "Loaded optimized Depth Anything OpenVINO (%s) from %s",
+                registered,
+                ir_dir,
             )
         except Exception as exc:
             self.logger.warning(
-                "OpenVINO backend failed (%s) - falling back to onnx", exc,
+                "OpenVINO backend failed (%s) - falling back to onnx",
+                exc,
             )
             self._load_onnx(force)
 
@@ -475,6 +522,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
                         exc,
                     )
                     import shutil
+
                     shutil.rmtree(cache_dir, ignore_errors=True)
                     continue
                 raise
@@ -519,10 +567,13 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._session = runtime.deserialize_cuda_engine(engine_path.read_bytes())
             self._infer = self._infer_depth_engine
             self._load_error = None
-            self.logger.info("Loaded optimized Depth Anything TensorRT from %s", engine_path)
+            self.logger.info(
+                "Loaded optimized Depth Anything TensorRT from %s", engine_path
+            )
         except Exception as exc:
             self.logger.warning(
-                "TensorRT build/load failed (%s) - falling back to onnx", exc,
+                "TensorRT build/load failed (%s) - falling back to onnx",
+                exc,
             )
             self._session = None
             self._load_onnx(force)
@@ -547,15 +598,20 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         try:
             if not model_path.exists() or force:
                 self.logger.info("Converting %s -> CoreML ...", artifact)
-                mlmodel = ct.convert(artifact, source="onnx", compute_units=ct.ComputeUnit.ALL)
+                mlmodel = ct.convert(
+                    artifact, source="onnx", compute_units=ct.ComputeUnit.ALL
+                )
                 mlmodel.save(str(model_path))
             self._session = ct.models.MLModel(str(model_path))
             self._infer = self._infer_depth_coreml
             self._load_error = None
-            self.logger.info("Loaded optimized Depth Anything CoreML from %s", model_path)
+            self.logger.info(
+                "Loaded optimized Depth Anything CoreML from %s", model_path
+            )
         except Exception as exc:
             self.logger.warning(
-                "CoreML build/load failed (%s) - falling back to onnx", exc,
+                "CoreML build/load failed (%s) - falling back to onnx",
+                exc,
             )
             self._session = None
             self._load_onnx(force)
@@ -577,7 +633,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         out_dir = _YOLO_MODELS_DIR / "tflite"
         out_dir.mkdir(parents=True, exist_ok=True)
-        tflite_path = out_dir / f"{_DEPTH_ARTIFACT_STEM}_{self._input_size}x{self._input_size}.tflite"
+        tflite_path = (
+            out_dir
+            / f"{_DEPTH_ARTIFACT_STEM}_{self._input_size}x{self._input_size}.tflite"
+        )
         try:
             if not tflite_path.exists() or force:
                 self.logger.info("Converting %s -> TFLite ...", artifact)
@@ -594,10 +653,13 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._session = interpreter
             self._infer = self._infer_depth_tflite
             self._load_error = None
-            self.logger.info("Loaded optimized Depth Anything TFLite from %s", tflite_path)
+            self.logger.info(
+                "Loaded optimized Depth Anything TFLite from %s", tflite_path
+            )
         except Exception as exc:
             self.logger.warning(
-                "TFLite build/load failed (%s) - falling back to onnx", exc,
+                "TFLite build/load failed (%s) - falling back to onnx",
+                exc,
             )
             self._session = None
             self._load_onnx(force)
@@ -642,7 +704,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
                 rknn = RKNN(verbose=False)
                 try:
                     rknn.config(target_platform="rk3588")
-                    rknn.load_onnx(model=artifact, input_size_list=[[1, 3, self._input_size, self._input_size]])
+                    rknn.load_onnx(
+                        model=artifact,
+                        input_size_list=[[1, 3, self._input_size, self._input_size]],
+                    )
                     dataset = self._rknn_calibration_txt()
                     rknn.build(do_quantization=self.quantize, dataset=dataset)
                     rknn.export_rknn(str(rknn_path))
@@ -662,7 +727,8 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self.logger.info("Loaded optimized Depth Anything RKNN from %s", rknn_path)
         except Exception as exc:
             self.logger.warning(
-                "RKNN build/load failed (%s) - falling back to onnx", exc,
+                "RKNN build/load failed (%s) - falling back to onnx",
+                exc,
             )
             self._session = None
             self._load_onnx(force)
@@ -711,7 +777,8 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self.logger.info("Loaded Depth Anything on TPU device %s", device)
         except Exception as exc:
             self.logger.warning(
-                "TPU backend failed (%s) - falling back to onnx", exc,
+                "TPU backend failed (%s) - falling back to onnx",
+                exc,
             )
             self._model = None
             self._session = None
@@ -721,13 +788,14 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         size = getattr(self, "_input_size", _DEPTH_INPUT_SIZE)
         img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img = (
-            cv2.resize(img, (size, size), interpolation=cv2.INTER_CUBIC)
-            .astype(np.float32)
+            cv2.resize(img, (size, size), interpolation=cv2.INTER_CUBIC).astype(
+                np.float32
+            )
             / 255.0
         )
-        return (
-            (img.transpose(2, 0, 1) - _IMAGENET_MEAN) / _IMAGENET_STD
-        ).astype(np.float32)[None]
+        return ((img.transpose(2, 0, 1) - _IMAGENET_MEAN) / _IMAGENET_STD).astype(
+            np.float32
+        )[None]
 
     def _postprocess_depth(self, depth, frame: np.ndarray) -> np.ndarray:
         depth = np.asarray(depth)
@@ -745,11 +813,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             return
 
         try:
-            self.logger.info(
-                "Loading Depth Anything V2 Small from Hugging Face..."
-            )
+            self.logger.info("Loading Depth Anything V2 Small from Hugging Face...")
 
             from transformers import pipeline
+
             self._model = pipeline(
                 "depth-estimation",
                 model=_DEPTH_MODEL_ID,
@@ -761,10 +828,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self.logger.info("Loaded Depth Anything V2 Small.")
 
         except Exception as exc:
-            self._load_error = f"failed to load Depth Anything V2 from Hugging Face: {exc}"
-            self.logger.exception(
-                "Failed to load Depth Anything V2 from Hugging Face."
+            self._load_error = (
+                f"failed to load Depth Anything V2 from Hugging Face: {exc}"
             )
+            self.logger.exception("Failed to load Depth Anything V2 from Hugging Face.")
             self._model = None
 
     def _infer_depth(self, frame: np.ndarray):
@@ -774,9 +841,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         return self._infer_depth_pipeline(frame)
 
     def _infer_depth_pipeline(self, frame: np.ndarray):
-        image = Image.fromarray(
-            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        )
+        image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
         result = self._model(image)
 
@@ -789,7 +854,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
             depth = np.asarray(depth)
 
-        # strip batch/channel dims
+            # strip batch/channel dims
             while depth.ndim > 2:
                 depth = depth[0]
 
@@ -800,9 +865,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             depth = np.asarray(depth_image).astype(np.float32)
             return depth
 
-        raise RuntimeError(
-            "Depth Anything pipeline returned no depth output."
-        )
+        raise RuntimeError("Depth Anything pipeline returned no depth output.")
 
     def _infer_depth_onnx(self, frame: np.ndarray) -> np.ndarray:
         pixel_values = self._preprocess_depth(frame)
@@ -872,7 +935,9 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         pixel_values = torch.from_numpy(self._preprocess_depth(frame))
         with torch.no_grad():
-            pred = self._session(pixel_values=pixel_values.to(self._session.device)).predicted_depth
+            pred = self._session(
+                pixel_values=pixel_values.to(self._session.device)
+            ).predicted_depth
         depth = xm.send_cpu(pred).cpu().numpy()
         return self._postprocess_depth(depth, frame)
 
@@ -889,9 +954,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         closeness = (norm - d_min) / span
 
         # Depth Anything gives relative depth, not real meters
-        distance_m = self.max_depth * float(
-            np.clip(1.0 - closeness, 0.0, 1.0)
-        )
+        distance_m = self.max_depth * float(np.clip(1.0 - closeness, 0.0, 1.0))
 
         return distance_m * self._z_scale
 
@@ -907,9 +970,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         cx, cy = w // 2, h // 2
 
-        center_d = self._distance_from_depth(
-            float(depth[cy, cx])
-        )
+        center_d = self._distance_from_depth(float(depth[cy, cx]))
 
         objects = [
             Object(
@@ -935,9 +996,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         )
 
         near_y, near_x = int(flat_near[0]), int(flat_near[1])
-        near_d = self._distance_from_depth(
-            float(depth[near_y, near_x])
-        )
+        near_d = self._distance_from_depth(float(depth[near_y, near_x]))
 
         objects.append(
             Object(
@@ -1019,9 +1078,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             int(cy * depth.shape[0] / frame.shape[0]),
         )
 
-        center_d = self._distance_from_depth(
-            float(depth[depth_y, depth_x])
-        )
+        center_d = self._distance_from_depth(float(depth[depth_y, depth_x]))
 
         label = f"Depth {center_d:.2f} {self._unit_label}"
 
@@ -1056,11 +1113,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         last_depth = self._last_depth
 
         # reuse the last depth map between inference frames
-        if (
-            last_depth is not None
-            and every > 1
-            and self._frame_count % every != 0
-        ):
+        if last_depth is not None and every > 1 and self._frame_count % every != 0:
             objects = self._objects_from_depth(
                 last_depth,
                 frame,
@@ -1077,9 +1130,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             depth = self._infer_depth(frame)
 
         except Exception:
-            self.logger.exception(
-                "Depth Anything inference failed."
-            )
+            self.logger.exception("Depth Anything inference failed.")
 
             if last_depth is not None:
                 depth = last_depth
@@ -1158,9 +1209,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
                 depth.shape[0] - 1,
                 int(cy * depth.shape[0] / h),
             )
-            center_d = self._distance_from_depth(
-                float(depth[depth_y, depth_x])
-            )
+            center_d = self._distance_from_depth(float(depth[depth_y, depth_x]))
 
             cv2.circle(
                 map_img,
@@ -1206,4 +1255,3 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         if hasattr(super(), "destroy"):
             super().destroy()
-

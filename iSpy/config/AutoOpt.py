@@ -48,7 +48,6 @@ def _lsusb_output() -> str:
     return ""
 
 
-
 @lru_cache()
 def has_jetson() -> bool:
     if os.path.exists("/etc/nv_tegra_release"):
@@ -62,6 +61,7 @@ def has_jetson() -> bool:
         except Exception:
             pass
     return False
+
 
 @lru_cache()
 def has_hailo_npu() -> bool:
@@ -79,6 +79,7 @@ def has_hailo_npu() -> bool:
     # return _cmd_ok("hailortcli fw-control identify")
     return False
 
+
 @lru_cache()
 def has_nvidia() -> bool:
     if has_jetson():
@@ -92,6 +93,7 @@ def has_nvidia() -> bool:
         return True
     try:
         import torch
+
         if torch.cuda.is_available():
             return True
     except ImportError:
@@ -118,6 +120,7 @@ def has_tpu() -> bool:
     try:
         import torch_xla
         import torch_xla.core.xla_model as xm
+
         dev = xm.xla_device()
         return True
     except Exception:
@@ -164,7 +167,16 @@ def has_rockchip_npu() -> bool:
     if _cmd_ok("lsmod 2>/dev/null | grep -q rknpu"):
         return True
 
-    rockchip_indicators = ("rk3588", "rk3576", "rk3399", "rk3568", "rk3566", "rk3528", "rv1103", "rv1106")
+    rockchip_indicators = (
+        "rk3588",
+        "rk3576",
+        "rk3399",
+        "rk3568",
+        "rk3566",
+        "rk3528",
+        "rv1103",
+        "rv1106",
+    )
     try:
         with open("/proc/cpuinfo") as f:
             cpuinfo = f.read().lower()
@@ -186,11 +198,13 @@ def has_rockchip_npu() -> bool:
 
     return False
 
+
 def resolve_openvino_device(requested_device=None) -> str:
     if isinstance(requested_device, str) and requested_device.startswith("intel:"):
         return requested_device
     try:
         from openvino import Core
+
         available = Core().available_devices
     except Exception:
         return "intel:cpu"
@@ -217,7 +231,9 @@ def recommend_format(
     #           backend regresses either.
     # 1. embedded NPUs / TPUs
     if has_rockchip_npu():
-        logger.info("Rockchip NPU detected - using RKNN format for hardware acceleration.")
+        logger.info(
+            "Rockchip NPU detected - using RKNN format for hardware acceleration."
+        )
         return "rknn"
     # HAILO DISABLED - see <reason>
     # Hailo/HEF backend is disabled. has_hailo_npu() is neutered above AND
@@ -229,12 +245,16 @@ def recommend_format(
     #     logger.info("Hailo NPU detected - using HEF format for hardware acceleration.")
     #     return "hef"
     if has_edge_tpu():
-        logger.info("Edge TPU detected - using TFLite format for hardware acceleration.")
+        logger.info(
+            "Edge TPU detected - using TFLite format for hardware acceleration."
+        )
         return "tflite"
 
     # 2. apple ecosystem
     if has_apple_silicon() and runtime_supported:
-        logger.info("Apple Silicon detected - using Core ML format for hardware acceleration.")
+        logger.info(
+            "Apple Silicon detected - using Core ML format for hardware acceleration."
+        )
         return "coreml"
 
     # 3. google TPU - pytorch via XLA
@@ -245,9 +265,7 @@ def recommend_format(
     # 4. nvidia - tensorrt engine > onnx for max fps
     if has_nvidia():
         if (has_tensorrt() or ignore_dependencies) and runtime_supported:
-            logger.info(
-                "NVIDIA GPU detected - using .engine format for maximum FPS."
-            )
+            logger.info("NVIDIA GPU detected - using .engine format for maximum FPS.")
             return "engine"
         logger.info(
             "NVIDIA GPU detected but .engine runtime unsupported - falling back "
@@ -257,10 +275,14 @@ def recommend_format(
 
     # 5. desktop hardware
     if os.name != "nt" and has_intel_vpu() and runtime_supported:
-        logger.info("Intel VPU detected - using OpenVINO format for hardware acceleration.")
+        logger.info(
+            "Intel VPU detected - using OpenVINO format for hardware acceleration."
+        )
         return "openvino"
     if has_intel_gpu() and runtime_supported:
-        logger.info("Intel GPU detected - using OpenVINO format for hardware acceleration.")
+        logger.info(
+            "Intel GPU detected - using OpenVINO format for hardware acceleration."
+        )
         return "openvino"
     if has_amd_gpu():
         logger.info("AMD GPU detected - using ONNX format for hardware acceleration.")
@@ -268,7 +290,9 @@ def recommend_format(
 
     # 6. arm edge (jetson, rpi, etc.)
     if has_arm():
-        logger.info("ARM edge device detected - using TFLite format for hardware acceleration.")
+        logger.info(
+            "ARM edge device detected - using TFLite format for hardware acceleration."
+        )
         return "tflite"
 
     logger.info("No specialised hardware detected - defaulting to ONNX (CPU).")

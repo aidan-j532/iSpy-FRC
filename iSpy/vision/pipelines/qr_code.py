@@ -9,6 +9,7 @@ from iSpy.vision.Object import Object
 from iSpy.vision import triangulation
 from iSpy.vision import calibration as cam_calibration
 
+
 class QRCodePipeline(VisionPipeline):
     plugin_name = "qr_code"
     # QR pose uses the camera matrix -> ChArUco board intrinsics.
@@ -31,7 +32,9 @@ class QRCodePipeline(VisionPipeline):
             },
         }
 
-    def __init__(self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None):
+    def __init__(
+        self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None
+    ):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
 
@@ -43,7 +46,9 @@ class QRCodePipeline(VisionPipeline):
 
             _pos_unit = config.get("unit", "frc")
             # 'height' is the single mount-height field feeding triangulation
-            self.camera_height = unit_to_inches(camera_config.get("height", 0.0), _pos_unit)
+            self.camera_height = unit_to_inches(
+                camera_config.get("height", 0.0), _pos_unit
+            )
             self.camera_x = unit_to_inches(camera_config.get("x", 0.0), _pos_unit)
             self.camera_y = unit_to_inches(camera_config.get("y", 0.0), _pos_unit)
             _legacy_z = camera_config.get("z")
@@ -54,21 +59,27 @@ class QRCodePipeline(VisionPipeline):
                     "triangulation.",
                     _legacy_z,
                 )
-            
+
             calib = camera_config.get("calibration", {})
             self.fov = calib.get("fov", 0.0)
             self.grayscale = camera_config.get("grayscale", False)
             self.qr_size = float(camera_config.get_pipeline_setting("qr_size", 0.1))
-            self.decode_mode = str(camera_config.get_pipeline_setting("decode_mode", "standard")).lower()
+            self.decode_mode = str(
+                camera_config.get_pipeline_setting("decode_mode", "standard")
+            ).lower()
         except KeyError as e:
             raise ValueError(f"Missing camera config key for QRCode: {e}")
 
         self.unit = config.get("unit", "meter")
         self.conversions = {
-            "meter": 0.0254, "meters": 0.0254,
-            "inch": 1.0, "inches": 1.0,
-            "foot": 1 / 12, "feet": 1 / 12,
-            "centimeter": 2.54, "centimeters": 2.54,
+            "meter": 0.0254,
+            "meters": 0.0254,
+            "inch": 1.0,
+            "inches": 1.0,
+            "foot": 1 / 12,
+            "feet": 1 / 12,
+            "centimeter": 2.54,
+            "centimeters": 2.54,
             "frc": 0.0254,
         }
 
@@ -77,15 +88,13 @@ class QRCodePipeline(VisionPipeline):
         # 2. Setup OpenCV QR Code Detector
         self.detector = cv2.QRCodeDetector()
         self._last_objects: list[Object] = []
-        
+
         # 3D corners of the QR code (centered at origin)
         half = self.qr_size / 2.0
-        self.obj_pts = np.array([
-            [-half,  half, 0],
-            [ half,  half, 0],
-            [ half, -half, 0],
-            [-half, -half, 0]
-        ], dtype=np.float32)
+        self.obj_pts = np.array(
+            [[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]],
+            dtype=np.float32,
+        )
 
         self._set_status("ready")
 
@@ -104,14 +113,17 @@ class QRCodePipeline(VisionPipeline):
 
     def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
         scale = self.conversions.get(self.unit, self.conversions["meter"])
-        return triangulation.camera_point_to_robot(
-            pt,
-            self.camera_x,
-            self.camera_y,
-            self.camera_height,
-            self.camera_bot_relative_yaw,
-            self.camera_pitch_angle,
-        ) * scale
+        return (
+            triangulation.camera_point_to_robot(
+                pt,
+                self.camera_x,
+                self.camera_y,
+                self.camera_height,
+                self.camera_bot_relative_yaw,
+                self.camera_pitch_angle,
+            )
+            * scale
+        )
 
     def _matrix_to_euler(self, R: np.ndarray) -> tuple[float, float, float]:
         sy = math.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
@@ -130,12 +142,17 @@ class QRCodePipeline(VisionPipeline):
         scales = [1.0] if self.decode_mode == "fast" else [1.0, 1.5, 2.0, 0.75]
         for scale in scales:
             if scale != 1.0:
-                resized = cv2.resize(gray, (int(img_w * scale), int(img_h * scale)),
-                                     interpolation=cv2.INTER_LINEAR)
+                resized = cv2.resize(
+                    gray,
+                    (int(img_w * scale), int(img_h * scale)),
+                    interpolation=cv2.INTER_LINEAR,
+                )
             else:
                 resized = gray
             try:
-                retval, decoded_info, points, _ = self.detector.detectAndDecodeMulti(resized)
+                retval, decoded_info, points, _ = self.detector.detectAndDecodeMulti(
+                    resized
+                )
             except cv2.error:
                 retval, decoded_info, points = False, [], None
             if retval and points is not None and len(points):
@@ -169,7 +186,9 @@ class QRCodePipeline(VisionPipeline):
         if gated is not None:
             return gated
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        gray = (
+            cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        )
 
         objects = []
         points, decoded_info, _ = self._decode_scales(gray)
@@ -208,24 +227,35 @@ class QRCodePipeline(VisionPipeline):
 
             cv2.polylines(frame, [qr_corners.astype(np.int32)], True, (255, 0, 0), 2)
             if info:
-                cv2.putText(frame, info, tuple(qr_corners[0].astype(int)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+                cv2.putText(
+                    frame,
+                    info,
+                    tuple(qr_corners[0].astype(int)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 0, 0),
+                    2,
+                )
 
             ok, rvec, tvec = cv2.solvePnP(
                 self.obj_pts,
                 qr_corners,
                 cam_mat,
                 dist_coeffs,
-                flags=cv2.SOLVEPNP_IPPE_SQUARE
+                flags=cv2.SOLVEPNP_IPPE_SQUARE,
             )
 
             if ok:
-                cv2.drawFrameAxes(frame, cam_mat, dist_coeffs, rvec, tvec, self.qr_size / 2)
+                cv2.drawFrameAxes(
+                    frame, cam_mat, dist_coeffs, rvec, tvec, self.qr_size / 2
+                )
 
                 tvec = tvec.reshape(3)
                 # solvePnP output is in obj_pts units (configured unit) but
                 # _camera_point_to_robot works in inches - convert first
-                to_inches = 1.0 / self.conversions.get(self.unit, self.conversions["meter"])
+                to_inches = 1.0 / self.conversions.get(
+                    self.unit, self.conversions["meter"]
+                )
                 robot_pt = self._camera_point_to_robot(
                     (tvec[0] * to_inches, tvec[1] * to_inches, tvec[2] * to_inches)
                 )
@@ -246,11 +276,7 @@ class QRCodePipeline(VisionPipeline):
                     yaw=yaw,
                     depth_source="pnp",
                     vis_type="planar",
-                    vis_meta={
-                        "payload": info,
-                        "size": self.qr_size,
-                        "kind": "qr"
-                    },
+                    vis_meta={"payload": info, "size": self.qr_size, "kind": "qr"},
                 )
                 objects.append(obj)
         return objects
@@ -266,7 +292,9 @@ class QRCodePipeline(VisionPipeline):
         try:
             overlay = frame.copy()
             h, w = overlay.shape[:2]
-            cv2.putText(overlay, "QR", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
+            cv2.putText(
+                overlay, "QR", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2
+            )
             cv2.rectangle(overlay, (8, 38), (w - 8, h - 8), (255, 0, 0), 1)
             return overlay
         except Exception:

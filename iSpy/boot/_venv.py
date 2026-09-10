@@ -1,4 +1,3 @@
-
 import os
 import sys
 from pathlib import Path
@@ -27,7 +26,9 @@ def _is_executable(python: str | None) -> bool:
 
 def read_marked_python() -> str | None:
     try:
-        recorded = marker_path().read_text(encoding="utf-8").strip().splitlines()[0].strip()
+        recorded = (
+            marker_path().read_text(encoding="utf-8").strip().splitlines()[0].strip()
+        )
     except (OSError, IndexError):
         return None
     if not _is_executable(recorded):

@@ -91,8 +91,6 @@ class RollBack(UtilityBase):
                 return
 
         self._write(frame)
-        
-        
 
     def stop(self):
         self._stop_recorder()
@@ -133,9 +131,7 @@ class RollBack(UtilityBase):
 
         fourcc = cv2.VideoWriter_fourcc(*codec)
 
-        self._writer = cv2.VideoWriter(
-            filename, fourcc, self._fps, (width, height)
-        )
+        self._writer = cv2.VideoWriter(filename, fourcc, self._fps, (width, height))
 
         if not self._writer.isOpened():
             logger.warning("Primary codec failed, switching to MJPG fallback")
@@ -146,9 +142,7 @@ class RollBack(UtilityBase):
             )
             fourcc = cv2.VideoWriter_fourcc(*codec)
 
-            self._writer = cv2.VideoWriter(
-                filename, fourcc, self._fps, (width, height)
-            )
+            self._writer = cv2.VideoWriter(filename, fourcc, self._fps, (width, height))
 
         if not self._writer.isOpened():
             logger.error("VideoWriter failed completely.")

@@ -22,6 +22,7 @@ def _target_format(settings: dict) -> str:
         return fmt
     try:
         from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+
         return ObjectDetectionPipeline.recommended_format()
     except Exception:
         return "onnx"
@@ -66,13 +67,19 @@ class YOLOHandler(UtilityBase):
             src = _model_rel_path(p)
             artifact = existing_artifact_for(p, _target_format(settings))
             settings["vision_model"] = {
-                **model_cfg, "source_pt": src, "file_path": artifact or src,
+                **model_cfg,
+                "source_pt": src,
+                "file_path": artifact or src,
             }
             updated.append(cam.get("name", "?"))
         if not updated:
             return jsonify(error="No camera uses a user-selectable model"), 400
         self.config.save()
-        return jsonify(success=True, note="Restart iSpy (or re-run boot.py) to convert and load this model.", cameras=updated)
+        return jsonify(
+            success=True,
+            note="Restart iSpy (or re-run boot.py) to convert and load this model.",
+            cameras=updated,
+        )
 
     def stop(self):
         pass

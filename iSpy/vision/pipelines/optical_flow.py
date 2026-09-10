@@ -21,55 +21,87 @@ class OpticalFlowPipeline(VisionPipeline):
     def config_schema(cls) -> dict:
         return {
             "method": {
-                "type": "select", "label": "Flow Method",
-                "options": ["farneback", "lk"], "default": "farneback",
+                "type": "select",
+                "label": "Flow Method",
+                "options": ["farneback", "lk"],
+                "default": "farneback",
                 "help": "farneback = dense flow (smoother, slower). lk = sparse "
-                        "corner tracking (faster, noisier).",
+                "corner tracking (faster, noisier).",
             },
             "flow_scale": {
-                "type": "number", "label": "Processing Scale", "default": 0.5, "step": 0.1,
+                "type": "number",
+                "label": "Processing Scale",
+                "default": 0.5,
+                "step": 0.1,
                 "help": "Downscale factor applied before computing flow. 0.5 = "
-                        "half resolution, 4x faster.",
+                "half resolution, 4x faster.",
             },
             "win_size": {
-                "type": "number", "label": "Window Size", "default": 15, "step": 2,
+                "type": "number",
+                "label": "Window Size",
+                "default": 15,
+                "step": 2,
             },
             "lk_win_size": {
-                "type": "number", "label": "LK Window Size", "default": 21, "step": 2,
+                "type": "number",
+                "label": "LK Window Size",
+                "default": 21,
+                "step": 2,
             },
             "max_corners": {
-                "type": "number", "label": "LK Max Corners", "default": 250, "step": 25,
+                "type": "number",
+                "label": "LK Max Corners",
+                "default": 250,
+                "step": 25,
             },
             "min_flow": {
-                "type": "number", "label": "Min Flow (px)", "default": 0.2, "step": 0.05,
+                "type": "number",
+                "label": "Min Flow (px)",
+                "default": 0.2,
+                "step": 0.05,
                 "help": "Flows below this magnitude are ignored for the average.",
             },
             "smoothing": {
-                "type": "number", "label": "Velocity Smoothing", "default": 0.3,
+                "type": "number",
+                "label": "Velocity Smoothing",
+                "default": 0.3,
                 "step": 0.05,
                 "help": "EMA alpha (0..1) applied to the velocity estimate. "
-                        "Lower = smoother but laggier.",
+                "Lower = smoother but laggier.",
             },
             "ground_ratio": {
-                "type": "number", "label": "Ground Region", "default": 0.6, "step": 0.05,
+                "type": "number",
+                "label": "Ground Region",
+                "default": 0.6,
+                "step": 0.05,
                 "help": "Fraction of the frame (from the bottom) treated as ground.",
             },
             "nominal_range": {
-                "type": "number", "label": "Nominal Range (in)", "default": 60, "step": 5,
+                "type": "number",
+                "label": "Nominal Range (in)",
+                "default": 60,
+                "step": 5,
                 "help": "Used when the camera has no downward pitch: assumed "
-                        "distance to the ground region in inches.",
+                "distance to the ground region in inches.",
             },
             "flow_saturation": {
-                "type": "number", "label": "Flow Saturation (px)", "default": 24, "step": 4,
+                "type": "number",
+                "label": "Flow Saturation (px)",
+                "default": 24,
+                "step": 4,
                 "help": "Flow magnitude (px) that renders as full color intensity "
-                        "in the visualization.",
+                "in the visualization.",
             },
             "draw_debug": {
-                "type": "toggle", "label": "Draw Debug Overlay", "default": True,
+                "type": "toggle",
+                "label": "Draw Debug Overlay",
+                "default": True,
             },
         }
 
-    def __init__(self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None):
+    def __init__(
+        self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None
+    ):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
 
@@ -77,6 +109,7 @@ class OpticalFlowPipeline(VisionPipeline):
         self.camera_pitch_angle = camera_config.get("pitch", 0.0)
         _pos_unit = config.get("unit", "frc")
         from iSpy.config.iSpyConfig import unit_to_inches
+
         # 'height' is the single mount-height field (matches other pipelines);
         # legacy 'z' is deprecated and ignored
         self.camera_height = unit_to_inches(camera_config.get("height", 0.0), _pos_unit)
@@ -94,10 +127,14 @@ class OpticalFlowPipeline(VisionPipeline):
 
         self.unit = config.get("unit", "meter")
         self.conversions = {
-            "meter": 0.0254, "meters": 0.0254,
-            "inch": 1.0, "inches": 1.0,
-            "foot": 1 / 12, "feet": 1 / 12,
-            "centimeter": 2.54, "centimeters": 2.54,
+            "meter": 0.0254,
+            "meters": 0.0254,
+            "inch": 1.0,
+            "inches": 1.0,
+            "foot": 1 / 12,
+            "feet": 1 / 12,
+            "centimeter": 2.54,
+            "centimeters": 2.54,
             "frc": 0.0254,
         }
 
@@ -137,17 +174,26 @@ class OpticalFlowPipeline(VisionPipeline):
 
     def _unit_label(self) -> str:
         return {
-            "meter": "m/s", "meters": "m/s", "frc": "m/s",
-            "inch": "in/s", "inches": "in/s",
-            "foot": "ft/s", "feet": "ft/s",
-            "centimeter": "cm/s", "centimeters": "cm/s",
+            "meter": "m/s",
+            "meters": "m/s",
+            "frc": "m/s",
+            "inch": "in/s",
+            "inches": "in/s",
+            "foot": "ft/s",
+            "feet": "ft/s",
+            "centimeter": "cm/s",
+            "centimeters": "cm/s",
         }.get(self.unit, self.unit + "/s")
 
     def _flow_measure(self, frame):
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        gray = (
+            cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        )
         scale = float(self._setting("flow_scale", 0.5))
         if 0 < scale < 1.0:
-            small = cv2.resize(gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            small = cv2.resize(
+                gray, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+            )
         else:
             small = gray
 
@@ -165,12 +211,18 @@ class OpticalFlowPipeline(VisionPipeline):
         if method == "lk":
             win = int(self._setting("lk_win_size", 21))
             corners = int(self._setting("max_corners", 250))
-            pts = cv2.goodFeaturesToTrack(prev, maxCorners=corners, qualityLevel=0.01,
-                                          minDistance=8, blockSize=win)
+            pts = cv2.goodFeaturesToTrack(
+                prev,
+                maxCorners=corners,
+                qualityLevel=0.01,
+                minDistance=8,
+                blockSize=win,
+            )
             if pts is None:
                 return 0.0, 0.0, 0.0, None
-            cur, st, _ = cv2.calcOpticalFlowPyrLK(prev, small, pts, None,
-                                                  winSize=(win, win), maxLevel=3)
+            cur, st, _ = cv2.calcOpticalFlowPyrLK(
+                prev, small, pts, None, winSize=(win, win), maxLevel=3
+            )
             ok = st[:, 0] == 1
             if not ok.any():
                 return 0.0, 0.0, 0.0, None
@@ -195,16 +247,30 @@ class OpticalFlowPipeline(VisionPipeline):
             for (px, py), (dxd, dyd) in zip(tracked[in_ground], disp[in_ground]):
                 points.append((float(px) / scale, float(py) / scale))
                 if math.hypot(dxd, dyd) >= min_flow:
-                    arrows.append((float(px) / scale, float(py) / scale,
-                                   float(dxd) / scale, float(dyd) / scale))
+                    arrows.append(
+                        (
+                            float(px) / scale,
+                            float(py) / scale,
+                            float(dxd) / scale,
+                            float(dyd) / scale,
+                        )
+                    )
             viz = {"kind": "lk", "arrows": arrows, "points": points, "scale": scale}
             return dx / scale, dy / scale, coverage, viz
 
         # farneback (dense)
         win = max(3, int(self._setting("win_size", 15)))
         flow = cv2.calcOpticalFlowFarneback(
-            prev, small, None, pyr_scale=0.5, levels=3, winsize=win,
-            iterations=3, poly_n=5, poly_sigma=1.2, flags=0,
+            prev,
+            small,
+            None,
+            pyr_scale=0.5,
+            levels=3,
+            winsize=win,
+            iterations=3,
+            poly_n=5,
+            poly_sigma=1.2,
+            flags=0,
         )
         region = flow[start_row:, :, :]
         mags = np.hypot(region[..., 0], region[..., 1])
@@ -222,12 +288,20 @@ class OpticalFlowPipeline(VisionPipeline):
             for xx in range(0, small.shape[1], step):
                 dv = flow[yy, xx]
                 if math.hypot(dv[0], dv[1]) >= min_flow:
-                    arrows.append((float(xx) / scale, float(yy) / scale,
-                                   float(dv[0]) / scale, float(dv[1]) / scale))
+                    arrows.append(
+                        (
+                            float(xx) / scale,
+                            float(yy) / scale,
+                            float(dv[0]) / scale,
+                            float(dv[1]) / scale,
+                        )
+                    )
         viz = {
             "kind": "farneback",
-            "flow_small": flow, "mask_small": mask,
-            "start_row_small": start_row, "scale": scale,
+            "flow_small": flow,
+            "mask_small": mask,
+            "start_row_small": start_row,
+            "scale": scale,
             "arrows": arrows,
         }
         return dx / scale, dy / scale, coverage, viz
@@ -276,15 +350,20 @@ class OpticalFlowPipeline(VisionPipeline):
 
         speed = math.hypot(svx, svy)
         heading = math.degrees(math.atan2(svx, svy)) if speed > 1e-9 else 0.0
-        conf = float(np.clip(coverage * min(1.0, 0.3 + 0.7 * min(1.0, mag_px / 8.0)),
-                             0.0, 1.0))
+        conf = float(
+            np.clip(coverage * min(1.0, 0.3 + 0.7 * min(1.0, mag_px / 8.0)), 0.0, 1.0)
+        )
 
         self._last_motion = {
             "kind": "velocity",
-            "vx": svx, "vy": svy,
-            "lateral": svx, "forward": svy,
-            "speed": speed, "heading_deg": heading,
-            "vx_px": dx_px, "vy_px": dy_px,
+            "vx": svx,
+            "vy": svy,
+            "lateral": svx,
+            "forward": svy,
+            "speed": speed,
+            "heading_deg": heading,
+            "vx_px": dx_px,
+            "vy_px": dy_px,
             "flow_magnitude_px": mag_px,
             "coverage": coverage,
             "range_inches": rng,
@@ -293,7 +372,9 @@ class OpticalFlowPipeline(VisionPipeline):
         }
 
         obj = Object(
-            x=svx, y=svy, z=0.0,
+            x=svx,
+            y=svy,
+            z=0.0,
             name="flow",
             confidence=conf,
             depth_source="optical_flow",
@@ -323,7 +404,9 @@ class OpticalFlowPipeline(VisionPipeline):
             if viz is not None and viz.get("kind") == "farneback":
                 flow_small = viz["flow_small"]
                 mask_small = viz["mask_small"]
-                flow = cv2.resize(flow_small, (img_w, img_h), interpolation=cv2.INTER_NEAREST)
+                flow = cv2.resize(
+                    flow_small, (img_w, img_h), interpolation=cv2.INTER_NEAREST
+                )
                 fx = flow[..., 0].astype(np.float32)
                 fy = flow[..., 1].astype(np.float32)
                 mags = np.hypot(fx, fy)
@@ -332,18 +415,28 @@ class OpticalFlowPipeline(VisionPipeline):
                 hsv = np.dstack([hue, np.full_like(hue, 255), val])
                 color = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
-                mask_full = cv2.resize(
-                    mask_small.astype(np.uint8) * 255, (img_w, img_h),
-                    interpolation=cv2.INTER_NEAREST,
-                ) > 0
+                mask_full = (
+                    cv2.resize(
+                        mask_small.astype(np.uint8) * 255,
+                        (img_w, img_h),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                    > 0
+                )
                 live = np.zeros((img_h, img_w), dtype=bool)
                 live[start_row_full:, :] = True
                 live &= mask_full
                 if color is not None and live.any():
                     blend = cv2.addWeighted(out, 0.55, color, 0.45, 0)
                     out[live] = blend[live]
-                cv2.line(out, (0, start_row_full), (img_w, start_row_full),
-                         (0, 255, 255), 1, cv2.LINE_AA)
+                cv2.line(
+                    out,
+                    (0, start_row_full),
+                    (img_w, start_row_full),
+                    (0, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
 
             motion = self._last_motion or {}
             self._draw_hud(out, motion)
@@ -356,35 +449,68 @@ class OpticalFlowPipeline(VisionPipeline):
         x0, y0 = 12, 12
         rows = 5
         ph = y0 + rows * line_h + 12
-        sub = out[y0:y0 + ph, x0:x0 + panel_w]
+        sub = out[y0 : y0 + ph, x0 : x0 + panel_w]
         if sub.size:
             dark = np.full_like(sub, (12, 14, 18))
             cv2.addWeighted(sub, 0.62, dark, 0.38, 0, dst=sub)
 
         def text(line_idx, s, col, scale=0.5, bold=1):
-            cv2.putText(out, s, (x0 + 10, y0 + line_idx * line_h + 18),
-                        cv2.FONT_HERSHEY_SIMPLEX, scale, col, bold, cv2.LINE_AA)
+            cv2.putText(
+                out,
+                s,
+                (x0 + 10, y0 + line_idx * line_h + 18),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                scale,
+                col,
+                bold,
+                cv2.LINE_AA,
+            )
 
         unit = self._unit_label()
-        text(0, f"OPTICAL FLOW   {self._last_viz.get('kind', '-').upper() if self._last_viz else '-'}",
-             (88, 166, 255), 0.55, 2)
+        text(
+            0,
+            f"OPTICAL FLOW   {self._last_viz.get('kind', '-').upper() if self._last_viz else '-'}",
+            (88, 166, 255),
+            0.55,
+            2,
+        )
         speed = motion.get("speed", 0.0)
         text(1, f"SPEED   {speed:.2f} {unit}", (120, 255, 120), 0.6, 2)
         heading = float(motion.get("heading_deg", 0.0))
-        text(2, f"HEADING {heading:+.0f} deg   FWD {motion.get('forward', 0.0):+.2f}",
-             (230, 230, 230))
+        text(
+            2,
+            f"HEADING {heading:+.0f} deg   FWD {motion.get('forward', 0.0):+.2f}",
+            (230, 230, 230),
+        )
         cov = motion.get("coverage", 0.0)
-        text(3, f"COVERAGE {cov * 100:.0f}%   {motion.get('fps', 0.0):.0f} FPS",
-             (230, 230, 230))
+        text(
+            3,
+            f"COVERAGE {cov * 100:.0f}%   {motion.get('fps', 0.0):.0f} FPS",
+            (230, 230, 230),
+        )
 
         # confidence bar
         conf = float(np.clip(motion.get("confidence", 0.0), 0.0, 1.0))
         bw = int((panel_w - 24) * conf)
-        cv2.rectangle(out, (x0 + 10, y0 + 4 * line_h + 4),
-                      (x0 + panel_w - 14, y0 + 4 * line_h + 10), (60, 60, 70), -1)
-        bar_col = (60, 170, 255) if conf < 0.4 else ((90, 230, 140) if conf < 0.75 else (80, 255, 120))
-        cv2.rectangle(out, (x0 + 10, y0 + 4 * line_h + 4),
-                      (x0 + 10 + bw, y0 + 4 * line_h + 10), bar_col, -1)
+        cv2.rectangle(
+            out,
+            (x0 + 10, y0 + 4 * line_h + 4),
+            (x0 + panel_w - 14, y0 + 4 * line_h + 10),
+            (60, 60, 70),
+            -1,
+        )
+        bar_col = (
+            (60, 170, 255)
+            if conf < 0.4
+            else ((90, 230, 140) if conf < 0.75 else (80, 255, 120))
+        )
+        cv2.rectangle(
+            out,
+            (x0 + 10, y0 + 4 * line_h + 4),
+            (x0 + 10 + bw, y0 + 4 * line_h + 10),
+            bar_col,
+            -1,
+        )
         text(4, f"CONF {conf * 100:.0f}%", (230, 230, 230))
 
     # ------------------------------------------------------------------
@@ -410,4 +536,3 @@ class OpticalFlowPipeline(VisionPipeline):
 
     def destroy(self):
         super().destroy()
-

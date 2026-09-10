@@ -16,16 +16,16 @@ class TargetSelector(UtilityBase):
                 "type": "number",
                 "label": "Reacquire Timeout (s)",
                 "hint": "How long to keep the lock after the selected id "
-                        "briefly drops out of frame_data['detections'] before "
-                        "clearing the selection.",
+                "briefly drops out of frame_data['detections'] before "
+                "clearing the selection.",
                 "default": 1.0,
             },
             "output_key": {
                 "type": "text",
                 "label": "Output Key",
                 "description": "The key used to expose the selected target "
-                               "under frame_data['addon_data'] (selectable as "
-                               "a NetworkTables publish source).",
+                "under frame_data['addon_data'] (selectable as "
+                "a NetworkTables publish source).",
                 "default": "selected_target",
             },
         }
@@ -46,16 +46,22 @@ class TargetSelector(UtilityBase):
 
         if self.flask_app:
             self.flask_app.add_url_rule(
-                "/api/target-selector/select", "target_selector_select",
-                self._api_select, methods=["POST"],
+                "/api/target-selector/select",
+                "target_selector_select",
+                self._api_select,
+                methods=["POST"],
             )
             self.flask_app.add_url_rule(
-                "/api/target-selector/clear", "target_selector_clear",
-                self._api_clear, methods=["POST"],
+                "/api/target-selector/clear",
+                "target_selector_clear",
+                self._api_clear,
+                methods=["POST"],
             )
             self.flask_app.add_url_rule(
-                "/api/target-selector/status", "target_selector_status",
-                self._api_status, methods=["GET"],
+                "/api/target-selector/status",
+                "target_selector_status",
+                self._api_status,
+                methods=["GET"],
             )
 
     def _api_select(self):
@@ -89,8 +95,7 @@ class TargetSelector(UtilityBase):
         selection = self._selection()
         if selection is None:
             self.logger.debug(
-                "target_selector: no shared selection state on context - "
-                "nothing to do"
+                "target_selector: no shared selection state on context - nothing to do"
             )
             self.publish_output(frame_data, None)
             return
@@ -102,11 +107,16 @@ class TargetSelector(UtilityBase):
             self.publish_output(frame_data, None)
             return
 
-        detections = frame_data.get("detections", []) if isinstance(frame_data, dict) else []
+        detections = (
+            frame_data.get("detections", []) if isinstance(frame_data, dict) else []
+        )
         obj = self._find_object(detections, selected_id)
 
-        if obj is None and selection.age_s() is not None and \
-                selection.age_s() < self.reacquire_timeout_s:
+        if (
+            obj is None
+            and selection.age_s() is not None
+            and selection.age_s() < self.reacquire_timeout_s
+        ):
             # briefly dropped out - hold the lock but publish nothing new this
             # tick so the robot keeps its last target instead of a cleared one
             return

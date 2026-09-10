@@ -20,8 +20,9 @@ def _setup_log_file() -> None:
             log_file = Path(__file__).resolve().parents[2] / "Outputs" / "log.txt"
         log_file.parent.mkdir(parents=True, exist_ok=True)
         handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s [%(name)s] %(levelname)s: %(message)s"))
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+        )
         handler.setLevel(logging.INFO)
         logging.getLogger().addHandler(handler)
     except Exception:
@@ -32,7 +33,7 @@ class VisionSupervisor:
     def __init__(self, entry_point: str):
         self.entry_point = entry_point
         self.proc: subprocess.Popen | None = None
-        self.status = "stopped"   # stopped | running | paused | error
+        self.status = "stopped"  # stopped | running | paused | error
         self.last_error = None
         self.lock = threading.RLock()
         self._watch_thread: threading.Thread | None = None
@@ -49,7 +50,10 @@ class VisionSupervisor:
             python = resolve_launch_python()
             logger.info(
                 "launching vision process %r with python=%r (this daemon: %r, prefix=%r)",
-                self.entry_point, python, sys.executable, sys.prefix,
+                self.entry_point,
+                python,
+                sys.executable,
+                sys.prefix,
             )
             self.proc = subprocess.Popen(
                 [python, self.entry_point],
@@ -69,8 +73,14 @@ class VisionSupervisor:
         with self.lock:
             if self.proc is proc:
                 if self.status not in ("stopping",):
-                    self.status = "error" if proc.returncode not in (0, None) else "stopped"
-                    self.last_error = f"exited with code {proc.returncode}" if proc.returncode else None
+                    self.status = (
+                        "error" if proc.returncode not in (0, None) else "stopped"
+                    )
+                    self.last_error = (
+                        f"exited with code {proc.returncode}"
+                        if proc.returncode
+                        else None
+                    )
                 else:
                     self.status = "stopped"
                 self._save_state()
@@ -142,10 +152,14 @@ class VisionSupervisor:
                 state = {}
         except Exception:
             state = {}
-        state.update({
-            "status": self.status, "pid": pid, "last_error": self.last_error,
-            "updated": time.time(),
-        })
+        state.update(
+            {
+                "status": self.status,
+                "pid": pid,
+                "last_error": self.last_error,
+                "updated": time.time(),
+            }
+        )
         try:
             tmp = state_file.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(state))
@@ -155,8 +169,13 @@ class VisionSupervisor:
 
     def get_status(self):
         with self.lock:
-            return {"status": self.status, "pid": self.proc.pid if self.proc and self.proc.poll() is None else None,
-                    "last_error": self.last_error}
+            return {
+                "status": self.status,
+                "pid": self.proc.pid
+                if self.proc and self.proc.poll() is None
+                else None,
+                "last_error": self.last_error,
+            }
 
 
 def create_service_app(entry_point: str) -> Flask:
@@ -206,8 +225,6 @@ def create_service_app(entry_point: str) -> Flask:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     _setup_log_file()
-    logger.info(
-        "ispy service daemon: python=%r prefix=%r", sys.executable, sys.prefix
-    )
+    logger.info("ispy service daemon: python=%r prefix=%r", sys.executable, sys.prefix)
     app = create_service_app("iSpy/core/game_loop.py")
     app.run(host="0.0.0.0", port=5050)

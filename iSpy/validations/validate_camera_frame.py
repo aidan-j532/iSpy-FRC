@@ -10,10 +10,8 @@ def validate_camera_frame(frame):
 
     sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
 
-    sharpness_score = clamp(
-        (sharpness - 75) / (500 - 75) * 100
-    )
-    
+    sharpness_score = clamp((sharpness - 75) / (500 - 75) * 100)
+
     dark = (gray < 20).mean()
     bright = (gray > 235).mean()
 
@@ -23,14 +21,10 @@ def validate_camera_frame(frame):
 
     contrast = gray.std()
 
-    contrast_score = clamp(
-        (contrast - 10) / (60 - 10) * 100
-    )
+    contrast_score = clamp((contrast - 10) / (60 - 10) * 100)
 
     overall_score = (
-        sharpness_score * 0.45 +
-        exposure_score * 0.30 +
-        contrast_score * 0.25
+        sharpness_score * 0.45 + exposure_score * 0.30 + contrast_score * 0.25
     )
 
     overall_score = round(clamp(overall_score), 1)
@@ -38,16 +32,14 @@ def validate_camera_frame(frame):
     return {
         "valid": overall_score >= 70,
         "score": overall_score,
-
         "sharpness": round(sharpness_score, 1),
         "exposure": round(exposure_score, 1),
         "contrast": round(contrast_score, 1),
-
         # Raw values are useful for debugging/tuning
         "raw": {
             "sharpness": sharpness,
             "dark_pixels": dark,
             "bright_pixels": bright,
             "contrast": contrast,
-        }
+        },
     }

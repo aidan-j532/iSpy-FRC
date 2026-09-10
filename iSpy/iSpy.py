@@ -32,8 +32,14 @@ while not (PROJECT_ROOT / "plugins").exists():
 
 _PLUGIN_ROOT = PROJECT_ROOT / "plugins"
 
+
 class iSpy:
-    def __init__(self, config: iSpyConfig, cameras: list[VisionPipeline] | None = None, web_app=None):
+    def __init__(
+        self,
+        config: iSpyConfig,
+        cameras: list[VisionPipeline] | None = None,
+        web_app=None,
+    ):
         self.config = config
         self.logger = logging.getLogger(__name__)
 
@@ -42,7 +48,9 @@ class iSpy:
         self.web_app = web_app
         if self.web_app is None and config.config.get("app_mode", False):
             self.web_app = create_app(cameras=[], config=config)
-            threading.Thread(target=self.web_app.run, daemon=True, name="iSpyWebServer").start()
+            threading.Thread(
+                target=self.web_app.run, daemon=True, name="iSpyWebServer"
+            ).start()
 
         if cameras is None:
             cameras = self._build_cameras_from_config(config)
@@ -71,6 +79,7 @@ class iSpy:
         # the shared context so any tracker/utility can read/set it without
         # depending on a specific add-on (see iSpy.plugins.selection).
         from iSpy.plugins.selection import SelectionState
+
         self.selection = SelectionState()
 
         # shared context for every add-on; each one gets its OWN settings view
@@ -104,7 +113,9 @@ class iSpy:
                         self._addon_context(utility_classes[name], settings)
                     )
                 except Exception:
-                    self.logger.exception("Failed to initialize utility plugin: %s", name)
+                    self.logger.exception(
+                        "Failed to initialize utility plugin: %s", name
+                    )
             else:
                 self.logger.warning("Unknown utility plugin: %s", name)
 
@@ -113,10 +124,13 @@ class iSpy:
                 "Enabled utilities %s declare the same output_key '%s' - "
                 "they will overwrite each other's addon_data value each tick "
                 "(update order decides the winner).",
-                ", ".join(names), key,
+                ", ".join(names),
+                key,
             )
 
-        frame_processor_classes = load_plugins(_PLUGIN_ROOT / "frame_processors", FrameProcessorBase)
+        frame_processor_classes = load_plugins(
+            _PLUGIN_ROOT / "frame_processors", FrameProcessorBase
+        )
         self.frame_processors = {}
         for name, settings in self._enabled_addons("frame_processors"):
             if name in frame_processor_classes:
@@ -125,7 +139,9 @@ class iSpy:
                         self._addon_context(frame_processor_classes[name], settings)
                     )
                 except Exception:
-                    self.logger.exception("Failed to initialize frame processor: %s", name)
+                    self.logger.exception(
+                        "Failed to initialize frame processor: %s", name
+                    )
             else:
                 self.logger.warning("Unknown frame processor: %s", name)
 
@@ -157,7 +173,9 @@ class iSpy:
         from iSpy.vision.pipelines import get_pipeline_classes
         from iSpy.config.iSpyConfig import get_pipeline_settings
 
-        is_valid, corrected_model_path = enforce_model_organization(repo_root, config.config)
+        is_valid, corrected_model_path = enforce_model_organization(
+            repo_root, config.config
+        )
         if corrected_model_path:
             for cam_cfg in config.config["camera_configs"].values():
                 if not isinstance(cam_cfg, dict):
@@ -184,7 +202,8 @@ class iSpy:
                     "Camera '%s' (pipeline '%s') failed to initialize - "
                     "skipping it. Fix its config or model, then restart. "
                     "The remaining cameras are still starting.",
-                    cam_name, pipeline,
+                    cam_name,
+                    pipeline,
                 )
 
         if not cameras:
@@ -319,7 +338,9 @@ class iSpy:
                 key = getattr(util, "plugin_name", name)
                 code_times[key] = time.perf_counter() - t0
                 opted_utilities_s += code_times[key]
-        code_times["utilities"] = max(0.0, time.perf_counter() - t_util - opted_utilities_s)
+        code_times["utilities"] = max(
+            0.0, time.perf_counter() - t_util - opted_utilities_s
+        )
 
     def _update_web(self, frame_data: dict):
         if self.web_app:
@@ -357,11 +378,13 @@ class iSpy:
         return self.config.get_default_config()
 
     def _control_server(self) -> ControlServer:
-        return ControlServer({
-            "PAUSE": self.pause_event.set,
-            "RESUME": self.pause_event.clear,
-            "SHUTDOWN": self._handle_shutdown,
-        })
+        return ControlServer(
+            {
+                "PAUSE": self.pause_event.set,
+                "RESUME": self.pause_event.clear,
+                "SHUTDOWN": self._handle_shutdown,
+            }
+        )
 
     def run(self, duration_s: float | None = None):
         if not self.cameras:
@@ -372,7 +395,9 @@ class iSpy:
         try:
             control.start()
         except OSError:
-            self.logger.exception("Control channel failed to start - service pause/resume unavailable.")
+            self.logger.exception(
+                "Control channel failed to start - service pause/resume unavailable."
+            )
             control = None
 
         if duration_s is not None:
@@ -418,7 +443,9 @@ class iSpy:
                 key = getattr(tracker, "plugin_name", name)
                 code_times[key] = time.perf_counter() - t0
                 opted_trackers_s += code_times[key]
-        code_times["trackers"] = max(0.0, time.perf_counter() - t_track - opted_trackers_s)
+        code_times["trackers"] = max(
+            0.0, time.perf_counter() - t_track - opted_trackers_s
+        )
 
         if hasattr(camera, "get_code_times"):
             try:
@@ -434,6 +461,7 @@ class iSpy:
         camera_config_dict = {}
         try:
             from iSpy.config.iSpyConfig import get_pipeline_settings
+
             camera_config_dict = dict(getattr(camera, "_camera_config", {}) or {})
             pipeline_settings = dict(get_pipeline_settings(camera_config_dict) or {})
         except Exception:
@@ -444,14 +472,20 @@ class iSpy:
             "detection_count": len(detections),
             "frame": frame,
             "fps": min(round(1 / loop_s, 1), 60) if loop_s > 0 else 0,
-            "loop_s": loop_s, "vision_s": vision_s, "camera_lag_s": camera_lag_s,
+            "loop_s": loop_s,
+            "vision_s": vision_s,
+            "camera_lag_s": camera_lag_s,
             "cameras": self.cameras,
             "code_times": code_times,
             "debug_data": {},
             "pipeline_name": pipeline_name,
             "pipeline_settings": pipeline_settings,
             "camera_config": camera_config_dict,
-            "robot_pose": {"x": pose.X(), "y": pose.Y(), "heading": pose.rotation().radians()},
+            "robot_pose": {
+                "x": pose.X(),
+                "y": pose.Y(),
+                "heading": pose.rotation().radians(),
+            },
         }
         if hasattr(camera, "get_debug_data"):
             frame_data["debug_data"] = camera.get_debug_data() or {}
@@ -494,7 +528,9 @@ class iSpy:
                 key = getattr(tracker, "plugin_name", name)
                 code_times[key] = time.perf_counter() - t0
                 opted_trackers_s += code_times[key]
-        code_times["trackers"] = max(0.0, time.perf_counter() - t_track - opted_trackers_s)
+        code_times["trackers"] = max(
+            0.0, time.perf_counter() - t_track - opted_trackers_s
+        )
 
         for cam in handler.cameras:
             if hasattr(cam, "get_code_times"):
@@ -525,7 +561,11 @@ class iSpy:
             "pipeline_name": ",".join(sorted(pipeline_names)),
             "pipeline_settings": {},
             "camera_config": {},
-            "robot_pose": {"x": pose.X(), "y": pose.Y(), "heading": pose.rotation().radians()},
+            "robot_pose": {
+                "x": pose.X(),
+                "y": pose.Y(),
+                "heading": pose.rotation().radians(),
+            },
         }
         if hasattr(handler, "get_camera_debug_data"):
             frame_data["debug_data"] = handler.get_camera_debug_data() or {}

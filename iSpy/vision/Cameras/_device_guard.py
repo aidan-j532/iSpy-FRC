@@ -1,4 +1,3 @@
-
 import logging
 import os
 import shutil
@@ -70,7 +69,9 @@ def _holders_via_fuser(devnode: Path) -> list[int]:
     try:
         result = subprocess.run(
             ["fuser", str(devnode)],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
@@ -108,7 +109,8 @@ def _kill_holder(pid: int) -> None:
         os.kill(pid, signal.SIGTERM)
         logger.warning(
             "device-guard: SIGTERM to pid %d holding the camera (%s)",
-            pid, cmdline or "?",
+            pid,
+            cmdline or "?",
         )
     except OSError:
         return
@@ -153,7 +155,9 @@ def free_camera_device(target, log_noop: bool = False) -> list[int]:
         if pid in own or _is_ispy_process(cmdline):
             logger.info(
                 "device-guard: keeping iSpy pid %d on %s (%s)",
-                pid, devnode, cmdline or "?",
+                pid,
+                devnode,
+                cmdline or "?",
             )
             continue
         _kill_holder(pid)

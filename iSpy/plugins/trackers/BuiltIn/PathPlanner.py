@@ -2,6 +2,7 @@ import numpy as np
 from iSpy.plugins.bases import TrackerBase
 from iSpy.algorithms.CustomDBScan import CustomDBScan
 
+
 class PathPlanner(TrackerBase):
     plugin_name = "path_planner"
 
@@ -12,14 +13,14 @@ class PathPlanner(TrackerBase):
                 "type": "number",
                 "label": "Cluster Radius (m)",
                 "hint": "DBSCAN epsilon - detections within this distance (m) "
-                        "of each other form a cluster.",
+                "of each other form a cluster.",
                 "default": 0.3,
             },
             "min_samples": {
                 "type": "number",
                 "label": "Min Cluster Size",
                 "hint": "DBSCAN min_samples - clusters smaller than this are "
-                        "treated as noise.",
+                "treated as noise.",
                 "default": 3,
             },
         }

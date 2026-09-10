@@ -6,6 +6,7 @@ from collections import deque
 from flask import jsonify, render_template
 from iSpy.web.Backend.WebModule import WebModule
 
+
 class MetricsModule(WebModule):
     plugin_name = "metrics"
 
@@ -31,7 +32,9 @@ class MetricsModule(WebModule):
         self._timeline = {k: deque(maxlen=self.MAX_POINTS) for k in self.SERIES}
         self._fps_timeline = deque(maxlen=self.MAX_POINTS)
         self._code_parts = dict(self.CODE_PARTS)
-        self._code_timeline = {k: deque(maxlen=self.MAX_POINTS) for k in self._code_parts}
+        self._code_timeline = {
+            k: deque(maxlen=self.MAX_POINTS) for k in self._code_parts
+        }
         self._start = time.perf_counter()
 
     def set_code_parts(self, parts: dict):
@@ -42,9 +45,13 @@ class MetricsModule(WebModule):
             self._code_timeline[key] = deque(maxlen=self.MAX_POINTS)
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/metrics", "metrics_page", lambda: render_template("metrics.html"))
+        flask_app.add_url_rule(
+            "/metrics", "metrics_page", lambda: render_template("metrics.html")
+        )
         flask_app.add_url_rule("/api/metrics", "api_metrics", self._api_metrics)
-        flask_app.add_url_rule("/api/metrics/save", "api_metrics_save", self._save, methods=["POST"])
+        flask_app.add_url_rule(
+            "/api/metrics/save", "api_metrics_save", self._save, methods=["POST"]
+        )
 
     def update(self, frame_data: dict):
         t = time.perf_counter() - self._start
@@ -65,15 +72,21 @@ class MetricsModule(WebModule):
         out = {}
         for key, (label, unit, scale) in self.SERIES.items():
             pts = list(self._timeline[key])
-            out[key] = {"label": label, "unit": unit,
-                        "x": [p[0] for p in pts], "y": [p[1] * scale for p in pts]}
+            out[key] = {
+                "label": label,
+                "unit": unit,
+                "x": [p[0] for p in pts],
+                "y": [p[1] * scale for p in pts],
+            }
         out["fps"] = {
-            "label": "FPS", "unit": "fps",
+            "label": "FPS",
+            "unit": "fps",
             "x": [p[0] for p in self._fps_timeline],
             "y": [p[1] for p in self._fps_timeline],
         }
         out["code_parts"] = {
-            "label": "Loop breakdown", "unit": "ms",
+            "label": "Loop breakdown",
+            "unit": "ms",
             "series": {
                 key: {
                     "label": label,
@@ -105,10 +118,15 @@ class MetricsModule(WebModule):
         data = {}
         for key, (label, unit, scale) in self.SERIES.items():
             pts = list(self._timeline[key])
-            data[key] = {"label": label, "unit": unit,
-                         "x": [p[0] for p in pts], "y": [p[1] * scale for p in pts]}
+            data[key] = {
+                "label": label,
+                "unit": unit,
+                "x": [p[0] for p in pts],
+                "y": [p[1] * scale for p in pts],
+            }
         data["fps"] = {
-            "label": "FPS", "unit": "fps",
+            "label": "FPS",
+            "unit": "fps",
             "x": [p[0] for p in self._fps_timeline],
             "y": [p[1] for p in self._fps_timeline],
         }

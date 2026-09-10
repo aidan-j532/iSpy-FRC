@@ -25,6 +25,7 @@ def torch_load(path, trusted: bool = True):
     import torch
 
     from iSpy.vision.yolo_pt import register_shim
+
     register_shim()
     if not trusted:
         entries = _safe_globals_for_checkpoint(_checkpoint_pickle_bytes(path))
@@ -75,7 +76,7 @@ def _safe_globals_for_checkpoint(raw: bytes):
         raise RuntimeError(f"checkpoint could not be scanned safely: {e}") from e
 
     entries = []
-    for (module, name) in sorted(globals_in_file):
+    for module, name in sorted(globals_in_file):
         obj = _resolve_safe_global(module, name)
         if obj is _ALLOWED_BY_DEFAULT:
             continue
@@ -128,9 +129,15 @@ def _resolve_safe_global(module: str, name: str):
         register_shim()
         mod = sys.modules.get(module)
         obj = None if mod is None else getattr(mod, name, None)
-        if obj is not None and isinstance(obj, type) and obj.__module__.startswith("iSpy.vision.yolo_pt"):
+        if (
+            obj is not None
+            and isinstance(obj, type)
+            and obj.__module__.startswith("iSpy.vision.yolo_pt")
+        ):
             return obj
-        raise RuntimeError(f"checkpoint references non-shim ultralytics global {full_path}")
+        raise RuntimeError(
+            f"checkpoint references non-shim ultralytics global {full_path}"
+        )
 
     if module.startswith("torch.nn"):
         try:
@@ -151,20 +158,27 @@ def _resolve_safe_global(module: str, name: str):
 class ModelFileError(RuntimeError):
     pass
 
+
 def _validate_model_file(path: str) -> None:
     p = Path(path)
     if not p.exists():
         raise ModelFileError(f"Model file does not exist: {p}")
-    size = p.stat().st_size if p.is_file() else sum(
-        f.stat().st_size for f in p.rglob("*") if f.is_file()
+    size = (
+        p.stat().st_size
+        if p.is_file()
+        else sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
     )
     if size < 1024:
-        raise ModelFileError(f"Model file '{p}' is only {size} bytes - empty or truncated")
+        raise ModelFileError(
+            f"Model file '{p}' is only {size} bytes - empty or truncated"
+        )
+
 
 try:
     # rknnlite clobbers stdlib logging level names on import, which breaks
     # torch's setLevel('WARNING') bootstrap later - use the guarded importer
     from iSpy.vision._safe_imports import import_rknnlite
+
     RKNNLite = import_rknnlite()
     warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
 
@@ -220,6 +234,7 @@ except ImportError:
     def _set_rknn_log_level(level: int) -> None:
         pass
 
+
 class _ONNXInferencePool:
     def __init__(self, model_file: str, devices: list[int], providers_template):
         self._in_q = queue.Queue()
@@ -227,16 +242,22 @@ class _ONNXInferencePool:
         self._n = len(devices)
         self.logger = logging.getLogger(__name__)
         for device in devices:
-            threading.Thread(target=self._worker, args=(model_file, device, providers_template),
-                              daemon=True, name=f"ONNX-GPU{device}-Infer").start()
+            threading.Thread(
+                target=self._worker,
+                args=(model_file, device, providers_template),
+                daemon=True,
+                name=f"ONNX-GPU{device}-Infer",
+            ).start()
         self.logger.info("Multi-GPU ONNX pool: %d device(s) %s", len(devices), devices)
 
     def _worker(self, model_file, device, providers_template):
         import onnxruntime as ort
-        
+
         ort.set_default_logger_severity(4)
-        providers = [(ep, {**opts, "device_id": device}) if opts else ep
-                     for ep, opts in providers_template]
+        providers = [
+            (ep, {**opts, "device_id": device}) if opts else ep
+            for ep, opts in providers_template
+        ]
         session = ort.InferenceSession(model_file, providers=providers)
         inp_name = session.get_inputs()[0].name
         out_names = [o.name for o in session.get_outputs()]
@@ -266,9 +287,17 @@ class _ONNXInferencePool:
         for _ in range(self._n):
             self._in_q.put(None)
 
+
 class _GPUInferencePool:
-    def __init__(self, model_file: str, task: str, devices: list[int], input_size: tuple, min_conf: float):
-        self._in_q  = queue.Queue()
+    def __init__(
+        self,
+        model_file: str,
+        task: str,
+        devices: list[int],
+        input_size: tuple,
+        min_conf: float,
+    ):
+        self._in_q = queue.Queue()
         self._out_q = queue.Queue()
         self._input_size = (input_size[1], input_size[0])
         self._min_conf = min_conf
@@ -286,19 +315,30 @@ class _GPUInferencePool:
                 name=f"GPU{device}-Infer",
             ).start()
 
-        self.logger.info("Multi-GPU inference pool: %d device(s) %s", len(devices), devices)
+        self.logger.info(
+            "Multi-GPU inference pool: %d device(s) %s", len(devices), devices
+        )
 
     def _worker(self, device):
         # Load model INSIDE the worker thread so TensorRT creates a context on this GPU
         import torch
         from .yolo_pt import load_yolo_pt
+
         torch.cuda.set_device(device)
         model = load_yolo_pt(self._model_file, task=self._task)
         if self._model_file.endswith(".pt"):
             model.to(f"cuda:{device}")
 
-        dummy_frame = np.zeros((self._input_size[1], self._input_size[0], 3), dtype=np.uint8)
-        model(dummy_frame, verbose=False, show=False, imgsz=self._input_size, device=device)
+        dummy_frame = np.zeros(
+            (self._input_size[1], self._input_size[0], 3), dtype=np.uint8
+        )
+        model(
+            dummy_frame,
+            verbose=False,
+            show=False,
+            imgsz=self._input_size,
+            device=device,
+        )
 
         while True:
             item = self._in_q.get()
@@ -321,7 +361,7 @@ class _GPUInferencePool:
 
     def infer_batch(self, frames: list[np.ndarray]):
         num_frames = len(frames)
-        
+
         # 1. Push all frames into the queue with their original index
         for idx, frame in enumerate(frames):
             self._in_q.put((idx, frame))
@@ -337,6 +377,7 @@ class _GPUInferencePool:
     def stop(self):
         for _ in range(self._n):
             self._in_q.put(None)
+
 
 def normalize_model_config(model_config: dict) -> dict:
     cfg = dict(model_config)
@@ -429,14 +470,18 @@ def _validate_output_block(out: dict, task: str, num_classes: int) -> None:
 
 
 class Box:
-    def __init__(self, xyxy, conf, cls_id=0, translation=None, rotation=None, keypoints_3d=None):
+    def __init__(
+        self, xyxy, conf, cls_id=0, translation=None, rotation=None, keypoints_3d=None
+    ):
         self.xyxy = xyxy
         self.conf = conf
         self.cls_id = cls_id
         # PnP results, both None for detect-only models
         self.translation = translation  # (x, y, z) metres in camera frame
         self.rotation = rotation  # (roll, pitch, yaw) radians in camera frame
-        self.keypoints_3d = keypoints_3d  # list of [x,y,z] per keypoint in camera frame or None
+        self.keypoints_3d = (
+            keypoints_3d  # list of [x,y,z] per keypoint in camera frame or None
+        )
 
 
 class Results:
@@ -449,12 +494,22 @@ class Results:
 
     _SKELETONS = {
         17: [
-            (0, 1), (0, 2), (1, 3), (2, 4),
+            (0, 1),
+            (0, 2),
+            (1, 3),
+            (2, 4),
             (5, 6),
-            (5, 7), (7, 9), (6, 8), (8, 10),
-            (5, 11), (6, 12),
+            (5, 7),
+            (7, 9),
+            (6, 8),
+            (8, 10),
+            (5, 11),
+            (6, 12),
             (11, 12),
-            (11, 13), (13, 15), (12, 14), (14, 16),
+            (11, 13),
+            (13, 15),
+            (12, 14),
+            (14, 16),
         ],
     }
 
@@ -501,7 +556,13 @@ class Results:
                     x1, y1, c1 = kpt_set[i]
                     x2, y2, c2 = kpt_set[j]
                     if c1 > 0.5 and c2 > 0.5:
-                        cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
+                        cv2.line(
+                            frame,
+                            (int(x1), int(y1)),
+                            (int(x2), int(y2)),
+                            (0, 255, 255),
+                            2,
+                        )
             for kpt in kpt_set:
                 x, y, conf = kpt
                 if conf > 0.5:
@@ -518,7 +579,7 @@ class GenericYolo:
         self._iSpy_config = iSpy_config
         _validate_model_file(model_config.get("file_path", ""))
         model_config = fill_missing_config(model_config)
-        
+
         cfg = normalize_model_config(model_config)
         model_file_path = cfg["file_path"]
         self.device = cfg.get("device", 0)
@@ -529,6 +590,7 @@ class GenericYolo:
 
         try:
             import torch
+
             cuda_ok = (
                 torch.cuda.is_available()
                 and isinstance(requested_device, int)
@@ -540,23 +602,27 @@ class GenericYolo:
         if isinstance(requested_device, str) and requested_device == "tpu":
             try:
                 import torch_xla.core.xla_model as xm
+
                 self._tpu_device = xm.xla_device()
                 self._is_tpu = True
                 self.device = "tpu"
                 self.logger.info("TPU device initialized: %s", self._tpu_device)
             except Exception:
-                self.logger.warning("TPU requested but torch_xla not available - falling back to CPU")
+                self.logger.warning(
+                    "TPU requested but torch_xla not available - falling back to CPU"
+                )
                 self.device = "cpu"
         elif self._is_openvino:
             from iSpy.config.AutoOpt import resolve_openvino_device
+
             self.device = resolve_openvino_device(requested_device)
             self.logger.info("OpenVINO device resolved to: %s", self.device)
         elif not cuda_ok and requested_device != "cpu":
             self.logger.info(
                 "Device %r not available (CUDA=%s, count=%d) - falling back to CPU",
                 requested_device,
-                torch.cuda.is_available() if 'torch' in dir() else False,
-                torch.cuda.device_count() if 'torch' in dir() else 0,
+                torch.cuda.is_available() if "torch" in dir() else False,
+                torch.cuda.device_count() if "torch" in dir() else 0,
             )
             self.device = "cpu"
         else:
@@ -574,7 +640,7 @@ class GenericYolo:
         self.input = cfg.get("input")
         self._preprocess_bufs: list[np.ndarray | None] = [None, None]
         self._preprocess_buf_idx = 0
-        
+
         self.has_hardware_nms = self.output["format"] == "hardware_nms"
         self.model_type = None
 
@@ -594,10 +660,17 @@ class GenericYolo:
                 raise ValueError(f"Failed to load RKNN model: {self.model_file}") from e
             _set_rknn_log_level(3)
             try:
-                if self.model.init_runtime(core_mask=(core_mask if core_mask is not None else 7)) != 0:
+                if (
+                    self.model.init_runtime(
+                        core_mask=(core_mask if core_mask is not None else 7)
+                    )
+                    != 0
+                ):
                     raise ValueError(f"Failed to init RKNN runtime: {self.model_file}")
             except Exception as e:
-                raise ValueError(f"Failed to init RKNN runtime: {self.model_file}") from e
+                raise ValueError(
+                    f"Failed to init RKNN runtime: {self.model_file}"
+                ) from e
 
         elif self.model_file.endswith(".onnx"):
             self._require_input_block()
@@ -609,18 +682,32 @@ class GenericYolo:
             if num_gpus == "auto":
                 try:
                     import torch
+
                     num_gpus = torch.cuda.device_count()
                 except Exception:
                     num_gpus = 1
-            if num_gpus and num_gpus > 1 and "CUDAExecutionProvider" in self.model.get_providers():
+            if (
+                num_gpus
+                and num_gpus > 1
+                and "CUDAExecutionProvider" in self.model.get_providers()
+            ):
                 try:
                     import torch
+
                     devices = list(range(min(num_gpus, torch.cuda.device_count())))
                     if len(devices) > 1:
-                        providers_template = [("CUDAExecutionProvider", {}), ("CPUExecutionProvider", None)]
-                        self._onnx_pool = _ONNXInferencePool(self.model_file, devices, providers_template)
+                        providers_template = [
+                            ("CUDAExecutionProvider", {}),
+                            ("CPUExecutionProvider", None),
+                        ]
+                        self._onnx_pool = _ONNXInferencePool(
+                            self.model_file, devices, providers_template
+                        )
                 except Exception as e:
-                    self.logger.warning("Multi-GPU ONNX pool failed, falling back to single device: %s", e)
+                    self.logger.warning(
+                        "Multi-GPU ONNX pool failed, falling back to single device: %s",
+                        e,
+                    )
 
         elif self.model_file.endswith(".tflite"):
             self._require_input_block()
@@ -662,6 +749,7 @@ class GenericYolo:
         elif self.model_file.endswith(".pt"):
             self.model_type = "yolo"
             from .yolo_pt import load_yolo_pt
+
             self.model = load_yolo_pt(self.model_file, task=self.task)
             self.model.to("cpu" if self.device == "cpu" else f"cuda:{self.device}")
 
@@ -671,6 +759,7 @@ class GenericYolo:
             if num_gpus == "auto":
                 try:
                     import torch
+
                     num_gpus = torch.cuda.device_count()
                 except Exception:
                     num_gpus = 1
@@ -678,6 +767,7 @@ class GenericYolo:
             if num_gpus > 1:
                 try:
                     import torch
+
                     available = torch.cuda.device_count()
                     devices = list(range(min(num_gpus, available)))
                     if len(devices) > 1:
@@ -689,7 +779,9 @@ class GenericYolo:
                             min_conf=self.min_conf,
                         )
                 except Exception as e:
-                    self.logger.warning("Multi-GPU pool failed, falling back to single GPU: %s", e)
+                    self.logger.warning(
+                        "Multi-GPU pool failed, falling back to single GPU: %s", e
+                    )
         else:
             raise ValueError(f"Unsupported model file type: {self.model_file}")
 
@@ -714,19 +806,29 @@ class GenericYolo:
             msg_lines.append(f"Input dtype       : {inp_cfg.get('dtype', 'N/A')}")
             msg_lines.append(f"Letterbox         : {inp_cfg.get('letterbox', 'N/A')}")
         if self.output["format"] == "raw":
-            msg_lines.append(f"Box format        : {self.output.get('box_format', 'N/A')}")
-            msg_lines.append(f"Score mode        : {self.output.get('score_mode', 'N/A')}")
-            msg_lines.append(f"Software NMS      : {self.output.get('apply_software_nms', 'N/A')}")
+            msg_lines.append(
+                f"Box format        : {self.output.get('box_format', 'N/A')}"
+            )
+            msg_lines.append(
+                f"Score mode        : {self.output.get('score_mode', 'N/A')}"
+            )
+            msg_lines.append(
+                f"Software NMS      : {self.output.get('apply_software_nms', 'N/A')}"
+            )
             if self.output.get("apply_software_nms"):
-                msg_lines.append(f"NMS IoU           : {self.output.get('nms_iou', 'N/A')}")
+                msg_lines.append(
+                    f"NMS IoU           : {self.output.get('nms_iou', 'N/A')}"
+                )
 
         pad = max(len(l) for l in msg_lines)
         sep = "=" * pad
-        full = "\n".join([
-            f"+{sep}+",
-            *[f"|{l:<{pad}}|" for l in msg_lines],
-            f"+{sep}+",
-        ])
+        full = "\n".join(
+            [
+                f"+{sep}+",
+                *[f"|{l:<{pad}}|" for l in msg_lines],
+                f"+{sep}+",
+            ]
+        )
         self.logger.info("GenericYolo loaded:\n%s", full)
 
     def _require_input_block(self) -> None:
@@ -744,7 +846,7 @@ class GenericYolo:
             return 4 + score_cols + out["num_keypoints"] * out["keypoint_dims"]
         score_cols = 1 if out["score_mode"] == "objectness" else self.num_classes
         return 4 + score_cols
-    
+
     def _next_preprocess_buffer(self) -> np.ndarray:
         idx = self._preprocess_buf_idx
         self._preprocess_buf_idx = 1 - idx
@@ -755,6 +857,7 @@ class GenericYolo:
     def _load_onnx(self, model_file: str) -> None:
         try:
             import onnxruntime as ort
+
             ort.set_default_logger_severity(4)
         except ImportError as exc:
             raise ImportError("onnxruntime is required for .onnx models.") from exc
@@ -779,7 +882,9 @@ class GenericYolo:
             providers = ["CPUExecutionProvider"]
 
         sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess_options.graph_optimization_level = (
+            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        )
         cpu_count = os.cpu_count() or 4
         # leave a core free for the camera reader / preprocess threads instead
         # of letting ORT claim every logical core for intra-op parallelism
@@ -788,11 +893,17 @@ class GenericYolo:
         sess_options.enable_mem_pattern = True
         sess_options.enable_cpu_mem_arena = True
 
-        self.model = ort.InferenceSession(model_file, sess_options=sess_options, providers=providers)
+        self.model = ort.InferenceSession(
+            model_file, sess_options=sess_options, providers=providers
+        )
         self._onnx_inp_name = self.model.get_inputs()[0].name
         self._onnx_out_names = [o.name for o in self.model.get_outputs()]
-        self.logger.info("ONNX providers: %s (intra_op_threads=%d)", self.model.get_providers(), sess_options.intra_op_num_threads)
-        
+        self.logger.info(
+            "ONNX providers: %s (intra_op_threads=%d)",
+            self.model.get_providers(),
+            sess_options.intra_op_num_threads,
+        )
+
     def _load_tflite(self, model_file: str):
         num_threads = max(1, (os.cpu_count() or 4) - 1)
         try:
@@ -803,7 +914,10 @@ class GenericYolo:
                 delegates = [load_delegate("libedgetpu.so.1")]
                 self.logger.info("Coral Edge TPU delegate loaded.")
             except Exception:
-                self.logger.info("No Edge TPU delegate - running TFLite on CPU (%d threads).", num_threads)
+                self.logger.info(
+                    "No Edge TPU delegate - running TFLite on CPU (%d threads).",
+                    num_threads,
+                )
             self.model = Interpreter(
                 model_path=model_file,
                 experimental_delegates=delegates,
@@ -811,6 +925,7 @@ class GenericYolo:
             )
         except ImportError:
             from tensorflow.lite.python.interpreter import Interpreter
+
             self.model = Interpreter(model_path=model_file, num_threads=num_threads)
 
         self.model.allocate_tensors()
@@ -832,13 +947,19 @@ class GenericYolo:
                 Path(model_file).read_bytes()
             )
             if engine is None:
-                raise ValueError(f"TensorRT engine deserialization returned None: {model_file}")
+                raise ValueError(
+                    f"TensorRT engine deserialization returned None: {model_file}"
+                )
         except Exception as exc:
-            raise ValueError(f"Failed to load TensorRT engine: {model_file} ({exc})") from exc
+            raise ValueError(
+                f"Failed to load TensorRT engine: {model_file} ({exc})"
+            ) from exc
 
         self.model = engine
         self._engine_context = None
-        self.logger.info("Loaded TensorRT engine from %s (device %s)", model_file, self.device)
+        self.logger.info(
+            "Loaded TensorRT engine from %s (device %s)", model_file, self.device
+        )
 
     def _load_openvino(self, model_file: str) -> None:
         # OpenVINO IR (.xml + .bin) artifact. mirror the resolve/fallback
@@ -883,16 +1004,21 @@ class GenericYolo:
             if registered is None:
                 self.logger.warning(
                     "OpenVINO device %r not registered (%s) - using AUTO",
-                    device, core.available_devices,
+                    device,
+                    core.available_devices,
                 )
                 registered = "AUTO"
 
             compiled = self._compile_openvino(core, ir_xml, registered)
             self.model = compiled
             self._openvino_inp_name = next(iter(compiled.inputs)).get_any_name()
-            self.logger.info("Loaded OpenVINO IR from %s (device %s)", ir_xml, registered)
+            self.logger.info(
+                "Loaded OpenVINO IR from %s (device %s)", ir_xml, registered
+            )
         except Exception as exc:
-            raise ValueError(f"Failed to load OpenVINO model: {model_file} ({exc})") from exc
+            raise ValueError(
+                f"Failed to load OpenVINO model: {model_file} ({exc})"
+            ) from exc
 
     def _compile_openvino(self, core, ir_xml: Path, device: str):
         try:
@@ -900,7 +1026,8 @@ class GenericYolo:
         except Exception as exc:
             self.logger.warning(
                 "OpenVINO compile failed on %r (%s) - falling back to AUTO",
-                device, exc,
+                device,
+                exc,
             )
             return core.compile_model(str(ir_xml), "AUTO")
 
@@ -1014,9 +1141,12 @@ class GenericYolo:
         results_list = []
         if self.model_type == "yolo" and is_list and len(frames) > 1:
             raw_results = self.model(
-                frames, verbose=False, show=False,
+                frames,
+                verbose=False,
+                show=False,
                 imgsz=(self.input_size[1], self.input_size[0]),
-                conf=self.min_conf, device=self.device,
+                conf=self.min_conf,
+                device=self.device,
             )
             for r in raw_results:
                 r.orig_img = None
@@ -1025,7 +1155,9 @@ class GenericYolo:
             for frame in frames:
                 target_shape = orig_shape if orig_shape is not None else frame.shape
                 if self.model_type == "rknn":
-                    results_list.append(self._run_rknn(self._preprocess_frame(frame), target_shape))
+                    results_list.append(
+                        self._run_rknn(self._preprocess_frame(frame), target_shape)
+                    )
                 elif self.model_type == "onnx":
                     results_list.append(self._run_onnx(frame, target_shape))
                 elif self.model_type == "tflite":
@@ -1038,23 +1170,32 @@ class GenericYolo:
                     results_list.append(self._run_openvino(frame, target_shape))
                 else:
                     result = self.model(
-                        frame, verbose=False, show=False,
+                        frame,
+                        verbose=False,
+                        show=False,
                         imgsz=(self.input_size[1], self.input_size[0]),
-                        conf=self.min_conf, device=self.device,
+                        conf=self.min_conf,
+                        device=self.device,
                     )
                     result[0].orig_img = None
                     results_list.append(self._convert_ultralytics_to_results(result[0]))
 
         return results_list if is_list else results_list[0]
+
     def _preprocess_tpu(self, frame: np.ndarray) -> "torch.Tensor":
         import torch
+
         target_w, target_h = self.input_size
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         inp = self.input
         if inp and inp.get("letterbox", True):
-            canvas = np.full((target_h, target_w, 3), inp.get("pad_value", 114), dtype=np.uint8)
-            self._letterbox_into(img_rgb, canvas, self.input_size, inp.get("pad_value", 114))
+            canvas = np.full(
+                (target_h, target_w, 3), inp.get("pad_value", 114), dtype=np.uint8
+            )
+            self._letterbox_into(
+                img_rgb, canvas, self.input_size, inp.get("pad_value", 114)
+            )
             img_rgb = canvas
         else:
             img_rgb = cv2.resize(img_rgb, (target_w, target_h))
@@ -1073,11 +1214,14 @@ class GenericYolo:
         import torch
         import torch_xla.core.xla_model as xm
         from .yolo_pt import load_yolo_pt
+
         raw_model = load_yolo_pt(model_file, task=self.task).model
         raw_model = raw_model.to(self._tpu_device)
         raw_model.eval()
 
-        dummy = torch.zeros((1, 3, self.input_size[0], self.input_size[1])).to(self._tpu_device)
+        dummy = torch.zeros((1, 3, self.input_size[0], self.input_size[1])).to(
+            self._tpu_device
+        )
         with torch.no_grad():
             _ = raw_model(dummy)
         xm.mark_step()
@@ -1179,7 +1323,6 @@ class GenericYolo:
         if raw_outputs is None:
             return Results([], orig_shape)
 
-
         # print(f"\n=== RKNN raw_outputs debug ({self.model_file}) ===")
         # print(f"count: {len(raw_outputs)}")
         # for i, o in enumerate(raw_outputs):
@@ -1239,6 +1382,7 @@ class GenericYolo:
             "- engine/openvino/coreml/.pt models run through Ultralytics' own "
             "internal preprocessing and can't accept an externally preprocessed tensor."
         )
+
     def postprocess(self, raw_outputs, orig_shape) -> Results:
         tensor = raw_outputs[0]
         tensor = self._prepare_output_tensor(tensor)
@@ -1470,7 +1614,7 @@ class GenericYolo:
 
         euler = self._rvec_to_euler(rvec.reshape(3))
         return euler, tvec, keypoints_3d
-    
+
     def _apply_software_nms(
         self,
         boxes_xyxy: np.ndarray,
@@ -1484,7 +1628,9 @@ class GenericYolo:
         if dropped:
             self.logger.debug(
                 "Dropped %d/%d raw anchor(s) with non-finite (NaN/Inf) "
-                "box coordinates or confidence before NMS.", dropped, len(boxes_xyxy),
+                "box coordinates or confidence before NMS.",
+                dropped,
+                len(boxes_xyxy),
             )
         mask = (confs >= self.min_conf) & finite
         boxes_xyxy = boxes_xyxy[mask]
@@ -1567,7 +1713,7 @@ class GenericYolo:
             orig_shape,
             keypoints=final_kpts if kpts_raw is not None else None,
         )
-        
+
     def _parse_hardware_nms(self, tensor: np.ndarray, orig_shape) -> Results:
         if tensor.ndim == 2 and tensor.shape[0] == 6 and tensor.shape[1] != 6:
             tensor = tensor.T
@@ -1580,7 +1726,9 @@ class GenericYolo:
         if dropped:
             self.logger.debug(
                 "Dropped %d/%d hardware-NMS detection(s) with non-finite "
-                "(NaN/Inf) box coordinates or confidence.", dropped, len(tensor),
+                "(NaN/Inf) box coordinates or confidence.",
+                dropped,
+                len(tensor),
             )
         valid = tensor[(confs >= self.min_conf) & finite]
 
@@ -1590,7 +1738,7 @@ class GenericYolo:
             cls_id = int(det[5]) if det.shape[0] > 5 else 0
             boxes.append(Box(xyxy.tolist(), float(det[4]), cls_id))
         return Results(boxes, orig_shape)
-    
+
     def _parse_raw_detect(self, tensor: np.ndarray, orig_shape) -> Results:
         boxes_xyxy = self._boxes_from_encoding(tensor)
         confs, class_ids = self._scores_from_tensor(tensor)
@@ -1616,8 +1764,8 @@ class GenericYolo:
             kd = self.output["keypoint_dims"]
             kpts_raw = kpts_raw.astype(np.float32, copy=True)
             for k in range(0, kpts_raw.shape[1], kd):
-                kpts_raw[:, k] *= kpt_coord_scale       # x
-                kpts_raw[:, k + 1] *= kpt_coord_scale   # y
+                kpts_raw[:, k] *= kpt_coord_scale  # x
+                kpts_raw[:, k + 1] *= kpt_coord_scale  # y
                 # k+2 (confidence) intentionally left unscaled
 
         if self.output["keypoint_scores_are_logits"]:
@@ -1650,7 +1798,11 @@ class GenericYolo:
         keypoints_list = []
         kpt_data = getattr(ultralytics_result, "keypoints", None)
         if kpt_data is not None and kpt_data.data is not None:
-            kpt_arrs = kpt_data.data.cpu().numpy() if hasattr(kpt_data.data, "cpu") else np.asarray(kpt_data.data)
+            kpt_arrs = (
+                kpt_data.data.cpu().numpy()
+                if hasattr(kpt_data.data, "cpu")
+                else np.asarray(kpt_data.data)
+            )
             oshape = getattr(ultralytics_result, "orig_shape", None)
             img_w = int(oshape[1]) if oshape is not None and len(oshape) > 1 else 0
             img_h = int(oshape[0]) if oshape is not None else 0

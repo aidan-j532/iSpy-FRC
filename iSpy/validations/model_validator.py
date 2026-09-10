@@ -26,9 +26,9 @@ class ModelValidationResult:
     def __init__(self):
         self.valid_organized_models: Dict[str, Dict] = {}  # Path -> details
         self.orphan_models: Dict[str, str] = {}  # Path -> reason
-        self.config_mismatches: List[Tuple[str, str, str]] = (
-            []
-        )  # (config_path, actual_path, warning)
+        self.config_mismatches: List[
+            Tuple[str, str, str]
+        ] = []  # (config_path, actual_path, warning)
         self.errors: List[str] = []
         self.warnings: List[str] = []
 

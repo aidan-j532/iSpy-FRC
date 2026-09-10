@@ -1,4 +1,3 @@
-
 import contextlib
 import glob
 import os
@@ -21,10 +20,16 @@ def _silence_stderr():
         os.close(old_fd)
         os.close(devnull)
 
+
 # names windows hands out when it has nothing better - treat as unknown and keep digging
 _GENERIC_WINDOWS_NAMES = {
-    "", "usb video device", "usb camera", "camera", "uvc camera",
-    "video capture device", "usb2.0 camera",
+    "",
+    "usb video device",
+    "usb camera",
+    "camera",
+    "uvc camera",
+    "video capture device",
+    "usb2.0 camera",
 }
 
 # v4l2 capability bits (videodev2.h) - caps u32 lives at offset 84 in QUERYCAP
@@ -67,7 +72,11 @@ def _linux_is_known_non_camera(video_path):
     # e.g. /dev/video-dec0, /dev/video-enc0 — the part after "video-" starts
     # with a non-digit which real camera nodes never do
     basename = os.path.basename(video_path).lower()
-    if basename.startswith("video-") and len(basename) > 6 and not basename[6].isdigit():
+    if (
+        basename.startswith("video-")
+        and len(basename) > 6
+        and not basename[6].isdigit()
+    ):
         return True
     return False
 
@@ -104,7 +113,8 @@ def _linux_sysfs_name(video_path):
     try:
         with open(
             f"/sys/class/video4linux/video{m.group(1)}/name",
-            encoding="utf-8", errors="replace",
+            encoding="utf-8",
+            errors="replace",
         ) as f:
             return f.read().strip() or None
     except OSError:
@@ -115,7 +125,9 @@ def _linux_device_groups():
     try:
         result = subprocess.run(
             ["v4l2-ctl", "--list-devices"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
     except Exception:
         result = None
@@ -165,16 +177,18 @@ def _windows_cameras_from_registry():
             subkey_pos += 1
             if "#{" not in iface:
                 continue
-            raw_hw = iface[:iface.find("#{")]
+            raw_hw = iface[: iface.find("#{")]
             # USB cameras expose two UVC interfaces (MI_00 video, MI_01 metadata)
             # - strip &MI_XX so they collapse to the same physical device
             dedup_key = re.sub(r"&MI_\w+", "", raw_hw, flags=re.IGNORECASE)
-            devices.append({
-                "index": camera_index,
-                "name": _windows_camera_name(iface) or f"Camera {camera_index}",
-                "hw_id": raw_hw,
-                "dedup_key": dedup_key,
-            })
+            devices.append(
+                {
+                    "index": camera_index,
+                    "name": _windows_camera_name(iface) or f"Camera {camera_index}",
+                    "hw_id": raw_hw,
+                    "dedup_key": dedup_key,
+                }
+            )
             camera_index += 1
     finally:
         winreg.CloseKey(key)
@@ -193,7 +207,7 @@ def _windows_camera_name(iface):
     body = iface[:end]
     for prefix in ("##?#", "#?#"):
         if body.startswith(prefix):
-            body = body[len(prefix):]
+            body = body[len(prefix) :]
             break
 
     def _read_name(enum_path):
@@ -270,11 +284,14 @@ def _probe_index_devices(claimed):
                 if cap is not None and cap.isOpened():
                     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    devices.append({
-                        "path": str(i), "name": f"Camera {i}",
-                        "resolution": f"{w}x{h}" if w and h else None,
-                        "device_id": None,
-                    })
+                    devices.append(
+                        {
+                            "path": str(i),
+                            "name": f"Camera {i}",
+                            "resolution": f"{w}x{h}" if w and h else None,
+                            "device_id": None,
+                        }
+                    )
                     cap.release()
         except Exception:
             continue
@@ -297,7 +314,8 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
                 # nodes where caps couldn't be read - include only if sysfs
                 # name doesn't scream "not a camera" (codec/encoder/decoder)
                 capture = [
-                    n for n in nodes
+                    n
+                    for n in nodes
                     if _linux_is_capture_node(n) is None
                     and not _linux_is_known_non_camera(n)
                 ]
@@ -309,11 +327,13 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
             if key in seen_keys:
                 continue
             seen_keys.add(key)
-            devices.append({
-                "path": node,
-                "name": label or _linux_sysfs_name(node) or node,
-                "device_id": key,
-            })
+            devices.append(
+                {
+                    "path": node,
+                    "name": label or _linux_sysfs_name(node) or node,
+                    "device_id": key,
+                }
+            )
 
         # catch whatever grouping missed - still drop non-capture nodes + dupes
         for path in sorted(glob.glob("/dev/video*")):
@@ -326,11 +346,13 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
             if key in seen_keys:
                 continue
             seen_keys.add(key)
-            devices.append({
-                "path": path,
-                "name": _linux_sysfs_name(path) or path,
-                "device_id": key,
-            })
+            devices.append(
+                {
+                    "path": path,
+                    "name": _linux_sysfs_name(path) or path,
+                    "device_id": key,
+                }
+            )
 
     elif system_name == "Windows":
         # no index probing - MSMF cant open by index, every attempt spams
@@ -345,19 +367,24 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
             index = str(cam["index"])
             if index in claimed:
                 continue
-            devices.append({
-                "path": index,
-                "name": cam["name"],
-                "device_id": cam.get("hw_id"),
-            })
+            devices.append(
+                {
+                    "path": index,
+                    "name": cam["name"],
+                    "device_id": cam.get("hw_id"),
+                }
+            )
 
     else:
         # macos / other: best-effort /dev/video glob + index probing
         for path in sorted(glob.glob("/dev/video*")):
-            devices.append({
-                "path": path, "name": path,
-                "device_id": None,
-            })
+            devices.append(
+                {
+                    "path": path,
+                    "name": path,
+                    "device_id": None,
+                }
+            )
 
         if not devices:
             devices = _probe_index_devices(claimed)

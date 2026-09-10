@@ -5,7 +5,9 @@ from pathlib import Path
 from iSpy.boot.boot import on_boot
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+)
 
 _PROJECT_ROOT = Path.cwd().resolve()
 _CONFIG_PATH = _PROJECT_ROOT / "Config" / "config.json"

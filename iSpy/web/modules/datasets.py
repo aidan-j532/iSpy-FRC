@@ -27,8 +27,7 @@ def _count_images_in_dir(folder: Path) -> int:
         return 0
     try:
         return sum(
-            1 for p in folder.iterdir()
-            if p.is_file() and p.suffix.lower() in _IMG_EXTS
+            1 for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _IMG_EXTS
         )
     except PermissionError:
         return 0
@@ -44,14 +43,42 @@ class DatasetsModule(WebModule):
         (self.dataset_root / "default").mkdir(parents=True, exist_ok=True)
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/datasets", "datasets_page", lambda: render_template("datasets.html"))
-        flask_app.add_url_rule("/api/datasets", "api_datasets_list", self._list, methods=["GET"])
-        flask_app.add_url_rule("/api/datasets", "api_datasets_create", self._create, methods=["POST"])
-        flask_app.add_url_rule("/api/datasets/<name>/images", "api_ds_images", self._list_images, methods=["GET"])
-        flask_app.add_url_rule("/api/datasets/<name>/images", "api_ds_upload", self._upload_image, methods=["POST"])
-        flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_get", self._get_image, methods=["GET"])
-        flask_app.add_url_rule("/api/datasets/<name>/images/<filename>", "api_ds_image_delete", self._delete_image, methods=["DELETE"])
-        flask_app.add_url_rule("/api/fs/dirs", "api_fs_dirs", self._browse_dirs, methods=["GET"])
+        flask_app.add_url_rule(
+            "/datasets", "datasets_page", lambda: render_template("datasets.html")
+        )
+        flask_app.add_url_rule(
+            "/api/datasets", "api_datasets_list", self._list, methods=["GET"]
+        )
+        flask_app.add_url_rule(
+            "/api/datasets", "api_datasets_create", self._create, methods=["POST"]
+        )
+        flask_app.add_url_rule(
+            "/api/datasets/<name>/images",
+            "api_ds_images",
+            self._list_images,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/datasets/<name>/images",
+            "api_ds_upload",
+            self._upload_image,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/datasets/<name>/images/<filename>",
+            "api_ds_image_get",
+            self._get_image,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/datasets/<name>/images/<filename>",
+            "api_ds_image_delete",
+            self._delete_image,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/fs/dirs", "api_fs_dirs", self._browse_dirs, methods=["GET"]
+        )
 
     def _images_dir(self, name: str) -> Path:
         # datasets live flat: QuantizeDataset/<name>/img1.png ...
@@ -116,8 +143,7 @@ class DatasetsModule(WebModule):
         if not d.exists():
             return jsonify(images=[], count=0)
         files = sorted(
-            p.name for p in d.iterdir()
-            if p.is_file() and p.suffix.lower() in _IMG_EXTS
+            p.name for p in d.iterdir() if p.is_file() and p.suffix.lower() in _IMG_EXTS
         )
         return jsonify(images=files, count=len(files))
 

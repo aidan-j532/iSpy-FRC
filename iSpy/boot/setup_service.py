@@ -76,7 +76,9 @@ def setup_mdns(hostname: str | None = None) -> None:
         install = run(["sudo", "apt-get", "install", "-y", "avahi-daemon"], check=False)
         if install.returncode != 0:
             print(f"Failed to install avahi-daemon: {install.stderr.strip()}")
-            print(f"Install it manually, then re-run setup_mdns() to get {hostname}.local")
+            print(
+                f"Install it manually, then re-run setup_mdns() to get {hostname}.local"
+            )
             return
 
     current = run(["hostname"], check=False).stdout.strip()
@@ -85,7 +87,10 @@ def setup_mdns(hostname: str | None = None) -> None:
         if result.returncode != 0:
             print(f"Failed to set hostname: {result.stderr.strip()}")
             return
-        run(["sudo", "sed", "-i", f"s/{current}/{hostname}/g", "/etc/hosts"], check=False)
+        run(
+            ["sudo", "sed", "-i", f"s/{current}/{hostname}/g", "/etc/hosts"],
+            check=False,
+        )
 
     run(["sudo", "systemctl", "enable", "avahi-daemon"], check=False)
     run(["sudo", "systemctl", "restart", "avahi-daemon"], check=False)
@@ -110,13 +115,16 @@ def _setup_mdns_macos(hostname: str | None = None) -> None:
         result = run(cmd, check=False)
         if result.returncode != 0:
             print(f"Failed to set {cmd[-2]}: {result.stderr.strip()}")
-            print("Set it manually in System Settings > General > Sharing, "
-                  "or re-run setup_mdns().")
+            print(
+                "Set it manually in System Settings > General > Sharing, "
+                "or re-run setup_mdns()."
+            )
             return
 
     # bounce mDNSResponder so the new LocalHostName takes effect immediately
     run(["sudo", "killall", "-HUP", "mDNSResponder"], check=False)
     print(f"mDNS ready - board will be reachable at http://{hostname}.local:5000")
+
 
 def _configure_dhcp_hostname(hostname: str) -> None:
     # Try dhcpcd first (common on Raspberry Pi OS / Armbian).
@@ -142,13 +150,25 @@ def _configure_dhcp_hostname(hostname: str) -> None:
     if nm_conns.returncode == 0 and nm_conns.stdout.strip():
         try:
             # Get the primary connection name
-            primary = run(["sudo", "nmcli", "-t", "-f", "NAME", "general", "status"], check=False)
-            conn_name = primary.stdout.strip().split("\n")[0] if primary.stdout.strip() else ""
+            primary = run(
+                ["sudo", "nmcli", "-t", "-f", "NAME", "general", "status"], check=False
+            )
+            conn_name = (
+                primary.stdout.strip().split("\n")[0] if primary.stdout.strip() else ""
+            )
             if conn_name:
                 run(
-                    ["sudo", "nmcli", "connection", "modify", conn_name,
-                     "ipv4.dhcp-send-hostname", "yes",
-                     "ipv4.dhcp-hostname", hostname],
+                    [
+                        "sudo",
+                        "nmcli",
+                        "connection",
+                        "modify",
+                        conn_name,
+                        "ipv4.dhcp-send-hostname",
+                        "yes",
+                        "ipv4.dhcp-hostname",
+                        hostname,
+                    ],
                     check=False,
                 )
                 run(["sudo", "nmcli", "connection", "up", conn_name], check=False)
@@ -168,13 +188,16 @@ def _configure_dhcp_hostname(hostname: str) -> None:
                     if "Hostname" not in existing:
                         with open(path, "a") as f:
                             f.write(f"\n[DHCP]\nHostname={hostname}\n")
-                        print(f"systemd-networkd: configured DHCP hostname in {conffile}.")
+                        print(
+                            f"systemd-networkd: configured DHCP hostname in {conffile}."
+                        )
         except Exception as exc:
             print(f"systemd-networkd: could not set DHCP hostname (non-fatal): {exc}")
 
 
 def run(cmd, check=True):
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
 
 def get_platform():
     if platform.system() == "Windows":
@@ -272,13 +295,10 @@ WorkingDirectory={workdir}
 WantedBy=multi-user.target
 """
     service_file = f"/etc/systemd/system/{SERVICE_NAME}.service"
-    
+
     # Write via tee so we can use sudo
     proc = subprocess.run(
-        ["sudo", "tee", service_file],
-        input=service,
-        text=True,
-        capture_output=True
+        ["sudo", "tee", service_file], input=service, text=True, capture_output=True
     )
     if proc.returncode != 0:
         print(f"Failed to write service file: {proc.stderr}")
@@ -296,6 +316,7 @@ WantedBy=multi-user.target
 def _is_admin_windows():
     try:
         import ctypes
+
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
@@ -311,6 +332,7 @@ def _relaunch_as_admin_windows(cmd):
         # Quote args that contain spaces
         def quote(s):
             return f'"{s}"' if " " in s else s
+
         cmd_line = " ".join(quote(a) for a in cmd)
 
         with open(bat_file, "w") as f:
@@ -320,10 +342,7 @@ def _relaunch_as_admin_windows(cmd):
 
         # Run the bat file elevated
         ps_cmd = f"Start-Process -FilePath '{bat_file}' -Verb RunAs -Wait"
-        subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_cmd],
-            check=False
-        )
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], check=False)
 
         try:
             exit_code = int(open(out_file).read().strip())
@@ -331,8 +350,10 @@ def _relaunch_as_admin_windows(cmd):
             exit_code = -1
         finally:
             for f in [bat_file, out_file]:
-                try: os.remove(f)
-                except: pass
+                try:
+                    os.remove(f)
+                except:
+                    pass
 
         if exit_code != 0:
             print(f"Elevated schtasks failed with exit code {exit_code}")
@@ -349,11 +370,17 @@ def setup_windows(script_path):
 
     # Register as a scheduled task that runs at startup
     cmd = [
-        "schtasks", "/create", "/tn", SERVICE_NAME,
-        "/tr", f"{python} {script_path}",
-        "/sc", "onlogon",
-        "/rl", "highest",
-        "/f"  # overwrite if exists
+        "schtasks",
+        "/create",
+        "/tn",
+        SERVICE_NAME,
+        "/tr",
+        f"{python} {script_path}",
+        "/sc",
+        "onlogon",
+        "/rl",
+        "highest",
+        "/f",  # overwrite if exists
     ]
     result = run(cmd, check=False)
     if result.returncode != 0:
@@ -363,7 +390,9 @@ def setup_windows(script_path):
         if not _is_admin_windows():
             print("Requesting administrator privileges via UAC...")
             if _relaunch_as_admin_windows(cmd):
-                print(f"Scheduled task '{SERVICE_NAME}' created successfully (elevated).")
+                print(
+                    f"Scheduled task '{SERVICE_NAME}' created successfully (elevated)."
+                )
                 return
             else:
                 print("UAC elevation was declined or the task creation failed.")
@@ -371,7 +400,9 @@ def setup_windows(script_path):
         # either we're admin and schtasks still failed, or elevation got declined - fall back to a per-user startup entry
         try:
             appdata = str(Path.home() / "AppData" / "Roaming")
-            startup_dir = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+            startup_dir = os.path.join(
+                appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup"
+            )
             os.makedirs(startup_dir, exist_ok=True)
             bat_path = os.path.join(startup_dir, f"{SERVICE_NAME}_startup.bat")
             cmdline = f'"{python}" "{script_path}"'
@@ -379,11 +410,15 @@ def setup_windows(script_path):
                 f.write("@echo off\n")
                 f.write(cmdline + "\n")
             print(f"Created per-user startup fallback: {bat_path}")
-            print("Note: this will run at user login (not at system boot). To register a system task, run this installer as Administrator.")
+            print(
+                "Note: this will run at user login (not at system boot). To register a system task, run this installer as Administrator."
+            )
             return
         except Exception as e:
             print(f"Fallback failed: {e}")
-            print("Please rerun this script in an elevated Administrator PowerShell to install as a system task.")
+            print(
+                "Please rerun this script in an elevated Administrator PowerShell to install as a system task."
+            )
             return
 
     print(f"Scheduled task '{SERVICE_NAME}' created.")
@@ -438,6 +473,7 @@ def setup(script_path: str, project_root: str | None = None):
     else:
         print("Unsupported platform (no systemd detected). Set up a cron job manually:")
         print(f"  @reboot {_make_python()} {os.path.abspath(script_path)}")
+
 
 if __name__ == "__main__":
     setup("watchdog.py iSpy/boot/service_daemon.py")

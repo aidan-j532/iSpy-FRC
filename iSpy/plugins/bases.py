@@ -116,7 +116,9 @@ class UtilityBase(AddonBase):
         key, _err = validate_output_key(self.config.get("output_key"))
         return key
 
-    def publish_output(self, frame_data: dict, value, output_key: str | None = None) -> bool:
+    def publish_output(
+        self, frame_data: dict, value, output_key: str | None = None
+    ) -> bool:
         if not isinstance(frame_data, dict):
             return False
         key = output_key or self.declared_output_key()
@@ -126,7 +128,8 @@ class UtilityBase(AddonBase):
         if key in addon_data:
             logging.getLogger(__name__).debug(
                 "addon_data['%s'] overwritten by %s",
-                key, type(self).__name__,
+                key,
+                type(self).__name__,
             )
         addon_data[key] = value
         return True
@@ -159,7 +162,6 @@ def find_duplicate_output_keys(utilities: dict) -> dict[str, list[str]]:
 
 
 class VisionBase(ABC):
-
     plugin_name = "base"
 
     def __init__(self, context: dict):

@@ -1208,6 +1208,7 @@ def _convert_rknn(
 
     try:
         from iSpy.vision._safe_imports import repair_standard_log_levels
+
         repair_standard_log_levels()
         from rknn.api import RKNN
 
@@ -1570,44 +1571,73 @@ def _convert_model_subprocess(
     if dataset_path:
         args["dataset_path"] = str(dataset_path)
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False, dir=str(outputs_dir)
-    ) as f:
-        args_path = f.name
-        json.dump(args, f)
+    def _run_once(quantize) -> Path | None:
+        args["quantize"] = quantize
 
-    result_path = args_path + ".result.json"
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, dir=str(outputs_dir)
+        ) as f:
+            args_path = f.name
+            json.dump(args, f)
 
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "iSpy.boot._convert_worker", args_path],
-            cwd=str(_PROJECT_ROOT),
-            capture_output=True,
-            text=True,
-        )
-
-        # surface the worker's own logging - it just runs in a subprocess,
-        # it shouldnt run silently
-        if proc.stdout:
-            print(proc.stdout, file=_REAL_STDOUT, end="")
-        if proc.stderr:
-            print(proc.stderr, file=_REAL_STDERR, end="")
-
-        if proc.returncode != 0 or not os.path.exists(result_path):
-            logger.error(
-                "Conversion subprocess for %s -> %s failed (exit code %s). Falling back to .pt.",
-                Path(model_file).name,
-                target_format,
-                proc.returncode,
+        result_path = args_path + ".result.json"
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "iSpy.boot._convert_worker", args_path],
+                cwd=str(_PROJECT_ROOT),
+                capture_output=True,
+                text=True,
             )
-            return Path(model_file)
 
-        with open(result_path) as f:
-            result_data = json.load(f)
-        return Path(result_data["result"])
-    finally:
-        for p in (args_path, result_path):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+            # surface the worker's own logging - it just runs in a subprocess,
+            # it shouldnt run silently
+            if proc.stdout:
+                print(proc.stdout, file=_REAL_STDOUT, end="")
+            if proc.stderr:
+                print(proc.stderr, file=_REAL_STDERR, end="")
+
+            if proc.returncode != 0 or not os.path.exists(result_path):
+                logger.error(
+                    "Conversion subprocess for %s -> %s failed (exit code %s).",
+                    Path(model_file).name,
+                    target_format,
+                    proc.returncode,
+                )
+                return None
+
+            with open(result_path) as f:
+                result_data = json.load(f)
+            return Path(result_data["result"])
+        finally:
+            for p in (args_path, result_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+    result = _run_once(quantize)
+    if result is not None:
+        return result
+
+    # a killed/failed quantized build (rknn toolkit's int8 calibration is the
+    # usual OOM casualty - its worker dies with a signal exit code) degrades to
+    # an unquantized build before conceding to the .pt on-CPU fallback, so the
+    # NPU artifact still exists instead of silently running the model in torch
+    if quantize:
+        logger.warning(
+            "Quantized conversion of %s -> %s failed - retrying without "
+            "quantization so an artifact is still produced.",
+            Path(model_file).name,
+            target_format,
+        )
+        result = _run_once(False)
+        if result is not None:
+            logger.info("Unquantized retry succeeded: %s", result)
+            return result
+
+    logger.error(
+        "Conversion subprocess for %s -> %s failed. Falling back to .pt.",
+        Path(model_file).name,
+        target_format,
+    )
+    return Path(model_file)

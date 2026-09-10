@@ -103,9 +103,7 @@ class CameraBase:
 
         self.source = camera_config["source"]
 
-        self._is_url_source = (
-            isinstance(self.source, str) and "://" in self.source
-        )
+        self._is_url_source = isinstance(self.source, str) and "://" in self.source
 
         self.is_image = (
             isinstance(self.source, str)
@@ -223,7 +221,9 @@ class CameraBase:
                     self.logger.info(
                         "Camera %s: no frame from backend %s within %.1fs - "
                         "trying the next backend.",
-                        self.source, backend, self._STREAM_START_TIMEOUT,
+                        self.source,
+                        backend,
+                        self._STREAM_START_TIMEOUT,
                     )
                     raise ValueError(
                         f"Camera stream did not start with backend {backend}: {self.source}"
@@ -294,7 +294,9 @@ class CameraBase:
             self.logger.warning(
                 "Camera %s: opening with backend %s exceeded %.0fs - "
                 "abandoning it and trying the next backend.",
-                self.source, backend, self._CAP_OPEN_TIMEOUT,
+                self.source,
+                backend,
+                self._CAP_OPEN_TIMEOUT,
             )
             raise CameraOpenTimeout(
                 f"Camera open with backend {backend} timed out after "
@@ -314,7 +316,9 @@ class CameraBase:
             )
         return cap
 
-    def _wait_for_first_frame(self, cap, timeout: float = _STREAM_START_TIMEOUT) -> bool:
+    def _wait_for_first_frame(
+        self, cap, timeout: float = _STREAM_START_TIMEOUT
+    ) -> bool:
         deadline = time.perf_counter() + timeout
         while time.perf_counter() < deadline:
             try:
@@ -355,10 +359,14 @@ class CameraBase:
         is_linux = sys_platform == "Linux"
 
         if is_linux and not self._is_url_source:
-            device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
+            device = (
+                self.source
+                if isinstance(self.source, str)
+                else f"/dev/video{self.source}"
+            )
 
             _fmt_resolutions = [
-                (self._cap_w, self._cap_h),    # model input size
+                (self._cap_w, self._cap_h),  # model input size
                 (640, 480),
                 (1280, 720),
                 (800, 600),
@@ -369,10 +377,14 @@ class CameraBase:
                 try:
                     result = subprocess.run(
                         [
-                            "v4l2-ctl", "-d", device,
+                            "v4l2-ctl",
+                            "-d",
+                            device,
                             f"--set-fmt-video=width={_fw},height={_fh},pixelformat=MJPG",
                         ],
-                        capture_output=True, text=True, timeout=5,
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
                     )
                     if result.returncode == 0:
                         _fmt_ok = True
@@ -391,17 +403,25 @@ class CameraBase:
 
             try:
                 subprocess.run(
-                    ["v4l2-ctl", "-d", device,
-                     "--set-ctrl=exposure_dynamic_framerate=0",
-                     "--set-ctrl=auto_exposure=0",
-                     f"--set-ctrl=exposure_time_absolute={self._exposure_time}",
-                     f"--set-ctrl=gain={self._gain}"],
-                    capture_output=True, text=True, timeout=5,
+                    [
+                        "v4l2-ctl",
+                        "-d",
+                        device,
+                        "--set-ctrl=exposure_dynamic_framerate=0",
+                        "--set-ctrl=auto_exposure=0",
+                        f"--set-ctrl=exposure_time_absolute={self._exposure_time}",
+                        f"--set-ctrl=gain={self._gain}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
             except FileNotFoundError:
                 pass
             except subprocess.TimeoutExpired:
-                self.logger.warning("v4l2-ctl timed out setting UVC controls on %s", device)
+                self.logger.warning(
+                    "v4l2-ctl timed out setting UVC controls on %s", device
+                )
 
             time.sleep(0.15)
 
@@ -417,19 +437,31 @@ class CameraBase:
         actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
         fourcc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
-        fourcc_str = "".join(chr((fourcc >> 8 * i) & 0xFF) for i in range(4)) if fourcc else "N/A"
+        fourcc_str = (
+            "".join(chr((fourcc >> 8 * i) & 0xFF) for i in range(4))
+            if fourcc
+            else "N/A"
+        )
         self.logger.info(
             "Camera %s: capture %dx%d @ %.1f FPS (format %s)",
-            self.source, actual_w, actual_h, actual_fps, fourcc_str,
+            self.source,
+            actual_w,
+            actual_h,
+            actual_fps,
+            fourcc_str,
         )
         if actual_w != self._cap_w or actual_h != self._cap_h:
             self.logger.warning(
                 "Requested %dx%d but camera vetoed to %dx%d",
-                self._cap_w, self._cap_h, actual_w, actual_h,
+                self._cap_w,
+                self._cap_h,
+                actual_w,
+                actual_h,
             )
         if fourcc_str not in ("MJPG", "JPEG"):
             self.logger.warning(
-                "Camera format is %s (not MJPG). USB bandwidth may be higher.", fourcc_str
+                "Camera format is %s (not MJPG). USB bandwidth may be higher.",
+                fourcc_str,
             )
 
         self._frame_processors = []
@@ -460,7 +492,9 @@ class CameraBase:
             ):
                 self.logger.warning(
                     "Camera %s: still waiting for device (%s) - retrying every %.0fs.",
-                    self.source, exc, self._RECONNECT_RETRY_DELAY,
+                    self.source,
+                    exc,
+                    self._RECONNECT_RETRY_DELAY,
                 )
             return False
         self._connected = True
@@ -531,7 +565,8 @@ class CameraBase:
                     self.logger.warning(
                         "Frame read failed on %s (%d consecutive) - camera busy "
                         "or stream unavailable; re-opening the capture if this persists.",
-                        self.source, consecutive_failures,
+                        self.source,
+                        consecutive_failures,
                     )
                 if consecutive_failures >= self._READ_REOPEN_AFTER:
                     consecutive_failures = 0
@@ -591,7 +626,9 @@ class CameraBase:
                     t0 = time.perf_counter()
                     frame = processor.process(frame)
                     dt = time.perf_counter() - t0
-                    processor._last_code_seconds = getattr(processor, "_last_code_seconds", 0.0) + dt
+                    processor._last_code_seconds = (
+                        getattr(processor, "_last_code_seconds", 0.0) + dt
+                    )
                 else:
                     frame = processor.process(frame)
             except Exception as exc:
@@ -672,13 +709,23 @@ class CameraBase:
             return
         if platform.system() == "Linux":
             try:
-                device = self.source if isinstance(self.source, str) else f"/dev/video{self.source}"
+                device = (
+                    self.source
+                    if isinstance(self.source, str)
+                    else f"/dev/video{self.source}"
+                )
                 subprocess.run(
-                    ["v4l2-ctl", "-d", device,
-                     "--set-ctrl=auto_exposure=0",
-                     f"--set-ctrl=exposure_time_absolute={int(self._exposure_time)}",
-                     f"--set-ctrl=gain={int(self._gain)}"],
-                    capture_output=True, text=True, timeout=5,
+                    [
+                        "v4l2-ctl",
+                        "-d",
+                        device,
+                        "--set-ctrl=auto_exposure=0",
+                        f"--set-ctrl=exposure_time_absolute={int(self._exposure_time)}",
+                        f"--set-ctrl=gain={int(self._gain)}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
@@ -701,7 +748,9 @@ class CameraBase:
         hsv[..., 1] = np.clip(hsv[..., 1] * factor, 0, 255)
         return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
-    def _apply_color_balance(self, frame: np.ndarray, white_balance: float, tint: float) -> np.ndarray:
+    def _apply_color_balance(
+        self, frame: np.ndarray, white_balance: float, tint: float
+    ) -> np.ndarray:
         if frame.ndim < 3 or (not white_balance and not tint):
             return frame
         wb = self._clamp_num(white_balance, -100, 100, 0) / 100.0
@@ -716,9 +765,7 @@ class CameraBase:
             np.clip(np.arange(256, dtype=np.float32) * s, 0, 255).astype(np.uint8)
             for s in scales
         ]
-        return cv2.merge(
-            [cv2.LUT(frame[:, :, i], luts[i]) for i in range(3)]
-        )
+        return cv2.merge([cv2.LUT(frame[:, :, i], luts[i]) for i in range(3)])
 
     def _apply_image_adjustments(self, frame: np.ndarray) -> np.ndarray:
         contrast = self._contrast
@@ -748,7 +795,9 @@ class CameraBase:
         if "saturation" in adjustments:
             self._saturation = self._clamp_num(adjustments["saturation"], -100, 100, 0)
         if "white_balance" in adjustments:
-            self._white_balance = self._clamp_num(adjustments["white_balance"], -100, 100, 0)
+            self._white_balance = self._clamp_num(
+                adjustments["white_balance"], -100, 100, 0
+            )
         if "tint" in adjustments:
             self._tint = self._clamp_num(adjustments["tint"], -100, 100, 0)
         if "gamma" in adjustments:
@@ -797,7 +846,8 @@ class CameraBase:
     # ------------------------------------------------------------------
 
     def _make_placeholder_frame(
-        self, width: int = _PLACEHOLDER_W,
+        self,
+        width: int = _PLACEHOLDER_W,
         height: int = _PLACEHOLDER_H,
     ) -> np.ndarray:
         try:
@@ -815,7 +865,9 @@ class CameraBase:
         (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
         cx = (width - tw) // 2
         cy = (height + th) // 2
-        cv2.putText(frame, text, (cx, cy), font, scale, (180, 180, 180), thickness, cv2.LINE_AA)
+        cv2.putText(
+            frame, text, (cx, cy), font, scale, (180, 180, 180), thickness, cv2.LINE_AA
+        )
         return frame
 
     # ------------------------------------------------------------------

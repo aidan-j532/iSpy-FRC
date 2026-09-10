@@ -307,6 +307,7 @@ iSpy uses a plugin architecture. Drop a file into the right folder and it loads 
 # iSpy/plugins/trackers/my_tracker.py
 from iSpy.plugins.bases import TrackerBase
 
+
 class MyTracker(TrackerBase):
     plugin_name = "my_tracker"
 
@@ -342,6 +343,7 @@ your config - its presence enables it:
 ```python
 # iSpy/plugins/utilities/my_utility.py
 from iSpy.plugins.bases import UtilityBase
+
 
 class MyUtility(UtilityBase):
     plugin_name = "my_utility"

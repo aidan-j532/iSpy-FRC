@@ -1,10 +1,8 @@
-
 from iSpy.vision.Cameras import _discovery
 from iSpy.vision.Cameras.base import CameraBase
 
 
 class OpenCVCamera(CameraBase):
-
     camera_type = "opencv"
     plugin_name = "opencv"
 
@@ -26,7 +24,7 @@ class OpenCVCamera(CameraBase):
                 "label": "Device ID",
                 "default": "",
                 "help": "Hardware identifier reported by discovery "
-                        "(auto-filled when you pick a discovered camera).",
+                "(auto-filled when you pick a discovered camera).",
             },
             "fps_cap": {
                 "type": "number",

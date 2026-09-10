@@ -15,7 +15,9 @@ class LogsModule(WebModule):
         self.log_path = Path.cwd() / "Outputs" / "log.txt"
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/logs", "logs_page", lambda: render_template("logs.html"))
+        flask_app.add_url_rule(
+            "/logs", "logs_page", lambda: render_template("logs.html")
+        )
         flask_app.add_url_rule("/api/logs", "api_logs", self._tail)
 
     def _tail(self):

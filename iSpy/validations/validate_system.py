@@ -12,26 +12,36 @@ logger = logging.getLogger(__name__)
 _MODEL_PATTERN = re.compile(
     r"^YoloModels/"
     r"(?:(?:pytorch|onnx|tflite|rknn|openvino|coreml|engine)/)?"
-    r"[a-zA-Z0-9_\-]+.*\.(pt|onnx|tflite|rknn|bin|xml|yaml|engine)$")
+    r"[a-zA-Z0-9_\-]+.*\.(pt|onnx|tflite|rknn|bin|xml|yaml|engine)$"
+)
+
 
 def is_valid_model_path(path: str) -> bool:
     return bool(_MODEL_PATTERN.match(path.replace("\\", "/")))
 
+
 def validate_model_files() -> None:
     model_dir = Path("YoloModels")
     if not model_dir.exists():
-        logger.warning("YoloModels directory not found - skipping model path validation.")
+        logger.warning(
+            "YoloModels directory not found - skipping model path validation."
+        )
         return
 
     for root, dirs, files in os.walk(model_dir):
-        dirs[:] = [d for d in dirs if not (d.endswith(".mlpackage") or d.endswith("_openvino_model"))]
+        dirs[:] = [
+            d
+            for d in dirs
+            if not (d.endswith(".mlpackage") or d.endswith("_openvino_model"))
+        ]
         for file in files:
             full_path = os.path.join(root, file)
             if not is_valid_model_path(full_path):
                 raise ValueError(f"Invalid model file path: {full_path}")
 
     logger.info("All model file paths are valid.")
-    
+
+
 def validate_config_files() -> None:
     config_dir = Path("Config")
     if not config_dir.exists():
@@ -41,9 +51,12 @@ def validate_config_files() -> None:
     for root, _, files in os.walk(config_dir):
         for file in files:
             if not file.endswith(".json"):
-                raise ValueError(f"Invalid config file: {file}. Only .json files are allowed.")
+                raise ValueError(
+                    f"Invalid config file: {file}. Only .json files are allowed."
+                )
 
     logger.info("All config files are valid.")
+
 
 def run_unit_tests() -> bool:
     logger.info("Running unit tests...")
@@ -54,6 +67,7 @@ def run_unit_tests() -> bool:
 
     import unittest
     import logging
+
     # Suppress logging during unit tests to avoid spam in boot output.
     # Setting the root level is not enough: iSpy.* loggers get an explicit
     # INFO level in boot's quiet-logging setup, so their records ignore the
@@ -73,8 +87,10 @@ def run_unit_tests() -> bool:
     finally:
         logging.disable(logging.NOTSET)
 
-def get_addon_setting(config: dict, addon_type: str, addon_name: str,
-                      key: str, default=None):
+
+def get_addon_setting(
+    config: dict, addon_type: str, addon_name: str, key: str, default=None
+):
     try:
         entry = config["plugins"][addon_type][addon_name]
     except (KeyError, TypeError):
@@ -108,9 +124,21 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
         if field not in config:
             raise ValueError(f"Missing required config field: {field}")
 
-    valid_units = {"meter", "meters", "inch", "inches", "foot", "feet", "centimeter", "centimeters", "frc"}
+    valid_units = {
+        "meter",
+        "meters",
+        "inch",
+        "inches",
+        "foot",
+        "feet",
+        "centimeter",
+        "centimeters",
+        "frc",
+    }
     if config.get("unit", "").lower() not in valid_units:
-        raise ValueError(f"Invalid unit: {config.get('unit')}. Must be one of: {valid_units}")
+        raise ValueError(
+            f"Invalid unit: {config.get('unit')}. Must be one of: {valid_units}"
+        )
 
     camera_configs = config.get("camera_configs", {})
     if not camera_configs:
@@ -128,7 +156,9 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
             calib_required = ["size", "distance", "game_piece_size", "fov"]
             for field in calib_required:
                 if field not in calib:
-                    raise ValueError(f"Camera '{cam_name}' calibration missing: {field}")
+                    raise ValueError(
+                        f"Camera '{cam_name}' calibration missing: {field}"
+                    )
 
         # models live in the camera's pipeline settings (nested layout) - legacy flat entries are folded in lazily
         pipeline = cam_config.get("pipeline")
@@ -137,8 +167,11 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
             settings = pipeline.get("settings") or {}
         else:
             pipeline_name = pipeline
-            settings = {k: v for k, v in cam_config.items()
-                        if k not in ("name", "source", "subsystem", "pipeline", "calibration")}
+            settings = {
+                k: v
+                for k, v in cam_config.items()
+                if k not in ("name", "source", "subsystem", "pipeline", "calibration")
+            }
         if not pipeline_name:
             raise ValueError(f"Camera '{cam_name}' pipeline must have a name")
 
@@ -146,22 +179,28 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
         if isinstance(vision_model, dict):
             model_cameras += 1
             if "file_path" not in vision_model:
-                raise ValueError(f"Camera '{cam_name}' vision_model must have 'file_path'")
+                raise ValueError(
+                    f"Camera '{cam_name}' vision_model must have 'file_path'"
+                )
             if "input_size" not in vision_model:
-                raise ValueError(f"Camera '{cam_name}' vision_model must have 'input_size'")
+                raise ValueError(
+                    f"Camera '{cam_name}' vision_model must have 'input_size'"
+                )
 
     if model_cameras == 0:
         raise ValueError("No camera has a vision_model configured")
 
     # network_tables_ip is an add-on setting now (network_table_handler utility); only validated when the add-on is enabled
-    ip = get_addon_setting(config, "utilities", "network_table_handler",
-                           "network_tables_ip")
+    ip = get_addon_setting(
+        config, "utilities", "network_table_handler", "network_tables_ip"
+    )
     if ip:
         ip_parts = ip.split(".")
         if len(ip_parts) != 4:
             raise ValueError(f"Invalid network_tables_ip format: {ip}")
 
     logger.info("Config validation passed.")
+
 
 def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
     import json
@@ -178,10 +217,10 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
     recommendations = []
 
     # Add-on settings live in plugins.<type>.<name>; absent add-on = disabled.
-    dbscan_epsilon = get_addon_setting(config, "trackers", "path_planner",
-                                       "epsilon")
-    dbscan_min_samples = get_addon_setting(config, "trackers", "path_planner",
-                                           "min_samples")
+    dbscan_epsilon = get_addon_setting(config, "trackers", "path_planner", "epsilon")
+    dbscan_min_samples = get_addon_setting(
+        config, "trackers", "path_planner", "min_samples"
+    )
     epsilon = dbscan_epsilon if dbscan_epsilon is not None else 0
     min_samples = dbscan_min_samples if dbscan_min_samples is not None else 0
 
@@ -216,8 +255,9 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
             "Only dense clusters will be kept. May miss sparse detections."
         )
 
-    dist_threshold = get_addon_setting(config, "trackers", "object_tracker",
-                                       "distance_threshold")
+    dist_threshold = get_addon_setting(
+        config, "trackers", "object_tracker", "distance_threshold"
+    )
     if dist_threshold is None:
         recommendations.append(
             "object_tracker tracker is not enabled - no object merging configured. "
@@ -276,8 +316,11 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
         if isinstance(pipeline, dict):
             settings = pipeline.get("settings") or {}
         else:
-            settings = {k: v for k, v in cam_cfg.items()
-                        if k not in ("name", "source", "subsystem", "pipeline", "calibration")}
+            settings = {
+                k: v
+                for k, v in cam_cfg.items()
+                if k not in ("name", "source", "subsystem", "pipeline", "calibration")
+            }
         vision_model = settings.get("vision_model")
         if not isinstance(vision_model, dict):
             continue
@@ -298,8 +341,9 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
                 "Most models expect square input. This may cause issues."
             )
 
-    nt_ip = get_addon_setting(config, "utilities", "network_table_handler",
-                              "network_tables_ip")
+    nt_ip = get_addon_setting(
+        config, "utilities", "network_table_handler", "network_tables_ip"
+    )
     if nt_ip is None:
         recommendations.append(
             "NetworkTables utility not enabled - vision data is not published to the robot."
@@ -312,9 +356,9 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
 
     stale = config.get("health_stale_threshold")
     if stale is None:
-        stale = get_addon_setting(config, "trackers",
-                                  "object_tracker",
-                                  "stale_threshold", 1.0)
+        stale = get_addon_setting(
+            config, "trackers", "object_tracker", "stale_threshold", 1.0
+        )
     if stale > 3.0:
         recommendations.append(
             f"stale_threshold is high ({stale}s). "
@@ -340,7 +384,10 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
 
     return output
 
-def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset") -> bool:
+
+def validate_quantization_dataset_wrapper(
+    dataset_path: str = "QuantizeDataset",
+) -> bool:
     root = Path(dataset_path)
 
     from iSpy.dataset.dataset import _find_images
@@ -348,22 +395,30 @@ def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset")
     if not root.exists() or not _find_images(root):
         logger.warning(
             "No quantization dataset found at %s - skipping (only needed for "
-            "RKNN conversion, which runs on demand, not at boot).", dataset_path,
+            "RKNN conversion, which runs on demand, not at boot).",
+            dataset_path,
         )
         return True
 
     # named datasets live at QuantizeDataset/<name>/ - reusable calibration picked per camera via its 'quantization_dataset' setting, never derived from a model filename. validate each one since that's what conversions actually use now
-    per_model_dirs = [
-        d for d in root.iterdir()
-        if d.is_dir() and d.name not in ("valid",) and (d / "dataset.txt").exists()
-    ] if root.exists() else []
+    per_model_dirs = (
+        [
+            d
+            for d in root.iterdir()
+            if d.is_dir() and d.name not in ("valid",) and (d / "dataset.txt").exists()
+        ]
+        if root.exists()
+        else []
+    )
 
     if not per_model_dirs:
         result = validate_quantization_dataset(dataset_path)
         if result["valid"]:
             logger.info(
                 "Quantization dataset valid: %d images, rknn=%s, yolo_data=%s",
-                result["image_count"], result["rknn_ready"], result["yolo_data_ready"],
+                result["image_count"],
+                result["rknn_ready"],
+                result["yolo_data_ready"],
             )
         else:
             logger.warning("Quantization dataset issues (%s):", dataset_path)
@@ -377,7 +432,10 @@ def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset")
         if result["valid"]:
             logger.info(
                 "Quantization dataset valid for %s: %d images, rknn=%s, yolo_data=%s",
-                model_dir.name, result["image_count"], result["rknn_ready"], result["yolo_data_ready"],
+                model_dir.name,
+                result["image_count"],
+                result["rknn_ready"],
+                result["yolo_data_ready"],
             )
         else:
             logger.warning("Quantization dataset issues (%s):", model_dir)
@@ -386,6 +444,7 @@ def validate_quantization_dataset_wrapper(dataset_path: str = "QuantizeDataset")
             all_valid = False
 
     return all_valid
+
 
 def validate_system() -> bool:
     try:

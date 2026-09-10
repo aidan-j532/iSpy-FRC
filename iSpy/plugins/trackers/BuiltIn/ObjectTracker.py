@@ -7,6 +7,7 @@ from iSpy.vision.Object import Object
 
 _EMA_ALPHA = 0.3
 
+
 class ObjectTracker(TrackerBase):
     plugin_name = "object_tracker"
 
@@ -21,15 +22,14 @@ class ObjectTracker(TrackerBase):
                 "type": "number",
                 "label": "Merge Distance (m)",
                 "hint": "Detections closer than this to an existing tracked "
-                        "object (m) are merged into it instead of spawning a "
-                        "new one.",
+                "object (m) are merged into it instead of spawning a "
+                "new one.",
                 "default": 0.5,
             },
             "stale_threshold": {
                 "type": "number",
                 "label": "Stale Threshold (s)",
-                "hint": "Tracked objects not seen for this many seconds are "
-                        "dropped.",
+                "hint": "Tracked objects not seen for this many seconds are dropped.",
                 "default": 1.0,
             },
         }
@@ -74,7 +74,7 @@ class ObjectTracker(TrackerBase):
         self._merge(new_detections)
 
         return self.tracked_objects
-    
+
     def _merge(self, detections: list[Object]):
         for det in detections:
             if not self._exists_and_update(det):
@@ -107,10 +107,14 @@ class ObjectTracker(TrackerBase):
                 existing.z += _EMA_ALPHA * (new_det.z - existing.z)
 
                 # EMA smoothing on angles (shortest-path wrapping)
-                d_roll = (new_det.roll - existing.roll + math.pi) % (2 * math.pi) - math.pi
+                d_roll = (new_det.roll - existing.roll + math.pi) % (
+                    2 * math.pi
+                ) - math.pi
                 existing.roll = (existing.roll + _EMA_ALPHA * d_roll) % (2 * math.pi)
 
-                d_pitch = (new_det.pitch - existing.pitch + math.pi) % (2 * math.pi) - math.pi
+                d_pitch = (new_det.pitch - existing.pitch + math.pi) % (
+                    2 * math.pi
+                ) - math.pi
                 existing.pitch = (existing.pitch + _EMA_ALPHA * d_pitch) % (2 * math.pi)
 
                 d_yaw = (new_det.yaw - existing.yaw + math.pi) % (2 * math.pi) - math.pi

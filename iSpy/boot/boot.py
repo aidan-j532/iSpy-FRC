@@ -47,6 +47,7 @@ def _remove_path_for_cleanup(path: Path) -> None:
             func(p)
         except OSError:
             pass
+
     shutil.rmtree(str(path), onerror=onerror)
 
 
@@ -54,10 +55,15 @@ def _bootstrap_default_camera(config: iSpyConfig):
     cams = config.get("camera_configs", {})
     if cams and any(c.get("source") not in (None, "") for c in cams.values()):
         return  # already has something real
-    from iSpy.web.modules.cameras import CamerasModule  # or move probing to a shared util
+    from iSpy.web.modules.cameras import (
+        CamerasModule,
+    )  # or move probing to a shared util
+
     devices = CamerasModule({})._probe_devices()
     if not devices:
-        logger.warning("No cameras detected at first boot - leaving default placeholder config.")
+        logger.warning(
+            "No cameras detected at first boot - leaving default placeholder config."
+        )
         return
     dev = devices[0]
     name = "camera_1"
@@ -70,7 +76,9 @@ def _bootstrap_default_camera(config: iSpyConfig):
     config.save()
     logger.info(
         "First boot: auto-configured camera '%s' -> %s (pipeline=%s)",
-        name, dev["path"], get_pipeline_name(cam_cfg),
+        name,
+        dev["path"],
+        get_pipeline_name(cam_cfg),
     )
 
 
@@ -96,8 +104,9 @@ def _is_non_device_source(source) -> bool:
     return "://" in source or source.lower().endswith(_IMAGE_SOURCE_EXTS)
 
 
-def _camera_present(cam_cfg: dict, probed_ids: set, probed_paths: set,
-                    probed_sigs: set) -> bool:
+def _camera_present(
+    cam_cfg: dict, probed_ids: set, probed_paths: set, probed_sigs: set
+) -> bool:
     device_id = cam_cfg.get("device_id")
     source = cam_cfg.get("source")
     if _is_non_device_source(source):
@@ -126,14 +135,18 @@ def _camera_present(cam_cfg: dict, probed_ids: set, probed_paths: set,
 
 def cleanup_missing_cameras(config: iSpyConfig) -> None:
     cams = {
-        k: v for k, v in (config.get("camera_configs") or {}).items()
+        k: v
+        for k, v in (config.get("camera_configs") or {}).items()
         if isinstance(v, dict)
     }
     if len(cams) <= 1:
         return
 
     try:
-        from iSpy.web.modules.cameras import CamerasModule  # same probing the web ui uses
+        from iSpy.web.modules.cameras import (
+            CamerasModule,
+        )  # same probing the web ui uses
+
         devices = CamerasModule({})._probe_devices()
     except Exception as exc:
         logger.warning("Boot camera cleanup skipped - device probe failed: %s", exc)
@@ -150,7 +163,8 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
     probed_sigs = {s for s in (_usb_signature(i) for i in probed_ids) if s}
 
     missing = [
-        name for name, cfg in cams.items()
+        name
+        for name, cfg in cams.items()
         if not _camera_present(cfg, probed_ids, probed_paths, probed_sigs)
     ]
     if not missing:
@@ -163,10 +177,12 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
         missing = [name for name in missing if name != kept]
         logger.warning(
             "Every configured camera is missing from the system - keeping "
-            "'%s' anyway so the boot still has something to run.", kept,
+            "'%s' anyway so the boot still has something to run.",
+            kept,
         )
 
     from iSpy.web.Backend.save_store import read, write
+
     profiles = read("camera_profiles", {}) or {}
     for name in missing:
         entry = cams.pop(name)
@@ -176,7 +192,8 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
         logger.info(
             "Boot camera cleanup: camera '%s' (%s) is gone from the system - "
             "removed from config, settings saved%s.",
-            name, entry.get("source"),
+            name,
+            entry.get("source"),
             " under its device profile" if device_id else "",
         )
     config.set("camera_configs", cams)
@@ -311,7 +328,11 @@ def _wait_for_pipeline_ready(
 ) -> None:
     from iSpy.config.iSpyConfig import iSpyCameraConfig
 
-    cams = {k: v for k, v in config.config.get("camera_configs", {}).items() if isinstance(v, dict)}
+    cams = {
+        k: v
+        for k, v in config.config.get("camera_configs", {}).items()
+        if isinstance(v, dict)
+    }
     if not cams:
         raise RuntimeError("No cameras configured - nothing to boot.")
 
@@ -320,7 +341,11 @@ def _wait_for_pipeline_ready(
     )
     instances: dict[str, object] = {}
     for name, cam_cfg in cams.items():
-        pipeline = get_pipeline_name(cam_cfg) if isinstance(cam_cfg, dict) else default_pipeline
+        pipeline = (
+            get_pipeline_name(cam_cfg)
+            if isinstance(cam_cfg, dict)
+            else default_pipeline
+        )
         cls = pipeline_classes.get(pipeline)
         if cls is None:
             raise RuntimeError(
@@ -340,7 +365,8 @@ def _wait_for_pipeline_ready(
     deadline = _time.monotonic() + _READINESS_WAIT_TIMEOUT_S
     logger.info(
         "Waiting for %d camera pipeline(s) to become ready (background "
-        "preparation may still be running)...", len(instances),
+        "preparation may still be running)...",
+        len(instances),
     )
     pending = set(instances)
     last_status: dict[str, str] = {n: "" for n in instances}
@@ -378,9 +404,7 @@ def _wait_for_pipeline_ready(
 
 def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = False):
     _configure_quiet_logging()
-    logger.info(
-        "ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix
-    )
+    logger.info("ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix)
 
     # in iSpy/boot/boot.py, inside on_boot(), right after setup_files(fresh=True)
     # and iSpyConfig construction, before cleanup_missing_cameras:
@@ -397,6 +421,7 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
         # doesn't fail on a missing import mid-pipeline-construction
         try:
             from iSpy.vision.optimizer import install_special_dependencies
+
             logger.info("First-boot dependency install starting (auto_install=True)...")
             install_special_dependencies(auto_install=True)
         except Exception:
@@ -430,6 +455,7 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
     # even when mDNS and DHCP hostname resolution both fail.
     try:
         from iSpy.boot.announce import start_announcer
+
         start_announcer(daemon=True)
         logger.info("UDP announce beacon started.")
     except Exception as exc:
@@ -462,10 +488,18 @@ def _any_camera_uses_csi() -> bool:
 
 
 def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser.add_argument("-s", "--service", action="store_true",
-                         help="Install and start the watchdog service")
-    parser.add_argument("-w", "--wait", action="store_true",
-                         help="Wait for all pipelines to be ready before running vision")
+    parser.add_argument(
+        "-s",
+        "--service",
+        action="store_true",
+        help="Install and start the watchdog service",
+    )
+    parser.add_argument(
+        "-w",
+        "--wait",
+        action="store_true",
+        help="Wait for all pipelines to be ready before running vision",
+    )
     return parser
 
 
@@ -477,10 +511,14 @@ def main():
 
     parser = argparse.ArgumentParser(description="iSpy boot sequence")
     parser = add_boot_arguments(parser)
-    parser.add_argument("-f", "--fresh", action="store_true",
-                         help="Forcefully wipe generated state (Config, Outputs, "
-                              "YoloModels, QuantizeDataset) and create a fresh "
-                              "default setup")
+    parser.add_argument(
+        "-f",
+        "--fresh",
+        action="store_true",
+        help="Forcefully wipe generated state (Config, Outputs, "
+        "YoloModels, QuantizeDataset) and create a fresh "
+        "default setup",
+    )
     args = parser.parse_args()
     on_boot(install_service=args.service, fresh=args.fresh, wait=args.wait)
 
@@ -490,6 +528,7 @@ def main():
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)
+
 
 if __name__ == "__main__":
     main()

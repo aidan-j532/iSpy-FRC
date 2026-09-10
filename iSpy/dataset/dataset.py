@@ -22,15 +22,17 @@ _VALIDATION_KEYWORDS = [
 _SEARCH_FALLBACK_ENV = "ISPY_ALLOW_SEARCH_FALLBACK"
 
 _FORMAT_CALIB_COUNTS = {
-    "rknn": 20,      # KL-divergence wants broader coverage
-    "tflite": 100,     # simpler min/max calibration, converges faster
+    "rknn": 20,  # KL-divergence wants broader coverage
+    "tflite": 100,  # simpler min/max calibration, converges faster
     "openvino": 300,
-    "engine": 500,     # tensorrt entropy calibration wants more samples
-    "coreml": 0,       # float16, no calibration needed
+    "engine": 500,  # tensorrt entropy calibration wants more samples
+    "coreml": 0,  # float16, no calibration needed
 }
+
 
 def calib_count_for_format(target_format: str, default: int = _CALIB_COUNT) -> int:
     return _FORMAT_CALIB_COUNTS.get(target_format, default)
+
 
 def _download_release_images(
     folder: Path,
@@ -63,7 +65,11 @@ def _download_release_images(
                 path = Path(member.filename)
 
                 if path.suffix.lower() not in {
-                    ".jpg", ".jpeg", ".png", ".bmp", ".tiff"
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".bmp",
+                    ".tiff",
                 }:
                     continue
 
@@ -80,6 +86,7 @@ def _download_release_images(
     logger.info("Got %d calibration images from release", len(downloaded))
     return downloaded
 
+
 def _extract_release_url(keywords: list[str] | None) -> str | None:
     if not keywords:
         return None
@@ -88,14 +95,18 @@ def _extract_release_url(keywords: list[str] | None) -> str | None:
             return kw
     return None
 
+
 def _session():
     import requests as _requests
+
     sess = _requests.Session()
     # TLS verification stays ON (requests default) - downloads come from
     # GitHub/NuGet-style HTTPS endpoints we have no reason to distrust.
     for scheme in ("http://", "https://"):
         adapter = sess.get_adapter(scheme)
-        adapter.max_retries = _requests.adapters.Retry(total=1, backoff_factor=0.5, raise_on_status=False)
+        adapter.max_retries = _requests.adapters.Retry(
+            total=1, backoff_factor=0.5, raise_on_status=False
+        )
     return sess
 
 
@@ -114,7 +125,7 @@ def _search_urls_ddg(sess, keyword: str, count: int, headers: dict) -> list[str]
 
         vqd = None
         patterns = [
-            r'vqd=([\w-]+)&',
+            r"vqd=([\w-]+)&",
             r'"vqd"\s*:\s*"([\w-]+)"',
             r'vqd["\']?\s*:\s*["\']([\w-]{60,})["\']',
             r'vqd=([\w-]{60,})(?:&|"|\s|$)',
@@ -130,7 +141,7 @@ def _search_urls_ddg(sess, keyword: str, count: int, headers: dict) -> list[str]
                     vqd = candidate
                     break
         if not vqd:
-            for token in re.findall(r'[\w-]{60,}', html):
+            for token in re.findall(r"[\w-]{60,}", html):
                 vqd = token
                 break
 
@@ -183,7 +194,9 @@ def _search_urls_bing(sess, keyword: str, count: int, headers: dict) -> list[str
 
         for attr in ("src", "data-src", "data-src2", "data-original"):
             for m in re.finditer(
-                rf'{attr}="(https?://[^"]+)"', html, re.IGNORECASE,
+                rf'{attr}="(https?://[^"]+)"',
+                html,
+                re.IGNORECASE,
             ):
                 u = m.group(1)
 
@@ -198,7 +211,8 @@ def _search_urls_bing(sess, keyword: str, count: int, headers: dict) -> list[str
 
         for m in re.finditer(
             r'<a[^>]+href="(https?://[^"]+)"[^>]*>',
-            html, re.IGNORECASE,
+            html,
+            re.IGNORECASE,
         ):
             u = m.group(1)
             u_clean = u.replace("&amp;", "&").replace("\\/", "/")
@@ -235,8 +249,17 @@ def _search_urls_google(sess, keyword: str, count: int, headers: dict) -> list[s
 
         img_urls = set()
 
-        for m in re.finditer(r'"(https?://[^"]+\.(?:jpg|jpeg|png|bmp|gif|webp)(?:\?[^"]*)?)"', html, re.IGNORECASE):
-            u = m.group(1).replace("\\/", "/").replace("\\u0026", "&").replace("\\x26", "&")
+        for m in re.finditer(
+            r'"(https?://[^"]+\.(?:jpg|jpeg|png|bmp|gif|webp)(?:\?[^"]*)?)"',
+            html,
+            re.IGNORECASE,
+        ):
+            u = (
+                m.group(1)
+                .replace("\\/", "/")
+                .replace("\\u0026", "&")
+                .replace("\\x26", "&")
+            )
             if any(ext in u.lower() for ext in [".jpg", ".jpeg", ".png"]):
                 if "google" not in u.lower() and "gstatic" not in u.lower():
                     img_urls.add(u)
@@ -263,8 +286,10 @@ def _search_urls_google(sess, keyword: str, count: int, headers: dict) -> list[s
 
     return found
 
+
 def get_active_dataset_dir(default_root: str = "QuantizeDataset") -> Path:
     return Path.cwd() / default_root
+
 
 def _is_host_reachable(host: str, timeout: int = 3) -> bool:
     try:
@@ -275,9 +300,13 @@ def _is_host_reachable(host: str, timeout: int = 3) -> bool:
         logger.debug("Host %s unreachable: %s", host, e)
         return False
 
+
 def _search_fallback_allowed() -> bool:
     return os.environ.get(_SEARCH_FALLBACK_ENV, "").strip().lower() in (
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     )
 
 
@@ -341,7 +370,11 @@ def _collect_urls(keywords: list[str], count: int) -> tuple[list[str], dict, obj
                 continue
 
     if len(all_urls) < count:
-        logger.warning("Only collected %d / %d image URLs from search engines", len(all_urls), count)
+        logger.warning(
+            "Only collected %d / %d image URLs from search engines",
+            len(all_urls),
+            count,
+        )
 
     return all_urls, dl_headers_base, sess
 
@@ -349,11 +382,17 @@ def _collect_urls(keywords: list[str], count: int) -> tuple[list[str], dict, obj
 def _validate_image(image_path: Path) -> bool:
     try:
         from PIL import Image
+
         img = Image.open(image_path)
         img.load()
 
         if img.width < 32 or img.height < 32:
-            logger.debug("Rejecting %s: too small (%dx%d)", image_path.name, img.width, img.height)
+            logger.debug(
+                "Rejecting %s: too small (%dx%d)",
+                image_path.name,
+                img.width,
+                img.height,
+            )
             return False
 
         needs_save = image_path.suffix.lower() != ".jpg"
@@ -375,7 +414,9 @@ def _validate_image(image_path: Path) -> bool:
 
         extrema = img.getextrema()
         if all(mn == mx for mn, mx in extrema):
-            logger.debug("Rejecting %s: blank image (all pixels identical)", image_path.name)
+            logger.debug(
+                "Rejecting %s: blank image (all pixels identical)", image_path.name
+            )
             return False
 
         return True
@@ -391,15 +432,20 @@ def _generate_synthetic_images(
     target_dir: str = "",
 ) -> list[Path]:
     import numpy as np
+
     try:
         import cv2
     except ImportError:
         try:
             from PIL import Image, ImageDraw
         except ImportError:
-            logger.error("Cannot generate synthetic images: neither OpenCV nor Pillow available")
+            logger.error(
+                "Cannot generate synthetic images: neither OpenCV nor Pillow available"
+            )
             return []
-        return _generate_synthetic_images_pil(folder, count, imgsz, target_dir=target_dir)
+        return _generate_synthetic_images_pil(
+            folder, count, imgsz, target_dir=target_dir
+        )
 
     generated: list[Path] = []
     images_dir = folder / target_dir
@@ -473,7 +519,11 @@ def _generate_synthetic_images_pil(
             y1 = random.randint(0, imgsz - 1)
             x2 = random.randint(x1, imgsz - 1)
             y2 = random.randint(y1, imgsz - 1)
-            fill = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+            fill = (
+                random.randint(0, 255),
+                random.randint(0, 255),
+                random.randint(0, 255),
+            )
             shape = random.choice(["rect", "ellipse"])
             if shape == "rect":
                 draw.rectangle([x1, y1, x2, y2], fill=fill)
@@ -499,7 +549,9 @@ def _download_images(
     downloaded: list[Path] = []
 
     all_urls, dl_headers_base, sess = _collect_urls(keywords, count)
-    logger.info("Collected %d image URLs, attempting to download %d", len(all_urls), count)
+    logger.info(
+        "Collected %d image URLs, attempting to download %d", len(all_urls), count
+    )
 
     for url in all_urls:
         if len(downloaded) >= count:
@@ -535,7 +587,13 @@ def _download_images(
 
             if _validate_image(dest):
                 downloaded.append(dest)
-                logger.info("Downloaded %d/%d: %s (%.0f KB)", len(downloaded), count, dest.name, len(resp.content) / 1024)
+                logger.info(
+                    "Downloaded %d/%d: %s (%.0f KB)",
+                    len(downloaded),
+                    count,
+                    dest.name,
+                    len(resp.content) / 1024,
+                )
             else:
                 dest.unlink(missing_ok=True)
         except Exception:
@@ -543,13 +601,26 @@ def _download_images(
 
     if len(downloaded) < count:
         needed = count - len(downloaded)
-        logger.warning("Only downloaded %d / %d real images. Generating %d synthetic calibration images...", len(downloaded), count, needed)
-        synthetic = _generate_synthetic_images(folder, needed, _IMGSZ, target_dir=target_dir)
+        logger.warning(
+            "Only downloaded %d / %d real images. Generating %d synthetic calibration images...",
+            len(downloaded),
+            count,
+            needed,
+        )
+        synthetic = _generate_synthetic_images(
+            folder, needed, _IMGSZ, target_dir=target_dir
+        )
         downloaded.extend(synthetic)
-        logger.info("Total calibration images: %d (%d real + %d synthetic)", len(downloaded), len(downloaded) - len(synthetic), len(synthetic))
+        logger.info(
+            "Total calibration images: %d (%d real + %d synthetic)",
+            len(downloaded),
+            len(downloaded) - len(synthetic),
+            len(synthetic),
+        )
 
     logger.info("Downloaded %d images", len(downloaded))
     return downloaded
+
 
 def _find_images(folder: Path):
     imgs = []
@@ -561,7 +632,8 @@ def _find_images(folder: Path):
 def _rebuild_dataset_txt(ds: Path, root: Path | None = None):
     search_root = root or ds
     imgs = [
-        p for p in _find_images(search_root)
+        p
+        for p in _find_images(search_root)
         if "valid" not in p.relative_to(search_root).parts
     ]
     if imgs:
@@ -603,7 +675,9 @@ def add_validate_images(
     if len(existing) >= validation_count:
         return validation_dir
 
-    logger.info("Preparing %d validation images under %s", validation_count, validation_dir)
+    logger.info(
+        "Preparing %d validation images under %s", validation_count, validation_dir
+    )
     release_url = _extract_release_url(keywords)
     _download_release_images(
         ds,
@@ -655,10 +729,7 @@ def add_validate_images(
 
 
 def _find_train_images(ds: Path) -> list[Path]:
-    return [
-        p for p in _find_images(ds)
-        if "valid" not in p.relative_to(ds).parts
-    ]
+    return [p for p in _find_images(ds) if "valid" not in p.relative_to(ds).parts]
 
 
 def prepare_quantization_dataset(
@@ -687,7 +758,10 @@ def prepare_quantization_dataset(
     else:
         release_url = _extract_release_url(keywords)
         if release_url:
-            logger.info("Keyword is a release URL - downloading calibration images from %s", release_url)
+            logger.info(
+                "Keyword is a release URL - downloading calibration images from %s",
+                release_url,
+            )
             _download_release_images(ds, count, release_url=release_url, target_dir="")
             existing = _find_train_images(ds)
         else:
@@ -699,13 +773,22 @@ def prepare_quantization_dataset(
                 logger.info(
                     "Have %d/%d calibration images from release download; "
                     "fetching %d more via keyword search (%s) instead of discarding them.",
-                    len(existing), count, remaining, ", ".join(keywords),
+                    len(existing),
+                    count,
+                    remaining,
+                    ", ".join(keywords),
                 )
-                _download_images(keywords, ds, remaining, boot=boot, start_index=len(existing))
+                _download_images(
+                    keywords, ds, remaining, boot=boot, start_index=len(existing)
+                )
                 existing = _find_train_images(ds)
 
         if len(existing) < count:
-            logger.warning("Only have %d / %d images. Generating synthetic fallback...", len(existing), count)
+            logger.warning(
+                "Only have %d / %d images. Generating synthetic fallback...",
+                len(existing),
+                count,
+            )
             _generate_synthetic_images(ds, count - len(existing), imgsz, target_dir="")
 
         _rebuild_dataset_txt(ds)
@@ -713,8 +796,11 @@ def prepare_quantization_dataset(
     add_validate_images(ds, count=count, imgsz=imgsz, boot=boot, keywords=keywords)
 
     final_count = len(_find_train_images(ds))
-    logger.info("Quantization dataset ready at %s (%d images)", ds.resolve(), final_count)
+    logger.info(
+        "Quantization dataset ready at %s (%d images)", ds.resolve(), final_count
+    )
     return ds
+
 
 def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
     ds = Path(dataset_path)
@@ -741,6 +827,7 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
 
     if imgs:
         from PIL import Image
+
         bad = 0
         for img_path in imgs:
             try:
@@ -756,7 +843,8 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
     dataset_txt = ds / "dataset.txt"
     if dataset_txt.exists():
         lines = [
-            l.strip() for l in dataset_txt.read_text().splitlines()
+            l.strip()
+            for l in dataset_txt.read_text().splitlines()
             if l.strip() and not l.strip().startswith("#")
         ]
         if not lines:
@@ -764,7 +852,10 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
         else:
             missing = [l for l in lines if not (ds / l).exists()]
             if missing:
-                issues.append(f"RKNN dataset.txt: {len(missing)} image(s) missing: {missing[:3]}" + ("..." if len(missing) > 3 else ""))
+                issues.append(
+                    f"RKNN dataset.txt: {len(missing)} image(s) missing: {missing[:3]}"
+                    + ("..." if len(missing) > 3 else "")
+                )
             else:
                 result["rknn_ready"] = True
     else:
@@ -774,6 +865,7 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
     if data_yaml.exists():
         try:
             from ruamel.yaml import YAML
+
             yaml = YAML()
             with open(data_yaml) as f:
                 cfg = yaml.load(f) or {}
@@ -783,10 +875,17 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
                 if not tp.is_absolute():
                     tp = ds / tp
                 if not tp.exists():
-                    issues.append(f"data.yaml points to non-existent path: {train_path}")
+                    issues.append(
+                        f"data.yaml points to non-existent path: {train_path}"
+                    )
                 else:
                     val_imgs = list(tp.rglob("*"))
-                    img_val = [v for v in val_imgs if v.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp", ".tiff")]
+                    img_val = [
+                        v
+                        for v in val_imgs
+                        if v.suffix.lower()
+                        in (".jpg", ".jpeg", ".png", ".bmp", ".tiff")
+                    ]
                     if not img_val:
                         issues.append(f"data.yaml path '{train_path}' has no images")
                     else:
@@ -796,7 +895,9 @@ def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
         except Exception as e:
             issues.append(f"data.yaml parse error: {e}")
     else:
-        issues.append("Missing data.yaml (required for TFLite/OpenVINO int8 quantization)")
+        issues.append(
+            "Missing data.yaml (required for TFLite/OpenVINO int8 quantization)"
+        )
 
     if issues:
         result["valid"] = False

@@ -150,7 +150,9 @@ class SetupWizardModule(WebModule):
     plugin_name = "setup_wizard"
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/setup", "setup_page", lambda: Response(_HTML, mimetype="text/html"))
+        flask_app.add_url_rule(
+            "/setup", "setup_page", lambda: Response(_HTML, mimetype="text/html")
+        )
         flask_app.add_url_rule("/api/setup", "api_setup", self._save, methods=["POST"])
 
     def _save(self):
@@ -167,17 +169,27 @@ class SetupWizardModule(WebModule):
             if "use_network_tables" in data or "network_tables_ip" in data:
                 if data.get("use_network_tables"):
                     config.update_addon_settings(
-                        "utilities", "network_table_handler",
-                        {"network_tables_ip": data.get("network_tables_ip", "10.0.0.2")},
+                        "utilities",
+                        "network_table_handler",
+                        {
+                            "network_tables_ip": data.get(
+                                "network_tables_ip", "10.0.0.2"
+                            )
+                        },
                         save=False,
                     )
-                    config.enable_addon("utilities", "network_table_handler", save=False)
+                    config.enable_addon(
+                        "utilities", "network_table_handler", save=False
+                    )
                 else:
-                    config.disable_addon("utilities", "network_table_handler", save=False)
+                    config.disable_addon(
+                        "utilities", "network_table_handler", save=False
+                    )
             config.set("camera_configs", data["camera_configs"])
             # normalize entries (nested pipeline layout, default vision_model
             # for model-backed pipelines) so the first run is valid
             from iSpy.config.iSpyConfig import ensure_camera_entries_ready
+
             ensure_camera_entries_ready(config.get("camera_configs", {}))
             config.save()
             return jsonify(success=True)

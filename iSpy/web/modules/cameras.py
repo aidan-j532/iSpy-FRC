@@ -29,23 +29,23 @@ from iSpy.vision.Cameras import OpenCVCamera, TelloCamera
 from iSpy.vision.Cameras.base import CameraOpenTimeout
 
 COCO17_OBJECT_POINTS = [
-    [ 0.00,  0.62,  0.00],  # 0  nose
-    [ 0.02,  0.67,  0.00],  # 1  left_eye
-    [-0.02,  0.67,  0.00],  # 2  right_eye
-    [ 0.05,  0.65,  0.00],  # 3  left_ear
-    [-0.05,  0.65,  0.00],  # 4  right_ear
-    [ 0.17,  0.45,  0.00],  # 5  left_shoulder
-    [-0.17,  0.45,  0.00],  # 6  right_shoulder
-    [ 0.30,  0.22,  0.00],  # 7  left_elbow
-    [-0.30,  0.22,  0.00],  # 8  right_elbow
-    [ 0.35,  0.00,  0.00],  # 9  left_wrist
-    [-0.35,  0.00,  0.00],  # 10 right_wrist
-    [ 0.10, -0.05,  0.00],  # 11 left_hip
-    [-0.10, -0.05,  0.00],  # 12 right_hip
-    [ 0.10, -0.40,  0.00],  # 13 left_knee
-    [-0.10, -0.40,  0.00],  # 14 right_knee
-    [ 0.10, -0.75,  0.00],  # 15 left_ankle
-    [-0.10, -0.75,  0.00],  # 16 right_ankle
+    [0.00, 0.62, 0.00],  # 0  nose
+    [0.02, 0.67, 0.00],  # 1  left_eye
+    [-0.02, 0.67, 0.00],  # 2  right_eye
+    [0.05, 0.65, 0.00],  # 3  left_ear
+    [-0.05, 0.65, 0.00],  # 4  right_ear
+    [0.17, 0.45, 0.00],  # 5  left_shoulder
+    [-0.17, 0.45, 0.00],  # 6  right_shoulder
+    [0.30, 0.22, 0.00],  # 7  left_elbow
+    [-0.30, 0.22, 0.00],  # 8  right_elbow
+    [0.35, 0.00, 0.00],  # 9  left_wrist
+    [-0.35, 0.00, 0.00],  # 10 right_wrist
+    [0.10, -0.05, 0.00],  # 11 left_hip
+    [-0.10, -0.05, 0.00],  # 12 right_hip
+    [0.10, -0.40, 0.00],  # 13 left_knee
+    [-0.10, -0.40, 0.00],  # 14 right_knee
+    [0.10, -0.75, 0.00],  # 15 left_ankle
+    [-0.10, -0.75, 0.00],  # 16 right_ankle
 ]
 
 _STALE_EVICT_S = 10.0
@@ -88,9 +88,14 @@ _SETTING_ALIASES = {"quantized": "quantize", "auto_opt": "optimize"}
 # image tuning knobs (sliders in the camera lightbox). these live on the cam
 # entry like the other capture keys; the live Camera applies them immediately
 _TUNING_KEYS = (
-    "brightness", "contrast",
-    "saturation", "white_balance", "tint", "gamma",
-    "exposure_time", "gain",
+    "brightness",
+    "contrast",
+    "saturation",
+    "white_balance",
+    "tint",
+    "gamma",
+    "exposure_time",
+    "gain",
 )
 _TUNING_DEFAULTS = {
     "brightness": 0,
@@ -115,9 +120,11 @@ def _camera_calibrated(entry: dict) -> bool:
     if not isinstance(entry, dict):
         return False
     calib = entry.get("calibration") or {}
-    return bool(
-        calib.get("camera_matrix") and calib.get("dist_coeffs") is not None
-    ) or bool(calib.get("focal_length_pixels")) or _to_float(calib.get("fov")) > 0
+    return (
+        bool(calib.get("camera_matrix") and calib.get("dist_coeffs") is not None)
+        or bool(calib.get("focal_length_pixels"))
+        or _to_float(calib.get("fov")) > 0
+    )
 
 
 def _decode_base64_frame(image_b64):
@@ -134,6 +141,7 @@ def _decode_base64_frame(image_b64):
 def _pipeline_schema_keys(pipeline_name: str) -> set:
     try:
         from iSpy.vision.pipelines import get_pipeline_classes
+
         cls = get_pipeline_classes().get(pipeline_name)
     except Exception:
         cls = None
@@ -155,6 +163,7 @@ def _prune_stale_pipeline_settings(entry: dict) -> None:
         return
     try:
         from iSpy.vision.pipelines import get_pipeline_classes
+
         foreign = set()
         for name, cls in get_pipeline_classes().items():
             if name == pipeline_name:
@@ -179,6 +188,7 @@ def _vision_model_target_format(settings: dict) -> str:
         return fmt
     try:
         from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+
         return ObjectDetectionPipeline.recommended_format()
     except Exception:
         return "onnx"
@@ -235,16 +245,18 @@ def _windows_cameras_from_registry():
             subkey_pos += 1
             if "#{" not in iface:
                 continue
-            raw_hw = iface[:iface.find("#{")]
+            raw_hw = iface[: iface.find("#{")]
             # USB cameras expose two UVC interfaces (MI_00 video, MI_01 metadata)
             # - strip &MI_XX so they collapse to the same physical device
             dedup_key = re.sub(r"&MI_\w+", "", raw_hw, flags=re.IGNORECASE)
-            devices.append({
-                "index": camera_index,
-                "name": _windows_camera_name(iface) or f"Camera {camera_index}",
-                "hw_id": raw_hw,
-                "dedup_key": dedup_key,
-            })
+            devices.append(
+                {
+                    "index": camera_index,
+                    "name": _windows_camera_name(iface) or f"Camera {camera_index}",
+                    "hw_id": raw_hw,
+                    "dedup_key": dedup_key,
+                }
+            )
             camera_index += 1
     finally:
         winreg.CloseKey(key)
@@ -263,7 +275,7 @@ def _windows_camera_name(iface):
     body = iface[:end]
     for prefix in ("##?#", "#?#"):
         if body.startswith(prefix):
-            body = body[len(prefix):]
+            body = body[len(prefix) :]
             break
 
     def _read_name(enum_path):
@@ -327,8 +339,13 @@ def _windows_camera_name(iface):
 
 # names windows hands out when it has nothing better - treat as unknown and keep digging
 _GENERIC_WINDOWS_NAMES = {
-    "", "usb video device", "usb camera", "camera", "uvc camera",
-    "video capture device", "usb2.0 camera",
+    "",
+    "usb video device",
+    "usb camera",
+    "camera",
+    "uvc camera",
+    "video capture device",
+    "usb2.0 camera",
 }
 
 # v4l2 capability bits (videodev2.h) - caps u32 lives at offset 84 in QUERYCAP
@@ -371,7 +388,11 @@ def _linux_is_known_non_camera(video_path):
     # e.g. /dev/video-dec0, /dev/video-enc0 — the part after "video-" starts
     # with a non-digit which real camera nodes never do
     basename = os.path.basename(video_path).lower()
-    if basename.startswith("video-") and len(basename) > 6 and not basename[6].isdigit():
+    if (
+        basename.startswith("video-")
+        and len(basename) > 6
+        and not basename[6].isdigit()
+    ):
         return True
     return False
 
@@ -408,7 +429,8 @@ def _linux_sysfs_name(video_path):
     try:
         with open(
             f"/sys/class/video4linux/video{m.group(1)}/name",
-            encoding="utf-8", errors="replace",
+            encoding="utf-8",
+            errors="replace",
         ) as f:
             return f.read().strip() or None
     except OSError:
@@ -419,7 +441,9 @@ def _linux_device_groups():
     try:
         result = subprocess.run(
             ["v4l2-ctl", "--list-devices"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
     except Exception:
         result = None
@@ -444,6 +468,7 @@ def _linux_device_groups():
         groups.setdefault(key, []).append(path)
     return [(None, nodes) for nodes in groups.values()]
 
+
 class CamerasModule(WebModule):
     plugin_name = "cameras"
 
@@ -466,40 +491,166 @@ class CamerasModule(WebModule):
         self._sse_clients: list = []
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/cameras", "cameras_page", lambda: render_template("cameras.html"))
+        flask_app.add_url_rule(
+            "/cameras", "cameras_page", lambda: render_template("cameras.html")
+        )
         flask_app.add_url_rule("/api/cameras", "api_cameras", self._api_cameras)
-        flask_app.add_url_rule("/api/cameras/discover", "api_cameras_discover", self._discover)
-        flask_app.add_url_rule("/api/cameras/sources", "api_cameras_sources", self._sources)
+        flask_app.add_url_rule(
+            "/api/cameras/discover", "api_cameras_discover", self._discover
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/sources", "api_cameras_sources", self._sources
+        )
         flask_app.add_url_rule("/video/<camera_name>", "video_feed", self._video_feed)
-        flask_app.add_url_rule("/api/cameras/config", "api_cameras_config_add", self._add_camera, methods=["POST"])
-        flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_get", self._get_camera, methods=["GET"])
-        flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_update", self._update_camera, methods=["PUT"])
-        flask_app.add_url_rule("/api/cameras/config/<cam_name>", "api_cameras_config_delete", self._remove_camera, methods=["DELETE"])
-        flask_app.add_url_rule("/api/cameras/profile/<device_id>", "api_cameras_profile", self._get_profile, methods=["GET"])
-        flask_app.add_url_rule("/api/cameras/tuning/<cam_name>", "api_cameras_tuning_get", self._tuning_get, methods=["GET"])
-        flask_app.add_url_rule("/api/cameras/tuning/<cam_name>", "api_cameras_tuning_set", self._tuning_set, methods=["POST"])
-        flask_app.add_url_rule("/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines)
-        flask_app.add_url_rule("/api/camera_schemas", "api_camera_schemas", self._camera_schemas)
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>", "api_cameras_calibration_get", self._calibration_get, methods=["GET"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>", "api_cameras_calibration_reset", self._calibration_reset, methods=["DELETE"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/focal", "api_cameras_calibration_focal", self._calibration_focal, methods=["POST"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/capture", "api_cameras_charuco_capture", self._charuco_capture, methods=["POST"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/status", "api_cameras_charuco_status", self._charuco_status)
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco", "api_cameras_charuco_clear", self._charuco_clear, methods=["DELETE"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/charuco/finish", "api_cameras_charuco_finish", self._charuco_finish, methods=["POST"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/feed", "api_cameras_calibration_feed", self._calibration_feed)
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/mode", "api_cameras_calibration_mode", self._calibration_mode, methods=["POST"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/heartbeat", "api_cameras_calibration_heartbeat", self._calibration_heartbeat, methods=["POST"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/auto", "api_cameras_auto_set", self._auto_set, methods=["POST"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/auto/status", "api_cameras_auto_status", self._auto_status)
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_get", self._pnp_get, methods=["GET"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_save", self._pnp_save, methods=["POST"])
-        flask_app.add_url_rule("/api/cameras/calibration/<cam_name>/pnp", "api_cameras_pnp_clear", self._pnp_clear, methods=["DELETE"])
-        flask_app.add_url_rule("/api/cameras/calibration/board", "api_calibration_board_pdf", self._calibration_board_pdf)
-        flask_app.add_url_rule("/api/cameras/events", "api_cameras_events", self._sse_stream)
+        flask_app.add_url_rule(
+            "/api/cameras/config",
+            "api_cameras_config_add",
+            self._add_camera,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/config/<cam_name>",
+            "api_cameras_config_get",
+            self._get_camera,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/config/<cam_name>",
+            "api_cameras_config_update",
+            self._update_camera,
+            methods=["PUT"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/config/<cam_name>",
+            "api_cameras_config_delete",
+            self._remove_camera,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/profile/<device_id>",
+            "api_cameras_profile",
+            self._get_profile,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/tuning/<cam_name>",
+            "api_cameras_tuning_get",
+            self._tuning_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/tuning/<cam_name>",
+            "api_cameras_tuning_set",
+            self._tuning_set,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines
+        )
+        flask_app.add_url_rule(
+            "/api/camera_schemas", "api_camera_schemas", self._camera_schemas
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>",
+            "api_cameras_calibration_get",
+            self._calibration_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>",
+            "api_cameras_calibration_reset",
+            self._calibration_reset,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/focal",
+            "api_cameras_calibration_focal",
+            self._calibration_focal,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/charuco/capture",
+            "api_cameras_charuco_capture",
+            self._charuco_capture,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/charuco/status",
+            "api_cameras_charuco_status",
+            self._charuco_status,
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/charuco",
+            "api_cameras_charuco_clear",
+            self._charuco_clear,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/charuco/finish",
+            "api_cameras_charuco_finish",
+            self._charuco_finish,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/feed",
+            "api_cameras_calibration_feed",
+            self._calibration_feed,
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/mode",
+            "api_cameras_calibration_mode",
+            self._calibration_mode,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/heartbeat",
+            "api_cameras_calibration_heartbeat",
+            self._calibration_heartbeat,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/auto",
+            "api_cameras_auto_set",
+            self._auto_set,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/auto/status",
+            "api_cameras_auto_status",
+            self._auto_status,
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/pnp",
+            "api_cameras_pnp_get",
+            self._pnp_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/pnp",
+            "api_cameras_pnp_save",
+            self._pnp_save,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/pnp",
+            "api_cameras_pnp_clear",
+            self._pnp_clear,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/board",
+            "api_calibration_board_pdf",
+            self._calibration_board_pdf,
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/events", "api_cameras_events", self._sse_stream
+        )
 
     def start(self):
-        if self._auto_discover_thread is None or not self._auto_discover_thread.is_alive():
+        if (
+            self._auto_discover_thread is None
+            or not self._auto_discover_thread.is_alive()
+        ):
             self._auto_discover_stop.clear()
             self._auto_discover_thread = threading.Thread(
                 target=self._auto_discover_loop, daemon=True, name="AutoDiscover"
@@ -524,12 +675,18 @@ class CamerasModule(WebModule):
                     new_ids = current_ids - last_device_ids
                     removed_ids = last_device_ids - current_ids
                     last_device_ids = current_ids
-                    self._push_sse({
-                        "type": "cameras_changed",
-                        "devices": devices,
-                        "new": [d for d in devices if (d.get("device_id") or d.get("path")) in new_ids],
-                        "removed_ids": list(removed_ids),
-                    })
+                    self._push_sse(
+                        {
+                            "type": "cameras_changed",
+                            "devices": devices,
+                            "new": [
+                                d
+                                for d in devices
+                                if (d.get("device_id") or d.get("path")) in new_ids
+                            ],
+                            "removed_ids": list(removed_ids),
+                        }
+                    )
             except Exception:
                 pass
 
@@ -550,8 +707,12 @@ class CamerasModule(WebModule):
                 with self._sse_lock:
                     if q in self._sse_clients:
                         self._sse_clients.remove(q)
-        return Response(generate(), mimetype="text/event-stream",
-                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     def _push_sse(self, payload: dict):
         with self._sse_lock:
@@ -574,15 +735,24 @@ class CamerasModule(WebModule):
         if not isinstance(vm, dict) or not vm.get("file_path"):
             return None, None, "Camera has no vision_model configured"
         from iSpy.vision.metadata import read_metadata
+
         model_path = Path(vm["file_path"])
         if not model_path.is_absolute():
             model_path = Path.cwd() / model_path
         meta = read_metadata(model_path) or {}
         if meta.get("task") != "pose":
-            return vm, None, "Model is not a pose model - PnP needs keypoints (task=pose)"
+            return (
+                vm,
+                None,
+                "Model is not a pose model - PnP needs keypoints (task=pose)",
+            )
         kpt_shape = meta.get("kpt_shape")
         if not kpt_shape:
-            return vm, None, "Model metadata has no kpt_shape - re-run boot to regenerate the sidecar"
+            return (
+                vm,
+                None,
+                "Model metadata has no kpt_shape - re-run boot to regenerate the sidecar",
+            )
         return vm, int(kpt_shape[0]), None
 
     def _pnp_get(self, cam_name):
@@ -624,14 +794,24 @@ class CamerasModule(WebModule):
         camera_matrix = calib.get("camera_matrix")
         dist_coeffs = calib.get("dist_coeffs")
         if not camera_matrix or dist_coeffs is None:
-            return jsonify(error="No ChArUco intrinsics on this camera yet - run that calibration first"), 400
+            return jsonify(
+                error="No ChArUco intrinsics on this camera yet - run that calibration first"
+            ), 400
 
         object_points = data.get("object_points")
         if not isinstance(object_points, list) or len(object_points) != num_kpts:
-            return jsonify(error=f"object_points must have exactly {num_kpts} [x,y,z] entries"), 400
+            return jsonify(
+                error=f"object_points must have exactly {num_kpts} [x,y,z] entries"
+            ), 400
         for pt in object_points:
-            if not (isinstance(pt, list) and len(pt) == 3 and all(isinstance(v, (int, float)) for v in pt)):
-                return jsonify(error="Each object_points entry must be [x, y, z] numbers"), 400
+            if not (
+                isinstance(pt, list)
+                and len(pt) == 3
+                and all(isinstance(v, (int, float)) for v in pt)
+            ):
+                return jsonify(
+                    error="Each object_points entry must be [x, y, z] numbers"
+                ), 400
 
         mode = data.get("mode", "flexible")
         if mode not in ("flexible", "rigid"):
@@ -657,7 +837,9 @@ class CamerasModule(WebModule):
         config = self.context["config"]
         config.set("camera_configs", cams)
         config.save()
-        return jsonify(success=True, pnp=vm_entry["pnp"], note="Restart vision to apply.")
+        return jsonify(
+            success=True, pnp=vm_entry["pnp"], note="Restart vision to apply."
+        )
 
     def _pnp_clear(self, cam_name):
         cams, key, entry = self._find_camera_entry(cam_name)
@@ -817,6 +999,7 @@ class CamerasModule(WebModule):
         # Serve each camera-source's config_schema() straight from the backend
         # so the frontend never hardcodes a second copy that can drift (BUG 5).
         from iSpy.vision.Cameras import get_camera_classes
+
         schemas = {}
         for cam_type, cls in get_camera_classes().items():
             try:
@@ -852,7 +1035,9 @@ class CamerasModule(WebModule):
             pipeline=get_pipeline_name(entry),
             calibration=entry.get("calibration") or {},
             charuco_captures=len(session.get("charuco_captures", [])),
-            charuco_pattern=session.get("charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)),
+            charuco_pattern=session.get(
+                "charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)
+            ),
             charuco_dict=session.get("charuco_dict"),
             auto_enabled=bool(session.get("auto_enabled", True)),
         )
@@ -863,11 +1048,23 @@ class CamerasModule(WebModule):
             return jsonify(error="Camera not found"), 404
         with self.calib_lock:
             self.calib_sessions.pop(key, None)
-        saved = self._save_calibration(key, {
-            "distance": 0, "game_piece_size": 0, "size": 0, "fov": 0,
-        })
-        for stale in ("camera_matrix", "dist_coeffs", "resolution", "rms",
-                      "count", "focal_length_pixels"):
+        saved = self._save_calibration(
+            key,
+            {
+                "distance": 0,
+                "game_piece_size": 0,
+                "size": 0,
+                "fov": 0,
+            },
+        )
+        for stale in (
+            "camera_matrix",
+            "dist_coeffs",
+            "resolution",
+            "rms",
+            "count",
+            "focal_length_pixels",
+        ):
             saved.pop(stale, None)
         config = self.context["config"]
         entry["calibration"] = saved
@@ -882,8 +1079,12 @@ class CamerasModule(WebModule):
             cam_calibration.generate_calibration_board_pdf(str(pdf_path))
         if not pdf_path.exists():
             return jsonify(error="Calibration board PDF not available"), 404
-        return send_file(str(pdf_path), mimetype="application/pdf",
-                         as_attachment=True, download_name="calibration_board.pdf")
+        return send_file(
+            str(pdf_path),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name="calibration_board.pdf",
+        )
 
     def _calibration_focal(self, cam_name):
         data = request.get_json(force=True) or {}
@@ -900,20 +1101,22 @@ class CamerasModule(WebModule):
             ), 400
         focal_px = cam_calibration.focal_from_object(real_size, distance, pixel_height)
         fov_deg = cam_calibration.fov_from_focal(focal_px, frame_width)
-        saved = self._save_calibration(key, {
-            "distance": round(distance, 4),
-            "game_piece_size": round(real_size, 4),
-            "size": round(pixel_height, 2),
-            "fov": round(fov_deg, 3),
-            "focal_length_pixels": round(focal_px, 2),
-        })
+        saved = self._save_calibration(
+            key,
+            {
+                "distance": round(distance, 4),
+                "game_piece_size": round(real_size, 4),
+                "size": round(pixel_height, 2),
+                "fov": round(fov_deg, 3),
+                "focal_length_pixels": round(focal_px, 2),
+            },
+        )
         return jsonify(
             success=True,
             focal_length_px=round(focal_px, 2),
             fov_deg=round(fov_deg, 3),
             calibration=saved,
         )
-
 
     def _calibration_mode(self, cam_name):
         data = request.get_json(force=True) or {}
@@ -976,7 +1179,17 @@ class CamerasModule(WebModule):
             if session and session.get("auto_enabled"):
                 session["auto_msg"] = msg
 
-    def _auto_consider(self, key, kind, gray, corners, ids=None, pattern=None, dict_id=None, _synchronous=True):
+    def _auto_consider(
+        self,
+        key,
+        kind,
+        gray,
+        corners,
+        ids=None,
+        pattern=None,
+        dict_id=None,
+        _synchronous=True,
+    ):
         need_solve = False
         now = time.monotonic()
         with self.calib_lock:
@@ -985,7 +1198,9 @@ class CamerasModule(WebModule):
                 return
             if pattern is None:
                 pattern = tuple(
-                    session.get("charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN))
+                    session.get(
+                        "charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)
+                    )
                 )
             pattern = tuple(int(x) for x in pattern[:2])
             expected = cam_calibration.expected_charuco_corners(pattern)
@@ -1090,7 +1305,9 @@ class CamerasModule(WebModule):
             except (TypeError, ValueError):
                 dict_id = None
         return Response(
-            self._generate_calibration(cam_name, overlay=overlay, pattern=pattern, dict_id=dict_id),
+            self._generate_calibration(
+                cam_name, overlay=overlay, pattern=pattern, dict_id=dict_id
+            ),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
 
@@ -1126,7 +1343,11 @@ class CamerasModule(WebModule):
             layers = list(layers[-_MAX_OVERLAYS_DRAWN:])
         if not layers:
             return frame
-        out = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        out = (
+            frame.copy()
+            if len(frame.shape) == 3
+            else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        )
         for layer in layers:
             corners, ids, mc, mi, color = layer
             cam_calibration.draw_charuco_into(out, corners, ids, mc, mi, color=color)
@@ -1171,12 +1392,18 @@ class CamerasModule(WebModule):
                 if overlay == "charuco" and now - last_detect >= 0.1:
                     last_detect = now
                     work, scale = self._detect_workframe(frame)
-                    session_pattern, session_dict = self._charuco_session_layout(cam_name)
+                    session_pattern, session_dict = self._charuco_session_layout(
+                        cam_name
+                    )
                     effective_dict = dict_id if dict_id is not None else session_dict
                     candidates = []
                     if session_pattern is not None:
                         candidates.append(tuple(session_pattern))
-                    if pattern is not None and len(pattern) == 2 and tuple(pattern) not in candidates:
+                    if (
+                        pattern is not None
+                        and len(pattern) == 2
+                        and tuple(pattern) not in candidates
+                    ):
                         candidates.append(tuple(pattern))
                     found = False
                     matched_pattern = None
@@ -1210,21 +1437,39 @@ class CamerasModule(WebModule):
                             marker_corners, marker_ids = amc, ami
                             matched_pattern = tuple(apat)
                             matched_dict = adict
-                            self._remember_charuco_layout(cam_name, matched_pattern, adict)
+                            self._remember_charuco_layout(
+                                cam_name, matched_pattern, adict
+                            )
                     if scale != 1.0:
                         corners = self._rescale_corners(corners, 1.0 / scale)
-                        marker_corners = self._rescale_corners(marker_corners, 1.0 / scale)
+                        marker_corners = self._rescale_corners(
+                            marker_corners, 1.0 / scale
+                        )
                     if found and matched_pattern is not None:
-                        gray_full = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        gray_full = (
+                            frame
+                            if len(frame.shape) == 2
+                            else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        )
                         _, key, _ = self._find_camera_entry(cam_name)
                         key = key or cam_name
                         self._auto_consider(
-                            key, "charuco", gray_full, corners, ids,
-                            pattern=matched_pattern, dict_id=matched_dict,
+                            key,
+                            "charuco",
+                            gray_full,
+                            corners,
+                            ids,
+                            pattern=matched_pattern,
+                            dict_id=matched_dict,
                             _synchronous=False,
                         )
                     if not found:
-                        corners, ids, marker_corners, marker_ids = None, None, None, None
+                        corners, ids, marker_corners, marker_ids = (
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
                         self._auto_hint(
                             cam_name,
                             "Move the ChArUco board into view - auto capture waits for a detection",
@@ -1248,7 +1493,9 @@ class CamerasModule(WebModule):
             worker = threading.Thread(target=detection_worker, daemon=True)
             worker.start()
         try:
-            warmup_deadline = (time.monotonic() + _CALIB_FEED_WARMUP_S) if overlay == "charuco" else 0
+            warmup_deadline = (
+                (time.monotonic() + _CALIB_FEED_WARMUP_S) if overlay == "charuco" else 0
+            )
             # hold chunks until the detector's first tick so the opening frame
             # of an overlay feed is already annotated rather than raw
             while overlay == "charuco" and time.monotonic() < warmup_deadline:
@@ -1276,10 +1523,14 @@ class CamerasModule(WebModule):
                         if res.get("found"):
                             to_serve = cam_calibration.draw_charuco(
                                 to_serve,
-                                res["corners"], res["ids"],
-                                res["marker_corners"], res["marker_ids"],
+                                res["corners"],
+                                res["ids"],
+                                res["marker_corners"],
+                                res["marker_ids"],
                             )
-                    to_serve = self._draw_captured_overlays(to_serve, cam_name, "charuco")
+                    to_serve = self._draw_captured_overlays(
+                        to_serve, cam_name, "charuco"
+                    )
                 # overlay feeds are diagnostic - serve them capped in width so
                 # JPEG encode stays cheap. The plain feed (focal measurement)
                 # keeps full resolution: the UI reads the frame width from it.
@@ -1292,10 +1543,16 @@ class CamerasModule(WebModule):
                             to_serve,
                             (int(round(w * f)), int(round(to_serve.shape[0] * f))),
                         )
-                ok, buf = cv2.imencode(".jpg", serve_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                ok, buf = cv2.imencode(
+                    ".jpg", serve_frame, [cv2.IMWRITE_JPEG_QUALITY, 70]
+                )
                 if not ok:
                     continue
-                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+                yield (
+                    b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                    + buf.tobytes()
+                    + b"\r\n"
+                )
                 time.sleep(1.0 / 30)
         except GeneratorExit:
             pass
@@ -1310,7 +1567,9 @@ class CamerasModule(WebModule):
         if frame is None:
             return jsonify(found=False, message="No frame yet")
         session_pattern, session_dict = self._charuco_session_layout(cam_name)
-        preferred_pattern = session_pattern or tuple(cam_calibration.DEFAULT_CHARUCO_PATTERN)
+        preferred_pattern = session_pattern or tuple(
+            cam_calibration.DEFAULT_CHARUCO_PATTERN
+        )
         # always sweep: a compatible-but-wrong grid can match the visible
         # corners, so let the scan rank candidates instead of trusting the
         # preferred layout blindly
@@ -1333,7 +1592,9 @@ class CamerasModule(WebModule):
             "dictionary": matched_dict,
         }
         if not found:
-            payload["message"] = "Board not visible - show the whole board in frame, even lighting helps."
+            payload["message"] = (
+                "Board not visible - show the whole board in frame, even lighting helps."
+            )
         else:
             payload["message"] = (
                 f"Board detected as {matched_pattern[0]}x{matched_pattern[1]} "
@@ -1344,8 +1605,12 @@ class CamerasModule(WebModule):
     def _charuco_capture(self, cam_name):
         data = request.get_json(force=True) or {}
         image_b64 = data.get("image")
-        cols = int(_to_float(data.get("cols"), cam_calibration.DEFAULT_CHARUCO_PATTERN[0]))
-        rows = int(_to_float(data.get("rows"), cam_calibration.DEFAULT_CHARUCO_PATTERN[1]))
+        cols = int(
+            _to_float(data.get("cols"), cam_calibration.DEFAULT_CHARUCO_PATTERN[0])
+        )
+        rows = int(
+            _to_float(data.get("rows"), cam_calibration.DEFAULT_CHARUCO_PATTERN[1])
+        )
         if cols < 2 or rows < 2 or cols > 30 or rows > 30:
             return jsonify(error="Invalid ChArUco board pattern"), 400
         cams, key, entry = self._find_camera_entry(cam_name)
@@ -1370,8 +1635,8 @@ class CamerasModule(WebModule):
         kwargs = {}
         if matched_dict is not None:
             kwargs["dictionary_id"] = matched_dict
-        found, corners, ids, marker_corners, marker_ids, gray = cam_calibration.detect_charuco(
-            frame, cols, rows, **kwargs
+        found, corners, ids, marker_corners, marker_ids, gray = (
+            cam_calibration.detect_charuco(frame, cols, rows, **kwargs)
         )
         if not found:
             return jsonify(
@@ -1386,9 +1651,13 @@ class CamerasModule(WebModule):
             if matched_dict is not None:
                 session["charuco_dict"] = matched_dict
             session.setdefault("charuco_captures", []).append((gray, corners, ids))
-            session.setdefault("charuco_overlays", []).append((corners, ids, marker_corners, marker_ids, color))
+            session.setdefault("charuco_overlays", []).append(
+                (corners, ids, marker_corners, marker_ids, color)
+            )
             count = len(session["charuco_captures"])
-        return jsonify(success=True, board_found=True, captured=count, color=list(color))
+        return jsonify(
+            success=True, board_found=True, captured=count, color=list(color)
+        )
 
     def _charuco_clear(self, cam_name):
         cams, key, entry = self._find_camera_entry(cam_name)
@@ -1412,7 +1681,11 @@ class CamerasModule(WebModule):
         with self.calib_lock:
             session = self.calib_sessions.get(key) or {}
             captures = list(session.get("charuco_captures", []))
-            pattern = tuple(session.get("charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)))
+            pattern = tuple(
+                session.get(
+                    "charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)
+                )
+            )
             dict_id = session.get("charuco_dict")
         if len(captures) < 3:
             return jsonify(
@@ -1423,7 +1696,9 @@ class CamerasModule(WebModule):
             kwargs["dictionary_id"] = dict_id
         result = cam_calibration.calibrate_charuco(captures, pattern, **kwargs)
         if result is None:
-            return jsonify(error="Calibration failed - try capturing more varied frames"), 500
+            return jsonify(
+                error="Calibration failed - try capturing more varied frames"
+            ), 500
         derived = cam_calibration.derive_fov_from_intrinsics(result)
         saved = self._save_calibration(key, {**result, **derived})
         with self.calib_lock:
@@ -1433,9 +1708,13 @@ class CamerasModule(WebModule):
                 session.pop("charuco_pattern", None)
                 session.pop("auto_rms", None)
                 session.pop("auto_state", None)
-        return jsonify(success=True, result=result, fov=saved.get("fov"),
-                       focal_length_pixels=saved.get("focal_length_pixels"),
-                       calibration=saved)
+        return jsonify(
+            success=True,
+            result=result,
+            fov=saved.get("fov"),
+            focal_length_pixels=saved.get("focal_length_pixels"),
+            calibration=saved,
+        )
 
     def _add_camera(self):
         data = request.get_json(force=True) or {}
@@ -1461,7 +1740,9 @@ class CamerasModule(WebModule):
         if device_id:
             for existing in cams.values():
                 if existing.get("device_id") == device_id:
-                    return jsonify(error=f"Device already in use by camera '{existing.get('name')}'"), 409
+                    return jsonify(
+                        error=f"Device already in use by camera '{existing.get('name')}'"
+                    ), 409
 
         raw_pipeline = data.get("pipeline", "object_detection")
         if isinstance(raw_pipeline, dict):
@@ -1477,7 +1758,9 @@ class CamerasModule(WebModule):
         calibration = data.get("calibration")
         if not calibration and device_id:
             profile = (read("camera_profiles", {}) or {}).get(device_id)
-            if isinstance(profile, dict) and isinstance(profile.get("calibration"), dict):
+            if isinstance(profile, dict) and isinstance(
+                profile.get("calibration"), dict
+            ):
                 calibration = profile["calibration"]
 
         # Build cam_entry from ALL core keys provided in data
@@ -1486,7 +1769,8 @@ class CamerasModule(WebModule):
             "source": source,
             "camera_type": camera_type,
             "device_id": device_id,
-            "calibration": calibration or {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
+            "calibration": calibration
+            or {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
             "pipeline": {"name": pipeline_name, "settings": pipeline_settings},
         }
         # Copy all _CAMERA_CORE_KEYS from data if present (explicitly provided)
@@ -1532,7 +1816,10 @@ class CamerasModule(WebModule):
         if entry is not None:
             return cams, cam_name, entry
         for key, existing in cams.items():
-            if existing.get("name") == cam_name or str(existing.get("source")) == cam_name:
+            if (
+                existing.get("name") == cam_name
+                or str(existing.get("source")) == cam_name
+            ):
                 return cams, key, existing
         return None, None, None
 
@@ -1575,7 +1862,9 @@ class CamerasModule(WebModule):
                     if isinstance(value.get("settings"), dict):
                         if "vision_model" in value["settings"]:
                             model_picked = True
-                        pipeline_entry.setdefault("settings", {}).update(value["settings"])
+                        pipeline_entry.setdefault("settings", {}).update(
+                            value["settings"]
+                        )
                 continue
             if key == "name":
                 new_entry[key] = value
@@ -1603,6 +1892,7 @@ class CamerasModule(WebModule):
         pipeline_name = str(pipeline_entry.get("name") or "object_detection")
         try:
             from iSpy.vision.pipelines import get_pipeline_classes
+
             if pipeline_name not in get_pipeline_classes():
                 return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 400
         except Exception:
@@ -1613,7 +1903,9 @@ class CamerasModule(WebModule):
         if is_model_backed_pipeline(pipeline_name) and not isinstance(
             pipeline_entry.get("settings", {}).get("vision_model"), dict
         ):
-            pipeline_entry.setdefault("settings", {})["vision_model"] = default_vision_model()
+            pipeline_entry.setdefault("settings", {})["vision_model"] = (
+                default_vision_model()
+            )
 
         # a model pick must move both source_pt and file_path together, or the
         # camera keeps running the old model (stale artifact from a previous pick)
@@ -1641,7 +1933,9 @@ class CamerasModule(WebModule):
         if cam_name not in cams:
             return jsonify(error="Camera not found"), 404
         if len(cams) <= 1:
-            return jsonify(error="Cannot remove the last camera - at least one is required."), 400
+            return jsonify(
+                error="Cannot remove the last camera - at least one is required."
+            ), 400
 
         removed = cams.pop(cam_name)
         config.set("camera_configs", cams)
@@ -1679,7 +1973,9 @@ class CamerasModule(WebModule):
                 _, _, entry = self._find_camera_entry(n)
                 payload["calibrated"] = _camera_calibrated(entry)
                 payload["pipeline"] = (
-                    get_pipeline_name(entry) if isinstance(entry, dict) else "object_detection"
+                    get_pipeline_name(entry)
+                    if isinstance(entry, dict)
+                    else "object_detection"
                 )
                 inst = self.live_cameras.get(n)
                 if inst is not None and hasattr(inst, "is_ready"):
@@ -1728,7 +2024,10 @@ class CamerasModule(WebModule):
         for dev in devices:
             dev_id = dev.get("device_id")
             source = dev.get("path")
-            dev["active"] = bool(dev_id and dev_id in configured_device_ids) or str(source) in configured_sources
+            dev["active"] = (
+                bool(dev_id and dev_id in configured_device_ids)
+                or str(source) in configured_sources
+            )
 
         return jsonify(devices=devices)
 
@@ -1781,7 +2080,11 @@ class CamerasModule(WebModule):
                 ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 if not ok:
                     continue
-                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+                yield (
+                    b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                    + buf.tobytes()
+                    + b"\r\n"
+                )
                 elapsed = time.perf_counter() - t0
                 sleep_time = target_interval - elapsed
                 if sleep_time > 0:

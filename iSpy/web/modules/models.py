@@ -5,7 +5,12 @@ from werkzeug.utils import secure_filename
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.PluginStatus import require_local_or_token
 from iSpy.config.iSpyConfig import get_pipeline_settings
-from iSpy.vision.metadata import read_metadata, metadata_from_pt, write_metadata, metadata_path_for
+from iSpy.vision.metadata import (
+    read_metadata,
+    metadata_from_pt,
+    write_metadata,
+    metadata_path_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,7 @@ def _target_format(settings: dict) -> str:
         return fmt
     try:
         from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+
         return ObjectDetectionPipeline.recommended_format()
     except Exception:
         return "onnx"
@@ -86,12 +92,27 @@ class ModelsModule(WebModule):
         return None
 
     def register_routes(self, flask_app):
-        flask_app.add_url_rule("/models", "models_page", lambda: render_template("models.html"))
-        flask_app.add_url_rule("/api/models", "api_models_list", self._list, methods=["GET"])
-        flask_app.add_url_rule("/api/models/upload", "api_models_upload", require_local_or_token(self._upload), methods=["POST"])
-        flask_app.add_url_rule("/api/models/<name>", "api_models_detail", self._detail, methods=["GET"])
-        flask_app.add_url_rule("/api/models/<name>", "api_models_delete", self._delete, methods=["DELETE"])
-        flask_app.add_url_rule("/api/models/select", "api_models_select", self._select, methods=["POST"])
+        flask_app.add_url_rule(
+            "/models", "models_page", lambda: render_template("models.html")
+        )
+        flask_app.add_url_rule(
+            "/api/models", "api_models_list", self._list, methods=["GET"]
+        )
+        flask_app.add_url_rule(
+            "/api/models/upload",
+            "api_models_upload",
+            require_local_or_token(self._upload),
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/models/<name>", "api_models_detail", self._detail, methods=["GET"]
+        )
+        flask_app.add_url_rule(
+            "/api/models/<name>", "api_models_delete", self._delete, methods=["DELETE"]
+        )
+        flask_app.add_url_rule(
+            "/api/models/select", "api_models_select", self._select, methods=["POST"]
+        )
 
     def _list(self):
         current = self._get_current_model()
@@ -99,15 +120,17 @@ class ModelsModule(WebModule):
         for pt in sorted(self.pytorch_dir.glob("*.pt")):
             meta = read_metadata(pt) or {}
             protected = self._get_protected_model_names()
-            out.append({
-                "name": pt.name,
-                "size_mb": round(pt.stat().st_size / (1024 * 1024), 2),
-                "task": meta.get("task", "unknown"),
-                "nc": meta.get("nc"),
-                "names": meta.get("names"),
-                "input_size": meta.get("input_size"),
-                "active": pt.name in protected,
-            })
+            out.append(
+                {
+                    "name": pt.name,
+                    "size_mb": round(pt.stat().st_size / (1024 * 1024), 2),
+                    "task": meta.get("task", "unknown"),
+                    "nc": meta.get("nc"),
+                    "names": meta.get("names"),
+                    "input_size": meta.get("input_size"),
+                    "active": pt.name in protected,
+                }
+            )
         return jsonify(models=out, current=current)
 
     def _detail(self, name):
@@ -134,6 +157,7 @@ class ModelsModule(WebModule):
         dest = self.pytorch_dir / name
         tmp = dest.with_suffix(".pt.uploading")
         from iSpy.web.Backend.WebModule import ensure_disk_space
+
         space_err = ensure_disk_space(tmp, request.content_length or 0)
         if space_err:
             return jsonify(error=space_err), 503
@@ -158,7 +182,9 @@ class ModelsModule(WebModule):
             p = Path.cwd() / p
         if not p.exists():
             return jsonify(error=f"Model not found: {p}"), 404
-        if not _is_safe_path(self.pytorch_dir, p) and not _is_safe_path(Path.cwd() / "YoloModels", p):
+        if not _is_safe_path(self.pytorch_dir, p) and not _is_safe_path(
+            Path.cwd() / "YoloModels", p
+        ):
             return jsonify(error="Invalid model path"), 403
         config = self.context.get("config")
         if not config:
@@ -179,14 +205,18 @@ class ModelsModule(WebModule):
             src = _model_rel_path(p)
             artifact = existing_artifact_for(p, _target_format(settings))
             settings["vision_model"] = {
-                **model_cfg, "source_pt": src, "file_path": artifact or src,
+                **model_cfg,
+                "source_pt": src,
+                "file_path": artifact or src,
             }
             updated.append(cam_name)
         if not updated:
             return jsonify(error="No camera uses a user-selectable model"), 400
         config.save()
-        return jsonify(success=True, note="Restart iSpy to load this model.", cameras=updated)
-    
+        return jsonify(
+            success=True, note="Restart iSpy to load this model.", cameras=updated
+        )
+
     def _resolve_model_path(self, name: str) -> Path | None:
         target = (self.pytorch_dir / name).resolve()
         try:
@@ -194,7 +224,7 @@ class ModelsModule(WebModule):
         except ValueError:
             return None
         return target
-    
+
     def _delete(self, name):
         target = self._resolve_model_path(name)
         if target is None or not target.exists():
@@ -202,7 +232,9 @@ class ModelsModule(WebModule):
 
         protected = self._get_protected_model_names()
         if target.name in protected:
-            return jsonify(error="Cannot delete a model referenced by the active config. Select a different model first."), 400
+            return jsonify(
+                error="Cannot delete a model referenced by the active config. Select a different model first."
+            ), 400
 
         target.unlink()
         meta = metadata_path_for(target)

@@ -10,6 +10,7 @@ from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, unit_to_inches
 from iSpy.vision import triangulation
 from iSpy.vision import calibration as cam_calibration
 
+
 class AprilTagPipeline(VisionPipeline):
     plugin_name = "april_tag"
     # AprilTag pose is derived from the camera matrix, so the ChArUco board
@@ -27,7 +28,9 @@ class AprilTagPipeline(VisionPipeline):
             }
         }
 
-    def __init__(self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None):
+    def __init__(
+        self, camera_config: iSpyCameraConfig, config: iSpyConfig, core_mask=None
+    ):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
 
@@ -38,7 +41,9 @@ class AprilTagPipeline(VisionPipeline):
 
             _pos_unit = config.get("unit", "frc")
             # 'height' is the single mount-height field feeding triangulation
-            self.camera_height = unit_to_inches(camera_config.get("height", 0.0), _pos_unit)
+            self.camera_height = unit_to_inches(
+                camera_config.get("height", 0.0), _pos_unit
+            )
             self.camera_x = unit_to_inches(camera_config.get("x", 0.0), _pos_unit)
             self.camera_y = unit_to_inches(camera_config.get("y", 0.0), _pos_unit)
             _legacy_z = camera_config.get("z")
@@ -49,7 +54,7 @@ class AprilTagPipeline(VisionPipeline):
                     "triangulation.",
                     _legacy_z,
                 )
-            
+
             calib = camera_config.get("calibration", {})
             self.known_calibration_distance = calib.get("distance", 1.0)
             self.known_calibration_pixel_height = calib.get("size", 100)
@@ -66,38 +71,46 @@ class AprilTagPipeline(VisionPipeline):
 
         self.unit = config.get("unit", "meter")
         self.conversions = {
-            "meter": 0.0254, "meters": 0.0254,
-            "inch": 1.0, "inches": 1.0,
-            "foot": 1 / 12, "feet": 1 / 12,
-            "centimeter": 2.54, "centimeters": 2.54,
+            "meter": 0.0254,
+            "meters": 0.0254,
+            "inch": 1.0,
+            "inches": 1.0,
+            "foot": 1 / 12,
+            "feet": 1 / 12,
+            "centimeter": 2.54,
+            "centimeters": 2.54,
             "frc": 0.0254,
         }
 
         try:
-            if self.known_calibration_pixel_height <= 0 or self.known_calibration_distance <= 0:
+            if (
+                self.known_calibration_pixel_height <= 0
+                or self.known_calibration_distance <= 0
+            ):
                 self.focal_length_pixels = 1.0
             else:
                 self.focal_length_pixels = (
-                    self.known_calibration_pixel_height * self.known_calibration_distance
+                    self.known_calibration_pixel_height
+                    * self.known_calibration_distance
                 ) / self.ball_d_inches
         except ZeroDivisionError:
             self.focal_length_pixels = 1.0
 
         super().__init__(camera_config, (640, 480), self.grayscale)
 
-        self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
+        self.aruco_dict = cv2.aruco.getPredefinedDictionary(
+            cv2.aruco.DICT_APRILTAG_36h11
+        )
         self.aruco_params = cv2.aruco.DetectorParameters()
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
 
         self._last_objects: list[Object] = []
-        
+
         half = self.tag_size_inches / 2.0
-        self.obj_pts = np.array([
-            [-half,  half, 0],
-            [ half,  half, 0],
-            [ half, -half, 0],
-            [-half, -half, 0]
-        ], dtype=np.float32)
+        self.obj_pts = np.array(
+            [[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]],
+            dtype=np.float32,
+        )
 
         self._set_status("ready")
 
@@ -111,14 +124,17 @@ class AprilTagPipeline(VisionPipeline):
 
     def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
         scale = self.conversions.get(self.unit, self.conversions["meter"])
-        return triangulation.camera_point_to_robot(
-            pt,
-            self.camera_x,
-            self.camera_y,
-            self.camera_height,
-            self.camera_bot_relative_yaw,
-            self.camera_pitch_angle,
-        ) * scale
+        return (
+            triangulation.camera_point_to_robot(
+                pt,
+                self.camera_x,
+                self.camera_y,
+                self.camera_height,
+                self.camera_bot_relative_yaw,
+                self.camera_pitch_angle,
+            )
+            * scale
+        )
 
     def _matrix_to_euler(self, R: np.ndarray) -> tuple[float, float, float]:
         sy = math.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
@@ -141,7 +157,9 @@ class AprilTagPipeline(VisionPipeline):
         if gated is not None:
             return gated
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        gray = (
+            cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        )
 
         corners, ids, rejected = self.detector.detectMarkers(gray)
         objects = []
@@ -163,21 +181,30 @@ class AprilTagPipeline(VisionPipeline):
                 tag_id = int(ids[i][0])
                 tag_corners = corners[i][0]
 
-                cv2.polylines(frame, [tag_corners.astype(np.int32)], True, (0, 255, 0), 2)
-                cv2.putText(frame, f"ID: {tag_id}", tuple(tag_corners[0].astype(int)), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.polylines(
+                    frame, [tag_corners.astype(np.int32)], True, (0, 255, 0), 2
+                )
+                cv2.putText(
+                    frame,
+                    f"ID: {tag_id}",
+                    tuple(tag_corners[0].astype(int)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0),
+                    2,
+                )
 
                 ok, rvec, tvec = cv2.solvePnP(
-                    self.obj_pts, 
-                    tag_corners, 
-                    cam_mat, 
-                    dist_coeffs, 
-                    flags=cv2.SOLVEPNP_IPPE_SQUARE
+                    self.obj_pts,
+                    tag_corners,
+                    cam_mat,
+                    dist_coeffs,
+                    flags=cv2.SOLVEPNP_IPPE_SQUARE,
                 )
 
                 if ok:
                     cv2.drawFrameAxes(frame, cam_mat, dist_coeffs, rvec, tvec, 3.25)
-                    
+
                     tvec = tvec.reshape(3)
                     robot_pt = self._camera_point_to_robot((tvec[0], tvec[1], tvec[2]))
                     R_tag, _ = cv2.Rodrigues(rvec.reshape(3))
@@ -193,7 +220,7 @@ class AprilTagPipeline(VisionPipeline):
                         y=float(robot_pt[1]),
                         z=float(robot_pt[2]),
                         name=f"tag_{tag_id}",
-                        confidence=1.0, # tags are basically always right when detected
+                        confidence=1.0,  # tags are basically always right when detected
                         roll=roll,
                         pitch=pitch,
                         yaw=yaw,
@@ -204,12 +231,19 @@ class AprilTagPipeline(VisionPipeline):
                             "size": self.tag_size_inches * scale,
                         },
                     )
-                    
+
                     center_px = np.mean(tag_corners, axis=0)
                     ray = triangulation.pixel_to_ray(
-                        center_px[0], center_px[1], img_w, img_h, f,
-                        self.camera_x, self.camera_y, self.camera_height,
-                        self.camera_bot_relative_yaw, self.camera_pitch_angle
+                        center_px[0],
+                        center_px[1],
+                        img_w,
+                        img_h,
+                        f,
+                        self.camera_x,
+                        self.camera_y,
+                        self.camera_height,
+                        self.camera_bot_relative_yaw,
+                        self.camera_pitch_angle,
                     )
                     obj.ray_origin = ray.origin
                     obj.ray_direction = ray.direction
@@ -233,8 +267,13 @@ class AprilTagPipeline(VisionPipeline):
         try:
             overlay = frame.copy()
             cv2.putText(
-                overlay, "AprilTag", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2
+                overlay,
+                "AprilTag",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 0),
+                2,
             )
             return overlay
         except Exception:

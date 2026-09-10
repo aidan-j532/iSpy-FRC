@@ -2,7 +2,9 @@ import numpy as np
 import math
 import time
 import itertools
+
 _id_counter = itertools.count(1)
+
 
 class Object:
     def __init__(
@@ -34,7 +36,7 @@ class Object:
         self.name = name
         self.confidence = confidence
         self.keypoints_3d = keypoints_3d
-        self.ray_origin = ray_origin        # np.ndarray(3,) robot-frame, or None
+        self.ray_origin = ray_origin  # np.ndarray(3,) robot-frame, or None
         self.ray_direction = ray_direction  # np.ndarray(3,) unit vector, or None
         self.depth_source = depth_source
 
@@ -115,15 +117,18 @@ class Object:
             "vis_meta": dict(self.vis_meta),
             "keypoints_3d": (
                 [[float(c) for c in kpt] for kpt in self.keypoints_3d]
-                if self.keypoints_3d is not None else None
+                if self.keypoints_3d is not None
+                else None
             ),
             "ray_origin": (
                 [float(c) for c in self.ray_origin]
-                if self.ray_origin is not None else None
+                if self.ray_origin is not None
+                else None
             ),
             "ray_direction": (
                 [float(c) for c in self.ray_direction]
-                if self.ray_direction is not None else None
+                if self.ray_direction is not None
+                else None
             ),
         }
 

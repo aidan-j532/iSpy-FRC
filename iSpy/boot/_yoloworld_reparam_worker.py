@@ -1,4 +1,3 @@
-
 import sys
 import json
 from pathlib import Path
@@ -39,7 +38,9 @@ def main():
         # normalizes the saved checkpoint format into a plain fixed-vocab
         # detector before the on-device loader reads it.
         try:
-            model = YOLO(str(output_path), task="detect", verbose=False, weights_only=True)
+            model = YOLO(
+                str(output_path), task="detect", verbose=False, weights_only=True
+            )
         except TypeError:
             model = YOLO(str(output_path), task="detect", verbose=False)
 

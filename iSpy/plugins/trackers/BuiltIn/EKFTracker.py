@@ -24,29 +24,28 @@ class EKFTracker(TrackerBase):
                 "type": "number",
                 "label": "Process Noise",
                 "hint": "Trust the motion model less (higher = track follows "
-                        "measurements faster, more responsive but noisier).",
+                "measurements faster, more responsive but noisier).",
                 "default": 0.5,
             },
             "measurement_noise": {
                 "type": "number",
                 "label": "Measurement Noise",
                 "hint": "Trust each detection less (higher = smoother, more "
-                        "laggy; lower = closer to raw detections).",
+                "laggy; lower = closer to raw detections).",
                 "default": 0.1,
             },
             "distance_threshold": {
                 "type": "number",
                 "label": "Merge Distance (m)",
                 "hint": "Detections closer than this to an existing tracked "
-                        "object (m) are merged into it instead of spawning a "
-                        "new one.",
+                "object (m) are merged into it instead of spawning a "
+                "new one.",
                 "default": 0.5,
             },
             "stale_threshold": {
                 "type": "number",
                 "label": "Stale Threshold (s)",
-                "hint": "Tracked objects not seen for this many seconds are "
-                        "dropped.",
+                "hint": "Tracked objects not seen for this many seconds are dropped.",
                 "default": 1.0,
             },
         }

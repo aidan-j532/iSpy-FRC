@@ -1,12 +1,13 @@
 from sklearn.cluster import DBSCAN
 
+
 class CustomDBScan:
     def __init__(self, points: list, eps: int, samples: int):
         self.points = points
         self.eps = eps
         self.samples = samples
         self.dbscan = DBSCAN(eps=self.eps, min_samples=self.samples)
-        
+
     def get_dbscan(self):
         if self.eps == 0:
             # 0 = no clustering, so every point gets label 0, not noise (-1)

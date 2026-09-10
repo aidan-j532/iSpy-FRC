@@ -348,7 +348,7 @@ async function _syncUnit() {
 const COMMON_FIELDS = {
   device: { label: 'Device', type: 'device', required: true, help: 'A physical camera detected on this machine.' },
   source: { label: 'Source', type: 'text', required: true, help: 'Camera index (e.g. 0), a /dev/video path, or an RTSP / MJPEG URL.' },
-  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: ['opencv', 'tello'], help: 'Select the camera source type.' },
+  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: ['opencv', 'tello'], help: 'Select the camera source type (most likely OpenCV).' },
   name: { label: 'Name', type: 'text', required: true, default: '', help: 'Short unique name used on the dashboard and in code (e.g. front_cam).' },
   pipeline: { label: 'Pipeline', type: 'pipeline', required: true },
   tello_ip: { label: 'Tello IP', type: 'text', default: '192.168.10.1', help: 'IP address of the Tello drone access point.' },
@@ -757,6 +757,13 @@ function populatePipelineSelect() {
     option.value = name;
     const meta = pipelineSchemas[name] || {};
     option.textContent = humanizePipelineName(name) + (meta.beta ? ' (beta)' : '');
+
+    if (name === 'object_detection') {
+      option.style.fontWeight = '700'; // so i make it obvious that this is the primary pipeline
+    } else if (name === 'yolo_world' || name === 'depth_anything') {
+      option.style.fontStyle = 'italic'; // To make it obvious these are expeirmental pipelines. 
+    }
+
     sel.appendChild(option);
   });
   // back-compat: pipeline may be a nested dict or an old flat string, resolve either way

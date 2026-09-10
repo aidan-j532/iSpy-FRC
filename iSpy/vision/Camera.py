@@ -47,14 +47,18 @@ class Camera:
             object.__setattr__(self, name, value)
             return
         delegate = self.__dict__.get("_delegate")
-        if delegate is not None and (name in delegate.__dict__ or hasattr(delegate, name)):
+        if delegate is not None and (
+            name in delegate.__dict__ or hasattr(delegate, name)
+        ):
             setattr(delegate, name, value)
             return
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name):
         delegate = self.__dict__.get("_delegate")
-        if delegate is not None and (name in delegate.__dict__ or hasattr(delegate, name)):
+        if delegate is not None and (
+            name in delegate.__dict__ or hasattr(delegate, name)
+        ):
             delattr(delegate, name)
             return
         object.__delattr__(self, name)

@@ -17,23 +17,49 @@ _CONFIG_WRITE_LOCK = threading.RLock()
 _MODEL_BACKED_PIPELINES = ("object_detection",)
 
 _CAMERA_CORE_KEYS = {
-    "name", "source", "device_id", "subsystem", "grayscale",
-    "x", "y", "z", "height", "yaw", "pitch", "calibration",
-    "exposure_time", "gain", "fps_cap",
-    "brightness", "contrast", "saturation", "gamma",
-    "white_balance", "tint",
-    "csi", "path",
-    "camera_type", "tello_ip", "tello_command_port", "tello_video_port",
+    "name",
+    "source",
+    "device_id",
+    "subsystem",
+    "grayscale",
+    "x",
+    "y",
+    "z",
+    "height",
+    "yaw",
+    "pitch",
+    "calibration",
+    "exposure_time",
+    "gain",
+    "fps_cap",
+    "brightness",
+    "contrast",
+    "saturation",
+    "gamma",
+    "white_balance",
+    "tint",
+    "csi",
+    "path",
+    "camera_type",
+    "tello_ip",
+    "tello_command_port",
+    "tello_video_port",
 }
 
 # Camera-source config keys that are valid at the top level for every
 # camera type, no matter which Cameras/ class is running.
 _CAMERA_TYPE_KEYS = (
-    "camera_type", "tello_ip", "tello_command_port", "tello_video_port",
+    "camera_type",
+    "tello_ip",
+    "tello_command_port",
+    "tello_video_port",
 )
 
 _VISION_MODEL_SETTINGS_KEYS = (
-    "min_conf", "quantize", "quantization_dataset", "optimize",
+    "min_conf",
+    "quantize",
+    "quantization_dataset",
+    "optimize",
     "target_format",
 )
 
@@ -59,10 +85,14 @@ _UNIT_TO_INCHES = {
 }
 
 _UNIT_LABELS = {
-    "inch": "in", "inches": "in",
-    "foot": "ft", "feet": "ft",
-    "meter": "m", "meters": "m",
-    "centimeter": "cm", "centimeters": "cm",
+    "inch": "in",
+    "inches": "in",
+    "foot": "ft",
+    "feet": "ft",
+    "meter": "m",
+    "meters": "m",
+    "centimeter": "cm",
+    "centimeters": "cm",
     "frc": "in",
 }
 
@@ -74,12 +104,13 @@ def unit_to_inches(value: float, unit: str) -> float:
 def unit_label(unit: str) -> str:
     return _UNIT_LABELS.get(unit.lower().strip(), unit)
 
+
 # legacy top-level keys folded into individual add-ons. (key, addon type,
 # addon name, target setting key) - used by _migrate_addons.
 _ADDON_LEGACY_FOLDS = (
-    ("dbscan",           "trackers",    "object_tracker", None),  # special: dict
-    ("distance_threshold", "trackers",  "object_tracker", "distance_threshold"),
-    ("stale_threshold",  "trackers",    "object_tracker", "stale_threshold"),
+    ("dbscan", "trackers", "object_tracker", None),  # special: dict
+    ("distance_threshold", "trackers", "object_tracker", "distance_threshold"),
+    ("stale_threshold", "trackers", "object_tracker", "stale_threshold"),
 )
 
 # health reporting is a core web module (HealthModule) - these opt-in
@@ -121,12 +152,18 @@ def default_vision_model() -> dict:
         rel = f"YoloModels/pytorch/{user_pts[0].name}"
     else:
         # Prefer the v26 fuel detection model, then the plain detect model.
-        fuel = next((p for p in pts if p.name == "_default_v26_detect_for_fuel.pt"), None)
+        fuel = next(
+            (p for p in pts if p.name == "_default_v26_detect_for_fuel.pt"), None
+        )
         if fuel:
             rel = f"YoloModels/pytorch/{fuel.name}"
         else:
             detect = next((p for p in pts if p.name == "_default_detect.pt"), None)
-            rel = f"YoloModels/pytorch/{detect.name}" if detect else "YoloModels/pytorch/_default_detect.pt"
+            rel = (
+                f"YoloModels/pytorch/{detect.name}"
+                if detect
+                else "YoloModels/pytorch/_default_detect.pt"
+            )
     return {"file_path": rel, "source_pt": rel, "min_conf": 0.5}
 
 
@@ -153,8 +190,11 @@ def get_pipeline_settings(cam_entry: dict) -> dict:
     p = cam_entry.get("pipeline")
     if isinstance(p, dict) and isinstance(p.get("settings"), dict):
         return p["settings"]
-    return {k: v for k, v in cam_entry.items()
-            if k not in _CAMERA_CORE_KEYS and k != "pipeline"}
+    return {
+        k: v
+        for k, v in cam_entry.items()
+        if k not in _CAMERA_CORE_KEYS and k != "pipeline"
+    }
 
 
 def normalize_camera_entry(cam_entry: dict) -> dict:
@@ -173,7 +213,8 @@ def normalize_camera_entry(cam_entry: dict) -> dict:
         return cam_entry
     if isinstance(p, str):
         settings = {
-            k: v for k, v in cam_entry.items()
+            k: v
+            for k, v in cam_entry.items()
             if k not in _CAMERA_CORE_KEYS and k != "pipeline"
         }
         for k in settings:
@@ -182,7 +223,8 @@ def normalize_camera_entry(cam_entry: dict) -> dict:
         return cam_entry
     # no pipeline key at all (raw JSON editor) - tag with the default.
     settings = {
-        k: v for k, v in cam_entry.items()
+        k: v
+        for k, v in cam_entry.items()
         if k not in _CAMERA_CORE_KEYS and k != "pipeline"
     }
     for k in settings:
@@ -206,9 +248,7 @@ def ensure_camera_entries_ready(camera_configs: dict) -> None:
 
 
 class iSpyConfig:
-    def __init__(
-        self, file_path: str = None, create: bool = True
-    ):
+    def __init__(self, file_path: str = None, create: bool = True):
         self.logger = logging.getLogger(__name__)
 
         self.default_config = {
@@ -293,7 +333,7 @@ class iSpyConfig:
                 # "utilities": {"network_table_handler": {"network_tables_ip": "10.0.0.2"}},
                 "trackers": {},
                 "utilities": {},
-                "frame_processors": {}
+                "frame_processors": {},
             },
         }
         self.config = json.loads(json.dumps(self.default_config))
@@ -348,8 +388,10 @@ class iSpyConfig:
 
         dbscan = self.config.get("dbscan")
         if isinstance(dbscan, dict) and "path_planner" in trackers:
-            for legacy_key, target_key in (("epsilon", "epsilon"),
-                                           ("min_samples", "min_samples")):
+            for legacy_key, target_key in (
+                ("epsilon", "epsilon"),
+                ("min_samples", "min_samples"),
+            ):
                 if legacy_key in dbscan:
                     trackers["path_planner"].setdefault(target_key, dbscan[legacy_key])
 
@@ -364,8 +406,9 @@ class iSpyConfig:
 
         for flag, (addon_type, addon_name) in _ADDON_LEGACY_FLAGS.items():
             if self.config.get(flag):
-                {"trackers": trackers,
-                 "utilities": utilities}[addon_type].setdefault(addon_name, {})
+                {"trackers": trackers, "utilities": utilities}[addon_type].setdefault(
+                    addon_name, {}
+                )
 
         # the health_reporter/status_reporter add-ons were merged into the
         # always-on HealthModule web module; their stale_threshold setting
@@ -386,7 +429,11 @@ class iSpyConfig:
         if migrated_stale is not None:
             self.config["health_stale_threshold"] = migrated_stale
 
-        for legacy_key, (addon_type, addon_name, target_key) in _ADDON_LEGACY_SETTINGS.items():
+        for legacy_key, (
+            addon_type,
+            addon_name,
+            target_key,
+        ) in _ADDON_LEGACY_SETTINGS.items():
             value = self.config.get(legacy_key)
             if value is not None:
                 target = {"trackers": trackers, "utilities": utilities}[addon_type]
@@ -394,8 +441,12 @@ class iSpyConfig:
                     target[addon_name].setdefault(target_key, value)
 
         for legacy_key in (
-            "dbscan", "distance_threshold", "stale_threshold",
-            "record_mode", "record_dir", "use_network_tables",
+            "dbscan",
+            "distance_threshold",
+            "stale_threshold",
+            "record_mode",
+            "record_dir",
+            "use_network_tables",
             "network_tables_ip",
         ):
             self.config.pop(legacy_key, None)
@@ -464,8 +515,7 @@ class iSpyConfig:
         if not isinstance(cams, dict):
             self.config["camera_configs"] = cams = {}
         self.camera_configs = {
-            name: iSpyCameraConfig(cam_cfg)
-            for name, cam_cfg in cams.items()
+            name: iSpyCameraConfig(cam_cfg) for name, cam_cfg in cams.items()
         }
 
     def load_from_file(self, file_path: str):
@@ -494,14 +544,19 @@ class iSpyConfig:
             try:
                 self._configure_logging()
             except Exception:
-                self.logger.exception("Failed to apply logging configuration after loading file")
+                self.logger.exception(
+                    "Failed to apply logging configuration after loading file"
+                )
+
     def save(self, quiet=False):
         try:
             if self.file_path:
                 if not quiet:
                     self.logger.info("Config saved to %s", self.file_path)
             else:
-                self.logger.info("No config file path set; saving to Config/config.json")
+                self.logger.info(
+                    "No config file path set; saving to Config/config.json"
+                )
                 self.file_path = str(_REPO_ROOT / "Config" / "config.json")
 
             target = Path(self.file_path)
@@ -529,6 +584,7 @@ class iSpyConfig:
                         pass
         except Exception as e:
             self.logger.error("Failed to save config to %s: %s", self.file_path, e)
+
     def get(self, key, default=None):
         return self.config.get(key, default)
 
@@ -574,8 +630,13 @@ class iSpyConfig:
     def is_addon_enabled(self, addon_type: str, addon_name: str) -> bool:
         return self.get_addon_settings(addon_type, addon_name) is not None
 
-    def enable_addon(self, addon_type: str, addon_name: str,
-                     settings: dict | None = None, save: bool = True) -> None:
+    def enable_addon(
+        self,
+        addon_type: str,
+        addon_name: str,
+        settings: dict | None = None,
+        save: bool = True,
+    ) -> None:
         if addon_type not in _ADDON_TYPES:
             return
         entries = self.addon_entries(addon_type)
@@ -586,8 +647,9 @@ class iSpyConfig:
         if save:
             self.save()
 
-    def disable_addon(self, addon_type: str, addon_name: str,
-                      save: bool = True) -> None:
+    def disable_addon(
+        self, addon_type: str, addon_name: str, save: bool = True
+    ) -> None:
         if addon_type not in _ADDON_TYPES:
             return
         entries = self.addon_entries(addon_type)
@@ -596,8 +658,9 @@ class iSpyConfig:
         if save:
             self.save()
 
-    def set_addon_settings(self, addon_type: str, addon_name: str,
-                           settings: dict, save: bool = True) -> None:
+    def set_addon_settings(
+        self, addon_type: str, addon_name: str, settings: dict, save: bool = True
+    ) -> None:
         if addon_type not in _ADDON_TYPES:
             return
         entries = self.addon_entries(addon_type)
@@ -607,8 +670,9 @@ class iSpyConfig:
         if save:
             self.save()
 
-    def update_addon_settings(self, addon_type: str, addon_name: str,
-                              settings: dict, save: bool = True) -> None:
+    def update_addon_settings(
+        self, addon_type: str, addon_name: str, settings: dict, save: bool = True
+    ) -> None:
         if addon_type not in _ADDON_TYPES:
             return
         entries = self.addon_entries(addon_type)
@@ -639,7 +703,11 @@ class iSpyConfig:
     def _update_config(self, data: dict, current_dict: dict = None):
         if current_dict is None:
             current_dict = self.config
-        if isinstance(data, dict) and "vision_model" in data and current_dict is self.config:
+        if (
+            isinstance(data, dict)
+            and "vision_model" in data
+            and current_dict is self.config
+        ):
             # model settings live per-cam under pipeline.settings now - a top-level
             # key is either a stale UI payload or a legacy config.
             raise ValueError(
@@ -767,7 +835,8 @@ class iSpyCameraConfig:
                 p["settings"] = {}
             return p
         settings = {
-            k: v for k, v in self.data.items()
+            k: v
+            for k, v in self.data.items()
             if k not in _CAMERA_CORE_KEYS and k != "pipeline"
         }
         for k in settings:
