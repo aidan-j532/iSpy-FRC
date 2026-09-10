@@ -106,19 +106,6 @@ def _silence_third_party():
 keywords = ["frc game piece", "frc 2025 REBUILT", "frc 2025 fuel"]
 
 _RKNN_QUANTIZE = True
-_RKNN_QUANTIZE_ENV = "ISPY_RKNN_QUANTIZE"
-
-
-def _rknn_quantize_allowed() -> bool:
-    """True unless ISPY_RKNN_QUANTIZE is explicitly set to a false-y value.
-
-    int8 calibration is the heaviest RKNN build phase and commonly the OOM
-    victim on a memory-constrained robot, so let operators skip it up front.
-    """
-    val = os.environ.get(_RKNN_QUANTIZE_ENV)
-    if val is None:
-        return True
-    return val.strip().lower() not in ("0", "false", "off", "no", "")
 _RKNN_KNOWN_CHIPS = (
     "rk3588",
     "rk3576",
@@ -1184,7 +1171,7 @@ def _convert_rknn(
     )
 
     if quantize is None:
-        quantize = _RKNN_QUANTIZE and _rknn_quantize_allowed()
+        quantize = _RKNN_QUANTIZE
     pt_path = Path(pt_file)
 
     raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
@@ -1412,7 +1399,7 @@ def convert_model(
 
     if target_format == "rknn":
         if quantize is None:
-            quantize = _RKNN_QUANTIZE and _rknn_quantize_allowed()
+            quantize = _RKNN_QUANTIZE
         rknn_path = _desired_output_path(pt_path, "rknn")
         if rknn_path.exists() and not force:
             meta_path = metadata_path_for(rknn_path)
@@ -1570,18 +1557,6 @@ def _convert_model_subprocess(
 ) -> Path:
     outputs_dir = _PROJECT_ROOT / "Outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
-
-    # int8 calibration is the heaviest build phase by far - it gets OOM-killed
-    # (exit code -9) on memory-constrained robots with the pipeline already
-    # running. ISPY_RKNN_QUANTIZE=0 bypasses it up front (via the unquantized
-    # retry path below) instead of watching the doomed attempt run first.
-    if quantize and not _rknn_quantize_allowed():
-        logger.warning(
-            "ISPY_RKNN_QUANTIZE=0 - skipping int8 quantization for %s -> %s.",
-            Path(model_file).name,
-            target_format,
-        )
-        quantize = False
 
     args = {
         "model_file": str(model_file),

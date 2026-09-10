@@ -53,6 +53,40 @@ function markHasData(canvasId) {
   if (card) card.classList.add('has-data');
 }
 
+// The y-axis grows instantly when a part spikes, but holds its range for a few
+// seconds of small data before shrinking - a single heavy frame (e.g. an RKNN
+// build on the optimization thread) no longer makes every normal tick jump.
+const Y_HOLD_MS = 4000;
+
+function applySustainedScale(chart, stacked) {
+  const st = chart._ySustain || (chart._ySustain = { lastMax: 0.0001, shrinkAfter: 0 });
+  let dataMax = 0;
+  if (stacked) {
+    chart.data.labels.forEach((_, li) => {
+      let col = 0;
+      for (const ds of chart.data.datasets) {
+        const v = ds.data[li];
+        if (isFinite(v)) col += v;
+      }
+      if (col > dataMax) dataMax = col;
+    });
+  } else {
+    for (const ds of chart.data.datasets) {
+      for (const v of ds.data || []) {
+        if (isFinite(v) && v > dataMax) dataMax = v;
+      }
+    }
+  }
+  const now = Date.now();
+  if (dataMax > st.lastMax) {
+    st.shrinkAfter = now + Y_HOLD_MS;
+    st.lastMax = dataMax;
+  } else if (now >= st.shrinkAfter) {
+    st.lastMax = dataMax;
+  }
+  chart.options.scales.y.suggestedMax = st.lastMax;
+}
+
 function renderCodeParts(cp) {
   const s = cp.series;
   const series = Object.values(s);
@@ -76,6 +110,7 @@ function renderCodeParts(cp) {
   }
   chart.data.labels = series[0].x.map(v => v.toFixed(1));
   series.forEach((part, i) => { chart.data.datasets[i].data = part.y; });
+  applySustainedScale(chart, true);
   chart.update('none');
 }
 const metricsConn = connTracker(2);
@@ -90,6 +125,7 @@ async function refresh() {
       const c = ensureChart(key, s.label, s.unit);
       c.data.labels = s.x.map(v => v.toFixed(1));
       c.data.datasets[0].data = s.y;
+      applySustainedScale(c, false);
       c.update('none');
       if ((s.y || []).length > 0) markHasData(key);
     }

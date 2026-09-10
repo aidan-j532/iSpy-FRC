@@ -1,4 +1,5 @@
 import logging
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -171,6 +172,9 @@ def _artifact_loads(path: Path) -> bool:
     try:
         import onnxruntime as ort
 
+        # ORT's own W logs (e.g. probing /sys/class/drm/* on NPU boards)
+        # are noise, not errors - keep the stream at ERROR.
+        ort.set_default_logger_severity(3)
         ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
         return True
     except Exception as exc:
@@ -229,15 +233,19 @@ def ensure_onnx_model(
             raise TypeError("build_module must return a torch.nn.Module")
         model.eval()
         dummy = torch.zeros(1, 3, height, width)
-        torch.onnx.export(
-            model,
-            dummy,
-            str(fp32_path),
-            input_names=["pixel_values"],
-            output_names=["predicted_depth"],
-            opset_version=17,
-            dynamo=False,
-        )
+        # transformers emits harmless TracerWarnings during tracing (python
+        # bool/int control flow). they don't affect the export, only the log.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            torch.onnx.export(
+                model,
+                dummy,
+                str(fp32_path),
+                input_names=["pixel_values"],
+                output_names=["predicted_depth"],
+                opset_version=17,
+                dynamo=False,
+            )
     except Exception as exc:
         logger.warning("ONNX export of %s failed (%s).", artifact_stem, exc)
         # offline fallback: keep the camera running on an existing fp32 copy

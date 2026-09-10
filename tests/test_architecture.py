@@ -944,54 +944,6 @@ class ConvertModelSubprocessTests(unittest.TestCase):
         self.assertFalse(calls[1]["quantize"])
         self.assertEqual(out, Path("Outputs", "model_unquantized.rknn"))
 
-    def test_env_gate_skips_quantized_attempt_up_front(self):
-        from iSpy.vision.optimizer import _convert_model_subprocess
-
-        calls = []
-
-        def fake_run(cmd, **kwargs):
-            args_path = Path(cmd[-1])
-            with open(args_path) as f:
-                payload = json.load(f)
-            calls.append(payload)
-            result_path = Path(str(args_path) + ".result.json")
-            result_path.write_text(
-                json.dumps({"result": "Outputs/model.rknn"})
-            )
-            return mock.Mock(returncode=0, stdout="", stderr="")
-
-        with mock.patch.dict(
-            "os.environ", {"ISPY_RKNN_QUANTIZE": "0"}, clear=False
-        ):
-            with mock.patch(
-                "iSpy.vision.optimizer.subprocess.run",
-                side_effect=fake_run,
-            ):
-                out = _convert_model_subprocess(
-                    "models/yolov8s.pt",
-                    "rknn",
-                    [640, 640],
-                    quantize=True,
-                )
-
-        self.assertEqual(len(calls), 1)
-        self.assertFalse(calls[0]["quantize"])
-        self.assertEqual(out, Path("Outputs", "model.rknn"))
-
-    def test_rknn_quantize_env_dial(self):
-        from iSpy.vision.optimizer import _rknn_quantize_allowed
-
-        for val in (None, "1", "true", "on", "yes"):
-            with mock.patch.dict("os.environ", {}, clear=False):
-                if val is not None:
-                    os.environ["ISPY_RKNN_QUANTIZE"] = val
-                self.assertTrue(_rknn_quantize_allowed(), val)
-
-        for val in ("0", "false", "off", "no", ""):
-            with mock.patch.dict("os.environ", {}, clear=False):
-                os.environ["ISPY_RKNN_QUANTIZE"] = val
-                self.assertFalse(_rknn_quantize_allowed(), val)
-
     def test_nonquantized_failure_falls_back_without_retry(self):
         from iSpy.vision.optimizer import _convert_model_subprocess
 

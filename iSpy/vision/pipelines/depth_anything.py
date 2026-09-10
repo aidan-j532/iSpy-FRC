@@ -1,5 +1,6 @@
 import logging
 import threading
+import warnings
 from pathlib import Path
 
 import cv2
@@ -431,6 +432,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         import onnxruntime as ort
 
+        ort.set_default_logger_severity(3)
         providers = [
             p
             for p in ("CUDAExecutionProvider", "CPUExecutionProvider")
@@ -681,7 +683,11 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _load_rknn(self, force: bool = False):
         try:
-            from rknn.api import RKNN  # noqa: F401
+            # rknn.api pulls in pkg_resources, which is deprecated by setuptools;
+            # that one-time module-init warning is not actionable, so hide it.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                from rknn.api import RKNN  # noqa: F401
         except ImportError:
             self.logger.warning(
                 "rknn-toolkit2 not installed - 'rknn' backend unavailable, falling back to onnx"
@@ -703,7 +709,13 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
                 rknn = RKNN(verbose=False)
                 try:
-                    rknn.config(target_platform="rk3588")
+                    # match _preprocess_depth: (u8/255 - mean)/std, expressed in
+                    # 0..255 space for the NPU's input normalization
+                    rknn.config(
+                        target_platform="rk3588",
+                        mean_values=[[123.675, 116.28, 103.53]],
+                        std_values=[[58.395, 57.12, 57.375]],
+                    )
                     rknn.load_onnx(
                         model=artifact,
                         input_size_list=[[1, 3, self._input_size, self._input_size]],

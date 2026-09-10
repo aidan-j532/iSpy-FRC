@@ -597,7 +597,7 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                     str(fixed),
                     target_format,
                     list((self._model_input_size, self._model_input_size)),
-                    quantize=True,
+                    quantize=self.quantize,
                     force=force,
                     dataset_path=self._quantization_dataset,
                 )
