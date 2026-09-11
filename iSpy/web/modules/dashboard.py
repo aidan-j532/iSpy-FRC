@@ -51,6 +51,12 @@ def _generic_camera_name(name: str) -> bool:
     )
 
 
+#: hardware types with a real utilization reader, rendered as System-card rows.
+#: Types without one are skipped entirely - a forever "--" row is worse than
+#: no row (CPU load already lives on the top-level System card; TPU has no
+#: portable read).
+_HARDWARE_WITH_LOAD_READER = ("npu", "gpu")
+
 #: highest value that can still be a genuine 0-100 utilization percentage.
 #: Anything above it is a raw busy-clock counter from rknpu's devfreq node,
 #: which must never be clamped into a fake 100%.
@@ -303,6 +309,8 @@ class DashboardModule(WebModule):
 
         out = []
         for hardware, names in grouped.items():
+            if hardware not in _HARDWARE_WITH_LOAD_READER:
+                continue
             meaningful = sorted(n for n in names if not _generic_camera_name(n))
             out.append(
                 {

@@ -23,6 +23,37 @@ from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
 from iSpy.vision._safe_imports import ensure_torch_imported
 
+#: pipeline-settings keys that live as siblings of vision_model in the config
+#: but must be visible whenever a model config is read. A UI save strips them
+#: out of the vision_model sub-dict on purpose (_normalize_vision_model_settings),
+#: so the raw block alone stops reflecting the user's optimize/quantize/format
+#: choices - merge the siblings back in on every read.
+_VM_PIPELINE_SETTING_KEYS = (
+    "quantize",
+    "min_conf",
+    "target_format",
+    "input_size",
+    "quantization_dataset",
+    "optimize",
+)
+#: legacy sibling-setting aliases consulted when the canonical key is unset.
+_VM_PIPELINE_SETTING_LEGACY = {"quantize": "quantized", "optimize": "auto_opt"}
+
+
+def _merge_vm_pipeline_settings(vm: dict, camera_config: iSpyCameraConfig) -> dict:
+    """Return a copy of a vision_model dict with the per-camera pipeline
+    settings (which a UI save strips out of the sub-dict) merged back in."""
+    merged = dict(vm)
+    for key in _VM_PIPELINE_SETTING_KEYS:
+        value = camera_config.get_pipeline_setting(key)
+        if value is None:
+            legacy = _VM_PIPELINE_SETTING_LEGACY.get(key)
+            if legacy is not None:
+                value = camera_config.get_pipeline_setting(legacy)
+        if value is not None:
+            merged[key] = value
+    return merged
+
 
 class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
     plugin_name = "object_detection"
@@ -93,22 +124,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         # them into the model config. Merge on a copy so the persisted
         # vision_model keeps only model identity - otherwise every setting
         # gets duplicated on the next save.
-        vm_cfg = dict(vm_cfg)
-        for _k in (
-            "quantize",
-            "min_conf",
-            "target_format",
-            "input_size",
-            "quantization_dataset",
-            "optimize",
-        ):
-            _v = camera_config.get_pipeline_setting(_k)
-            if _v is None:
-                _legacy = {"quantize": "quantized", "optimize": "auto_opt"}.get(_k)
-                if _legacy is not None:
-                    _v = camera_config.get_pipeline_setting(_legacy)
-            if _v is not None:
-                vm_cfg[_k] = _v
+        vm_cfg = _merge_vm_pipeline_settings(vm_cfg, camera_config)
         # Malformed metadata sidecars (e.g. a non-integer nc) make
         # fill_missing_config raise ValueError instead of degrading. Keep the
         # camera alive: fall back to the raw config so the pipeline can still
@@ -500,11 +516,10 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             from iSpy.vision.optimizer import _convert_model_subprocess
 
             # self.quantize is the authoritative value computed in __init__ from
-            # the merged pipeline settings. _current_vm_config() returns the raw
-            # vision_model block, which after a UI save no longer carries the
-            # quantize/optimize keys (_normalize_vision_model_settings strips
-            # them) - re-reading it here silently downgrades to an unquantized
-            # build every time.
+            # the merged pipeline settings and is kept in sync by
+            # _activate_optimized_model(). _current_vm_config() merges the
+            # sibling settings for status/format reads, but the instance
+            # value must not be clobbered here on a rebuild.
             converted = _convert_model_subprocess(
                 str(source_pt),
                 target,
@@ -535,35 +550,25 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
     def _current_vm_config(self) -> dict:
         vm = self.config.get_pipeline_setting("vision_model")
         if isinstance(vm, dict):
-            return json.loads(json.dumps(vm))
-        return {
-            "file_path": getattr(self, "yolo_model_file", ""),
-            "input_size": list(getattr(self, "input_size", (640, 640))),
-        }
+            vm = json.loads(json.dumps(vm))
+        else:
+            vm = {
+                "file_path": getattr(self, "yolo_model_file", ""),
+                "input_size": list(getattr(self, "input_size", (640, 640))),
+            }
+        # the persisted vision_model block alone no longer carries the
+        # optimize/quantize/target_format/... keys (a UI save strips them -
+        # see _normalize_vision_model_settings), so merge the sibling pipeline
+        # settings back in or _optimization_requested()/_target_format_cached()
+        # would always read the off/default values and the optimize thread
+        # would never start.
+        return _merge_vm_pipeline_settings(vm, self.config)
 
     def _activate_optimized_model(
         self, artifact_path: str, vm_extra: dict | None = None
     ):
         vm = self._current_vm_config()
         vm["file_path"] = artifact_path
-        # re-merge the user's per-pipeline settings (min_conf, etc.) - a UI
-        # save strips them from the vision_model block, so the raw config
-        # cannot be the single source of truth here.
-        for _k in (
-            "quantize",
-            "min_conf",
-            "target_format",
-            "input_size",
-            "quantization_dataset",
-            "optimize",
-        ):
-            _v = self.config.get_pipeline_setting(_k)
-            if _v is None:
-                _legacy = {"quantize": "quantized", "optimize": "auto_opt"}.get(_k)
-                if _legacy is not None:
-                    _v = self.config.get_pipeline_setting(_legacy)
-            if _v is not None:
-                vm[_k] = _v
         # prefer the already-normalized self.quantize (merged from pipeline
         # settings in __init__) - the raw vision_model block may lack the key
         # after a UI save and must not clobber the user's setting with False.
