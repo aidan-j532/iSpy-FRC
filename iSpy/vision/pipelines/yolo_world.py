@@ -103,6 +103,8 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                     "openvino",
                     "engine",
                     "coreml",
+                    "hailo",
+                    "qnn",
                 ),
                 input_size_default=640,
             )

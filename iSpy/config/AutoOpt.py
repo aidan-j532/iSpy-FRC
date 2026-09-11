@@ -6,7 +6,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_FORMATS = {"tflite", "openvino", "coreml", "onnx", "rknn", "engine", "tpu"}
+SUPPORTED_FORMATS = {
+    "tflite",
+    "openvino",
+    "coreml",
+    "onnx",
+    "rknn",
+    "engine",
+    "tpu",
+    "hailo",
+    "qnn",
+}
 
 
 def _run(cmd: str) -> str:
@@ -65,18 +75,50 @@ def has_jetson() -> bool:
 
 @lru_cache()
 def has_hailo_npu() -> bool:
-    # HAILO DISABLED - see <reason>
-    # Hailo/HEF support is temporarily disabled (no Hailo hardware available
-    # for validation on this project). The real detection below is preserved,
-    # commented out, so re-enabling later is a one-line change (delete the
-    # `return False` and uncomment):
-    #
-    # import glob
-    # if glob.glob("/dev/hailo*"):
-    #     return True
-    # if "hailo" in _lsusb_output():
-    #     return True
-    # return _cmd_ok("hailortcli fw-control identify")
+    import glob
+
+    if glob.glob("/dev/hailo*"):
+        return True
+    if "hailo" in _lsusb_output():
+        return True
+    return _cmd_ok("hailortcli fw-control identify")
+
+
+@lru_cache()
+def has_qualcomm_npu() -> bool:
+    import glob
+
+    if glob.glob("/dev/fastrpc-cdsp*"):
+        return True
+    if glob.glob("/dev/adsprpc*"):
+        return True
+
+    qualcomm_indicators = (
+        "qcs6490",
+        "qcs610",
+        "qualcomm",
+    )
+    for path in (
+        "/proc/device-tree/model",
+        "/proc/device-tree/compatible",
+        "/sys/firmware/devicetree/base/model",
+    ):
+        try:
+            with open(path, "rb") as f:
+                model = f.read().decode(errors="ignore").lower()
+            if any(s in model for s in qualcomm_indicators):
+                return True
+        except Exception:
+            pass
+
+    try:
+        with open("/proc/cpuinfo") as f:
+            cpuinfo = f.read().lower()
+        if any(s in cpuinfo for s in qualcomm_indicators):
+            return True
+    except Exception:
+        pass
+
     return False
 
 
@@ -235,15 +277,16 @@ def recommend_format(
             "Rockchip NPU detected - using RKNN format for hardware acceleration."
         )
         return "rknn"
-    # HAILO DISABLED - see <reason>
-    # Hailo/HEF backend is disabled. has_hailo_npu() is neutered above AND
-    # this branch is commented out (belt and suspenders - re-enabling one
-    # must force a deliberate look at both before HEF can be auto-selected
-    # again):
-    #
-    # if has_hailo_npu():
-    #     logger.info("Hailo NPU detected - using HEF format for hardware acceleration.")
-    #     return "hef"
+    if has_hailo_npu():
+        logger.info(
+            "Hailo NPU detected - using HEF format for hardware acceleration."
+        )
+        return "hailo"
+    if has_qualcomm_npu():
+        logger.info(
+            "Qualcomm NPU detected - using QNN format for hardware acceleration."
+        )
+        return "qnn"
     if has_edge_tpu():
         logger.info(
             "Edge TPU detected - using TFLite format for hardware acceleration."

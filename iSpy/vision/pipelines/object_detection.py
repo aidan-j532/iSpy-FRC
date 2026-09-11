@@ -499,16 +499,17 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
             from iSpy.vision.optimizer import _convert_model_subprocess
 
+            # self.quantize is the authoritative value computed in __init__ from
+            # the merged pipeline settings. _current_vm_config() returns the raw
+            # vision_model block, which after a UI save no longer carries the
+            # quantize/optimize keys (_normalize_vision_model_settings strips
+            # them) - re-reading it here silently downgrades to an unquantized
+            # build every time.
             converted = _convert_model_subprocess(
                 str(source_pt),
                 target,
                 list(self.input_size),
-                quantize=bool(
-                    self._current_vm_config().get(
-                        "quantize",
-                        self._current_vm_config().get("quantized", False),
-                    )
-                ),
+                quantize=bool(self.quantize),
                 force=True,
                 dataset_path=self.quantization_dataset,
             )
@@ -545,7 +546,34 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
     ):
         vm = self._current_vm_config()
         vm["file_path"] = artifact_path
-        quantize = bool(vm.get("quantize", vm.get("quantized", False)))
+        # re-merge the user's per-pipeline settings (min_conf, etc.) - a UI
+        # save strips them from the vision_model block, so the raw config
+        # cannot be the single source of truth here.
+        for _k in (
+            "quantize",
+            "min_conf",
+            "target_format",
+            "input_size",
+            "quantization_dataset",
+            "optimize",
+        ):
+            _v = self.config.get_pipeline_setting(_k)
+            if _v is None:
+                _legacy = {"quantize": "quantized", "optimize": "auto_opt"}.get(_k)
+                if _legacy is not None:
+                    _v = self.config.get_pipeline_setting(_legacy)
+            if _v is not None:
+                vm[_k] = _v
+        # prefer the already-normalized self.quantize (merged from pipeline
+        # settings in __init__) - the raw vision_model block may lack the key
+        # after a UI save and must not clobber the user's setting with False.
+        quantize = bool(
+            getattr(
+                self,
+                "quantize",
+                vm.get("quantize", vm.get("quantized", False)),
+            )
+        )
         vm["quantize"] = quantize
         if vm_extra:
             vm.update(vm_extra)

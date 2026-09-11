@@ -672,6 +672,13 @@ class GenericYolo:
                     f"Failed to init RKNN runtime: {self.model_file}"
                 ) from e
 
+        elif self.model_file.endswith(".hef"):
+            self._require_input_block()
+            self.model_type = "hailo"
+            self._hailo_fmt_checked = False
+            self._hailo_activation = None
+            self._load_hailo(self.model_file)
+
         elif self.model_file.endswith(".onnx"):
             self._require_input_block()
             self.model_type = "onnx"
@@ -865,8 +872,23 @@ class GenericYolo:
         device_id = self.device if isinstance(self.device, int) else 0
         providers = []
         try:
+            # onnxruntime-qnn (Qualcomm NPU on Rubik Pi / QCS6490) ships as an
+            # execution-provider PLUGIN: it only appears in
+            # get_available_providers() after its shared library is registered
+            # by name. Register it first; if the wheel isn't installed the
+            # import fails and we simply never offer the provider.
+            try:
+                import onnxruntime_qnn as _qnn_plugin
+
+                ort.register_execution_provider_library(
+                    "QNNExecutionProvider", _qnn_plugin.get_library_path()
+                )
+                self.logger.info("onnxruntime-qnn plugin registered.")
+            except Exception:
+                pass
             available = ort.get_available_providers()
             candidates = [
+                ("QNNExecutionProvider", {"backend_type": "QNN", "device_id": device_id}),
                 ("TensorrtExecutionProvider", {"device_id": device_id}),
                 ("CUDAExecutionProvider", {"device_id": device_id}),
                 ("ROCMExecutionProvider", {"device_id": device_id}),
@@ -903,6 +925,111 @@ class GenericYolo:
             self.model.get_providers(),
             sess_options.intra_op_num_threads,
         )
+
+    def _load_hailo(self, model_file: str):
+        # HailoRT wrapper over the .hef. The python API is stable across
+        # recent bindings: VDevice -> configure -> activate -> InferVStreams.
+        try:
+            from hailo_platform import (
+                ConfigureParams,
+                FormatType,
+                HEF,
+                HailoStreamInterface,
+                InferVStreams,
+                InputVStreamParams,
+                OutputVStreamParams,
+                VDevice,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "hailo_platform (HailoRT bindings) is required for .hef models. "
+                "Install the HailoRT python bindings on this device."
+            ) from exc
+
+        hef = HEF(model_file)
+        input_infos = hef.get_input_vstream_infos()
+        if not input_infos:
+            raise ValueError(f"HEF {model_file} exposes no input vstreams.")
+        self._hailo_inp_name = input_infos[0].name
+
+        self._hailo_vdevice = VDevice()
+        try:
+            configure_params = ConfigureParams.create_from_hef(
+                hef, interface=HailoStreamInterface.PCIe
+            )
+            network_group = self._hailo_vdevice.configure(hef, configure_params)[0]
+            group_params = network_group.create_params()
+            input_vstreams_params = InputVStreamParams.make(
+                network_group, format_type=FormatType.UINT8
+            )
+            output_vstreams_params = OutputVStreamParams.make(
+                network_group, format_type=FormatType.FLOAT32
+            )
+            self._hailo_infer = InferVStreams(
+                network_group, output_vstreams_params, input_vstreams_params
+            )
+            self._hailo_network_group = network_group
+            self._hailo_group_params = group_params
+            self._hailo_hef = hef
+            # arm the network once and hold the activation for the lifetime of
+            # this session so per-frame infer() has zero activation overhead
+            self._hailo_activation = network_group.activate(group_params)
+            self._hailo_activation.__enter__()
+            self.logger.info(
+                "Hailo .hef loaded: %s (input vstream %s, %d output(s))",
+                Path(model_file).name,
+                self._hailo_inp_name,
+                len(hef.get_output_vstream_infos()),
+            )
+        except Exception:
+            try:
+                self._hailo_vdevice.release()
+            except Exception:
+                pass
+            raise ValueError(f"Failed to load Hailo .hef model: {model_file}")
+
+    def _run_hailo(self, preprocessed: np.ndarray, orig_shape) -> Results:
+        if getattr(self, "_hailo_infer", None) is None:
+            raise RuntimeError("Hailo infer pipeline not initialized")
+        try:
+            raw_outputs = self._hailo_infer.infer(
+                {self._hailo_inp_name: preprocessed}
+            )
+        except Exception as e:
+            self.logger.error("Hailo inference failed: %s", e)
+            return Results([], orig_shape)
+
+        vals = [np.asarray(v) for v in raw_outputs.values()]
+        if not vals:
+            return Results([], orig_shape)
+        # baked-NMS compile -> single output; a multi-output build (raw tail
+        # convs) would need the same merge the rknn path does. Fail loud rather
+        # than silently parsing the wrong tensor.
+        if len(vals) > 1:
+            raise ValueError(
+                f"Hailo .hef returned {len(vals)} output(s) "
+                f"{[v.shape for v in vals]}; the baked-NMS pipeline expects a "
+                "single (num_classes, max_dets, 5) output. Recompile the .hef "
+                "with Hailo model-zoo NMS, or wire up split-output merging."
+            )
+        tensor = vals[0]
+        if not self._hailo_fmt_checked:
+            self._hailo_fmt_checked = True
+            # per-class grouped NMS is distinguishable by a trailing '5' axis
+            # (num_classes, max_dets, 5) - anything else means the sidecar's
+            # output format contract and the .hef disagree.
+            last = tensor.shape[-1] if tensor.ndim else 0
+            actual_fmt = (
+                "hardware_nms" if (tensor.ndim >= 2 and last == 5) else "raw"
+            )
+            if actual_fmt != self.output["format"]:
+                raise ValueError(
+                    f"Hailo model output shape {tensor.shape} indicates "
+                    f"output.format should be {actual_fmt!r}, but the metadata "
+                    f"sidecar says {self.output['format']!r}. Re-run boot.py "
+                    f"conversion to regenerate the sidecar for this .hef."
+                )
+        return self.postprocess([tensor], orig_shape)
 
     def _load_tflite(self, model_file: str):
         num_threads = max(1, (os.cpu_count() or 4) - 1)
@@ -1158,6 +1285,10 @@ class GenericYolo:
                     results_list.append(
                         self._run_rknn(self._preprocess_frame(frame), target_shape)
                     )
+                elif self.model_type == "hailo":
+                    results_list.append(
+                        self._run_hailo(self._preprocess_frame(frame), target_shape)
+                    )
                 elif self.model_type == "onnx":
                     results_list.append(self._run_onnx(frame, target_shape))
                 elif self.model_type == "tflite":
@@ -1373,6 +1504,8 @@ class GenericYolo:
     def predict_preprocessed(self, preprocessed: np.ndarray, orig_shape) -> Results:
         if self.model_type == "rknn":
             return self._run_rknn(preprocessed, orig_shape)
+        if self.model_type == "hailo":
+            return self._run_hailo(preprocessed, orig_shape)
         if self.model_type == "onnx":
             return self._infer_onnx(preprocessed, orig_shape)
         if self.model_type == "tflite":
@@ -1388,15 +1521,74 @@ class GenericYolo:
         tensor = self._prepare_output_tensor(tensor)
         if tensor.size == 0:
             return Results([], orig_shape)
+        if self.model_type == "hailo":
+            return self._parse_hailo_nms(tensor, orig_shape)
         if self.output["format"] == "hardware_nms":
             return self._parse_hardware_nms(tensor, orig_shape)
         if self.task == "detect":
             return self._parse_raw_detect(tensor, orig_shape)
         return self._parse_raw_pose(tensor, orig_shape)
 
+    def _parse_hailo_nms(self, tensor: np.ndarray, orig_shape) -> Results:
+        # Hailo's baked-NMS output is grouped per class: (num_classes,
+        # max_dets, 5) with each row [y1, x1, y2, x2, score] in COORDS
+        # NORMALIZED 0-1 (relative to the network input), not pixels - unlike
+        # the flat (N, 6+) tensor the generic _parse_hardware_nms expects.
+        buf = np.asarray(tensor)
+        # drop a leading singleton batch axis if present
+        while buf.ndim > 2 and buf.shape[0] == 1:
+            buf = buf[0]
+
+        if buf.ndim == 2 and buf.shape[1] == 5:
+            # single-class build already squeezed to (max_dets, 5)
+            per_class = [buf]
+        elif buf.ndim == 3 and buf.shape[1] == 5:
+            # (num_classes, 5, max_dets) layout - move the 5-axis last
+            per_class = [buf[c].T for c in range(buf.shape[0])]
+        elif buf.ndim == 3 and buf.shape[2] == 5:
+            per_class = [buf[c] for c in range(buf.shape[0])]
+        else:
+            raise ValueError(
+                f"Hailo .hef output shape {tensor.shape} doesn't match the "
+                "expected per-class NMS layout (num_classes, max_dets, 5) or "
+                "(num_classes, 5, max_dets). The sidecar metadata or the .hef "
+                "itself may be stale - re-run boot.py conversion."
+            )
+
+        target_w, target_h = self.input_size
+        boxes = []
+        for cls_id, dets in enumerate(per_class):
+            confs = dets[:, 4]
+            finite = np.isfinite(dets[:, :4]).all(axis=1) & np.isfinite(confs)
+            dropped = int((~finite).sum())
+            if dropped:
+                self.logger.debug(
+                    "Dropped %d/%d Hailo detection(s) with non-finite "
+                    "coordinates/confidence (class %d).",
+                    dropped,
+                    len(dets),
+                    cls_id,
+                )
+            valid = dets[(confs >= self.min_conf) & finite]
+            for det in valid:
+                # normalized [y1, x1, y2, x2] -> pixel xyxy in the letterboxed
+                # input, then map back to the original frame
+                y1, x1, y2, x2 = (float(det[0]), float(det[1]),
+                                  float(det[2]), float(det[3]))
+                xyxy = np.array([x1 * target_w, y1 * target_h,
+                                 x2 * target_w, y2 * target_h])
+                xyxy = self._scale_coords(xyxy, orig_shape, is_kpts=False)
+                boxes.append(Box(xyxy.tolist(), float(det[4]), int(cls_id)))
+        return Results(boxes, orig_shape)
+
     def _prepare_output_tensor(self, tensor: np.ndarray) -> np.ndarray:
         while isinstance(tensor, (list, tuple)) and len(tensor) > 0:
             tensor = tensor[0]
+        if self.model_type == "hailo":
+            # per-class grouped NMS output - keep it exactly as the NPU
+            # produced it; the hailo parser knows its layout
+            self._output_verified = True
+            return tensor
         if tensor.ndim == 3 and tensor.shape[0] == 1:
             tensor = tensor[0]
         if not self._output_verified:
@@ -1830,6 +2022,19 @@ class GenericYolo:
                 self._onnx_pool.stop()
         elif self.model_type == "tflite":
             del self.model
+        elif self.model_type == "hailo":
+            act = getattr(self, "_hailo_activation", None)
+            if act is not None:
+                try:
+                    act.__exit__(None, None, None)
+                except Exception:
+                    pass
+            vdevice = getattr(self, "_hailo_vdevice", None)
+            if vdevice is not None:
+                try:
+                    vdevice.release()
+                except Exception:
+                    pass
         elif self.model_type in ("engine", "openvino"):
             # drop refs to free the CUDA context / compiled blob
             del self.model

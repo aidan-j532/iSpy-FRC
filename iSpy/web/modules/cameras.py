@@ -71,9 +71,11 @@ _FEED_MAX_DIM = 1280
 _CALIB_FEED_WARMUP_S = 1.5
 # the rolling solve is the other big periodic CPU spike - left unchecked it
 # re-runs a full bundle solve on every captured frame (every ~0.25-0.5s while
-# the board is being moved), which stutters the live feed. Throttle it and
-# bound the number of frames the live RMS preview is computed over.
-_AUTO_SOLVE_INTERVAL_S = 1.5
+# the board is being moved), which stutters the live feed. The native OpenCV
+# solver is ~30x faster than the scipy bundle, so the budget here is much
+# tighter than before: solve on a short cadence (RMS preview converges almost
+# as fast as captures accumulate) but still bound the number of frames.
+_AUTO_SOLVE_INTERVAL_S = 0.75
 _AUTO_SOLVE_MAX_CAPTURES = 10
 # how many captured-frame overlays to draw on each streamed frame (see
 # _draw_captured_overlays - captures never stop accumulating under auto capture)

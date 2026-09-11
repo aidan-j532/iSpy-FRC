@@ -471,6 +471,40 @@ def detect_charuco_auto(frame, preferred_pattern=None, preferred_dict=None):
     return False, None, None, None, None, gray, None, None
 
 
+def _calibration_sane(rms, cam_mat, dist, img_size, max_rms: float = 100.0) -> bool:
+    """Reject degenerate solves before they can poison the pipeline.
+
+    OpenCV's native ChArUco solver is ~30x faster than the scipy fallback but
+    occasionally lands on a garbage-but-low-RMS baseline (huge focal lengths,
+    principal point far outside the frame). Mirror the sanity bounds used by
+    _estimate_initial_intrinsics so the slow scipy path only runs on inputs the
+    native solver could not explain.
+    """
+    if rms is None or cam_mat is None or dist is None:
+        return False
+    try:
+        rms_f = float(rms)
+    except (TypeError, ValueError):
+        return False
+    if not np.isfinite(rms_f) or rms_f < 0.0 or rms_f > max_rms:
+        return False
+    try:
+        K = np.asarray(cam_mat, dtype=np.float64)
+        d = np.asarray(dist, dtype=np.float64).ravel()
+        if K.shape != (3, 3) or not np.isfinite(K).all() or not np.isfinite(d).all():
+            return False
+        fx, fy = float(K[0, 0]), float(K[1, 1])
+        cx, cy = float(K[0, 2]), float(K[1, 2])
+        w, h = img_size
+    except (TypeError, ValueError, IndexError, ZeroDivisionError):
+        return False
+    if not (0.0 < fx < w * 4.0 and 0.0 < fy < h * 4.0):
+        return False
+    if not (0.0 < cx < w * 2.0 and 0.0 < cy < h * 2.0):
+        return False
+    return True
+
+
 def calibrate_charuco(
     captures,
     pattern=DEFAULT_CHARUCO_PATTERN,
@@ -503,25 +537,34 @@ def calibrate_charuco(
         )
         return None
     try:
-        result = _calibrate_scipy(all_corners, all_ids, board, img_size)
-    except Exception as exc:
-        logger.debug("scipy calibration failed, falling back to OpenCV: %s", exc)
-        result = None
-    if result is not None:
-        rms, cam_mat, dist, _, _ = result
-    else:
+        rms, cam_mat, dist, _, _ = _calibrate_camera_charuco(
+            all_corners,
+            all_ids,
+            board,
+            img_size,
+            None,
+            None,
+        )
+    except (cv2.error, Exception) as exc:
+        logger.debug(
+            "OpenCV ChArUco calibration unavailable/failed (%s) - trying scipy",
+            exc,
+        )
+        rms, cam_mat, dist = None, None, None
+    if not _calibration_sane(rms, cam_mat, dist, img_size):
+        # native solver missing or returned an implausible baseline - fall back
+        # to the scipy bundle (what used to be the primary path)
         try:
-            rms, cam_mat, dist, _, _ = _calibrate_camera_charuco(
-                all_corners,
-                all_ids,
-                board,
-                img_size,
-                None,
-                None,
-            )
-        except cv2.error as exc:
-            logger.warning("ChArUco calibration failed: %s", exc)
-            return None
+            result = _calibrate_scipy(all_corners, all_ids, board, img_size)
+        except Exception as exc:
+            logger.debug("scipy calibration failed: %s", exc)
+            result = None
+        if result is not None:
+            rms, cam_mat, dist, _, _ = result
+        else:
+            rms, cam_mat, dist = None, None, None
+    if rms is None or cam_mat is None or dist is None:
+        return None
     if not np.isfinite(rms) or rms > 100.0:
         logger.warning(
             "ChArUco calibration gave an implausible RMS %.3f - frames were probably too similar",

@@ -3,10 +3,6 @@ from pathlib import Path
 
 #: every backend any model-backed pipeline can build; 'auto' resolution must
 #: pick from this set or fall back to onnx
-# HAILO DISABLED - see <reason>
-# Original: ("onnx", "rknn", "tflite", "openvino", "engine", "coreml", "tpu", "hef")
-# "hef" removed so 'auto' resolution, schema options, and auto_opt validation
-# can never select the disabled Hailo backend.
 SUPPORTED_TARGET_FORMATS = (
     "onnx",
     "rknn",
@@ -15,6 +11,8 @@ SUPPORTED_TARGET_FORMATS = (
     "engine",
     "coreml",
     "tpu",
+    "hailo",
+    "qnn",
 )
 
 
@@ -32,8 +30,8 @@ class OptimizableModelPipeline:
     #: for the active model artifact/file.
     _HARDWARE_BY_FORMAT = {
         "rknn": "npu",
-        # HAILO DISABLED - see <reason>
-        # "hef": "npu",      # Hailo NPU
+        "hailo": "npu",  # Hailo NPU
+        "qnn": "npu",  # Qualcomm NPU (ONNX Runtime QNN EP)
         "tpu": "tpu",
         "engine": "gpu",  # NVIDIA TensorRT
         "coreml": "gpu",  # Apple GPU
@@ -52,7 +50,7 @@ class OptimizableModelPipeline:
         mt = getattr(model, "model_type", None)
         if mt == "tpu":
             return "tpu"
-        if mt == "rknn":
+        if mt in ("rknn", "hailo", "qnn"):
             return "npu"
 
         path = None
@@ -286,10 +284,16 @@ class OptimizableModelPipeline:
         p = str(path).lower()
         if "openvino_model" in p or p.endswith(".xml"):
             return "openvino"
+        # QNN artifacts are .onnx files committed under a 'qnn' output dir -
+        # sniff the directory before the generic .onnx suffix, or they'd be
+        # mislabelled as plain onnx and the format wouldn't round-trip.
+        if "\\qnn\\" in p or "/qnn/" in p:
+            return "qnn"
         for ext, fmt in (
             (".pt", "pytorch"),
             (".onnx", "onnx"),
             (".rknn", "rknn"),
+            (".hef", "hailo"),
             (".tflite", "tflite"),
             (".engine", "engine"),
             (".mlpackage", "coreml"),

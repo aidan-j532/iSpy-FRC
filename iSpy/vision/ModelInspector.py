@@ -11,10 +11,14 @@ def inspect_model(model_path: str, task: str = "detect") -> dict:
     ext = Path(model_path).suffix.lower()
     suffix = Path(model_path).name
 
+    if ext == ".hef":
+        return _inspect_hailo(model_path, task)
     if ext == ".onnx":
         return _inspect_onnx(model_path, task)
-    elif ext == ".rknn":
+    if ext == ".rknn":
         return _inspect_rknn(model_path, task)
+    elif ext == ".hef":
+        return _inspect_hailo(model_path, task)
     elif ext == ".tflite":
         return _inspect_tflite(model_path, task)
     elif (
@@ -254,32 +258,29 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
     warnings_list = []
     manual = []
 
-    # Hardware contracts - always correct, no metadata needed
     certain_fields = [
-        "input.layout",  # RKNN runtime always NHWC
-        "input.dtype",  # RKNN runtime always uint8
-        "input.normalize",  # uint8 -> never normalise in Python
+        "input.layout",
+        "input.dtype",
+        "input.normalize",
     ]
     detected_fields: list[str] = []
 
-    # defaults tuned for RKNN TOOLKIT export (ONNX -> rknn.build());
-    # the ultralytics rknn export path isnt used here, its values would be wrong
     result: dict[str, Any] = {
         "file_path": model_path,
         "task": task,
         "num_classes": 1,
-        "input_size": [640, 640],  # overridden below if metadata has it
+        "input_size": [640, 640],
         "min_conf": 0.5,
         "output": {
-            "format": "raw",  # Toolkit: raw tensor, NOT end-to-end NMS
-            "layout": "features_first",  # Ultralytics ONNX -> Toolkit: (feat, anchors)
-            "box_format": "cxcywh",  # Ultralytics ONNX internal encoding
+            "format": "raw",
+            "layout": "features_first",
+            "box_format": "cxcywh",
             "score_mode": "objectness",
-            "scores_are_logits": False,  # Ultralytics applies sigmoid before ONNX export
-            "apply_software_nms": True,  # required for raw format
+            "scores_are_logits": False,
+            "apply_software_nms": True,
             "nms_iou": 0.45,
-            "quantization": "int8",  # overridden by metadata when available; int8 = quantized, none = unquantized
-            "quant_scale": 255.0,  # 255 for quantized, 1.0 for unquantized
+            "quantization": "int8",
+            "quant_scale": 255.0,
         },
         "input": {
             "layout": "nhwc",
@@ -361,7 +362,6 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
         except Exception as e:
             warnings_list.append(f"Failed to parse {meta_path.name}: {e}")
 
-    # When no metadata - every output field is a guess, warn loudly
     if not has_metadata:
         _logger.warning(
             "--------------------------------------------------------------\n"
@@ -409,7 +409,6 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
             "No metadata - output fields are defaults. See warnings above."
         )
 
-    # Even with metadata: input_size is unverifiable if it wasn't saved
     if "input_size" not in certain_fields:
         manual.append(
             "input_size  -  defaulted to [640,640]. "
@@ -684,6 +683,111 @@ def _flatten_config_to_metadata(cfg: dict) -> dict:
         ]
 
     return meta
+
+
+def _inspect_hailo(model_path: str, task: str) -> dict:
+    from pathlib import Path as _Path
+    from typing import Any
+    import logging as _logging
+
+    _logger = _logging.getLogger(__name__)
+
+    warnings_list = []
+    manual = []
+
+    certain_fields = [
+        "input.layout",
+        "input.dtype",
+        "input.normalize",
+    ]
+    detected_fields: list[str] = []
+
+    result: dict[str, Any] = {
+        "file_path": model_path,
+        "task": task,
+        "num_classes": 1,
+        "input_size": [640, 640],
+        "min_conf": 0.5,
+        "output": {
+            "format": "hardware_nms",
+            "layout": "anchors_first",
+            "box_format": "xyxy",
+            "score_mode": "objectness",
+            "scores_are_logits": False,
+            "apply_software_nms": False,
+            "nms_iou": 0.45,
+            "quantization": "int8",
+            "quant_scale": 255.0,
+            "box_coord_scale": 640.0,
+        },
+        "input": {
+            "layout": "nhwc",
+            "dtype": "uint8",
+            "letterbox": True,
+            "pad_value": 114,
+            "normalize": False,
+        },
+    }
+
+    meta_path = _Path(model_path).parent / f"{_Path(model_path).stem}_metadata.yaml"
+    has_metadata = meta_path.exists()
+
+    if has_metadata:
+        try:
+            from ruamel.yaml import YAML
+
+            meta = YAML(typ="safe").load(meta_path)
+            if isinstance(meta, dict):
+                hailo_task = meta.get("task", "")
+                if hailo_task:
+                    result["task"] = hailo_task
+                    certain_fields.append("task")
+
+                nc = meta.get("num_classes")
+                if nc is not None:
+                    result["num_classes"] = int(nc)
+                    certain_fields.append("num_classes")
+
+                saved_size = meta.get("input_size")
+                if saved_size and len(saved_size) == 2:
+                    result["input_size"] = [int(x) for x in saved_size]
+                    certain_fields.append("input_size")
+
+                for meta_key, cfg_path in (
+                    ("output_format", "output.format"),
+                    ("output_layout", "output.layout"),
+                    ("box_format", "output.box_format"),
+                    ("score_mode", "output.score_mode"),
+                    ("quantization", "output.quantization"),
+                    ("quant_scale", "output.quant_scale"),
+                    ("box_coord_scale", "output.box_coord_scale"),
+                ):
+                    val = meta.get(meta_key)
+                    if val is not None:
+                        parts = cfg_path.split(".")
+                        d = result
+                        for p in parts[:-1]:
+                            d = d[p]
+                        d[parts[-1]] = val
+                        certain_fields.append(cfg_path)
+        except Exception as e:
+            warnings_list.append(f"Failed to parse {meta_path.name}: {e}")
+
+    manual.append(
+        "output.format  -  defaulted to 'hardware_nms'. "
+        "Correct for any .hef compiled from the Hailo model-zoo (baked NMS)."
+    )
+    manual.append(
+        "input_size  -  defaulted to [640,640]. "
+        "Verify it matches your Hailo export resolution. "
+        "(Re-run conversion to save this automatically.)"
+    )
+
+    result["_certain_fields"] = certain_fields
+    result["_detected_fields"] = detected_fields
+    result["_manual_fields"] = manual
+    result["_warnings"] = warnings_list
+    return result
 
 
 def _inspect_tflite(model_path: str, task: str) -> dict:

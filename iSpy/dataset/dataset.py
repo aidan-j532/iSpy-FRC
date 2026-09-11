@@ -23,6 +23,8 @@ _SEARCH_FALLBACK_ENV = "ISPY_ALLOW_SEARCH_FALLBACK"
 
 _FORMAT_CALIB_COUNTS = {
     "rknn": 20,  # KL-divergence wants broader coverage
+    "hailo": 20,  # DFC quantization - moderate coverage like rknn
+    "qnn": 0,  # fp32 onnx artifact - NPU weights quantized on-device, no calib
     "tflite": 100,  # simpler min/max calibration, converges faster
     "openvino": 300,
     "engine": 500,  # tensorrt entropy calibration wants more samples

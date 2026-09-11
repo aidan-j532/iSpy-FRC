@@ -252,6 +252,39 @@ def derive_format_metadata(
             "input_normalize": True,
             "input_scale": 255.0,
         },
+        # HailoRT .hef: baked NMS output grouped per class
+        # (num_classes, max_dets, 5). Coordinates are normalized 0-1 in yxyx
+        # order; the runtime scales them to pixel xyxy before parsing.
+        "hailo": {
+            "output_format": "hardware_nms",
+            "output_layout": "anchors_first",
+            "box_format": "xyxy",
+            "score_mode": "objectness" if pt_meta.get("nc", 1) == 1 else "multi_class",
+            "scores_are_logits": False,
+            "apply_software_nms": False,
+            "quantization": "int8",
+            "quant_scale": 255.0,
+            "input_layout": "nhwc",
+            "input_dtype": "uint8",
+            "input_letterbox": True,
+            "input_pad_value": 114,
+            "input_normalize": False,
+        },
+        "qnn": {
+            "output_format": "raw",
+            "output_layout": "features_first",
+            "box_format": "cxcywh",
+            "score_mode": "objectness" if pt_meta.get("nc", 1) == 1 else "multi_class",
+            "scores_are_logits": False,
+            "apply_software_nms": True,
+            "quantization": "none",
+            "input_layout": "nchw",
+            "input_dtype": "float32",
+            "input_letterbox": True,
+            "input_pad_value": 114,
+            "input_normalize": True,
+            "input_scale": 255.0,
+        },
     }
 
     contract = FORMAT_CONTRACTS.get(target_format, {})

@@ -826,7 +826,8 @@ class YoloPT:
     def _postprocess(self, pred, frame_shape, conf):
         # pred: [B, 4+nc(+nk), N] (decode yields xywh in input-space); convert and scale.
         if self.task == "pose":
-            boxes_xyxy = xywh2xyxy(pred[:, :4, :]).transpose(1, 2)  # [B, N, 4]
+            boxes_xywh = pred[:, :4, :].transpose(1, 2)  # [B, N, 4]
+            boxes_xyxy = xywh2xyxy(boxes_xywh)  # [B, N, 4]
             scores = pred[:, 4 : 4 + self.nc, :].transpose(1, 2)  # [B, N, nc]
             kpts = pred[:, 4 + self.nc :, :]  # [B, nk, N]
             full = torch.cat([boxes_xyxy, scores], 2)  # [B, N, 4+nc]

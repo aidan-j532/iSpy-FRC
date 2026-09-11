@@ -189,6 +189,7 @@ def _no_hw_flags():
     return {
         "has_rockchip_npu": False,
         "has_hailo_npu": False,
+        "has_qualcomm_npu": False,
         "has_edge_tpu": False,
         "has_apple_silicon": False,
         "has_tpu": False,
@@ -218,19 +219,31 @@ class TestAutoOpt(unittest.TestCase):
         self.assertIsInstance(_recommend(), str)
 
     def test_returns_known_format(self):
-        # HAILO DISABLED - "hef" removed from the search space (see AutoOpt)
         known = SUPPORTED_FORMATS
         self.assertIn(_recommend(), known, f"Unknown format: {_recommend()}")
 
     def test_rknn_wins_when_rockchip_npu(self):
         self.assertEqual(_recommend(has_rockchip_npu=True), "rknn")
 
-    def test_hailo_disabled_never_selects_hef(self):
-        # HAILO DISABLED - has_hailo_npu() is neutered (returns False) and the
-        # recommend_format() hef branch is commented out, so even simulated
-        # Hailo hardware must fall through to the next best backend (onnx here).
-        self.assertEqual(_recommend(has_hailo_npu=True), "onnx")
-        self.assertNotEqual(_recommend(has_hailo_npu=True), "hef")
+    def test_rockchip_preserves_priority_over_hailo(self):
+        # A board with both a Rockchip and a Hailo NPU stays on rknn - Rockchip
+        # is the primary supported target.
+        self.assertEqual(
+            _recommend(has_rockchip_npu=True, has_hailo_npu=True), "rknn"
+        )
+
+    def test_hailo_npu_uses_hailo_format(self):
+        self.assertEqual(_recommend(has_hailo_npu=True), "hailo")
+
+    def test_qualcomm_npu_uses_qnn_format(self):
+        self.assertEqual(_recommend(has_qualcomm_npu=True), "qnn")
+
+    def test_hailo_preserves_priority_over_qualcomm(self):
+        # Order between the NPU vendors only matters on multi-NPU boards; hailo
+        # is checked before qnn so it wins when both are present.
+        self.assertEqual(
+            _recommend(has_hailo_npu=True, has_qualcomm_npu=True), "hailo"
+        )
 
     def test_edge_tpu_uses_tflite(self):
         self.assertEqual(_recommend(has_edge_tpu=True), "tflite")
@@ -282,12 +295,19 @@ class TestAutoOpt(unittest.TestCase):
         )
 
     def test_runtime_unsupported_keeps_cpu_backends(self):
-        # rknn/tflite/tpu remain valid runtime formats and shouldn't be skipped.
+        # rknn/tflite/tpu/hailo/qnn remain valid runtime formats and shouldn't
+        # be skipped.
         self.assertEqual(
             _recommend(has_rockchip_npu=True, runtime_supported=False), "rknn"
         )
         self.assertEqual(
             _recommend(has_edge_tpu=True, runtime_supported=False), "tflite"
+        )
+        self.assertEqual(
+            _recommend(has_hailo_npu=True, runtime_supported=False), "hailo"
+        )
+        self.assertEqual(
+            _recommend(has_qualcomm_npu=True, runtime_supported=False), "qnn"
         )
 
 

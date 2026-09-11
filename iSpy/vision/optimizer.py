@@ -600,7 +600,7 @@ def install_special_dependencies(auto_install: bool = False):
             )
             return
 
-    if backend in {"rknn", "engine"}:
+    if backend in {"rknn", "engine", "hailo"}:
         logger.warning(
             "%s is a hardware/vendor backend - installation may require "
             "system-level setup and can take a few minutes.",
@@ -616,6 +616,36 @@ def install_special_dependencies(auto_install: bool = False):
             )
 
     logger.info("Dependency installation complete for %s", backend)
+
+
+_EXPORT_DEPS = (
+    ("ultralytics", "ultralytics>=8.3.0"),
+    ("onnxslim", "onnxslim>=0.1.87"),
+    ("onnx", "onnx>=1.16.0,<1.17"),
+)
+
+
+def _ensure_export_deps() -> bool:
+    missing = [mod for mod, _ in _EXPORT_DEPS if not _is_installed(mod)]
+    if not missing:
+        return True
+    logger.warning(
+        "Missing build-time export dependencies (%s). Auto-installing "
+        "ultralytics (AGPL-3.0) + onnx + onnxslim - these are only used to "
+        "produce optimized artifacts, never for runtime inference.",
+        ", ".join(missing),
+    )
+    for mod, target in _EXPORT_DEPS:
+        if _is_installed(mod):
+            continue
+        if not _pip_install(target):
+            logger.error(
+                "Failed to install %s (required for model export). Run "
+                "'pip install \".[optimizer]\"' manually and retry.",
+                target,
+            )
+            return False
+    return True
 
 
 def _export_ultralytics(
@@ -789,6 +819,52 @@ def _yolo_models_dir() -> Path:
     return _PROJECT_ROOT / "YoloModels"
 
 
+def _export_backend_metadata(
+    pt_file: str,
+    artifact_output,
+    target_format: str,
+    input_size=None,
+    *,
+    quantize=None,
+    overrides: dict | None = None,
+) -> None:
+    # General backend sidecar exporter (hailo/qnn/whatever comes next). RKNN
+    # keeps its own heavily-tuned _export_rknn_metadata untouched - don't unify
+    # one into the other without a full RKNN regression run.
+    from iSpy.vision.metadata import (
+        derive_format_metadata,
+        metadata_from_pt,
+        metadata_path_for,
+        read_metadata,
+        write_metadata,
+    )
+
+    try:
+        pt_path = Path(pt_file)
+        artifact_path = Path(artifact_output)
+        pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
+        meta = derive_format_metadata(pt_meta, target_format)
+        if overrides:
+            meta.update(overrides)
+        if input_size is not None:
+            if hasattr(input_size, "__iter__"):
+                meta["input_size"] = [int(x) for x in input_size]
+            else:
+                meta["input_size"] = [int(input_size), int(input_size)]
+        if quantize is not None:
+            meta["quantization"] = "int8" if quantize else "none"
+            meta["quant_scale"] = 255.0 if quantize else 1.0
+            meta["quantize"] = quantize
+
+        meta_path = metadata_path_for(artifact_path)
+        write_metadata(meta_path, meta)
+        logger.info(
+            "Exported %s metadata: %s", target_format, meta_path
+        )
+    except Exception as e:
+        logger.warning("Failed to export %s metadata: %s", target_format, e)
+
+
 def _format_output_dir(target_format: str) -> Path:
     if target_format == "pytorch":
         return _yolo_models_dir() / "pytorch"
@@ -800,6 +876,13 @@ def _artifact_name(pt_path: Path, target_format: str) -> str:
     if target_format == "rknn":
         return f"{stem}.rknn"
     if target_format == "onnx":
+        return f"{stem}.onnx"
+    if target_format == "hailo":
+        return f"{stem}.hef"
+    if target_format == "qnn":
+        # qnn is the onnx artifact committed under the qnn/ dir - the format is
+        # distinguished by directory so cache/existing_artifact_for logic can
+        # round-trip it, not by a separate file extension.
         return f"{stem}.onnx"
     if target_format == "openvino":
         return f"{stem}_openvino_model"
@@ -820,7 +903,16 @@ def _desired_output_path(pt_path: Path, target_format: str) -> Path:
 
 # optimized artifacts can be built for any of these - a camera runs whichever
 # backend is active, so "already built" means any of them
-_ARTIFACT_FORMATS = ("onnx", "rknn", "tflite", "openvino", "engine", "coreml")
+_ARTIFACT_FORMATS = (
+    "onnx",
+    "rknn",
+    "tflite",
+    "openvino",
+    "engine",
+    "coreml",
+    "hailo",
+    "qnn",
+)
 
 
 def existing_artifact_for(
@@ -1174,6 +1266,11 @@ def _convert_rknn(
         quantize = _RKNN_QUANTIZE
     pt_path = Path(pt_file)
 
+    if not _ensure_export_deps():
+        raise RuntimeError(
+            "Unable to install the build-time export dependencies required to "
+            "produce the intermediate ONNX artifact for RKNN conversion."
+        )
     raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
     if not raw_onnx.exists():
         raise RuntimeError(f"Intermediate ONNX export failed: {raw_onnx}")
@@ -1358,6 +1455,246 @@ def _convert_rknn(
     return str(rknn_output)
 
 
+def _hailo_end_node_names(onnx_path: str) -> list[str]:
+    # Hailo's baked-NMS compile wants the detection-head conv outputs as
+    # --end-node-names (the box+cv2 and class+cv3 convs per scale - the Hailo
+    # model-zoo friendly cut, i.e. the raw tensors BEFORE ultralytics' Mul
+    # decode). Ultralytics names these nodes like
+    #   /model.22/cv2.0/cv2.0.2/Conv, /model.22/cv3.1/cv3.1.2/Conv
+    # (YOLOv8) / model.23 for YOLO11. Rather than hardcode a head depth, pull
+    # them from the graph by the cv<N>.2/Conv pattern and fail loud if the
+    # export structure has drifted so a stale build can never ship silently.
+    import re
+
+    import onnx
+
+    model = onnx.load(onnx_path)
+    pattern = re.compile(r"/cv[23]\.\d/cv[23]\.\d\.2/Conv")
+    names: list[str] = []
+    for node in model.graph.node:
+        if node.op_type != "Conv":
+            continue
+        if not pattern.search(node.name):
+            continue
+        if node.output:
+            names.append(node.output[0])
+    if not names:
+        raise RuntimeError(
+            f"No detection-head cv<2/3>.<n>.2/Conv end nodes found in "
+            f"{onnx_path} - the Ultralytics export structure may have changed. "
+            "Hailo compile needs explicit --end-node-names to cut the graph at "
+            "the raw box/class tensors."
+        )
+    logger.info("Derived %d Hailo end-node names: %s", len(names), names)
+    return names
+
+
+def _convert_hailo(
+    pt_file,
+    input_size,
+    dataset_path=None,
+    task="detect",
+    quantize=None,
+    kw=None,
+    arch: str | None = None,
+):
+    from iSpy.dataset.dataset import calib_count_for_format
+    from iSpy.vision.metadata import (
+        get_calibration_keywords,
+        read_metadata,
+    )
+
+    if task != "detect":
+        raise RuntimeError(
+            f"Hailo compile currently supports the detect task only (got "
+            f"{task!r}). Pose/Seg/OBB need Hailo model-zoo yaml variants."
+        )
+
+    if quantize is None:
+        quantize = True
+
+    if isinstance(input_size, int):
+        h, w = input_size, input_size
+    elif isinstance(input_size, (list, tuple)) and len(input_size) > 1:
+        h, w = int(input_size[0]), int(input_size[1])
+    elif isinstance(input_size, (list, tuple)) and len(input_size) == 1:
+        h = w = int(input_size[0])
+    else:
+        h = w = 640
+    if (h, w) != (640, 640):
+        raise RuntimeError(
+            f"Hailo compile is hard-wired to 640x640 (the model-zoo "
+            f"yolov8.yaml preprocessing) but input_size is {h}x{w}. Pick 640 "
+            "or disable Hailo for this model."
+        )
+
+    pt_path = Path(pt_file)
+
+    raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
+    if not raw_onnx.exists():
+        raise RuntimeError(f"Intermediate ONNX export failed: {raw_onnx}")
+
+    # Route intermediate ONNX to the onnx folder with its own sidecar
+    onnx_path = _desired_output_path(pt_path, "onnx")
+    try:
+        if raw_onnx != onnx_path:
+            onnx_path.parent.mkdir(parents=True, exist_ok=True)
+            if onnx_path.exists():
+                _remove_path_for_cleanup(onnx_path)
+            shutil.move(str(raw_onnx), str(onnx_path))
+        from iSpy.vision.metadata import (
+            derive_format_metadata,
+            metadata_from_pt,
+            metadata_path_for,
+            write_metadata,
+        )
+
+        pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
+        format_meta = derive_format_metadata(pt_meta, "onnx")
+        format_meta["input_size"] = (
+            list(input_size)
+            if hasattr(input_size, "__iter__")
+            else [int(input_size), int(input_size)]
+        )
+        write_metadata(metadata_path_for(onnx_path), format_meta)
+        logger.info("Intermediate ONNX routed to %s with sidecar", onnx_path)
+    except Exception as e:
+        logger.warning("Could not route intermediate ONNX: %s", e)
+        if not onnx_path.exists():
+            if raw_onnx != onnx_path and raw_onnx.exists():
+                shutil.move(str(raw_onnx), str(onnx_path))
+            else:
+                onnx_path = raw_onnx
+
+    end_nodes = _hailo_end_node_names(str(onnx_path))
+
+    pt_meta = read_metadata(pt_path)
+    from iSpy.vision.metadata import metadata_from_pt
+
+    pt_meta = pt_meta or metadata_from_pt(pt_path)
+    nc = int(pt_meta.get("nc", 80))
+
+    effective_kw = (
+        kw if kw is not None else get_calibration_keywords(pt_path, default=keywords)
+    )
+    count = calib_count_for_format("hailo")
+    ds_path, _ = _resolve_calibration_dataset(dataset_path, effective_kw, count)
+
+    arch = arch or os.environ.get("ISPY_HAILO_ARCH", "hailo8")
+    hailo_path = _desired_output_path(pt_path, "hailo")
+
+    if shutil.which("hailomz") is None:
+        raise RuntimeError(
+            "hailomz not found on PATH. Hailo compilation needs the Hailo "
+            "Dataflow Compiler + model-zoo from the Hailo Software Suite - they "
+            "don't ship on PyPI. Install them, or pre-compile the .hef on a "
+            "host with the toolchain."
+        )
+
+    cmd = [
+        "hailomz",
+        "compile",
+        "yolov8",
+        "--ckpt",
+        str(onnx_path),
+        "--calib-path",
+        str(ds_path),
+        "--hw-arch",
+        arch,
+        "--classes",
+        str(nc),
+        "--end-node-names",
+        *end_nodes,
+    ]
+    logger.info("Running hailomz compile: %s", " ".join(cmd))
+
+    workdir = Path(tempfile.mkdtemp(prefix="ispy_hailo_compile_"))
+    try:
+        with _progress_spinner("Hailo compile"):
+            with _silence_third_party():
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(workdir),
+                    capture_output=True,
+                    text=True,
+                )
+        if result.returncode != 0:
+            tail = "\n".join(
+                (result.stderr or result.stdout or "").strip().splitlines()[-25:]
+            )
+            raise RuntimeError(
+                f"hailomz compile failed (exit {result.returncode}).\n{tail}"
+            )
+
+        hefs = list(workdir.rglob("*.hef"))
+        if not hefs:
+            raise RuntimeError(
+                "hailomz compile succeeded but produced no .hef under "
+                f"{workdir}. Check the toolchain output."
+            )
+        produced = hefs[0]
+        hailo_path.parent.mkdir(parents=True, exist_ok=True)
+        if hailo_path.exists():
+            _remove_path_for_cleanup(hailo_path)
+        shutil.move(str(produced), str(hailo_path))
+    finally:
+        shutil.rmtree(str(workdir), ignore_errors=True)
+
+    logger.info("Hailo conversion successful: %s", hailo_path)
+    _export_backend_metadata(
+        pt_file,
+        hailo_path,
+        "hailo",
+        input_size=[640, 640],
+        quantize=quantize,
+        overrides={"arch": arch},
+    )
+    return str(hailo_path)
+
+
+def _convert_qnn(
+    pt_file,
+    input_size,
+    dataset_path=None,
+    task="detect",
+    quantize=None,
+    kw=None,
+):
+    # QNN is NOT a separate artifact format: the onnx artifact IS the qnn
+    # artifact, committed under YoloModels/qnn/. GenericYolo's existing onnx
+    # runtime then prefers the QNN Execution Provider when the NPU is present.
+    # We still keep the qnn/ dir + sidecar so 'auto' resolution, cache checks,
+    # and existing_artifact_for() can tell the two formats apart.
+    if quantize is None:
+        quantize = False
+    if task != "detect":
+        raise RuntimeError(
+            f"QNN conversion currently supports the detect task only (got "
+            f"{task!r})."
+        )
+
+    pt_path = Path(pt_file)
+    raw_onnx = Path(_export_ultralytics(str(pt_path), "onnx", input_size))
+    if not raw_onnx.exists():
+        raise RuntimeError(f"Intermediate ONNX export failed: {raw_onnx}")
+
+    qnn_path = _desired_output_path(pt_path, "qnn")
+    if qnn_path.exists():
+        _remove_path_for_cleanup(qnn_path)
+    qnn_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(raw_onnx), str(qnn_path))
+
+    logger.info("QNN conversion successful: %s", qnn_path)
+    _export_backend_metadata(
+        pt_file,
+        qnn_path,
+        "qnn",
+        input_size=input_size,
+        overrides={"quantize": quantize},
+    )
+    return str(qnn_path)
+
+
 def convert_model(
     model_file,
     target_format,
@@ -1445,6 +1782,48 @@ def convert_model(
             dataset_path=dataset_path,
         )
 
+    if target_format == "hailo":
+        hailo_path = _desired_output_path(pt_path, "hailo")
+        if hailo_path.exists() and not force:
+            logger.info("Cached hailo model found: %s", hailo_path)
+            return str(hailo_path)
+        if force and hailo_path.exists():
+            logger.info("Fresh conversion forced for %s", hailo_path.name)
+            _remove_path_for_cleanup(hailo_path)
+            meta = metadata_path_for(hailo_path)
+            if meta.exists():
+                _remove_path_for_cleanup(meta)
+        hailo_result = _convert_hailo(
+            pt_file=model_file,
+            input_size=input_size,
+            quantize=quantize,
+            kw=kw,
+            dataset_path=dataset_path,
+        )
+        _run_optimized_model_comparison(model_file, hailo_result)
+        return hailo_result
+
+    if target_format == "qnn":
+        qnn_path = _desired_output_path(pt_path, "qnn")
+        if qnn_path.exists() and not force:
+            logger.info("Cached qnn model found: %s", qnn_path)
+            return str(qnn_path)
+        if force and qnn_path.exists():
+            logger.info("Fresh conversion forced for %s", qnn_path.name)
+            _remove_path_for_cleanup(qnn_path)
+            meta = metadata_path_for(qnn_path)
+            if meta.exists():
+                _remove_path_for_cleanup(meta)
+        qnn_result = _convert_qnn(
+            pt_file=model_file,
+            input_size=input_size,
+            quantize=quantize,
+            kw=kw,
+            dataset_path=dataset_path,
+        )
+        _run_optimized_model_comparison(model_file, qnn_result)
+        return qnn_result
+
     desired = _desired_output_path(pt_path, target_format)
     if not force:
         if target_format == "tflite":
@@ -1479,6 +1858,13 @@ def convert_model(
         Path(dataset_root).mkdir(parents=True, exist_ok=True)
 
     try:
+        if not _ensure_export_deps():
+            logger.error(
+                "Cannot convert to %s - missing build-time export "
+                "dependencies. Falling back to .pt.",
+                target_format,
+            )
+            return model_file
         result = _export_ultralytics(model_file, target_format, input_size, data_yaml)
     except AttributeError as e:
         if "EXPLICIT_BATCH" in str(e):
