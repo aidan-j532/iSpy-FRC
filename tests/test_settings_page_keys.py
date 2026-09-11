@@ -5,6 +5,7 @@ from pathlib import Path
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "iSpy" / "web" / "templates"
 SETTINGS_HTML = (TEMPLATES / "settings.html").read_text()
+BASE_HTML = (TEMPLATES / "base.html").read_text()
 
 REMOVED_KEYS = [
     "distance_threshold",
@@ -35,9 +36,13 @@ class TestSettingsPageKeys(unittest.TestCase):
             )
 
     def test_all_settings_fields_are_still_valid_global_keys(self):
+        # top-level keys in iSpyConfig.default_config that the page may expose.
+        # "optimize" is deliberately absent: it moved to a per-vision-model
+        # pipeline setting (_VISION_MODEL_SETTINGS_KEYS), so it's edited per
+        # camera, not here.
         valid = {
-            "optimize",
             "unit",
+            "max_fps",
             "frame_sync",
             "metrics",
             "debug_mode",
@@ -52,8 +57,10 @@ class TestSettingsPageKeys(unittest.TestCase):
         for key in ("record_mode", "use_network_tables"):
             self.assertNotIn(f'"{key}"', SETTINGS_HTML)
 
-    def test_settings_page_points_to_addons_page(self):
-        self.assertIn("/addons", SETTINGS_HTML)
+    def test_addons_page_is_reachable_from_nav(self):
+        # the settings page used to carry its own "Manage add-ons from Add-ons"
+        # pointer; the sidebar nav in base.html is now the one route there.
+        self.assertIn('href="/addons"', BASE_HTML)
 
 
 if __name__ == "__main__":

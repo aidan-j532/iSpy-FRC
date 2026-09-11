@@ -16,7 +16,10 @@ class TestGlobalChrome(unittest.TestCase):
         html = read("base.html")
         self.assertIn('rel="icon"', html)
         self.assertIn("/static/favicon.svg", html)
-        self.assertIn('<meta name="theme-color" content="#0d1117">', html)
+        # matched loosely so an HTML reformat (self-closing tags, attribute
+        # wrapping) can't break a test that's really about the tag being present
+        self.assertIn('name="theme-color"', html)
+        self.assertIn('content="#0d1117"', html)
 
     def test_favicon_exists(self):
         svg = (STATIC / "favicon.svg").read_text(encoding="utf-8")
