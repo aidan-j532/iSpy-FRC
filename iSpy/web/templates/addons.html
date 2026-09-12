@@ -418,9 +418,32 @@ function renderList() {
   const count = document.getElementById('addon-count');
   count.textContent = `${list.length} of ${allAddons.length}`;
   const openVals = stashOpenPanels();
-  container.innerHTML = list.length === 0
-    ? '<div class="empty-state">No add-ons found.</div>'
-    : list.map(renderRow).join('');
+  if (list.length === 0) {
+    container.innerHTML = '<div class="empty-state">No add-ons found.</div>';
+    restoreOpenPanels(openVals);
+    return;
+  }
+  const groups = {};
+  const ungrouped = [];
+  list.forEach(p => {
+    if (p.group) {
+      groups[p.group] = groups[p.group] || [];
+      groups[p.group].push(p);
+    } else {
+      ungrouped.push(p);
+    }
+  });
+  const parts = [];
+  Object.keys(groups).sort().forEach(gname => {
+    const addons = groups[gname];
+    const enabledCount = addons.filter(p => p.enabled).length;
+    parts.push(`<details class="addon-group" open>
+  <summary class="addon-group-summary">${esc(gname)} <span class="text-dim text-sm">${enabledCount}/${addons.length} enabled</span></summary>
+  <div class="addon-group-body">${addons.map(renderRow).join('')}</div>
+</details>`);
+  });
+  parts.push(ungrouped.map(renderRow).join(''));
+  container.innerHTML = parts.join('');
   restoreOpenPanels(openVals);
 }
 

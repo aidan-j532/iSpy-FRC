@@ -706,6 +706,20 @@ pre {
 .settings-toggle-row { display: flex; align-items: center; gap: 10px; }
 .addon-settings-actions { display: flex; gap: 8px; margin-top: 8px; }
 
+/* Grouped add-ons */
+.addon-group { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; }
+.addon-group-summary {
+  cursor: pointer; padding: 8px 12px; font-weight: 600;
+  list-style: none; display: flex; align-items: baseline; gap: 8px;
+}
+.addon-group-summary::-webkit-details-marker { display: none; }
+.addon-group-summary::before {
+  content: '\25b8'; display: inline-block; transition: transform 0.15s;
+  color: var(--text-dim); font-size: 0.8rem;
+}
+.addon-group[open] > .addon-group-summary::before { transform: rotate(90deg); }
+.addon-group-body { border-top: 1px solid var(--border); padding: 4px 12px 8px; }
+
 /* Source viewer */
 .modal-wide { max-width: 780px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }

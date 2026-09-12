@@ -278,9 +278,11 @@ class PluginStatusModule(WebModule):
                 from iSpy.vision.pipelines import get_pipeline_classes
 
                 for name, cls in sorted(get_pipeline_classes().items()):
+                    group = name.rsplit("/", 1)[0] if "/" in name else None
                     available.append(
                         {
                             "name": name,
+                            "group": group,
                             "type": ptype,
                             "enabled": False,
                             "builtin": True,
@@ -316,9 +318,11 @@ class PluginStatusModule(WebModule):
                 )
                 supported = getattr(cls, "supported_pipelines", None)
                 supported = list(supported) if supported else []
+                group = name.rsplit("/", 1)[0] if "/" in name else None
                 available.append(
                     {
                         "name": name,
+                        "group": group,
                         "type": ptype,
                         "enabled": enabled,
                         "builtin": is_builtin,

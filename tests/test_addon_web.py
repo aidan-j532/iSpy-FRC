@@ -55,13 +55,13 @@ class PluginStatusModuleTests(unittest.TestCase):
         self.assertTrue({"tracker", "utility", "frame_processor"} <= kinds)
         by_name = {(p["type"], p["name"]): p for p in payload["available"]}
 
-        obj = by_name[("tracker", "object_tracker")]
+        obj = by_name[("tracker", "FRC/object_tracker")]
         self.assertIn("distance_threshold", obj["config_schema"])
         self.assertEqual(obj["config_schema"]["distance_threshold"]["default"], 0.5)
         self.assertFalse(obj["enabled"])
         self.assertEqual(obj["settings"], {})
 
-        nt = by_name[("utility", "network_table_handler")]
+        nt = by_name[("utility", "FRC/network_table_handler")]
         self.assertEqual(
             nt["config_schema"]["network_tables_ip"]["default"], "10.0.0.2"
         )
@@ -80,7 +80,7 @@ class PluginStatusModuleTests(unittest.TestCase):
             payload = mod._available().get_json()
         by_name = {(p["type"], p["name"]): p for p in payload["available"]}
         # <type>/BuiltIn/ add-ons are builtin - toggleable + configurable but never deletable
-        self.assertTrue(by_name[("tracker", "object_tracker")]["builtin"])
+        self.assertTrue(by_name[("tracker", "FRC/object_tracker")]["builtin"])
         self.assertTrue(by_name[("utility", "rollback")]["builtin"])
         # template examples ship with iSpy but live outside BuiltIn/ - they
         # still get the built-in badge so they are never mistaken for
@@ -102,7 +102,7 @@ class PluginStatusModuleTests(unittest.TestCase):
             payload = mod._available().get_json()
         by_name = {(p["type"], p["name"]): p for p in payload["available"]}
 
-        tracker = by_name[("tracker", "object_tracker")]
+        tracker = by_name[("tracker", "FRC/object_tracker")]
         self.assertEqual(tracker["supported_pipelines"], [])
         self.assertEqual(tracker["pipeline_warning"], [])
 
@@ -146,9 +146,9 @@ class PluginStatusModuleTests(unittest.TestCase):
     def test_available_reflects_enabled_settings_from_config(self):
         mod, cfg = self._module(
             {
-                "trackers": {"object_tracker": {"distance_threshold": 0.9}},
+                "trackers": {"FRC/object_tracker": {"distance_threshold": 0.9}},
                 "utilities": {
-                    "network_table_handler": {"network_tables_ip": "10.1.1.1"}
+                    "FRC/network_table_handler": {"network_tables_ip": "10.1.1.1"}
                 },
                 "frame_processors": {},
             }
@@ -156,12 +156,12 @@ class PluginStatusModuleTests(unittest.TestCase):
         with _app_context():
             payload = mod._available().get_json()
         by_name = {(p["type"], p["name"]): p for p in payload["available"]}
-        self.assertTrue(by_name[("tracker", "object_tracker")]["enabled"])
+        self.assertTrue(by_name[("tracker", "FRC/object_tracker")]["enabled"])
         self.assertEqual(
-            by_name[("tracker", "object_tracker")]["settings"],
+            by_name[("tracker", "FRC/object_tracker")]["settings"],
             {"distance_threshold": 0.9},
         )
-        nt = by_name[("utility", "network_table_handler")]
+        nt = by_name[("utility", "FRC/network_table_handler")]
         self.assertTrue(nt["enabled"])
         self.assertEqual(nt["settings"], {"network_tables_ip": "10.1.1.1"})
 
@@ -174,22 +174,26 @@ class PluginStatusModuleTests(unittest.TestCase):
             mock.patch(
                 "iSpy.web.Backend.PluginStatus.request",
                 _FakeRequest.get_json(
-                    {"name": "object_tracker", "type": "tracker", "enable": True}
+                    {
+                        "name": "FRC/object_tracker",
+                        "type": "tracker",
+                        "enable": True,
+                    }
                 ),
             ),
         ):
             resp = mod._toggle()
         self.assertTrue(resp.get_json()["success"])
-        self.assertIn("object_tracker", cfg.config["plugins"]["trackers"])
+        self.assertIn("FRC/object_tracker", cfg.config["plugins"]["trackers"])
         self.assertEqual(
-            cfg.config["plugins"]["trackers"]["object_tracker"],
+            cfg.config["plugins"]["trackers"]["FRC/object_tracker"],
             {"distance_threshold": 0.5, "stale_threshold": 1.0},
         )
 
     def test_toggle_disable_removes_dict_entry(self):
         mod, cfg = self._module(
             {
-                "trackers": {"object_tracker": {"distance_threshold": 0.7}},
+                "trackers": {"FRC/object_tracker": {"distance_threshold": 0.7}},
                 "utilities": {},
                 "frame_processors": {},
             }
@@ -199,13 +203,17 @@ class PluginStatusModuleTests(unittest.TestCase):
             mock.patch(
                 "iSpy.web.Backend.PluginStatus.request",
                 _FakeRequest.get_json(
-                    {"name": "object_tracker", "type": "tracker", "enable": False}
+                    {
+                        "name": "FRC/object_tracker",
+                        "type": "tracker",
+                        "enable": False,
+                    }
                 ),
             ),
         ):
             resp = mod._toggle()
         self.assertTrue(resp.get_json()["success"])
-        self.assertNotIn("object_tracker", cfg.config["plugins"]["trackers"])
+        self.assertNotIn("FRC/object_tracker", cfg.config["plugins"]["trackers"])
 
     def test_toggle_unknown_addon_404(self):
         mod, cfg = self._module()
@@ -240,7 +248,7 @@ class PluginStatusModuleTests(unittest.TestCase):
     def test_save_settings_merges_into_enabled_addon(self):
         mod, cfg = self._module(
             {
-                "trackers": {"object_tracker": {"distance_threshold": 0.5}},
+                "trackers": {"FRC/object_tracker": {"distance_threshold": 0.5}},
                 "utilities": {},
                 "frame_processors": {},
             }
@@ -251,7 +259,7 @@ class PluginStatusModuleTests(unittest.TestCase):
                 "iSpy.web.Backend.PluginStatus.request",
                 _FakeRequest.get_json(
                     {
-                        "name": "object_tracker",
+                        "name": "FRC/object_tracker",
                         "type": "tracker",
                         "settings": {"stale_threshold": 2.0},
                     }
@@ -261,15 +269,15 @@ class PluginStatusModuleTests(unittest.TestCase):
             resp = mod._save_settings()
         self.assertTrue(resp.get_json()["success"])
         self.assertEqual(
-            cfg.get_addon_settings("trackers", "object_tracker"),
+            cfg.get_addon_settings("trackers", "FRC/object_tracker"),
             {"distance_threshold": 0.5, "stale_threshold": 2.0},
         )
 
     def test_save_settings_coerces_types(self):
         mod, cfg = self._module(
             {
-                "trackers": {"object_tracker": {}},
-                "utilities": {"network_table_handler": {}},
+                "trackers": {"FRC/object_tracker": {}},
+                "utilities": {"FRC/network_table_handler": {}},
                 "frame_processors": {},
             }
         )
@@ -279,7 +287,7 @@ class PluginStatusModuleTests(unittest.TestCase):
                 "iSpy.web.Backend.PluginStatus.request",
                 _FakeRequest.get_json(
                     {
-                        "name": "object_tracker",
+                        "name": "FRC/object_tracker",
                         "type": "tracker",
                         "settings": {"distance_threshold": "0.75"},
                     }
@@ -287,14 +295,14 @@ class PluginStatusModuleTests(unittest.TestCase):
             ),
         ):
             resp = mod._save_settings()
-        saved = cfg.get_addon_settings("trackers", "object_tracker")
+        saved = cfg.get_addon_settings("trackers", "FRC/object_tracker")
         self.assertIsInstance(saved["distance_threshold"], float)
         self.assertEqual(saved["distance_threshold"], 0.75)
 
     def test_save_settings_rejects_unknown_keys(self):
         mod, cfg = self._module(
             {
-                "trackers": {"object_tracker": {}},
+                "trackers": {"FRC/object_tracker": {}},
                 "utilities": {},
                 "frame_processors": {},
             }
@@ -305,7 +313,7 @@ class PluginStatusModuleTests(unittest.TestCase):
                 "iSpy.web.Backend.PluginStatus.request",
                 _FakeRequest.get_json(
                     {
-                        "name": "object_tracker",
+                        "name": "FRC/object_tracker",
                         "type": "tracker",
                         "settings": {"bogus_key": 1},
                     }
@@ -315,13 +323,13 @@ class PluginStatusModuleTests(unittest.TestCase):
             resp = mod._save_settings()
         self.assertEqual(resp[1], 400)
         self.assertNotIn(
-            "bogus_key", cfg.get_addon_settings("trackers", "object_tracker")
+            "bogus_key", cfg.get_addon_settings("trackers", "FRC/object_tracker")
         )
 
     def test_save_settings_rejects_bad_numbers(self):
         mod, cfg = self._module(
             {
-                "trackers": {"object_tracker": {}},
+                "trackers": {"FRC/object_tracker": {}},
                 "utilities": {},
                 "frame_processors": {},
             }
@@ -332,7 +340,7 @@ class PluginStatusModuleTests(unittest.TestCase):
                 "iSpy.web.Backend.PluginStatus.request",
                 _FakeRequest.get_json(
                     {
-                        "name": "object_tracker",
+                        "name": "FRC/object_tracker",
                         "type": "tracker",
                         "settings": {"distance_threshold": "abc"},
                     }
@@ -350,7 +358,7 @@ class PluginStatusModuleTests(unittest.TestCase):
                 "iSpy.web.Backend.PluginStatus.request",
                 _FakeRequest.get_json(
                     {
-                        "name": "object_tracker",
+                        "name": "FRC/object_tracker",
                         "type": "tracker",
                         "settings": {"distance_threshold": 0.5},
                     }
@@ -378,7 +386,9 @@ class PluginStatusModuleTests(unittest.TestCase):
 
     def test_status_reports_loaded_instances(self):
         vision = FakeVision()
-        vision.trackers["object_tracker"] = mock.Mock(get_status=lambda: "running")
+        vision.trackers["FRC/object_tracker"] = mock.Mock(
+            get_status=lambda: "running"
+        )
         vision.utilities["rollback"] = mock.Mock(get_status=lambda: "idle")
         mod = PluginStatusModule({"config": iSpyConfig(), "vision_instance": vision})
         with _app_context():
@@ -386,8 +396,8 @@ class PluginStatusModuleTests(unittest.TestCase):
         plugins = payload["plugins"]
         self.assertEqual(len(plugins), 2)
         by_name = {p["name"]: p for p in plugins}
-        self.assertEqual(by_name["object_tracker"]["type"], "tracker")
-        self.assertEqual(by_name["object_tracker"]["status"], "running")
+        self.assertEqual(by_name["FRC/object_tracker"]["type"], "tracker")
+        self.assertEqual(by_name["FRC/object_tracker"]["status"], "running")
         self.assertEqual(by_name["rollback"]["status"], "idle")
 
     # ---------- delete ----------
@@ -425,7 +435,7 @@ class PluginStatusModuleTests(unittest.TestCase):
             resp = mod._delete("tracker", "BuiltIn/ObjectTracker")
         self.assertEqual(resp[1], 404)
         with _app_context():
-            resp2 = mod._delete("tracker", "object_tracker")
+            resp2 = mod._delete("tracker", "FRC/object_tracker")
         self.assertEqual(resp2[1], 404)
 
     def test_resolve_safe_path_never_reaches_builtin_dir(self):
@@ -565,7 +575,7 @@ class iSpyAddonLoadingTests(unittest.TestCase):
         cfg.config["app_mode"] = False
         cfg.config["plugins"] = {
             "trackers": {
-                "object_tracker": {},
+                "FRC/object_tracker": {},
                 "path_planner": {},
             },
             "utilities": {
@@ -575,7 +585,9 @@ class iSpyAddonLoadingTests(unittest.TestCase):
         }
         ispy = iSpy(cameras=[], config=cfg)
         try:
-            self.assertEqual(ispy.trackers["object_tracker"].distance_threshold, 0.5)
+            self.assertEqual(
+                ispy.trackers["FRC/object_tracker"].distance_threshold, 0.5
+            )
             self.assertEqual(ispy.trackers["path_planner"].epsilon, 0.3)
             self.assertEqual(ispy.utilities["rollback"]._fps, 30.0)
         finally:
@@ -623,7 +635,7 @@ class AllBuiltinsEnabledBootTests(unittest.TestCase):
                 self.assertEqual(set(loaded), expected)
 
             # no real NT server in CI - report connected so /health is "ok"
-            nt = vision.utilities.get("network_table_handler")
+            nt = vision.utilities.get("FRC/network_table_handler")
             if nt is not None:
                 mock.patch.object(nt, "isConnected", return_value=True).start()
 
@@ -639,7 +651,7 @@ class AllBuiltinsEnabledBootTests(unittest.TestCase):
             # plugin statuses surface through the canonical health payload
             listed = {(p["type"], p["name"]) for p in api_payload["plugins"]}
             self.assertIn(("utility", "rollback"), listed)
-            self.assertIn(("tracker", "object_tracker"), listed)
+            self.assertIn(("tracker", "FRC/object_tracker"), listed)
 
             r3 = client.get("/addons")
             self.assertEqual(r3.status_code, 200)

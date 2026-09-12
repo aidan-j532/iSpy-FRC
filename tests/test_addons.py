@@ -40,8 +40,10 @@ class AddonDiscoveryTests(unittest.TestCase):
         trackers = load_plugins(PLUGIN_ROOT / "trackers", TrackerBase)
         utilities = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)
         fps = load_plugins(PLUGIN_ROOT / "frame_processors", FrameProcessorBase)
-        self.assertTrue({"object_tracker", "path_planner"} <= set(trackers))
-        self.assertTrue({"network_table_handler", "rollback"} <= set(utilities))
+        self.assertTrue({"FRC/object_tracker", "path_planner"} <= set(trackers))
+        self.assertTrue(
+            {"FRC/network_table_handler", "rollback"} <= set(utilities)
+        )
         self.assertIn("example_frame_processor", fps)
         self.assertIn("example_tracker", trackers)
         self.assertIn("example_utility", utilities)
@@ -124,9 +126,11 @@ class AddonBaseTests(unittest.TestCase):
 
 class ObjectTrackerTests(unittest.TestCase):
     def _make(self, settings=None):
-        return load_plugins(PLUGIN_ROOT / "trackers", TrackerBase)["object_tracker"](
+        return load_plugins(PLUGIN_ROOT / "trackers", TrackerBase)["FRC/object_tracker"](
             addon_context(
-                load_plugins(PLUGIN_ROOT / "trackers", TrackerBase)["object_tracker"],
+                load_plugins(PLUGIN_ROOT / "trackers", TrackerBase)[
+                    "FRC/object_tracker"
+                ],
                 settings,
             )
         )
@@ -485,7 +489,7 @@ class HealthModuleTests(unittest.TestCase):
     def test_addon_health_from_network_table_handler(self):
         vision = mock.Mock()
         vision.utilities = {
-            "network_table_handler": mock.Mock(
+            "FRC/network_table_handler": mock.Mock(
                 get_health=lambda: {
                     "color": "green",
                     "state": "Connected",
@@ -498,7 +502,7 @@ class HealthModuleTests(unittest.TestCase):
         self.assertTrue(healthy)
         self.assertEqual(len(payload["addon_health"]), 1)
         entry = payload["addon_health"][0]
-        self.assertEqual(entry["name"], "network_table_handler")
+        self.assertEqual(entry["name"], "FRC/network_table_handler")
         self.assertEqual(entry["type"], "utility")
         self.assertEqual(entry["color"], "green")
         self.assertEqual(entry["state"], "Connected")
@@ -507,7 +511,7 @@ class HealthModuleTests(unittest.TestCase):
     def test_unhealthy_addon_degrades_banner(self):
         vision = mock.Mock()
         vision.utilities = {
-            "network_table_handler": mock.Mock(
+            "FRC/network_table_handler": mock.Mock(
                 get_health=lambda: {
                     "color": "red",
                     "state": "Disconnected",
@@ -601,14 +605,22 @@ class HealthModuleTests(unittest.TestCase):
 
     def test_plugin_statuses_pulled_from_vision_instance(self):
         vision = mock.Mock()
-        vision.trackers = {"object_tracker": mock.Mock(get_status=lambda: "running")}
+        vision.trackers = {
+            "FRC/object_tracker": mock.Mock(get_status=lambda: "running")
+        }
         vision.utilities = {}
         vision.frame_processors = {}
         mod = self._make(vision=vision)
         statuses = mod._plugin_statuses()
         self.assertEqual(
             statuses,
-            [{"name": "object_tracker", "type": "tracker", "status": "running"}],
+            [
+                {
+                    "name": "FRC/object_tracker",
+                    "type": "tracker",
+                    "status": "running",
+                }
+            ],
         )
 
     def test_stop_is_safe(self):

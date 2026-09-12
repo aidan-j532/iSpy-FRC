@@ -93,18 +93,18 @@ class AddonMigrationTests(unittest.TestCase):
         cfg = self._load(data)
         self.assertEqual(
             cfg.config["plugins"]["trackers"],
-            {"object_tracker": {}, "path_planner": {}},
+            {"FRC/object_tracker": {}, "path_planner": {}},
         )
         self.assertEqual(
             cfg.config["plugins"]["utilities"],
-            {"video_recorder": {}, "network_table_handler": {}},
+            {"video_recorder": {}, "FRC/network_table_handler": {}},
         )
         self.assertEqual(cfg.config["plugins"]["frame_processors"], {})
 
     def test_legacy_global_settings_fold_into_enabled_addons(self):
         cfg = self._load(self._legacy_config())
         self.assertEqual(
-            cfg.get_addon_settings("trackers", "object_tracker"),
+            cfg.get_addon_settings("trackers", "FRC/object_tracker"),
             {"distance_threshold": 0.88, "stale_threshold": 2.25},
         )
         self.assertEqual(
@@ -112,7 +112,7 @@ class AddonMigrationTests(unittest.TestCase):
             {"epsilon": 0.42, "min_samples": 7},
         )
         self.assertEqual(
-            cfg.get_addon_settings("utilities", "network_table_handler"),
+            cfg.get_addon_settings("utilities", "FRC/network_table_handler"),
             {"network_tables_ip": "10.6.6.6"},
         )
         self.assertEqual(
@@ -124,7 +124,9 @@ class AddonMigrationTests(unittest.TestCase):
         # record_mode/use_network_tables are gone - the add-ons they enabled are just present
         cfg = self._load(self._legacy_config())
         self.assertTrue(cfg.is_addon_enabled("utilities", "video_recorder"))
-        self.assertTrue(cfg.is_addon_enabled("utilities", "network_table_handler"))
+        self.assertTrue(
+            cfg.is_addon_enabled("utilities", "FRC/network_table_handler")
+        )
 
     def test_legacy_global_keys_are_removed(self):
         cfg = self._load(self._legacy_config())
@@ -144,8 +146,8 @@ class AddonMigrationTests(unittest.TestCase):
         data = self._legacy_config()
         data["plugins"]["trackers"] = ["path_planner"]  # object_tracker disabled
         cfg = self._load(data)
-        self.assertFalse(cfg.is_addon_enabled("trackers", "object_tracker"))
-        self.assertIsNone(cfg.get_addon_settings("trackers", "object_tracker"))
+        self.assertFalse(cfg.is_addon_enabled("trackers", "FRC/object_tracker"))
+        self.assertIsNone(cfg.get_addon_settings("trackers", "FRC/object_tracker"))
 
     def test_disabled_flags_do_not_enable_addons(self):
         # a False flag keeps the add-on disabled even if legacy top-level settings exist
@@ -157,7 +159,9 @@ class AddonMigrationTests(unittest.TestCase):
             "record_dir": "CustomDir",
         }
         cfg = self._load(data)
-        self.assertFalse(cfg.is_addon_enabled("utilities", "network_table_handler"))
+        self.assertFalse(
+            cfg.is_addon_enabled("utilities", "FRC/network_table_handler")
+        )
         self.assertFalse(cfg.is_addon_enabled("utilities", "video_recorder"))
 
     def test_migration_is_idempotent(self):
@@ -172,7 +176,7 @@ class AddonMigrationTests(unittest.TestCase):
         # migrates to the top-level health_stale_threshold key
         data = {
             "plugins": {
-                "trackers": {"object_tracker": {"distance_threshold": 0.9}},
+                "trackers": {"FRC/object_tracker": {"distance_threshold": 0.9}},
                 "utilities": {"health_reporter": {"stale_threshold": 0.7}},
                 "frame_processors": {},
             }
@@ -182,7 +186,7 @@ class AddonMigrationTests(unittest.TestCase):
             path.write_text(json.dumps(data))
             cfg = iSpyConfig(str(path), create=False)
         self.assertEqual(
-            cfg.get_addon_settings("trackers", "object_tracker"),
+            cfg.get_addon_settings("trackers", "FRC/object_tracker"),
             {"distance_threshold": 0.9},
         )
         self.assertIsNone(cfg.get_addon_settings("utilities", "health_reporter"))
@@ -201,13 +205,15 @@ class AddonMigrationTests(unittest.TestCase):
             path = Path(tmp) / "config.json"
             path.write_text(json.dumps(data))
             cfg = iSpyConfig(str(path), create=False)
-        self.assertIn("object_tracker", cfg.config["plugins"]["trackers"])
+        self.assertIn("FRC/object_tracker", cfg.config["plugins"]["trackers"])
         self.assertNotIn(3, cfg.config["plugins"]["trackers"])
         self.assertNotIn(None, cfg.config["plugins"]["trackers"])
         # malformed value still counts as enabled (presence == enabled), just no settings
-        self.assertTrue(cfg.is_addon_enabled("utilities", "network_table_handler"))
+        self.assertTrue(
+            cfg.is_addon_enabled("utilities", "FRC/network_table_handler")
+        )
         self.assertEqual(
-            cfg.get_addon_settings("utilities", "network_table_handler"), {}
+            cfg.get_addon_settings("utilities", "FRC/network_table_handler"), {}
         )
         self.assertEqual(cfg.config["plugins"]["frame_processors"], {})
 
@@ -216,7 +222,7 @@ class AddonConfigHelperTests(unittest.TestCase):
     def setUp(self):
         self.cfg = iSpyConfig()
         self.cfg.config["plugins"] = {
-            "trackers": {"object_tracker": {"distance_threshold": 0.6}},
+            "trackers": {"FRC/object_tracker": {"distance_threshold": 0.6}},
             "utilities": {},
             "frame_processors": {},
         }
@@ -240,46 +246,48 @@ class AddonConfigHelperTests(unittest.TestCase):
     def test_enable_addon_with_settings(self):
         self.cfg.enable_addon(
             "utilities",
-            "network_table_handler",
+            "FRC/network_table_handler",
             settings={"network_tables_ip": "1.2.3.4"},
             save=False,
         )
         self.assertEqual(
             self.cfg.get_addon_setting(
-                "utilities", "network_table_handler", "network_tables_ip"
+                "utilities", "FRC/network_table_handler", "network_tables_ip"
             ),
             "1.2.3.4",
         )
 
     def test_disable_addon_removes_entry(self):
-        self.cfg.disable_addon("trackers", "object_tracker", save=False)
-        self.assertFalse(self.cfg.is_addon_enabled("trackers", "object_tracker"))
-        self.assertIsNone(self.cfg.get_addon_settings("trackers", "object_tracker"))
+        self.cfg.disable_addon("trackers", "FRC/object_tracker", save=False)
+        self.assertFalse(self.cfg.is_addon_enabled("trackers", "FRC/object_tracker"))
+        self.assertIsNone(
+            self.cfg.get_addon_settings("trackers", "FRC/object_tracker")
+        )
 
     def test_set_addon_settings_requires_enabled(self):
         self.cfg.set_addon_settings("utilities", "nope", {"a": 1}, save=False)
         self.assertIsNone(self.cfg.get_addon_settings("utilities", "nope"))
         self.cfg.set_addon_settings(
-            "trackers", "object_tracker", {"distance_threshold": 1.0}, save=False
+            "trackers", "FRC/object_tracker", {"distance_threshold": 1.0}, save=False
         )
         self.assertEqual(
-            self.cfg.get_addon_settings("trackers", "object_tracker"),
+            self.cfg.get_addon_settings("trackers", "FRC/object_tracker"),
             {"distance_threshold": 1.0},
         )
 
     def test_update_addon_settings_merges(self):
         self.cfg.update_addon_settings(
-            "trackers", "object_tracker", {"stale_threshold": 3.0}, save=False
+            "trackers", "FRC/object_tracker", {"stale_threshold": 3.0}, save=False
         )
         self.assertEqual(
-            self.cfg.get_addon_settings("trackers", "object_tracker"),
+            self.cfg.get_addon_settings("trackers", "FRC/object_tracker"),
             {"distance_threshold": 0.6, "stale_threshold": 3.0},
         )
 
     def test_get_addon_setting_with_enabled_and_disabled(self):
         self.assertEqual(
             self.cfg.get_addon_setting(
-                "trackers", "object_tracker", "distance_threshold", 0.5
+                "trackers", "FRC/object_tracker", "distance_threshold", 0.5
             ),
             0.6,
         )
@@ -298,10 +306,10 @@ class AddonConfigHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             cfg = iSpyConfig(str(path), create=True)
-            cfg.enable_addon("trackers", "object_tracker", {"distance_threshold": 1.1})
+            cfg.enable_addon("trackers", "FRC/object_tracker", {"distance_threshold": 1.1})
             loaded = iSpyConfig(str(path), create=False)
             self.assertEqual(
-                loaded.get_addon_settings("trackers", "object_tracker"),
+                loaded.get_addon_settings("trackers", "FRC/object_tracker"),
                 {"distance_threshold": 1.1},
             )
 

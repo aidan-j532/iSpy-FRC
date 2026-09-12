@@ -54,26 +54,26 @@ def get_structured_recommendations(config: dict) -> list[dict]:
         add("critical", "no_cameras", "No cameras configured - vision cannot run.")
 
     dist_thresh = _addon_setting(
-        config, "trackers", "object_tracker", "distance_threshold", None
+        config, "trackers", "FRC/object_tracker", "distance_threshold", None
     )
     if dist_thresh is not None and dist_thresh > 1.5:
         add(
             "normal",
             "dist_thresh",
-            f"object_tracker distance_threshold is large ({dist_thresh}m) - "
+            f"FRC/object_tracker distance_threshold is large ({dist_thresh}m) - "
             "different objects may merge.",
         )
 
     if (
         _addon_setting(
-            config, "utilities", "network_table_handler", "network_tables_ip", ""
+            config, "utilities", "FRC/network_table_handler", "network_tables_ip", ""
         )
         == ""
     ):
         add(
             "critical",
             "nt_no_ip",
-            "network_table_handler is enabled but no network_tables_ip is set.",
+            "FRC/network_table_handler is enabled but no network_tables_ip is set.",
         )
 
     return out

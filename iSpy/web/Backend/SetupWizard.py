@@ -165,12 +165,12 @@ class SetupWizardModule(WebModule):
                 config.set("unit", data["unit"])
             # legacy wizard payloads had use_network_tables / network_tables_ip as
             # top-level keys. NetworkTables is now an add-on - enabling it
-            # just means the network_table_handler utility is in the config
+            # just means the FRC/network_table_handler utility is in the config
             if "use_network_tables" in data or "network_tables_ip" in data:
                 if data.get("use_network_tables"):
                     config.update_addon_settings(
                         "utilities",
-                        "network_table_handler",
+                        "FRC/network_table_handler",
                         {
                             "network_tables_ip": data.get(
                                 "network_tables_ip", "10.0.0.2"
@@ -179,11 +179,11 @@ class SetupWizardModule(WebModule):
                         save=False,
                     )
                     config.enable_addon(
-                        "utilities", "network_table_handler", save=False
+                        "utilities", "FRC/network_table_handler", save=False
                     )
                 else:
                     config.disable_addon(
-                        "utilities", "network_table_handler", save=False
+                        "utilities", "FRC/network_table_handler", save=False
                     )
             config.set("camera_configs", data["camera_configs"])
             # normalize entries (nested pipeline layout, default vision_model

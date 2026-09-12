@@ -190,9 +190,9 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
     if model_cameras == 0:
         raise ValueError("No camera has a vision_model configured")
 
-    # network_tables_ip is an add-on setting now (network_table_handler utility); only validated when the add-on is enabled
+    # network_tables_ip is an add-on setting now (FRC/network_table_handler utility); only validated when the add-on is enabled
     ip = get_addon_setting(
-        config, "utilities", "network_table_handler", "network_tables_ip"
+        config, "utilities", "FRC/network_table_handler", "network_tables_ip"
     )
     if ip:
         ip_parts = ip.split(".")
@@ -256,11 +256,11 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
         )
 
     dist_threshold = get_addon_setting(
-        config, "trackers", "object_tracker", "distance_threshold"
+        config, "trackers", "FRC/object_tracker", "distance_threshold"
     )
     if dist_threshold is None:
         recommendations.append(
-            "object_tracker tracker is not enabled - no object merging configured. "
+            "FRC/object_tracker tracker is not enabled - no object merging configured. "
             "Enable it and verify distance_threshold (default 0.5m) for your game pieces."
         )
     elif dist_threshold < 0:
@@ -342,7 +342,7 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
             )
 
     nt_ip = get_addon_setting(
-        config, "utilities", "network_table_handler", "network_tables_ip"
+        config, "utilities", "FRC/network_table_handler", "network_tables_ip"
     )
     if nt_ip is None:
         recommendations.append(
@@ -357,7 +357,7 @@ def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
     stale = config.get("health_stale_threshold")
     if stale is None:
         stale = get_addon_setting(
-            config, "trackers", "object_tracker", "stale_threshold", 1.0
+            config, "trackers", "FRC/object_tracker", "stale_threshold", 1.0
         )
     if stale > 3.0:
         recommendations.append(

@@ -9,7 +9,7 @@ _EMA_ALPHA = 0.3
 
 
 class ObjectTracker(TrackerBase):
-    plugin_name = "object_tracker"
+    plugin_name = "FRC/object_tracker"
 
     # show this add-on as its own "Code Breakdown" series on the Metrics page
     breakdown_label = "Object tracker"

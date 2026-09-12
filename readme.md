@@ -129,7 +129,7 @@ The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on dep
     "debug_mode": false,
     "plugins": {
         "trackers": {
-            "object_tracker": {
+            "FRC/object_tracker": {
                 "distance_threshold": 0.5,
                 "stale_threshold": 1.0
             },
@@ -139,7 +139,7 @@ The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on dep
             }
         },
         "utilities": {
-            "network_table_handler": {
+            "FRC/network_table_handler": {
                 "network_tables_ip": "10.TE.AM.2"
             },
             "video_recorder": {
@@ -189,9 +189,9 @@ entry; missing settings fall back to defaults declared by the add-on's schema.
 
 | Add-on | Default settings | What it does |
 |--------|------------------|-------------|
-| `trackers.object_tracker` | `distance_threshold: 0.5`, `stale_threshold: 1.0` | Stitches detections into a single object per camera; drops stale detections |
+| `trackers.FRC/object_tracker` | `distance_threshold: 0.5`, `stale_threshold: 1.0` | Stitches detections into a single object per camera; drops stale detections |
 | `trackers.path_planner` | `epsilon: 0.3`, `min_samples: 3` | DBSCAN clustering of tracked objects into game-piece piles |
-| `utilities.network_table_handler` | `network_tables_ip: "10.0.0.2"` | Publishes vision output to the robot over NetworkTables |
+| `utilities.FRC/network_table_handler` | `network_tables_ip: "10.0.0.2"` | Publishes vision output to the robot over NetworkTables |
 | `utilities.rollback` | `data_dir: "VideoRecordings"`, `fps: 30.0`, `max_queue: 300`, `downsample: 1` | Ring-buffer video recorder for reviewing past footage |
 
 Health reporting is **not** an add-on: it is the always-on core web module
@@ -396,7 +396,7 @@ game_loop.py
         │     ├── Camera (threaded frame reader)
         │     └── GenericYolo (dependency-free .pt / RKNN / ONNX / TFLite)
         ├── MultipleCameraHandler (merges multi-camera detections)
-        ├── Trackers (object_tracker -> path_planner -> your plugins)
+        ├── Trackers (FRC/object_tracker -> path_planner -> your plugins)
         ├── Utilities (rollback, network_handler, your plugins)
         └── CameraApp (Flask web server)
 ```

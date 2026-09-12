@@ -108,9 +108,21 @@ def unit_label(unit: str) -> str:
 # legacy top-level keys folded into individual add-ons. (key, addon type,
 # addon name, target setting key) - used by _migrate_addons.
 _ADDON_LEGACY_FOLDS = (
-    ("dbscan", "trackers", "object_tracker", None),  # special: dict
-    ("distance_threshold", "trackers", "object_tracker", "distance_threshold"),
-    ("stale_threshold", "trackers", "object_tracker", "stale_threshold"),
+    ("dbscan", "trackers", "FRC/object_tracker", None),  # special: dict
+    (
+        "distance_threshold",
+        "trackers",
+        "FRC/object_tracker",
+        "distance_threshold",
+    ),
+    ("stale_threshold", "trackers", "FRC/object_tracker", "stale_threshold"),
+)
+
+# add-on names that moved under a namespace; (old name, addon type, new name).
+# applied in _migrate_addons so configs written before the rename keep working.
+_ADDON_RENAMES = (
+    ("object_tracker", "trackers", "FRC/object_tracker"),
+    ("network_table_handler", "utilities", "FRC/network_table_handler"),
 )
 
 # health reporting is a core web module (HealthModule) - these opt-in
@@ -119,12 +131,16 @@ _MERGED_HEALTH_ADDONS = ("health_reporter", "status_reporter")
 
 # legacy enabled flags - the flag value is discarded once it becomes add-on presence
 _ADDON_LEGACY_FLAGS = {
-    "use_network_tables": ("utilities", "network_table_handler"),
+    "use_network_tables": ("utilities", "FRC/network_table_handler"),
     "record_mode": ("utilities", "video_recorder"),
 }
 
 _ADDON_LEGACY_SETTINGS = {
-    "network_tables_ip": ("utilities", "network_table_handler", "network_tables_ip"),
+    "network_tables_ip": (
+        "utilities",
+        "FRC/network_table_handler",
+        "network_tables_ip",
+    ),
     "record_dir": ("utilities", "video_recorder", "record_dir"),
 }
 
@@ -329,8 +345,8 @@ class iSpyConfig:
             "plugins": {
                 # enabled add-ons only - presence == enabled, no flag. each entry maps
                 # a name to that add-on's own settings (schema defaults apply at runtime).
-                # "trackers": {"object_tracker": {"distance_threshold": 0.5}},
-                # "utilities": {"network_table_handler": {"network_tables_ip": "10.0.0.2"}},
+                # "trackers": {"FRC/object_tracker": {"distance_threshold": 0.5}},
+                # "utilities": {"FRC/network_table_handler": {"network_tables_ip": "10.0.0.2"}},
                 "trackers": {},
                 "utilities": {},
                 "frame_processors": {},
@@ -385,6 +401,17 @@ class iSpyConfig:
 
         trackers = plugins.setdefault("trackers", {})
         utilities = plugins.setdefault("utilities", {})
+
+        # legacy add-on names that moved under a namespace keep working:
+        # move any old-name entry (with its settings) to the new name.
+        for old_name, addon_type, new_name in _ADDON_RENAMES:
+            target = {"trackers": trackers, "utilities": utilities}.get(addon_type)
+            if target is None or old_name not in target:
+                continue
+            target.setdefault(new_name, {})
+            settings = target.pop(old_name)
+            if isinstance(settings, dict):
+                target[new_name] = {**target[new_name], **settings}
 
         dbscan = self.config.get("dbscan")
         if isinstance(dbscan, dict) and "path_planner" in trackers:
