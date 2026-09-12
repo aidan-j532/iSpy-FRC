@@ -2,7 +2,7 @@ from iSpy.plugins.bases import FrameProcessorBase
 
 
 class YourTracker(FrameProcessorBase):
-    plugin_name = "example_frame_processor"
+    plugin_name = "example/example_frame_processor"
     template = True
 
     @classmethod

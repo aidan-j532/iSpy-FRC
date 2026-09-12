@@ -44,9 +44,9 @@ class AddonDiscoveryTests(unittest.TestCase):
         self.assertTrue(
             {"FRC/network_table_handler", "rollback"} <= set(utilities)
         )
-        self.assertIn("example_frame_processor", fps)
-        self.assertIn("example_tracker", trackers)
-        self.assertIn("example_utility", utilities)
+        self.assertIn("example/example_frame_processor", fps)
+        self.assertIn("example/example_tracker", trackers)
+        self.assertIn("example/example_utility", utilities)
 
     def test_every_addon_is_an_addonbase_subclass(self):
         for subdir, base in (
@@ -736,7 +736,7 @@ class DashboardModuleTests(unittest.TestCase):
 
 class ExampleAddonTests(unittest.TestCase):
     def test_example_tracker_counts_updates(self):
-        cls = load_plugins(PLUGIN_ROOT / "trackers", TrackerBase)["example_tracker"]
+        cls = load_plugins(PLUGIN_ROOT / "trackers", TrackerBase)["example/example_tracker"]
         tracker = cls(addon_context(cls, {"count_start": 5}))
         self.assertEqual(tracker.count, 5)
         out = tracker.update([], 0, 0, 0)
@@ -745,7 +745,7 @@ class ExampleAddonTests(unittest.TestCase):
 
     def test_example_frame_processor_blackens(self):
         cls = load_plugins(PLUGIN_ROOT / "frame_processors", FrameProcessorBase)[
-            "example_frame_processor"
+            "example/example_frame_processor"
         ]
         fp = cls(addon_context(cls))
         frame = np.full((10, 10, 3), 255, dtype=np.uint8)
@@ -754,7 +754,7 @@ class ExampleAddonTests(unittest.TestCase):
         fp.stop()  # safe
 
     def test_example_utility_ignores_missing_flask(self):
-        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["example_utility"]
+        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["example/example_utility"]
         util = cls(addon_context(cls))
         self.assertIsNone(util.flask_app)
         self.assertIsNone(util.get_robot_pose())
@@ -763,7 +763,7 @@ class ExampleAddonTests(unittest.TestCase):
     def test_example_utility_registers_route_with_flask(self):
         import flask
 
-        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["example_utility"]
+        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["example/example_utility"]
         app = flask.Flask(__name__)
         ctx = addon_context(cls)
         ctx["flask_app"] = app
@@ -776,7 +776,7 @@ class ExampleAddonTests(unittest.TestCase):
     def test_example_utility_declares_and_publishes_output(self):
         # template utilities demonstrate the addon output system:
         # output_key declared in schema -> counter published every tick
-        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["example_utility"]
+        cls = load_plugins(PLUGIN_ROOT / "utilities", UtilityBase)["example/example_utility"]
         self.assertIn("output_key", cls.config_schema())
         util = cls(addon_context(cls))
         frame_data = {}

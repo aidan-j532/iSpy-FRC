@@ -101,6 +101,27 @@ class AddonMigrationTests(unittest.TestCase):
         )
         self.assertEqual(cfg.config["plugins"]["frame_processors"], {})
 
+    def test_legacy_example_names_move_under_example_namespace(self):
+        data = {
+            "plugins": {
+                "trackers": {"example_tracker": {"count_start": 5}},
+                "utilities": {"example_utility": {}},
+                "frame_processors": {"example_frame_processor": {}},
+            }
+        }
+        cfg = self._load(data)
+        self.assertEqual(
+            cfg.config["plugins"]["trackers"],
+            {"example/example_tracker": {"count_start": 5}},
+        )
+        self.assertEqual(
+            cfg.config["plugins"]["utilities"], {"example/example_utility": {}}
+        )
+        self.assertEqual(
+            cfg.config["plugins"]["frame_processors"],
+            {"example/example_frame_processor": {}},
+        )
+
     def test_legacy_global_settings_fold_into_enabled_addons(self):
         cfg = self._load(self._legacy_config())
         self.assertEqual(

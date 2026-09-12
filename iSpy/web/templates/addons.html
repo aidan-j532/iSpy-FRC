@@ -137,6 +137,18 @@ function matchesFilter(p) {
   return `${p.name} ${p.type} ${p.doc || ''}`.toLowerCase().includes(q);
 }
 
+// one switch for a whole group - turns em all on/off at once
+function groupSwitchHtml(gname, addons) {
+  const toggles = addons.filter(p => p.type !== 'vision_pipeline');
+  const allOn = toggles.length > 0 && toggles.every(p => p.enabled);
+  const anyOn = toggles.some(p => p.enabled);
+  const indeterminate = anyOn && !allOn;
+  return `<label class="switch addon-group-switch" title="${allOn ? 'Disable all in this group' : 'Enable all in this group'}">
+    <input type="checkbox" ${allOn ? 'checked' : ''} data-indet="${indeterminate ? '1' : '0'}" onchange="toggleGroup('${jsStr(gname)}', this.checked)">
+    <span class="slider"></span>
+  </label>`;
+}
+
 function settingsFields(schema, current) {
   const keys = Object.keys(schema);
   if (keys.length === 0) {
@@ -438,12 +450,16 @@ function renderList() {
     const addons = groups[gname];
     const enabledCount = addons.filter(p => p.enabled).length;
     parts.push(`<details class="addon-group" open>
-  <summary class="addon-group-summary">${esc(gname)} <span class="text-dim text-sm">${enabledCount}/${addons.length} enabled</span></summary>
+  <summary class="addon-group-summary">${esc(gname)} <span class="text-dim text-sm">${enabledCount}/${addons.length} enabled</span> ${groupSwitchHtml(gname, addons)}</summary>
   <div class="addon-group-body">${addons.map(renderRow).join('')}</div>
 </details>`);
   });
   parts.push(ungrouped.map(renderRow).join(''));
   container.innerHTML = parts.join('');
+  // mark partial sections (some on, some off) as halfway
+  container.querySelectorAll('.addon-group-switch input[data-indet="1"]').forEach(el => {
+    el.indeterminate = true;
+  });
   restoreOpenPanels(openVals);
 }
 
@@ -592,6 +608,26 @@ async function togglePlugin(name, type, enable) {
   } catch (e) {
     showToast('Request failed', 'error');
   }
+  loadStatus(true);
+}
+
+// flip every addon in a group at once (the group switch in the header)
+async function toggleGroup(gname, enable) {
+  const targets = allAddons.filter(p => p.group === gname && p.type !== 'vision_pipeline');
+  let failed = false;
+  for (const p of targets) {
+    try {
+      const r = await fetch('/api/plugins/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: p.name, type: p.type, enable }),
+      });
+      if (!r.ok) failed = true;
+    } catch (e) {
+      failed = true;
+    }
+  }
+  if (failed) showToast('Some add-ons failed to toggle', 'error');
   loadStatus(true);
 }
 

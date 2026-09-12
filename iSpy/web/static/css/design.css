@@ -719,6 +719,9 @@ pre {
 }
 .addon-group[open] > .addon-group-summary::before { transform: rotate(90deg); }
 .addon-group-body { border-top: 1px solid var(--border); padding: 4px 12px 8px; }
+.addon-group-switch { margin-left: auto; align-self: center; }
+.addon-group-switch input:indeterminate + .slider { background: var(--text-dim); }
+.addon-group-switch input:checked:indeterminate + .slider { background: var(--accent); }
 
 /* Source viewer */
 .modal-wide { max-width: 780px; }

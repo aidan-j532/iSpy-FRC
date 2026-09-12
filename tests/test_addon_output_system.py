@@ -148,7 +148,7 @@ class DuplicateOutputKeyTests(unittest.TestCase):
         cfg.config["plugins"] = {
             "trackers": {},
             "utilities": {
-                "example_utility": {"output_key": "clash"},
+                "example/example_utility": {"output_key": "clash"},
                 "rollback": {
                     "output_key": "clash",
                     "data_dir": _temp_recordings_dir(self),
@@ -162,7 +162,7 @@ class DuplicateOutputKeyTests(unittest.TestCase):
             clash_logs = [m for m in captured.output if "'clash'" in m]
             self.assertTrue(clash_logs, f"no collision warning in {captured.output}")
             joined = " ".join(clash_logs)
-            self.assertIn("example_utility", joined)
+            self.assertIn("example/example_utility", joined)
             self.assertIn("rollback", joined)
         finally:
             vision._stop_all_plugins()
@@ -363,7 +363,7 @@ class PublishSourcesApiTests(unittest.TestCase):
         mod, cfg, ctx = self._module(
             {
                 "trackers": {},
-                "utilities": {"example_utility": {}},
+"utilities": {"example/example_utility": {}},
                 "frame_processors": {},
             }
         )
@@ -372,7 +372,7 @@ class PublishSourcesApiTests(unittest.TestCase):
         entry = next(
             s for s in payload["sources"] if s["source"] == "addon_data.example_output"
         )
-        self.assertEqual(entry["utility"], "example_utility")
+        self.assertEqual(entry["utility"], "example/example_utility")
 
     def test_disabled_utilities_excluded(self):
         mod, _cfg, ctx = self._module(
@@ -392,7 +392,7 @@ class PublishSourcesApiTests(unittest.TestCase):
         mod, cfg, ctx = self._module(
             {
                 "trackers": {},
-                "utilities": {"example_utility": {"output_key": "my_counter"}},
+                "utilities": {"example/example_utility": {"output_key": "my_counter"}},
                 "frame_processors": {},
             }
         )
@@ -407,7 +407,7 @@ class PublishSourcesApiTests(unittest.TestCase):
             {
                 "trackers": {},
                 "utilities": {
-                    "example_utility": {"output_key": "clash"},
+"example/example_utility": {"output_key": "clash"},
                     "rollback": {
                         "output_key": "clash",
                         "data_dir": _temp_recordings_dir(self),
@@ -420,7 +420,7 @@ class PublishSourcesApiTests(unittest.TestCase):
             mock.patch(
                 "iSpy.web.Backend.PluginStatus.load_plugins",
                 return_value={
-                    "example_utility": _OutputUtility,
+                    "example/example_utility": _OutputUtility,
                     "rollback": _OutputUtility,
                 },
             ),
@@ -455,13 +455,13 @@ class SaveSettingsOutputKeyValidationTests(unittest.TestCase):
         cfg.config["app_mode"] = False
         cfg.config["plugins"] = {
             "trackers": {},
-            "utilities": {"example_utility": {}},
+            "utilities": {"example/example_utility": {}},
             "frame_processors": {},
         }
         mod = PluginStatusModule({"config": cfg, "vision_instance": Mock()})
         req = Mock()
         req.get_json.return_value = {
-            "name": "example_utility",
+            "name": "example/example_utility",
             "type": "utility",
             "settings": settings,
         }
@@ -473,14 +473,14 @@ class SaveSettingsOutputKeyValidationTests(unittest.TestCase):
     def test_valid_key_saved_normalized(self):
         resp, cfg = self._save({"output_key": "  spaced_key "})
         self.assertEqual(resp.status_code, 200)
-        saved = cfg.get_addon_settings("utilities", "example_utility")
+        saved = cfg.get_addon_settings("utilities", "example/example_utility")
         self.assertEqual(saved["output_key"], "spaced_key")
 
     def test_empty_key_rejected_400(self):
         resp, cfg = self._save({"output_key": ""})
         self.assertEqual(resp[1], 400)
         self.assertNotIn(
-            "output_key", cfg.get_addon_settings("utilities", "example_utility")
+            "output_key", cfg.get_addon_settings("utilities", "example/example_utility")
         )
 
     def test_whitespace_only_key_rejected_400(self):

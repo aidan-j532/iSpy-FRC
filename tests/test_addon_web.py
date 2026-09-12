@@ -85,10 +85,10 @@ class PluginStatusModuleTests(unittest.TestCase):
         # template examples ship with iSpy but live outside BuiltIn/ - they
         # still get the built-in badge so they are never mistaken for
         # user-authored add-ons
-        self.assertTrue(by_name[("tracker", "example_tracker")]["builtin"])
-        self.assertTrue(by_name[("utility", "example_utility")]["builtin"])
+        self.assertTrue(by_name[("tracker", "example/example_tracker")]["builtin"])
+        self.assertTrue(by_name[("utility", "example/example_utility")]["builtin"])
         self.assertTrue(
-            by_name[("frame_processor", "example_frame_processor")]["builtin"]
+            by_name[("frame_processor", "example/example_frame_processor")]["builtin"]
         )
 
     def test_pipeline_mismatch_warning_payload(self):
@@ -133,9 +133,9 @@ class PluginStatusModuleTests(unittest.TestCase):
     def test_source_serves_custom_addon_file(self):
         mod, cfg = self._module()
         with _app_context():
-            resp = mod._source("tracker", "example_tracker")
+            resp = mod._source("tracker", "example/example_tracker")
         payload = resp.get_json()
-        self.assertIn('plugin_name = "example_tracker"', payload["source"])
+        self.assertIn('plugin_name = "example/example_tracker"', payload["source"])
 
     def test_source_unknown_addon_404(self):
         mod, cfg = self._module()
@@ -405,7 +405,7 @@ class PluginStatusModuleTests(unittest.TestCase):
     def test_delete_disables_then_removes_file(self):
         mod, cfg = self._module(
             {
-                "trackers": {"example_tracker": {}},
+                "trackers": {"example/example_tracker": {}},
                 "utilities": {},
                 "frame_processors": {},
             }
@@ -521,9 +521,9 @@ class iSpyAddonLoadingTests(unittest.TestCase):
         recordings_dir = tempfile.mkdtemp(prefix="ispy_rollback_")
         self.addCleanup(_rmtree, recordings_dir)
         cfg.config["plugins"] = {
-            "trackers": {"example_tracker": {"count_start": 5}},
+            "trackers": {"example/example_tracker": {"count_start": 5}},
             "utilities": {"rollback": {"data_dir": recordings_dir, "downsample": 2}},
-            "frame_processors": {"example_frame_processor": {}},
+            "frame_processors": {"example/example_frame_processor": {}},
         }
         return cfg
 
@@ -533,17 +533,17 @@ class iSpyAddonLoadingTests(unittest.TestCase):
         cfg = self._build_config()
         ispy = iSpy(cameras=[], config=cfg)
         try:
-            self.assertIn("example_tracker", ispy.trackers)
+            self.assertIn("example/example_tracker", ispy.trackers)
             self.assertIn("rollback", ispy.utilities)
-            self.assertIn("example_frame_processor", ispy.frame_processors)
+            self.assertIn("example/example_frame_processor", ispy.frame_processors)
 
-            tracker = ispy.trackers["example_tracker"]
+            tracker = ispy.trackers["example/example_tracker"]
             self.assertEqual(tracker.count, 5)  # own settings applied
 
             recorder = ispy.utilities["rollback"]
             self.assertEqual(recorder._downsample, 2)
 
-            fp = ispy.frame_processors["example_frame_processor"]
+            fp = ispy.frame_processors["example/example_frame_processor"]
             self.assertEqual(fp.process(123), 0)
         finally:
             ispy._stop_all_plugins()

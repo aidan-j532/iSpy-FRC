@@ -123,6 +123,9 @@ _ADDON_LEGACY_FOLDS = (
 _ADDON_RENAMES = (
     ("object_tracker", "trackers", "FRC/object_tracker"),
     ("network_table_handler", "utilities", "FRC/network_table_handler"),
+    ("example_tracker", "trackers", "example/example_tracker"),
+    ("example_utility", "utilities", "example/example_utility"),
+    ("example_frame_processor", "frame_processors", "example/example_frame_processor"),
 )
 
 # health reporting is a core web module (HealthModule) - these opt-in
@@ -401,11 +404,16 @@ class iSpyConfig:
 
         trackers = plugins.setdefault("trackers", {})
         utilities = plugins.setdefault("utilities", {})
+        frame_processors = plugins.setdefault("frame_processors", {})
 
         # legacy add-on names that moved under a namespace keep working:
         # move any old-name entry (with its settings) to the new name.
         for old_name, addon_type, new_name in _ADDON_RENAMES:
-            target = {"trackers": trackers, "utilities": utilities}.get(addon_type)
+            target = {
+                "trackers": trackers,
+                "utilities": utilities,
+                "frame_processors": frame_processors,
+            }.get(addon_type)
             if target is None or old_name not in target:
                 continue
             target.setdefault(new_name, {})

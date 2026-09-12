@@ -4,7 +4,7 @@ from iSpy.plugins.bases import UtilityBase
 
 
 class YourUtility(UtilityBase):
-    plugin_name = "example_utility"
+    plugin_name = "example/example_utility"
     template = True
 
     @classmethod
