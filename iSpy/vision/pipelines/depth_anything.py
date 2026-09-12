@@ -936,7 +936,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         size = getattr(self, "_input_size", _DEPTH_INPUT_SIZE)
         img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img = cv2.resize(img, (size, size), interpolation=cv2.INTER_CUBIC)
-        out = self._session.inference(inputs=[img])
+        out = self._session.inference(inputs=[np.expand_dims(img, axis=0)])
         depth = out[0]
         return self._postprocess_depth(depth, frame)
 
