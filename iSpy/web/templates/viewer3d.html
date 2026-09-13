@@ -423,7 +423,8 @@ function updateExistingBox(obj3d, o) {
 function cleanupBox(key) {
   const obj = boxes[key];
   if (!obj) return;
-  scene.remove(obj);
+  // boxes live under worldGroup, not scene
+  worldGroup.remove(obj);
   disposeMesh(obj);
   delete boxes[key];
 }
@@ -568,7 +569,7 @@ function syncOverlays(overlays) {
   }
   for (const id in overlayMeshes) {
     if (!seen.has(id)) {
-      scene.remove(overlayMeshes[id].mesh);
+      worldGroup.remove(overlayMeshes[id].mesh);
       disposeMesh(overlayMeshes[id].mesh);
       delete overlayMeshes[id];
     }
