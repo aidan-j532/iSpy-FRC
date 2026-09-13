@@ -1,8 +1,25 @@
+import math
 from pathlib import Path
 
 from flask import jsonify, render_template
 
+from iSpy.config.iSpyConfig import unit_to_inches
 from iSpy.web.Backend.WebModule import WebModule
+
+# inches -> config output unit scale, same literal duplicated across every
+# vision pipeline (see iSpy/vision/pipelines/object_detection.py self.conversions).
+_INCHES_TO_OUTPUT_UNIT = {
+    "meter": 0.0254,
+    "meters": 0.0254,
+    "inch": 1.0,
+    "inches": 1.0,
+    "foot": 1 / 12,
+    "feet": 1 / 12,
+    "centimeter": 2.54,
+    "centimeters": 2.54,
+    # FRC/WPILib convention: meters out (robot code), calibration in inches
+    "frc": 0.0254,
+}
 
 
 class Viewer3DModule(WebModule):
@@ -12,6 +29,7 @@ class Viewer3DModule(WebModule):
         super().__init__(context)
         self._latest_objects = []
         self._cached_num_keypoints = None
+        self._cached_camera_names = None
         self._overlays: dict[str, dict] = {}
 
     # overlay API (called by add-ons)
@@ -37,6 +55,12 @@ class Viewer3DModule(WebModule):
     # update (called every vision tick)
 
     def update(self, frame_data: dict):
+        camera_names = {
+            self._camera_display_name(cam) for cam in self.context.get("cameras", [])
+        }
+        if camera_names != self._cached_camera_names:
+            self._cached_camera_names = camera_names
+            self._refresh_camera_overlays()
         detections = frame_data.get("detections", [])
         if self._cached_num_keypoints is None:
             config = self.context.get("config", None)
@@ -85,6 +109,52 @@ class Viewer3DModule(WebModule):
             self._latest_objects.append(obj_entry)
 
     # -- internals ---------------------------------------------------------
+
+    def _camera_display_name(self, cam) -> str:
+        # same as CamerasModule: config name if present, else source.
+        if hasattr(cam, "config") and cam.config is not None:
+            name = cam.config.get("name")
+            if name:
+                return str(name)
+        return str(getattr(cam, "source", "camera"))
+
+    def _refresh_camera_overlays(self):
+        # static per-camera overlays - only rebuilt when camera set changes,
+        # not every tick. config yaw/pitch are degrees; renderers want radians.
+        config = self.context.get("config")
+        unit = config.get("unit", "frc") if config else "frc"
+        scale = _INCHES_TO_OUTPUT_UNIT.get(unit, _INCHES_TO_OUTPUT_UNIT["frc"])
+        current_names = set()
+        for cam in self.context.get("cameras", []):
+            cfg = getattr(cam, "config", None)
+            if not hasattr(cfg, "get"):
+                continue
+            name = self._camera_display_name(cam)
+            current_names.add(name)
+            fov = cfg.get("calibration", {}).get("fov", 0)
+            if fov <= 0:
+                fov = 60
+            self.add_overlay(
+                f"camera:{name}",
+                {
+                    "type": "camera",
+                    "x": unit_to_inches(cfg.get("x", 0) or 0, unit) * scale,
+                    "y": unit_to_inches(cfg.get("y", 0) or 0, unit) * scale,
+                    "z": unit_to_inches(cfg.get("height", 0) or 0, unit) * scale,
+                    "roll": 0,
+                    "yaw": math.radians(cfg.get("yaw", 0) or 0),
+                    "pitch": math.radians(cfg.get("pitch", 0) or 0),
+                    "label": name,
+                    "data": {"fov": fov},
+                },
+            )
+        stale = [
+            oid
+            for oid in self._overlays
+            if oid.startswith("camera:") and oid.split(":", 1)[1] not in current_names
+        ]
+        for oid in stale:
+            self.remove_overlay(oid)
 
     def _get_num_keypoints(self, vm: dict) -> int:
         if not vm:

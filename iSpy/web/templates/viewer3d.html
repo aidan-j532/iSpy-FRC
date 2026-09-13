@@ -502,6 +502,38 @@ const OVERLAY_RENDERERS = {
     },
   },
 
+  camera: {
+    create(o) {
+      const d = o.data || {};
+      const fov = Math.max(1, d.fov || 60);
+      const g = new THREE.Group();
+      // camera body: solid box + fat edges, same pattern as makeCubeMarker
+      const bodyGeo = new THREE.BoxGeometry(0.22, 0.14, 0.26);
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffaa00, transparent: true, opacity: 0.85 });
+      const body = new THREE.Mesh(bodyGeo, bodyMat);
+      body.castShadow = true;
+      body.add(makeFatEdges(new THREE.EdgesGeometry(bodyGeo), 0xffffff, 0.3, 2));
+      g.add(body);
+      // FOV wedge: schematic cone along local +Z, not a calibrated frustum
+      const len = 0.8;
+      const half = (fov * Math.PI) / 360;
+      const coneGeo = new THREE.ConeGeometry(len * Math.tan(half), len, 32, 1, true);
+      const coneMat = new THREE.MeshStandardMaterial({
+        color: 0xffaa00, transparent: true, opacity: 0.18,
+        side: THREE.DoubleSide, depthWrite: false,
+      });
+      const cone = new THREE.Mesh(coneGeo, coneMat);
+      cone.rotation.x = Math.PI / 2; // cone axis (+Y) rotated onto +Z forward
+      cone.position.z = len / 2;
+      g.add(cone);
+      return g;
+    },
+    update(g, o) {
+      g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
+      g.rotation.set(o.roll || 0, o.yaw || 0, o.pitch || 0);
+    },
+  },
+
   group: {
     create(o) {
       const g = new THREE.Group();

@@ -187,6 +187,21 @@ block content %}
         placeholder="1.0"
       />
     </div>
+
+    <div class="form-row">
+      <span class="form-label">Game Mode</span>
+
+      <button class="btn btn-ok" onclick="armGameMode()">
+        Disable web UI for next boot
+      </button>
+
+      <span
+        class="text-dim"
+        style="margin-left: 8px; font-size: 0.8rem"
+      >
+        Web dashboard off for one boot, then back automatically.
+      </span>
+    </div>
   </div>
 
   <div class="settings-section">
@@ -838,6 +853,28 @@ block content %}
     note.textContent = frameSyncBool(value)
       ? "Enabled - cameras will wait for synchronized frames"
       : "Disabled - cameras run independently";
+  }
+
+  async function armGameMode() {
+    if (
+      !confirm(
+        "Arm Game Mode? The web dashboard will be off for the NEXT boot after " +
+          "this one, then come back automatically.",
+      )
+    )
+      return;
+
+    try {
+      const r = await fetch("/api/settings/arm-game-mode", { method: "POST" });
+
+      const j = await r.json();
+
+      if (j.success) {
+        showToast("Armed - web UI off for the next boot, then back on", "success");
+      } else showToast(j.error || "Failed to arm Game Mode", "error");
+    } catch (e) {
+      showToast("Failed to reach the server", "error");
+    }
   }
 
   load();

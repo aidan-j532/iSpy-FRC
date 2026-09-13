@@ -1,7 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Dashboard - iSpy{% endblock %}
 {% block head %}
-<style>.stat-value.skeleton { display: inline-block; min-width: 64px; }</style>
+<style>
+.stat-value.skeleton { display: inline-block; min-width: 64px; }
+.plugin-group { width: 100%; }
+.plugin-group-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); transition: border-color 0.15s; }
+.plugin-group-head:hover { border-color: var(--accent); }
+.plugin-group-name { font-weight: 600; text-transform: capitalize; }
+.plugin-group-caret { margin-left: auto; color: var(--text-dim); }
+.plugin-group-body { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
+.plugin-group-body .plugin-item { padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+</style>
 {% endblock %}
 {% block content %}
 <h1>Mission Control</h1>
@@ -150,6 +159,79 @@ function applyVisionBanner(running) {
   visionBanner.textContent = running ? 'Vision is running' : 'Vision is not running, data will be stale';
 }
 
+// Group plugins by their section prefix, e.g. "FRC/object_tracker" -> "FRC",
+// "example/example_tracker" -> "example". Plugins with no section stay flat.
+function getPluginGroup(pluginName) {
+  const slash = String(pluginName).indexOf('/');
+  return slash > 0 ? String(pluginName).slice(0, slash) : null;
+}
+
+function pluginGroupLabel(groupName) {
+  return groupName.charAt(0).toUpperCase() + groupName.slice(1);
+}
+
+let lastAllPlugins = [];
+let lastGroupOrder = [];
+
+function togglePluginGroup(gi) {
+  const name = lastGroupOrder[gi];
+  if (name === undefined) return;
+  if (expandedGroups.has(name)) expandedGroups.delete(name);
+  else expandedGroups.add(name);
+  renderPluginList(lastAllPlugins);
+}
+
+const expandedGroups = new Set();
+
+function renderPluginList(allPlugins) {
+  lastAllPlugins = allPlugins;
+  const groups = {};
+  const ungrouped = [];
+
+  allPlugins.forEach(plugin => {
+    const groupName = getPluginGroup(plugin.name);
+    if (groupName) {
+      if (!groups[groupName]) groups[groupName] = [];
+      groups[groupName].push(plugin);
+    } else {
+      ungrouped.push(plugin);
+    }
+  });
+
+  lastGroupOrder = Object.keys(groups);
+
+  // 1. Group rows - collapsed by default, click to expand and reveal the
+  // individual plugins inside.
+  const groupHtml = lastGroupOrder.map((groupName, gi) => {
+    const items = groups[groupName];
+    const open = expandedGroups.has(groupName);
+    return `
+      <div class="plugin-group">
+        <div class="plugin-item plugin-group-head" onclick="togglePluginGroup(${gi})">
+          <span class="plugin-pill">${items.length} enabled</span>
+          <span class="plugin-group-name">${pluginGroupLabel(groupName)}</span>
+          <span class="plugin-group-caret">${open ? '▾' : '▸'}</span>
+        </div>
+        ${open ? `<div class="plugin-group-body">${items.map(p =>
+          `<div class="plugin-item"><span class="plugin-pill">${p.type}</span> ${p.name}</div>`
+        ).join('')}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  // 2. Remaining plugins as individual rows
+  const ungroupedHtml = ungrouped.map(plugin =>
+    `<div class="plugin-item"><span class="plugin-pill">${plugin.type}</span> ${plugin.name}</div>`
+  ).join('');
+
+  // 3. Combine both lists together
+  const finalHtml = [...groupHtml, ...ungroupedHtml].join('');
+
+  const pluginListElement = document.getElementById('plugin-list');
+  if (pluginListElement) {
+    pluginListElement.innerHTML = finalHtml || '<div class="empty-state">No plugins loaded</div>';
+  }
+}
+
 function applyFull(data) {
   applyTick(data);
 
@@ -168,11 +250,8 @@ function applyFull(data) {
     ...((plugins.utilities || []).map(n => ({name: n, type: 'utility'}))),
     ...((plugins.frame_processors || []).map(n => ({name: n, type: 'frame processor'}))),
   ];
-  document.getElementById('plugin-list').innerHTML = allPlugins.length === 0
-    ? '<div class="empty-state">No plugins loaded</div>'
-    : allPlugins.map(p =>
-      `<div class="plugin-item"><span class="plugin-pill">${p.type}</span> ${p.name}</div>`
-    ).join('');
+
+  renderPluginList(allPlugins);
 
   applySystem(data.system || {});
 }

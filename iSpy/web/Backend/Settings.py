@@ -65,6 +65,12 @@ class SettingsModule(WebModule):
             self._raw_unlock,
             methods=["POST"],
         )
+        flask_app.add_url_rule(
+            "/api/settings/arm-game-mode",
+            "api_settings_arm_game_mode",
+            self._arm_game_mode,
+            methods=["POST"],
+        )
 
     def _get(self):
         from iSpy.web.Backend.save_store import read
@@ -84,6 +90,22 @@ class SettingsModule(WebModule):
 
         write("raw_json_unlocked", {"unlocked": True})
         return jsonify(success=True)
+
+    def _arm_game_mode(self):
+        from iSpy.web.Backend.save_store import write
+
+        config = self.context["config"]
+        config.set("game_mode_web_off_next_run", True)
+        config.save(quiet=True)
+        write("game_mode_armed", {"armed": True})
+        return jsonify(
+            success=True,
+            game_mode_web_off_next_run=True,
+            note=(
+                "Armed - the web dashboard will be off for the NEXT boot after "
+                "this one, then come back automatically."
+            ),
+        )
 
     def _snapshot(self):
         from iSpy.web.Backend.save_store import write

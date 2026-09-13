@@ -2,6 +2,7 @@ import sys
 import os
 import re
 import json
+import time
 import shutil
 import subprocess
 import logging
@@ -199,6 +200,43 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
     config.set("camera_configs", cams)
     write("camera_profiles", profiles)
     config.save()
+
+
+def _consume_game_mode_web_off(config: iSpyConfig) -> None:
+    """One-shot "Game Mode" web-off, armed from Settings > Advanced.
+
+    Two boots are involved:
+
+    * The boot that consumes game_mode_web_off_next_run stashes the current
+      app_mode in game_mode_app_mode_backup, forces app_mode to False for
+      this boot only (so the run process - which reloads config.json fresh -
+      starts with the web UI off), then clears the flag and saves quietly.
+    * The NEXT boot sees game_mode_app_mode_backup and puts app_mode back to
+      the stashed value (web on again), clearing the backup.
+
+    Because every save below persists to disk regardless of how the run
+    finally exits, a crash mid-run can never leave the board stuck with the
+    web UI off forever.
+    """
+    backup = config.get("game_mode_app_mode_backup")
+    if backup is not None:
+        config.config["app_mode"] = backup
+        config.set("game_mode_app_mode_backup", None)
+        config.save(quiet=True)
+        logger.warning(
+            "Game Mode: restoring app_mode=%r - web UI back on for this run.",
+            backup,
+        )
+        return
+
+    if not config.get("game_mode_web_off_next_run", False):
+        return
+
+    logger.warning("Game Mode: web UI disabled for this run only.")
+    config.set("game_mode_app_mode_backup", config.get("app_mode", True))
+    config.config["app_mode"] = False
+    config.set("game_mode_web_off_next_run", False)
+    config.save(quiet=True)
 
 
 def _close_logging_handlers() -> None:
@@ -439,6 +477,8 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
             )
         logger.info("Using existing config: %s", config_path)
         config = iSpyConfig(config_path, create=False)
+
+    _consume_game_mode_web_off(config)
 
     cleanup_missing_cameras(config)
 

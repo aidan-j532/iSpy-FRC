@@ -40,6 +40,16 @@ own GitHub release
 and, like the Ultralytics checkpoints, is not bundled inside the
 PolyForm-licensed codebase.
 
+## Depth Anything V2 Small (optional download)
+The `depth-anything/Depth-Anything-V2-Small-hf` checkpoint (24.8M params,
+DPT/DINOv2 architecture, Lihe Yang et al.) is downloaded on demand via the
+transformers `from_pretrained` API into YoloModels/huggingface/ (see
+iSpy/vision/pipelines/depth_anything.py). It is NOT bundled in this
+repository. The model card declares this checkpoint under the Apache-2.0
+license, unlike Depth Anything V2 Base/Large which are CC-BY-NC-4.0, so V2
+Small carries no noncommercial restriction. See
+https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf.
+
 ## Bundled frontend libraries
 Vendored under iSpy/web/static/vendor/ and served to the web dashboard.
 The text below reflects only what is discoverable in the file headers
@@ -61,3 +71,11 @@ header are flagged for manual verification.
     `chart.js@4.4.0/dist/chart.umd.min.js` npm artifact (sha256
     0e2326c686...aac6abff0) on 2026-09-06. Chart.js is MIT licensed
     (https://github.com/chartjs/Chart.js/blob/v4.4.0/LICENSE.md).
+- **lines/** (LineSegments2.js, LineMaterial.js, LineSegmentsGeometry.js) -
+  three.js r164 line-segment addon used for OBB track overlays in viewer3d
+  - LICENSE CONFIRMED: MIT - body text byte-identical to the official
+    `three@0.164.0/examples/jsm/lines/*` npm artifacts (modulo CRLF line
+    endings); each file is annotated with the same SPDX MIT banner as
+    three.module.js (sha256 of the annotated vendored copies:
+    LineSegments2.js 95e71f7ca10c959a, LineMaterial.js 09a3697b4bba6f50,
+    LineSegmentsGeometry.js f1bbc6deb767bff2).

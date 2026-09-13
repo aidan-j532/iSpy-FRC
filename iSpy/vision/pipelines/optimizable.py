@@ -153,7 +153,7 @@ class OptimizableModelPipeline:
         try:
             from iSpy.config.AutoOpt import recommend_format
 
-            return recommend_format(ignore_dependencies=True)
+            return recommend_format(ignore_dependencies=True, runtime_supported=False)
         except Exception:
             logging.getLogger(__name__).warning(
                 "AutoOpt.recommend_format did NOT work for your device, "

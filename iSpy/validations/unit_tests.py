@@ -276,6 +276,30 @@ class TestAutoOpt(unittest.TestCase):
             _recommend(has_apple_silicon=True, runtime_supported=True), "coreml"
         )
 
+    def test_optimizable_recommended_format_skips_coreml_on_apple_silicon(self):
+        # OptimizableModelPipeline.recommended_format() defaults the build
+        # target, so it must never pick coreml when the runtime can't load the
+        # artifact that pick would produce. Loaded by path to dodge the eager
+        # imports in pipelines/__init__.py (scipy etc.) that may be missing.
+        import importlib.util
+
+        module_path = (
+            Path(__file__).resolve().parents[1]
+            / "vision"
+            / "pipelines"
+            / "optimizable.py"
+        )
+        spec = importlib.util.spec_from_file_location("_optimizable", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        import iSpy.config.AutoOpt as ao
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(ao, "has_apple_silicon", return_value=True)
+            )
+            self.assertEqual(module.OptimizableModelPipeline.recommended_format(), "onnx")
+
     def test_runtime_unsupported_skips_engine_on_nvidia(self):
         self.assertEqual(
             _recommend(has_nvidia=True, has_tensorrt=True, runtime_supported=False),

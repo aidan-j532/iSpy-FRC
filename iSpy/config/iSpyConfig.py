@@ -284,6 +284,13 @@ class iSpyConfig:
             "health_stale_threshold": 1.0,
             "metrics": True,
             "app_mode": True,
+            # One-shot "Game Mode" web-off: the Settings > Advanced > Game Mode
+            # button arms this. The next boot skips the web dashboard for that
+            # single run, stashes the previous app_mode in
+            # game_mode_app_mode_backup, and the boot after that flips app_mode
+            # back so the web UI comes on again automatically.
+            "game_mode_web_off_next_run": False,
+            "game_mode_app_mode_backup": None,
             "max_fps": 0,
             # reset to False by every `boot -f` (fresh install) so the web UI
             # shows its first-run tutorial once until the user dismisses it.
