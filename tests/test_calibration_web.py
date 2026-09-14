@@ -9,7 +9,7 @@ import cv2
 import flask
 import numpy as np
 
-from iSpy.config.iSpyConfig import iSpyConfig
+from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
 from iSpy.vision import calibration as c
 from iSpy.web.modules.cameras import CamerasModule
 
@@ -537,6 +537,45 @@ class CalibrationWebTests(unittest.TestCase):
         j = client.get("/api/cameras/calibration/cam_0/auto/status").get_json()
         self.assertFalse(j["enabled"])
         self.assertEqual(j["captured"]["charuco"], 0)
+
+    def test_calibration_save_updates_live_pipeline(self):
+        # the running pipeline holds a snapshot of its camera config from
+        # vision start - a save that only writes to config would leave the
+        # status saying "needs calibration" until restart. it has to land in
+        # the live instance too.
+        cfg, cam, mod, client = self._setup()
+        live_cam = type(
+            "_LiveCam",
+            (),
+            {"config": iSpyCameraConfig(dict(cfg.config["camera_configs"]["cam_0"]))},
+        )()
+        mod.live_cameras = {"cam_0": live_cam}
+
+        r = client.post(
+            "/api/cameras/calibration/cam_0/focal",
+            json={
+                "real_size": 1.0,
+                "distance": 2.0,
+                "pixel_height": 50.0,
+                "frame_width": 640,
+            },
+        )
+        self.assertEqual(r.status_code, 200)
+        saved = cfg.config["camera_configs"]["cam_0"]["calibration"]
+        self.assertEqual(
+            live_cam.config.data["calibration"]["focal_length_pixels"],
+            saved["focal_length_pixels"],
+        )
+
+        r = client.delete("/api/cameras/calibration/cam_0")
+        self.assertEqual(r.status_code, 200)
+        live = live_cam.config.data["calibration"]
+        self.assertNotIn("focal_length_pixels", live)
+        self.assertNotIn("camera_matrix", live)
+        self.assertEqual(
+            cfg.config["camera_configs"]["cam_0"]["calibration"],
+            live,
+        )
 
 
 if __name__ == "__main__":

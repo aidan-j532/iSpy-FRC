@@ -1024,7 +1024,40 @@ class CamerasModule(WebModule):
         entry["calibration"] = merged
         config.set("camera_configs", cams)
         config.save()
+        # the running pipeline holds a snapshot of its camera config from
+        # vision start, so the config-only save above leaves it reporting
+        # "needs calibration" until a restart. poke the live copy so the
+        # status (and the detection gating) flip without one.
+        self._push_calibration_live(key, merged)
         return merged
+
+    def _live_camera_for(self, cam_key: str):
+        # live_cameras is keyed by display name, which can differ from the
+        # config key - match on the entry's name/source too
+        cam = self.live_cameras.get(cam_key)
+        if cam is not None:
+            return cam
+        cams = self.context["config"].get("camera_configs", {})
+        entry = cams.get(cam_key)
+        if not isinstance(entry, dict):
+            return None
+        name = entry.get("name")
+        source = entry.get("source")
+        for inst in self.live_cameras.values():
+            if name is not None and self._camera_display_name(inst) == str(name):
+                return inst
+            if source is not None and str(getattr(inst, "source", "")) == str(source):
+                return inst
+        return None
+
+    def _push_calibration_live(self, cam_key: str, calibration: dict):
+        cam = self._live_camera_for(cam_key)
+        if cam is None:
+            return
+        try:
+            cam.config.data["calibration"] = calibration
+        except Exception:
+            pass
 
     def _calibration_get(self, cam_name):
         cams, key, entry = self._find_camera_entry(cam_name)
@@ -1072,6 +1105,9 @@ class CamerasModule(WebModule):
         entry["calibration"] = saved
         config.set("camera_configs", cams)
         config.save()
+        # same live-sync as the save path - a reset has to clear the running
+        # pipeline's snapshot too, or it keeps saying it's calibrated
+        self._push_calibration_live(key, saved)
         return jsonify(success=True, calibration=saved)
 
     def _calibration_board_pdf(self):
