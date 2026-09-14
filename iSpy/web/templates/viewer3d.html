@@ -514,7 +514,7 @@ const OVERLAY_RENDERERS = {
       });
       const body = new THREE.Mesh(bodyGeo, bodyMat);
       body.castShadow = true;
-      body.add(makeFatEdges(new THREE.EdgesGeometry(bodyGeo), 0xffaa00, 0.55, 1.5));
+      body.add(makeFatEdges(new THREE.EdgesGeometry(bodyGeo), 0xffffff, 0.55, 1.5));
       g.add(body);
       // lens barrel on the front face (+Z)
       const barrelGeo = new THREE.CylinderGeometry(0.045, 0.05, 0.05, 20);
@@ -528,22 +528,12 @@ const OVERLAY_RENDERERS = {
       // glass - the glowing dot that makes "this face is the front" obvious
       const glassGeo = new THREE.CircleGeometry(0.037, 24);
       const glassMat = new THREE.MeshStandardMaterial({
-        color: 0x8fd3ff, emissive: 0x2a6d99, emissiveIntensity: 0.5,
-        roughness: 0.12, side: THREE.DoubleSide,
+        color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.35,
+        roughness: 0.15, side: THREE.DoubleSide,
       });
       const glass = new THREE.Mesh(glassGeo, glassMat);
       glass.position.z = bd / 2 + 0.055;
       g.add(glass);
-      // top chevron: a small pyramid sat on the front-top edge as a second
-      // front indicator (readable from behind/above, where the lens is hidden)
-      const chevronGeo = new THREE.ConeGeometry(0.045, 0.06, 4);
-      const chevronMat = new THREE.MeshStandardMaterial({
-        color: 0xffaa00, emissive: 0xffaa00, emissiveIntensity: 0.4,
-      });
-      const chevron = new THREE.Mesh(chevronGeo, chevronMat);
-      chevron.rotation.x = Math.PI / 2; // cone axis (+Y) rotated onto +Z
-      chevron.position.set(0, bh / 2 + 0.035, bd / 2 - 0.02);
-      g.add(chevron);
       return g;
     },
     update(g, o) {
