@@ -507,24 +507,56 @@ const OVERLAY_RENDERERS = {
       const d = o.data || {};
       const fov = Math.max(1, d.fov || 60);
       const g = new THREE.Group();
-      // camera body: solid box + fat edges, same pattern as makeCubeMarker
-      const bodyGeo = new THREE.BoxGeometry(0.22, 0.14, 0.26);
-      const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffaa00, transparent: true, opacity: 0.85 });
+      // body: small rectangular camera box. +Z is forward (matches yaw/pitch).
+      const bw = 0.26, bh = 0.14, bd = 0.18;
+      const bodyGeo = new THREE.BoxGeometry(bw, bh, bd);
+      const bodyMat = new THREE.MeshStandardMaterial({
+        color: 0x232732, roughness: 0.55, metalness: 0.35,
+      });
       const body = new THREE.Mesh(bodyGeo, bodyMat);
       body.castShadow = true;
-      body.add(makeFatEdges(new THREE.EdgesGeometry(bodyGeo), 0xffffff, 0.3, 2));
+      body.add(makeFatEdges(new THREE.EdgesGeometry(bodyGeo), 0xffaa00, 0.55, 1.5));
       g.add(body);
-      // FOV wedge: schematic cone along local +Z, not a calibrated frustum
+      // lens barrel on the front face (+Z)
+      const barrelGeo = new THREE.CylinderGeometry(0.05, 0.056, 0.05, 20);
+      const barrelMat = new THREE.MeshStandardMaterial({
+        color: 0x0d0f13, roughness: 0.3, metalness: 0.6,
+      });
+      const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+      barrel.rotation.x = Math.PI / 2; // cylinder axis onto +Z
+      barrel.position.z = bd / 2 + 0.025;
+      g.add(barrel);
+      // glass - the glowing dot that makes "this face is the front" obvious
+      const glassGeo = new THREE.CircleGeometry(0.042, 24);
+      const glassMat = new THREE.MeshStandardMaterial({
+        color: 0x8fd3ff, emissive: 0x2a6d99, emissiveIntensity: 0.5,
+        roughness: 0.12, side: THREE.DoubleSide,
+      });
+      const glass = new THREE.Mesh(glassGeo, glassMat);
+      glass.position.z = bd / 2 + 0.055;
+      g.add(glass);
+      // top chevron: a small pyramid sat on the front-top edge as a second
+      // front indicator (readable from behind/above, where the lens is hidden)
+      const chevronGeo = new THREE.ConeGeometry(0.045, 0.06, 4);
+      const chevronMat = new THREE.MeshStandardMaterial({
+        color: 0xffaa00, emissive: 0xffaa00, emissiveIntensity: 0.4,
+      });
+      const chevron = new THREE.Mesh(chevronGeo, chevronMat);
+      chevron.rotation.x = Math.PI / 2; // cone axis (+Y) rotated onto +Z
+      chevron.position.set(0, bh / 2 + 0.035, 0.02);
+      g.add(chevron);
+      // FOV wedge: faint schematic cone along local +Z, starts at the front
+      // face - mostly a "where is it aimed" cue, not a calibrated frustum
       const len = 0.8;
       const half = (fov * Math.PI) / 360;
       const coneGeo = new THREE.ConeGeometry(len * Math.tan(half), len, 32, 1, true);
       const coneMat = new THREE.MeshStandardMaterial({
-        color: 0xffaa00, transparent: true, opacity: 0.18,
+        color: 0xffaa00, transparent: true, opacity: 0.1,
         side: THREE.DoubleSide, depthWrite: false,
       });
       const cone = new THREE.Mesh(coneGeo, coneMat);
       cone.rotation.x = Math.PI / 2; // cone axis (+Y) rotated onto +Z forward
-      cone.position.z = len / 2;
+      cone.position.z = bd / 2 + len / 2;
       g.add(cone);
       return g;
     },
