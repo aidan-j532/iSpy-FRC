@@ -243,5 +243,98 @@ class OtherPipelinesUseMountHeightTests(unittest.TestCase):
         self.assertAlmostEqual(cam._range_inches(), expected, places=6)
 
 
+class TagRotationConventionTests(unittest.TestCase):
+    """Lock the Euler convention that viewer3d depends on.
+
+    The 3D viewer orients markers with `rotation.set(roll, pitch, yaw)` using
+    THREE.Euler's default 'XYZ' order, i.e. R = Rz(yaw)*Ry(pitch)*Rx(roll).
+    The AprilTag pipeline's `_matrix_to_euler` must extract exactly that
+    decomposition - if the two ever drift apart, tilted/rolled tags render in
+    the wrong plane (the reported "tag not positioned correctly" regression).
+    """
+
+    @staticmethod
+    def _Rx(a):
+        c, s = math.cos(a), math.sin(a)
+        return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+
+    @staticmethod
+    def _Ry(a):
+        c, s = math.cos(a), math.sin(a)
+        return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+    @staticmethod
+    def _Rz(a):
+        c, s = math.cos(a), math.sin(a)
+        return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+    def _make(self, yaw=0.0, pitch=0.0):
+        from iSpy.vision.pipelines.april_tag import AprilTagPipeline
+
+        cfg = {
+            "name": "tag_conv_test",
+            "source": "definitely_missing_frame.png",
+            "height": 24.0,
+            "yaw": yaw,
+            "pitch": pitch,
+            "subsystem": "field",
+        }
+        return AprilTagPipeline(iSpyCameraConfig(cfg), iSpyConfig())
+
+    def _assert_rebuilds_correctly(self, cam, R_tag):
+        for cam_yaw, cam_pitch in ((0, 0), (18.0, 12.0), (-25.0, 8.0)):
+            r_robot = triangulation.camera_rotation_to_robot(
+                R_tag, cam_yaw, cam_pitch
+            )
+            roll, pitch, yaw = cam._matrix_to_euler(r_robot)
+            rebuilt = self._Rz(yaw) @ self._Ry(pitch) @ self._Rx(roll)
+            np.testing.assert_allclose(
+                rebuilt, r_robot, atol=1e-9,
+                err_msg=f"euler no longer matches Rz(yaw)Ry(pitch)Rx(roll) "
+                f"at cam yaw={cam_yaw} pitch={cam_pitch}",
+            )
+
+    def test_euler_convention_matches_viewer_decomposition(self):
+        cam = self._make()
+        # a visible (pattern-facing-camera) tag carries the 180 deg x-flip
+        front = self._Rx(math.pi)
+        for spin, tilt, turn in ((0, 0, 0), (30, 0, 0), (0, 20, 0),
+                                 (0, 0, 20), (30, 15, 10)):
+            r_tag = (
+                self._Rx(math.radians(tilt))
+                @ self._Ry(math.radians(turn))
+                @ self._Rz(math.radians(spin))
+                @ front
+            )
+            self._assert_rebuilds_correctly(cam, r_tag)
+
+    def test_flat_visible_tag_yields_pi_over_two_roll(self):
+        # A tag held flat, pattern to the camera, at a level straight-ahead
+        # camera must come out as (roll=pi/2, pitch=0, yaw=0) so the viewer
+        # draws it as a card facing the camera (normal toward the camera).
+        cam = self._make()
+        r_robot = triangulation.camera_rotation_to_robot(
+            self._Rx(math.pi), 0.0, 0.0
+        )
+        roll, pitch, yaw = cam._matrix_to_euler(r_robot)
+        self.assertAlmostEqual(roll, math.pi / 2.0, places=9)
+        self.assertAlmostEqual(pitch, 0.0, places=9)
+        self.assertAlmostEqual(yaw, 0.0, places=9)
+        # the marker's local normal ends up pointing back at the camera
+        np.testing.assert_allclose(
+            r_robot[:, 2], [0.0, -1.0, 0.0], atol=1e-9
+        )
+
+    def test_dead_ahead_tag_position(self):
+        # tvec straight ahead of a level camera lands directly in front of the
+        # camera at mount height - the viewer position the user checks.
+        cam = self._make()
+        pt = cam._camera_point_to_robot((0.0, 0.0, 30.0))
+        scale = cam.conversions[cam.unit]
+        np.testing.assert_allclose(
+            pt, [0.0, 30.0 * scale, 24.0 * scale], rtol=1e-9
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

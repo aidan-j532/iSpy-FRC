@@ -312,7 +312,10 @@ function makeCubeMarker() {
 
 function updateCubeMarker(mesh, o) {
   mesh.position.copy(toViewer(o.x, o.y, o.z));
-  mesh.rotation.set(o.roll, o.yaw, o.pitch);
+  // Object roll/pitch/yaw follow the convention R = Rz(yaw)*Ry(pitch)*Rx(roll),
+  // so with the default 'XYZ' Euler order the args are (roll, pitch, yaw). A
+  // swapped order renders tilted tags/boxes folded in the wrong plane.
+  mesh.rotation.set(o.roll, o.pitch, o.yaw);
   // selected target gets a distinct, brighter outline
   const wire = mesh.children.find(c => c.isLineSegments || c.isLineSegments2);
   if (wire) {
@@ -338,7 +341,8 @@ function makePlanarMarker(o) {
 
 function updatePlanarMarker(g, o) {
   g.position.copy(toViewer(o.x, o.y, o.z));
-  g.rotation.set(o.roll, o.yaw, o.pitch);
+  // same convention as updateCubeMarker: euler args are (roll, pitch, yaw)
+  g.rotation.set(o.roll, o.pitch, o.yaw);
   const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
   g.scale.setScalar(size / (g.userData.planarSize || size));
   // selected target gets a distinct outline color
