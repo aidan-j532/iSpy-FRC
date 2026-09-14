@@ -88,7 +88,8 @@
 {
   "imports": {
     "three": "/static/vendor/three.module.js",
-    "three/addons/": "/static/vendor/"
+    "three/addons/": "/static/vendor/",
+    "robotpose": "/static/js/robotpose.js"
   }
 }
 </script>
@@ -98,6 +99,7 @@ import { OrbitControls } from 'three/addons/OrbitControls.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { robotToViewer, robotToViewerQuat } from 'robotpose';
 
 const container = document.getElementById('scene-container');
 const scene = new THREE.Scene();
@@ -293,7 +295,8 @@ function makeFatEdges(edgesGeo, color, opacity, linewidth) {
 }
 
 function toViewer(px, py, pz) {
-  return new THREE.Vector3(px, pz, py);
+  const [x, y, z] = robotToViewer(px, py, pz);
+  return new THREE.Vector3(x, y, z);
 }
 
 // ============================================================
@@ -312,10 +315,10 @@ function makeCubeMarker() {
 
 function updateCubeMarker(mesh, o) {
   mesh.position.copy(toViewer(o.x, o.y, o.z));
-  // Object roll/pitch/yaw follow the convention R = Rz(yaw)*Ry(pitch)*Rx(roll),
-  // so with the default 'XYZ' Euler order the args are (roll, pitch, yaw). A
-  // swapped order renders tilted tags/boxes folded in the wrong plane.
-  mesh.rotation.set(o.roll, o.pitch, o.yaw);
+  // Object roll/pitch/yaw are robot-frame (R = Rz(yaw)*Ry(pitch)*Rx(roll), the
+  // order _matrix_to_euler decodes), so move them into the viewer frame as a
+  // quaternion. A frame-swapped euler folds tilted objects into the wrong plane.
+  mesh.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
   // selected target gets a distinct, brighter outline
   const wire = mesh.children.find(c => c.isLineSegments || c.isLineSegments2);
   if (wire) {
@@ -341,8 +344,9 @@ function makePlanarMarker(o) {
 
 function updatePlanarMarker(g, o) {
   g.position.copy(toViewer(o.x, o.y, o.z));
-  // same convention as updateCubeMarker: euler args are (roll, pitch, yaw)
-  g.rotation.set(o.roll, o.pitch, o.yaw);
+  // same convention as updateCubeMarker: eulers are robot-frame ZYX, applied
+  // as a quaternion so the tag tilts the way it actually tilts on the field
+  g.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
   const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
   g.scale.setScalar(size / (g.userData.planarSize || size));
   // selected target gets a distinct outline color
@@ -485,7 +489,7 @@ const OVERLAY_RENDERERS = {
     },
     update(mesh, o) {
       mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
-      mesh.rotation.set(o.roll || 0, o.yaw || 0, o.pitch || 0);
+      mesh.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
     },
   },
 
@@ -502,7 +506,7 @@ const OVERLAY_RENDERERS = {
     },
     update(mesh, o) {
       mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
-      mesh.rotation.set(o.roll || 0, o.yaw || 0, o.pitch || 0);
+      mesh.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
     },
   },
 
@@ -542,7 +546,7 @@ const OVERLAY_RENDERERS = {
     },
     update(g, o) {
       g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
-      g.rotation.set(o.roll || 0, o.yaw || 0, o.pitch || 0);
+      g.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
     },
   },
 
@@ -554,7 +558,7 @@ const OVERLAY_RENDERERS = {
     },
     update(g, o) {
       g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
-      g.rotation.set(o.roll || 0, o.yaw || 0, o.pitch || 0);
+      g.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
       const children = (o.data && o.data.children) || [];
       syncOverlayChildren(g, children);
     },

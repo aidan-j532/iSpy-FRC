@@ -917,6 +917,38 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
     def _pnp_to_robot_coordinates(self, tvec: tuple[float, float, float]) -> np.ndarray:
         return self._pnp_point_to_robot(tvec)
 
+    def _euler_to_matrix(self, roll: float, pitch: float, yaw: float) -> np.ndarray:
+        cr, sr = math.cos(roll), math.sin(roll)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+        ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+        rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+        return rz @ ry @ rx
+
+    def _matrix_to_euler(self, R: np.ndarray) -> tuple[float, float, float]:
+        sy = math.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
+        if sy > 1e-6:
+            roll = math.atan2(R[2, 1], R[2, 2])
+            pitch = math.atan2(-R[2, 0], sy)
+            yaw = math.atan2(R[1, 0], R[0, 0])
+        else:
+            roll = math.atan2(-R[1, 2], R[1, 1])
+            pitch = math.atan2(-R[2, 0], sy)
+            yaw = 0.0
+        return roll, pitch, yaw
+
+    def _euler_to_robot_frame(
+        self, roll: float, pitch: float, yaw: float
+    ) -> tuple[float, float, float]:
+        # solvePnP euler comes out in the camera frame; convert it the same way
+        # the april_tag pipeline does so every Object ships robot-frame eulers.
+        R_cam = self._euler_to_matrix(roll, pitch, yaw)
+        R_robot = triangulation.camera_rotation_to_robot(
+            R_cam, self.camera_bot_relative_yaw, self.camera_pitch_angle
+        )
+        return self._matrix_to_euler(R_robot)
+
     def _box_to_object(
         self, box: Box, img_w: int, img_h: int, keypoints_2d: np.ndarray | None = None
     ) -> Object | None:
@@ -943,7 +975,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
         roll, pitch, yaw = 0.0, 0.0, 0.0
         if box.rotation is not None:
-            roll, pitch, yaw = box.rotation
+            roll, pitch, yaw = self._euler_to_robot_frame(*box.rotation)
         z = float(pt[2]) if len(pt) > 2 else 0.0
 
         kpts_3d_robot = None
