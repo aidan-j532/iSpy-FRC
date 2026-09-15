@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Flow Graph - iSpy{% endblock %}
+{% block head %}
+<style>
+/* ---- flow graph editor ---- */
+.node-page { display:flex; flex-direction:column; height:calc(100vh - 140px); min-height:480px; }
+.node-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.node-toolbar .hint { color:var(--text-dim); font-size:0.82rem; }
+.node-workspace { flex:1; display:flex; gap:12px; min-height:0; }
+.node-canvas-wrap { flex:1; position:relative; border:1px solid var(--border); border-radius:var(--radius); background:#0c0f14; overflow:hidden; cursor:grab; user-select:none; }
+.node-canvas-wrap.panning { cursor:grabbing; }
+.node-canvas-wrap.node-canvas {
+  background-image: radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: 0 0;
+}
+.node-canvas-wrap #graph-layer { position:absolute; top:0; left:0; right:0; bottom:0; transform-origin:0 0; }
+#wire-svg { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:1; overflow:visible; }
+.wire { stroke:#4c8bf5; stroke-width:2; fill:none; opacity:0.85; }
+.wire.candidate { stroke-dasharray:4,4; opacity:0.7; }
+.node { position:absolute; z-index:2; min-width:150px; max-width:230px; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); }
+.node.selected { outline:2px solid var(--accent); }
+.node-head { display:flex; align-items:center; gap:6px; padding:6px 8px; border-bottom:1px solid var(--border); background:rgba(255,255,255,0.03); border-radius:var(--radius) var(--radius) 0 0; font-size:0.8rem; font-weight:600; }
+.node.camera .node-head { background:rgba(76,139,245,0.12); }
+.node.pipeline .node-head { background:rgba(255,170,0,0.10); }
+.node-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+.node-btn { background:none; border:none; color:var(--text-dim); cursor:pointer; padding:2px; line-height:1; font-size:0.8rem; }
+.node-btn:hover { color:var(--accent); }
+.node-btn.del:hover { color:#ff4d4d; }
+.node-type-label { font-size:0.62rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted); padding:3px 8px; }
+.node-body { padding:6px 8px; font-size:0.75rem; color:var(--text-dim); line-height:1.45; }
+.node-status { display:flex; align-items:center; gap:6px; padding:4px 8px 6px; font-size:0.7rem; color:var(--text-muted); }
+.node-dot { width:7px; height:7px; border-radius:50%; background:#666; flex:none; }
+.node-dot.ok { background:#3fb950; }
+.node-dot.stale { background:#d29922; }
+.node-dot.down { background:#f85149; }
+.port { position:absolute; width:14px; height:14px; border-radius:50%; background:#1c2128; border:2px solid var(--accent); top:50%; transform:translateY(-50%); cursor:crosshair; z-index:3; }
+.port.out { right:-8px; }
+.port.in { left:-8px; }
+.port.err { border-color:#ff4d4d; background:#3a1b1b; }
+.marquee { position:absolute; z-index:5; border:1px dashed var(--accent); background:rgba(76,139,245,0.10); display:none; }
+.node-palette { width:190px; flex:none; display:flex; flex-direction:column; gap:10px; overflow-y:auto; }
+.node-addons-panel { width:240px; flex:none; display:flex; flex-direction:column; gap:4px; overflow-y:auto; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius); padding:12px; }
+.panel-title { font-size:0.72rem; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-dim); margin:2px 0 8px; }
+.palette-card { background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius); padding:10px; }
+.palette-card .pal-title { font-size:0.7rem; font-weight:600; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-dim); margin-bottom:6px; }
+.pal-item { display:flex; align-items:center; gap:6px; width:100%; text-align:left; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:5px 8px; margin-bottom:4px; font-size:0.78rem; cursor:pointer; color:var(--text); }
+.pal-item:hover { border-color:var(--accent); }
+.pal-item small { color:var(--text-muted); }
+.addon-row-mini { display:flex; align-items:center; gap:8px; padding:5px 2px; border-bottom:1px solid var(--border); }
+.addon-row-mini .name { flex:1; font-size:0.78rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.canvas-controls { position:absolute; right:12px; bottom:12px; z-index:10; display:flex; gap:4px; align-items:center; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius); padding:4px; box-shadow:var(--shadow); }
+.canvas-controls button { width:26px; height:26px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:var(--radius-sm); cursor:pointer; font-size:0.9rem; line-height:1; }
+.canvas-controls button:hover { border-color:var(--accent); }
+.zoom-label { min-width:44px; text-align:center; font-size:0.72rem; color:var(--text-dim); }
+.runtime-badge { display:flex; align-items:center; gap:7px; padding:4px 10px; border:1px solid var(--border); border-radius:99px; font-size:0.78rem; color:var(--text-dim); background:var(--bg-surface); }
+.runtime-badge .dot { width:8px; height:8px; border-radius:50%; background:#666; }
+.runtime-badge.running .dot { background:#3fb950; box-shadow:0 0 6px rgba(63,185,80,0.7); }
+.ctx-menu { position:fixed; z-index:5000; min-width:170px; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-lg); padding:4px; display:none; }
+.ctx-menu button { display:block; width:100%; text-align:left; background:none; border:none; color:var(--text); font-size:0.8rem; padding:6px 10px; border-radius:var(--radius-sm); cursor:pointer; }
+.ctx-menu button:hover { background:var(--accent-dim); color:var(--accent); }
+.ctx-menu .sep { height:1px; background:var(--border); margin:4px 6px; }
+.ctx-menu button.danger:hover { background:rgba(248,81,73,0.12); color:#ff6b62; }
+.form-hint { font-size:0.7rem; color:var(--text-muted); margin:8px 0 4px; }
+</style>
+{% endblock %}
+{% block content %}
+<h1>Flow Graph</h1>
+<div class="node-page">
+  <div class="node-toolbar">
+    <span class="hint">drag a camera (or its port) to wire a pipeline. gear = settings, right-click = menu.</span>
+    <div class="runtime-badge" id="runtime-badge"><span class="dot"></span><span id="runtime-text">vision: unknown</span></div>
+    <span style="flex:1;"></span>
+    <button class="btn btn-sm" onclick="fitToScreen()">Fit</button>
+    <button class="btn btn-sm" onclick="resetLayout()">Reset Layout</button>
+    <button class="btn btn-sm" onclick="loadState(true)">Reload</button>
+  </div>
+  <div class="node-workspace">
+    <div class="node-palette" id="palette"></div>
+    <div class="node-canvas-wrap node-canvas" id="node-canvas">
+      <div id="graph-layer">
+        <svg id="wire-svg"></svg>
+        <div id="marquee" class="marquee"></div>
+      </div>
+      <div class="canvas-controls">
+        <button title="zoom out" onclick="zoomAroundCenter(0.8)">&#8722;</button>
+        <span class="zoom-label" id="zoom-label">100%</span>
+        <button title="zoom in" onclick="zoomAroundCenter(1.25)">&#43;</button>
+        <button title="reset zoom" onclick="setZoom(1)">1:1</button>
+      </div>
+    </div>
+    <div class="node-addons-panel" id="addons-panel">
+      <div class="panel-title">Global Add-ons</div>
+      <div id="addons-list" class="text-dim text-sm">loading&hellip;</div>
+    </div>
+  </div>
+</div>
+
+<!-- settings popup -->
+<div id="settings-modal" class="modal-overlay" style="display:none;">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>Settings: <span id="settings-title"></span></h3>
+      <button class="modal-close" onclick="closeSettings()">&times;</button>
+    </div>
+    <div id="settings-body" style="max-height:60vh;overflow-y:auto;"></div>
+    <div class="modal-actions">
+      <button class="btn-ok" onclick="saveSettingsPopup()">Save</button>
+      <button class="btn-secondary" onclick="closeSettings()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- pipeline type picker -->
+<div id="picktype-modal" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Choose pipeline type</h3>
+      <button class="modal-close" onclick="closePickType()">&times;</button>
+    </div>
+    <div id="picktype-body"></div>
+  </div>
+</div>
+
+<!-- context menu -->
+<div id="ctx-menu" class="ctx-menu"></div>
+
+<script type="module">
+import { boot } from '/static/js/nodes/editor.js';
+boot();
+</script>
+{% endblock %}

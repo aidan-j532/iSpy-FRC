@@ -8,6 +8,7 @@ from iSpy.web.modules.dashboard import DashboardModule
 from iSpy.web.modules.cameras import CamerasModule
 from iSpy.web.modules.models import ModelsModule
 from iSpy.web.modules.datasets import DatasetsModule
+from iSpy.web.modules.nodes import NodesModule
 from iSpy.web.modules.viewer3d import Viewer3DModule
 from iSpy.web.modules.logs import LogsModule
 from iSpy.web.modules.metrics import MetricsModule
@@ -57,6 +58,7 @@ class iSpyWebApp:
             "cameras": CamerasModule(context),
             "models": ModelsModule(context),
             "datasets": DatasetsModule(context),
+            "nodes": NodesModule(context),
             "viewer3d": Viewer3DModule(context),
             "dashboard": DashboardModule(context),
             "health": HealthModule(context),
