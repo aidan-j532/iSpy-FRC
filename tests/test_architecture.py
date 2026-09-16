@@ -646,8 +646,16 @@ class BootTests(unittest.TestCase):
                 }
             )
             cam = ObjectDetectionPipeline(cam_cfg, config)
-        self.assertIsNone(cam.model)
-        self.assertFalse(cam._use_pipeline)
+        try:
+            self.assertIsNone(cam.model)
+            self.assertFalse(cam._use_pipeline)
+        finally:
+            # Constructing the pipeline starts a CamReader thread for device
+            # 99, which does not exist. Without this teardown it outlives the
+            # test and keeps retrying the open every 3s for the rest of the
+            # session, taking and releasing _open_worker_live slots while
+            # CameraOpenBoundedTests is asserting on that same counter.
+            cam.destroy()
 
     def test_boot_flag_is_fresh_not_first_boot(self):
         import inspect
@@ -814,15 +822,17 @@ class CameraOpenBoundedTests(unittest.TestCase):
         from iSpy.vision.Cameras import base as cam_mod
 
         cam = self._mk_cam()
+        baseline = cam_mod._open_worker_live
         with mock.patch.object(cam_mod.cv2, "VideoCapture", side_effect=self._FakeCap):
             cap = cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
         self.assertTrue(cap.isOpened())
-        self.assertEqual(cam_mod._open_worker_live, 0)
+        self.assertEqual(cam_mod._open_worker_live, baseline)
 
     def test_live_slot_released_after_failure(self):
         from iSpy.vision.Cameras import base as cam_mod
 
         cam = self._mk_cam()
+        baseline = cam_mod._open_worker_live
 
         def boom(*a, **k):
             raise RuntimeError("driver wedged")
@@ -830,21 +840,26 @@ class CameraOpenBoundedTests(unittest.TestCase):
         with mock.patch.object(cam_mod.cv2, "VideoCapture", side_effect=boom):
             with self.assertRaises(RuntimeError):
                 cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
-        self.assertEqual(cam_mod._open_worker_live, 0)
+        self.assertEqual(cam_mod._open_worker_live, baseline)
 
     def test_cap_blocks_oversubscription_and_releases_slot(self):
         from iSpy.vision.Cameras import base as cam_mod
 
         cam = self._mk_cam()
+        # Fill the slots by delta rather than by assignment. A blanket
+        # "= _OPEN_WORKER_MAX" here (and "= 0" in the teardown) erases the
+        # increment of any concurrent holder, so that holder's finally-block
+        # drives the counter negative and fails the sibling tests above.
         with cam_mod._open_worker_guard:
-            cam_mod._open_worker_live = cam_mod._OPEN_WORKER_MAX
+            baseline = cam_mod._open_worker_live
+            cam_mod._open_worker_live += cam_mod._OPEN_WORKER_MAX
         try:
             with self.assertRaises(cam_mod.CameraOpenTimeout):
                 cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
         finally:
             with cam_mod._open_worker_guard:
-                cam_mod._open_worker_live = 0
-        self.assertEqual(cam_mod._open_worker_live, 0)
+                cam_mod._open_worker_live -= cam_mod._OPEN_WORKER_MAX
+        self.assertEqual(cam_mod._open_worker_live, baseline)
 
 
 class MDNSHostnameTests(unittest.TestCase):
