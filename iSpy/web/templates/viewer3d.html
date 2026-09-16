@@ -25,6 +25,8 @@
 .obj-row { cursor:pointer; }
 .obj-row.selected td { background:rgba(76,139,245,0.22); outline:1px solid #4c8bf5; }
 .empty-row-note { color:var(--text-dim); font-size:0.8rem; }
+#world-status { margin:-2px 0 12px; font-size:0.78rem; color:var(--text-dim); font-family:var(--mono); }
+#world-status .ws-strong { color:var(--text); }
 </style>
 {% endblock %}
 {% block content %}
@@ -51,6 +53,7 @@
     <input type="checkbox" id="show-overlays" checked onchange="toggleOverlays()"> Overlays
   </label>
 </div>
+<div id="world-status"></div>
 <div class="viewer-layout">
   <div id="scene-container"></div>
   <div class="viewer-panel">
@@ -403,6 +406,18 @@ function updateVoxelGroup(g, o) {
   const size = meta.voxel_size || 0.1;
   let mesh = g.userData.voxelMesh;
 
+  // empty map -> keep the group but drop the drawable so stale voxels never linger
+  if (!voxels.length) {
+    if (mesh) {
+      g.remove(mesh);
+      disposeMesh(mesh);
+      mesh = null;
+      g.userData.voxelMesh = null;
+      g.userData.voxelCap = 0;
+    }
+    return;
+  }
+
   if (!mesh || g.userData.voxelCap < voxels.length) {
     if (mesh) {
       g.remove(mesh);
@@ -423,6 +438,7 @@ function updateVoxelGroup(g, o) {
     g.userData.voxelMesh = mesh;
     g.userData.voxelCap = cap;
   }
+  mesh.visible = true;
 
   let maxAbsZ = 0.001;
   for (const v of voxels) maxAbsZ = Math.max(maxAbsZ, Math.abs(v[2]));
@@ -506,13 +522,13 @@ function syncDetections(objects) {
     seen.add(o.id);
     const key = o.id;
     const visType = resolveVisType(o);
-    if (!boxes[key]) {
+    if (!boxes[key] || boxes[key].userData.visType !== visType) {
       boxes[key] = createBoxForDetection(o);
-    } else if (boxes[key].userData.visType !== visType) {
-      boxes[key] = createBoxForDetection(o);
-    } else {
-      updateExistingBox(boxes[key], o);
     }
+    // Always update, even on the frame the box was created, so overlays
+    // (e.g. the voxel world) render on the very first poll instead of
+    // staying blank until the next one.
+    updateExistingBox(boxes[key], o);
   }
   for (const k in boxes) {
     const idNum = parseInt(k, 10);
@@ -701,6 +717,7 @@ window.toggleOverlays = function() {
 function renderTable(objects, overlays) {
   const tbody = document.getElementById('obj-tbody');
   let rows = '';
+  let voxelStatus = '';
   for (const o of objects) {
     const nk = o.num_keypoints || (o.keypoints_3d ? o.keypoints_3d.length : 0);
     const visType = resolveVisType(o);
@@ -708,6 +725,14 @@ function renderTable(objects, overlays) {
                 : visType === 'planar' ? (o.vis_meta && o.vis_meta.tag_id != null ? `tag ${o.vis_meta.tag_id}` : 'planar')
                 : visType === 'voxels' ? `${(o.vis_meta && o.vis_meta.exported) || 0} vox`
                 : '-';
+    if (visType === 'voxels') {
+      const vm = o.vis_meta || {};
+      const ext = Array.isArray(vm.extent) ? vm.extent.map(v => Number(v).toFixed(2)).join(' x ') : '-';
+      const size = typeof vm.voxel_size === 'number' ? vm.voxel_size.toFixed(3) : '?';
+      voxelStatus = `<span class="ws-strong">Voxel world</span>: ${vm.exported || 0} shown / ${vm.count || 0} total`
+                  + ` &middot; voxel ${size}${vm.unit ? ' ' + vm.unit : ''}`
+                  + ` &middot; extent ${ext}`;
+    }
     const selectedCls = (selectedId === o.id) ? 'selected' : '';
     rows += `<tr class="obj-row ${selectedCls}" data-id="${o.id}"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.pitch * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.roll * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
   }
@@ -717,6 +742,8 @@ function renderTable(objects, overlays) {
     rows += `<tr class="obj-row" style="color:#4c8bf5"><td>${o.id}</td><td>${(o.x||0).toFixed(2)}</td><td>${(o.y||0).toFixed(2)}</td><td>${(o.z||0).toFixed(2)}</td><td>-</td><td>${((o.yaw||0) * 180 / Math.PI).toFixed(1)}&deg;</td><td>-</td><td>${label}</td></tr>`;
   }
   tbody.innerHTML = rows || '<tr><td colspan="8" class="empty-state">No detections</td></tr>';
+  const statusEl = document.getElementById('world-status');
+  if (statusEl) statusEl.innerHTML = voxelStatus;
 }
 
 function selectRowById(trackId) {

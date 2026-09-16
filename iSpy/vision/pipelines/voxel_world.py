@@ -9,7 +9,6 @@ distances are only as good as the far-plane scaling and camera calibration.
 """
 
 import logging
-from typing import Optional
 
 import numpy as np
 
@@ -119,10 +118,12 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                 "min_height": {
                     "type": "number",
                     "label": "Min Height (m)",
-                    "default": 0.0,
+                    "default": -0.25,
                     "step": 0.1,
                     "help": "World points below this height are discarded to "
-                    "reject ground-plane noise. Set negative to keep them.",
+                    "reject ground-plane noise. A small negative default keeps "
+                    "the floor so low-mounted cameras still build a map; set "
+                    "0 or higher to clip ground points.",
                 },
                 "voxel_min_depth": {
                     "type": "number",
@@ -173,7 +174,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         self.min_voxel_count = max(1, as_int("min_voxel_count", 1))
         self.decay_seconds = max(0.0, as_float("decay_seconds", 8.0))
         self.depth_scale = max(as_float("depth_scale", 1.0), 1e-6)
-        self.min_height = as_float("min_height", 0.0) * self._z_scale
+        self.min_height = as_float("min_height", -0.25) * self._z_scale
         self.voxel_min_depth = (
             max(as_float("voxel_min_depth", 0.05), 0.0) * self._z_scale
         )
@@ -248,37 +249,55 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
 
         self.voxel_map.integrate(world)
 
-    def _voxel_object(self) -> Optional[Object]:
+    def _voxel_object(self) -> Object:
         voxels = self.voxel_map.export(
             max_points=self.export_max_voxels,
             min_count=self.min_voxel_count,
         )
-        if not voxels:
-            return None
-
-        points = np.asarray([v[:3] for v in voxels], dtype=np.float64)
-        centroid = points.mean(axis=0)
-        extent = (points.max(axis=0) - points.min(axis=0)).tolist()
         total = self.voxel_map.count()
 
-        return Object(
-            x=float(centroid[0]),
-            y=float(centroid[1]),
-            z=float(centroid[2]),
-            name="voxel_world",
-            confidence=float(min(1.0, len(voxels) / 200.0)),
-            depth_source="depth_model",
-            vis_type="voxels",
-            vis_meta={
-                "kind": "voxel_map",
-                "voxels": voxels,
-                "voxel_size": self.voxel_size,
-                "count": int(total),
-                "exported": len(voxels),
-                "unit": self.unit,
-                "extent": extent,
-            },
-        )
+        if voxels:
+            points = np.asarray([v[:3] for v in voxels], dtype=np.float64)
+            centroid = points.mean(axis=0)
+            extent = (points.max(axis=0) - points.min(axis=0)).tolist()
+        else:
+            centroid = np.zeros(3, dtype=np.float64)
+            extent = [0.0, 0.0, 0.0]
+
+        meta = {
+            "kind": "voxel_map",
+            "voxels": voxels,
+            "voxel_size": self.voxel_size,
+            "count": int(total),
+            "exported": len(voxels),
+            "unit": self.unit,
+            "extent": extent,
+        }
+
+        # Reuse one Object so its identity stays stable across ticks (the map
+        # contents change, the detection does not). Always return it - even an
+        # empty map is reported so the 3D viewer can show that the world is
+        # building rather than silently rendering nothing.
+        obj = getattr(self, "_voxel_object_ref", None)
+        if obj is None:
+            obj = Object(
+                x=float(centroid[0]),
+                y=float(centroid[1]),
+                z=float(centroid[2]),
+                name="voxel_world",
+                confidence=float(min(1.0, len(voxels) / 200.0)),
+                depth_source="depth_model",
+                vis_type="voxels",
+                vis_meta=meta,
+            )
+            self._voxel_object_ref = obj
+        else:
+            obj.x = float(centroid[0])
+            obj.y = float(centroid[1])
+            obj.z = float(centroid[2])
+            obj.confidence = float(min(1.0, len(voxels) / 200.0))
+            obj.vis_meta = meta
+        return obj
 
     # ------------------------------------------------------------------
 
@@ -307,12 +326,17 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             if depth is not None:
                 self._last_depth = depth
                 last_depth = depth
-                self._integrate_depth(depth, frame)
+                try:
+                    self._integrate_depth(depth, frame)
+                except Exception:
+                    # never let a single bad frame blank the whole pipeline -
+                    # a geometry edge case must not wipe out the voxel world
+                    self.logger.exception("Voxel world map integration failed.")
 
         self.voxel_map.decay()
 
         obj = self._voxel_object()
-        self._last_objects = [obj] if obj is not None else []
+        self._last_objects = [obj]
 
         if last_depth is None:
             return self._last_objects, frame
@@ -321,4 +345,5 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
     def destroy(self):
         if getattr(self, "voxel_map", None) is not None:
             self.voxel_map.clear()
+        self._voxel_object_ref = None
         super().destroy()
