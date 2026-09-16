@@ -3,6 +3,7 @@ from iSpy.vision.pipelines.depth_anything import DepthAnythingPipeline
 from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
 from iSpy.vision.pipelines.optical_flow import OpticalFlowPipeline
 from iSpy.vision.pipelines.qr_code import QRCodePipeline
+from iSpy.vision.pipelines.voxel_world import VoxelWorldPipeline
 from iSpy.vision.pipelines.yolo_world import YoloWorldPipeline
 
 PIPELINES: dict[str, type] = {
@@ -11,6 +12,7 @@ PIPELINES: dict[str, type] = {
     "object_detection": ObjectDetectionPipeline,
     "optical_flow": OpticalFlowPipeline,
     "qr_code": QRCodePipeline,
+    "voxel_world": VoxelWorldPipeline,
     "yolo_world": YoloWorldPipeline,
 }
 

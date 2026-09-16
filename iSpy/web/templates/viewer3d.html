@@ -387,11 +387,74 @@ function updatePointCloud(g, kpts3d) {
   }
 }
 
+// Sparse voxel occupancy map (voxel_world pipeline). Rendered as a single
+// InstancedMesh so thousands of cubes stay cheap to upload and draw. Color
+// ramps with height so the ground plane reads differently from obstacles.
+function buildVoxelGroup(o) {
+  const g = new THREE.Group();
+  g.userData.voxelCap = 0;
+  g.userData.voxelMesh = null;
+  return g;
+}
+
+function updateVoxelGroup(g, o) {
+  const meta = o.vis_meta || {};
+  const voxels = meta.voxels || [];
+  const size = meta.voxel_size || 0.1;
+  let mesh = g.userData.voxelMesh;
+
+  if (!mesh || g.userData.voxelCap < voxels.length) {
+    if (mesh) {
+      g.remove(mesh);
+      disposeMesh(mesh);
+      mesh = null;
+    }
+    const cap = Math.max(voxels.length, 64);
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true, transparent: true, opacity: 0.9,
+      roughness: 0.7, metalness: 0.05,
+    });
+    mesh = new THREE.InstancedMesh(geo, mat, cap);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false;
+    mesh.castShadow = false;
+    g.add(mesh);
+    g.userData.voxelMesh = mesh;
+    g.userData.voxelCap = cap;
+  }
+
+  let maxAbsZ = 0.001;
+  for (const v of voxels) maxAbsZ = Math.max(maxAbsZ, Math.abs(v[2]));
+
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const s = new THREE.Vector3(size, size, size);
+  const color = new THREE.Color();
+  for (let i = 0; i < voxels.length; i++) {
+    const v = voxels[i];
+    const p = toViewer(v[0], v[1], v[2]);
+    m.compose(p, q, s);
+    mesh.setMatrixAt(i, m);
+    const t = Math.min(1, Math.abs(v[2]) / maxAbsZ);
+    color.setHSL(0.58 - 0.52 * t, 0.72, 0.42 + 0.20 * (1 - t));
+    mesh.setColorAt(i, color);
+  }
+  // park unused instances at zero scale so they never render
+  const hidden = new THREE.Matrix4().makeScale(0, 0, 0);
+  for (let j = voxels.length; j < g.userData.voxelCap; j++) {
+    mesh.setMatrixAt(j, hidden);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+}
+
 const VIS_RENDERERS = {
   generic: { create: () => makeCubeMarker(),     update: updateCubeMarker },
   points:  { create: (o) => buildPointCloud(o.keypoints_3d),
              update: (g, o) => updatePointCloud(g, o.keypoints_3d) },
   planar:  { create: (o) => makePlanarMarker(o), update: updatePlanarMarker },
+  voxels:  { create: (o) => buildVoxelGroup(o),  update: updateVoxelGroup },
 };
 
 function resolveVisType(o) {
@@ -643,6 +706,7 @@ function renderTable(objects, overlays) {
     const visType = resolveVisType(o);
     const label = visType === 'points' ? `${nk} pts`
                 : visType === 'planar' ? (o.vis_meta && o.vis_meta.tag_id != null ? `tag ${o.vis_meta.tag_id}` : 'planar')
+                : visType === 'voxels' ? `${(o.vis_meta && o.vis_meta.exported) || 0} vox`
                 : '-';
     const selectedCls = (selectedId === o.id) ? 'selected' : '';
     rows += `<tr class="obj-row ${selectedCls}" data-id="${o.id}"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.pitch * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.roll * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
