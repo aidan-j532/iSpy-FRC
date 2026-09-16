@@ -39,6 +39,7 @@ dependencies = [
     "onnxruntime>=1.16.0",  # CPU ONNX fallback - works everywhere, used until boot picks a better backend
     "transformers",
     "scipy>=1.10.0",
+    "robotpy[apriltag]>=2024.0.0",
 ]
 
 [project.optional-dependencies]

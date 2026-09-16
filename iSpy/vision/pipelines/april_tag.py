@@ -1,14 +1,17 @@
-import cv2
-import math
-import numpy as np
 import logging
+import math
+import os
 import time
 
-from iSpy.vision.pipelines.base import VisionPipeline
-from iSpy.vision.Object import Object
-from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, unit_to_inches
-from iSpy.vision import triangulation
+import cv2
+import numpy as np
+import robotpy_apriltag as apriltag
+
+from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig, unit_to_inches
 from iSpy.vision import calibration as cam_calibration
+from iSpy.vision import triangulation
+from iSpy.vision.Object import Object
+from iSpy.vision.pipelines.base import VisionPipeline
 
 
 class AprilTagPipeline(VisionPipeline):
@@ -98,12 +101,13 @@ class AprilTagPipeline(VisionPipeline):
 
         super().__init__(camera_config, (640, 480), self.grayscale)
 
-        self.aruco_dict = cv2.aruco.getPredefinedDictionary(
-            cv2.aruco.DICT_APRILTAG_36h11
-        )
-        self.aruco_params = cv2.aruco.DetectorParameters()
-        self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
-
+        self.detector = apriltag.AprilTagDetector()
+        self.detector.addFamily("tag36h11")
+        # leave a core free, same pattern genericYolo.py uses for ONNX
+        det_config = self.detector.getConfig()
+        det_config.numThreads = max(1, (os.cpu_count() or 1) - 1)
+        self.detector.setConfig(det_config)
+        
         self._last_objects: list[Object] = []
 
         half = self.tag_size_inches / 2.0
@@ -160,11 +164,11 @@ class AprilTagPipeline(VisionPipeline):
         gray = (
             cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
         )
-
-        corners, ids, rejected = self.detector.detectMarkers(gray)
+        
+        detections = self.detector.detect(gray)
         objects = []
 
-        if ids is not None:
+        if detections:
             img_h, img_w = frame.shape[:2]
             f = self._focal_length_px_fov(img_w)
             cx, cy = img_w / 2.0, img_h / 2.0
@@ -177,9 +181,17 @@ class AprilTagPipeline(VisionPipeline):
             if intr is not None:
                 cam_mat, dist_coeffs = intr
 
-            for i in range(len(ids)):
-                tag_id = int(ids[i][0])
-                tag_corners = corners[i][0]
+            for det in detections:
+                tag_id = det.getId()
+
+                raw = det.getCorners([0.0] * 8)
+                bl, br, tr, tl = ( # reorder becasue this library switchs the order and im to lazy to fix eveyrthing down stream
+                    (raw[0], raw[1]),
+                    (raw[2], raw[3]),
+                    (raw[4], raw[5]),
+                    (raw[6], raw[7]),
+                )
+                tag_corners = np.array([tl, tr, br, bl], dtype=np.float32)
 
                 cv2.polylines(
                     frame, [tag_corners.astype(np.int32)], True, (0, 255, 0), 2
