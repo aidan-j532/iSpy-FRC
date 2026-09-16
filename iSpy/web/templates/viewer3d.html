@@ -732,6 +732,19 @@ function renderTable(objects, overlays) {
       voxelStatus = `<span class="ws-strong">Voxel world</span>: ${vm.exported || 0} shown / ${vm.count || 0} total`
                   + ` &middot; voxel ${size}${vm.unit ? ' ' + vm.unit : ''}`
                   + ` &middot; extent ${ext}`;
+      if (!vm.exported) {
+        const dbg = vm.debug || {};
+        const mdl = vm.model || {};
+        const bits = [];
+        if (mdl && mdl.load_error) bits.push(`model: ${mdl.load_error}`);
+        if (mdl && mdl.estimate_depth === false) bits.push('depth estimation disabled');
+        if (dbg.infer && dbg.infer !== 'ok') bits.push(`inference: ${dbg.infer}`);
+        if (dbg.reason) bits.push(dbg.reason);
+        if (dbg.back_projected != null) bits.push(`back-projected ${dbg.back_projected} pts`);
+        if (dbg.past_min_depth != null) bits.push(`past min-depth ${dbg.past_min_depth}`);
+        if (dbg.past_min_height != null) bits.push(`past min-height ${dbg.past_min_height}`);
+        if (bits.length) voxelStatus += ` &middot; <span style="color:#f4a261">${bits.join('; ')}</span>`;
+      }
     }
     const selectedCls = (selectedId === o.id) ? 'selected' : '';
     rows += `<tr class="obj-row ${selectedCls}" data-id="${o.id}"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.pitch * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.roll * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;

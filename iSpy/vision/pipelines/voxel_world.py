@@ -185,6 +185,9 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             decay_seconds=self.decay_seconds,
         )
         self._resolve_geometry(camera_config)
+        # last tick's diagnostics, surfaced to the 3D viewer so an empty map
+        # can explain itself instead of silently rendering nothing
+        self._debug: dict = {}
 
     def _resolve_geometry(self, camera_config: iSpyCameraConfig) -> None:
         unit = self.unit
@@ -204,11 +207,16 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
     # ------------------------------------------------------------------
 
     def _integrate_depth(self, depth: np.ndarray, frame: np.ndarray) -> None:
+        self._debug = getattr(self, "_debug", None) or {}
+        debug = self._debug
+        debug["reason"] = ""
         if depth is None or getattr(depth, "size", 0) == 0:
+            debug["reason"] = "no depth map produced"
             return
 
         finite = depth[np.isfinite(depth)]
         if finite.size == 0:
+            debug["reason"] = "depth map has no finite values"
             return
         self._dmin = float(finite.min())
         self._dmax = float(finite.max())
@@ -228,11 +236,24 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         cam_points = depth_to_camera_points(
             distance, focal, stride=self.pixel_stride
         )
+        debug.update(
+            dmin=round(self._dmin, 4),
+            dmax=round(self._dmax, 4),
+            max_depth=self.max_depth,
+            focal=round(float(focal), 1),
+            back_projected=int(cam_points.shape[0]),
+        )
         if cam_points.size == 0:
+            debug["reason"] = "depth -> camera back-projection produced no points"
             return
 
         cam_points = cam_points[cam_points[:, 2] >= self.voxel_min_depth]
+        debug["past_min_depth"] = int(cam_points.shape[0])
         if cam_points.size == 0:
+            debug["reason"] = (
+                f"every point is closer than Min Depth "
+                f"({self.voxel_min_depth:.3f} {self._unit_label})"
+            )
             return
 
         world = camera_points_to_robot(
@@ -244,10 +265,15 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             self.camera_pitch,
         )
         world = world[world[:, 2] >= self.min_height]
+        debug["past_min_height"] = int(world.shape[0])
         if world.size == 0:
+            debug["reason"] = (
+                f"every point is below Min Height "
+                f"({self.min_height:.3f} {self._unit_label})"
+            )
             return
 
-        self.voxel_map.integrate(world)
+        debug["integrated"] = int(self.voxel_map.integrate(world))
 
     def _voxel_object(self) -> Object:
         voxels = self.voxel_map.export(
@@ -272,6 +298,21 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             "exported": len(voxels),
             "unit": self.unit,
             "extent": extent,
+            "geometry": {
+                "camera_height": round(float(getattr(self, "camera_height", 0.0)), 4),
+                "camera_pitch": getattr(self, "camera_pitch", 0.0),
+                "camera_yaw": getattr(self, "camera_yaw", 0.0),
+                "min_height": getattr(self, "min_height", 0.0),
+                "min_depth": getattr(self, "voxel_min_depth", 0.0),
+                "pixel_stride": getattr(self, "pixel_stride", 0),
+                "process_every": getattr(self, "_every", 0),
+            },
+            "debug": dict(getattr(self, "_debug", {})),
+            "model": {
+                "estimate_depth": getattr(self, "estimate_depth", True),
+                "backend": "onnx" if getattr(self, "_session", None) is not None else "torch",
+                "load_error": getattr(self, "_load_error", None),
+            },
         }
 
         # Reuse one Object so its identity stays stable across ticks (the map
@@ -308,6 +349,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         if not self._is_processable():
             return [], frame
 
+        self._debug = getattr(self, "_debug", None) or {}
         self._frame_count = getattr(self, "_frame_count", 0) + 1
         every = max(1, self._every)
         last_depth = self._last_depth
@@ -320,18 +362,21 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         if refresh:
             try:
                 depth = self._infer_depth(frame)
-            except Exception:
+                self._debug["infer"] = "ok"
+            except Exception as exc:
                 self.logger.exception("Voxel world depth inference failed.")
+                self._debug["infer"] = f"error: {exc}"
                 depth = last_depth
             if depth is not None:
                 self._last_depth = depth
                 last_depth = depth
                 try:
                     self._integrate_depth(depth, frame)
-                except Exception:
+                except Exception as exc:
                     # never let a single bad frame blank the whole pipeline -
                     # a geometry edge case must not wipe out the voxel world
                     self.logger.exception("Voxel world map integration failed.")
+                    self._debug["reason"] = f"integration error: {exc}"
 
         self.voxel_map.decay()
 

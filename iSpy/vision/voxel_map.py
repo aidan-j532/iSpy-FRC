@@ -31,7 +31,10 @@ def relative_depth_to_distance(
     depth = np.asarray(depth, dtype=np.float64)
     span = float(d_max) - float(d_min)
     if span <= 1e-9:
-        closeness = np.ones_like(depth)
+        # flat depth map: there is no relative signal to scale, but collapsing
+        # to distance 0 would put every point at the origin and the min-depth
+        # filter would then discard the whole frame. Mid-range is a safer guess.
+        closeness = np.full_like(depth, 0.5)
     else:
         closeness = (depth - float(d_min)) / span
     closeness = np.clip(closeness, 0.0, 1.0)
@@ -44,6 +47,8 @@ def focal_length_pixels(
 ) -> float:
     """Resolve a horizontal focal length in pixels for the live frame width."""
     calib = calibration or {}
+    if not isinstance(calib, dict):
+        calib = {}
     frame_w = max(1, int(frame_w))
 
     fov = calib.get("fov") or 0
