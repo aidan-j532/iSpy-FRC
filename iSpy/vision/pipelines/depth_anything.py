@@ -748,7 +748,11 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
     def _rknn_calibration_txt(self) -> str | None:
         if not self._quantization_dataset:
             return None
-        ds = Path(self._quantization_dataset)
+        # resolve to an absolute path so every line written below is absolute too -
+        # rknn-toolkit2 resolves dataset-file entries relative to the txt's own
+        # directory, so relative entries like "QuantizeDataset/dataset/395.png"
+        # would otherwise be double-joined into .../dataset/QuantizeDataset/dataset/
+        ds = Path(self._quantization_dataset).resolve()
         if not ds.exists():
             return None
         images = sorted(
@@ -757,7 +761,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         if not images:
             return None
         txt = ds / "rknn_calibration.txt"
-        txt.write_text("\n".join(str(p) for p in images))
+        txt.write_text("\n".join(str(p) for p in images) + "\n")
         return str(txt)
 
     def _load_tpu(self, force: bool = False):

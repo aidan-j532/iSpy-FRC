@@ -10,6 +10,7 @@ from unittest import mock
 
 import cv2
 import flask
+import numpy as np
 
 from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
 from iSpy.vision.optimizer import default_quantization_dataset_dir
@@ -710,6 +711,37 @@ class QuantizeDatasetTests(unittest.TestCase):
                     names = {d["name"] for d in resp.get_json()["datasets"]}
                     self.assertIn("competition", names)
                     self.assertIn("default", names)
+
+    def test_rknn_calibration_txt_writes_absolute_paths(self):
+        # rknn-toolkit2 resolves dataset-file entries relative to the txt's own
+        # directory, so a relative entry like "QuantizeDataset/dataset/395.png"
+        # would be double-joined into ".../dataset/QuantizeDataset/dataset/395.png".
+        # Regression: paths written by _rknn_calibration_txt must be absolute.
+        da = DepthAnythingPipeline.__new__(DepthAnythingPipeline)
+        da.logger = logging.getLogger("test.da")
+        old_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                ds = Path("QuantizeDataset/dataset")
+                ds.mkdir(parents=True)
+                for name in ("395", "396"):
+                    cv2.imwrite(str(ds / f"{name}.png"), np.zeros((32, 32, 3), np.uint8))
+                for raw, label in (
+                    ("QuantizeDataset/dataset", "relative"),
+                    (str(ds.resolve()), "absolute"),
+                ):
+                    da._quantization_dataset = raw
+                    txt = Path(da._rknn_calibration_txt())
+                    lines = [l for l in txt.read_text().splitlines() if l.strip()]
+                    self.assertTrue(lines, f"no lines for {label} dataset")
+                    for line in lines:
+                        with self.subTest(mode=label, line=line):
+                            self.assertTrue(Path(line).is_absolute(), line)
+                            resolved = txt.parent / line if not Path(line).is_absolute() else Path(line)
+                            self.assertTrue(resolved.exists(), f"missing {resolved}")
+            finally:
+                os.chdir(old_cwd)
 
     def test_duplicate_dataset_folder_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
