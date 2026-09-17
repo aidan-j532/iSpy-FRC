@@ -1,26 +1,28 @@
-import sys
+import argparse
+import json
+import logging
 import os
 import re
-import json
-import time
 import shutil
 import subprocess
-import logging
-import argparse
+import sys
+import time
 import time as _time
 from pathlib import Path
 
-from iSpy.config.iSpyConfig import iSpyConfig, get_pipeline_name
-from iSpy.config.AutoOpt import has_jetson
-from iSpy.validations.validate_system import validate_system
-from iSpy.dataset.dataset import get_active_dataset_dir
-from iSpy.vision.metadata import (
-    metadata_path_for,
-    metadata_from_pt,
-    write_metadata,
-    read_metadata,
-)
+from PIL import Image
+
 from iSpy.boot.opencv_fix import ensure_csi_capable_opencv
+from iSpy.config.AutoOpt import has_jetson
+from iSpy.config.iSpyConfig import get_pipeline_name, iSpyConfig
+from iSpy.dataset.dataset import get_active_dataset_dir
+from iSpy.validations.validate_system import validate_system
+from iSpy.vision.metadata import (
+    metadata_from_pt,
+    metadata_path_for,
+    read_metadata,
+    write_metadata,
+)
 from iSpy.vision.pipelines import get_pipeline_classes
 
 logger = logging.getLogger("iSpy.boot.boot")
@@ -439,6 +441,48 @@ def _wait_for_pipeline_ready(
         )
     logger.info("All camera pipelines ready.")
 
+def cleanup_broken_images(config: iSpyConfig) -> None:
+    # delte/move broken images
+    dataset_dir = get_active_dataset_dir()
+    trash_dir = dataset_dir / "Trash"
+    trash_dir.mkdir(parents=True, exist_ok=True)
+
+    image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+    for file in dataset_dir.rglob("*"):
+        if not file.is_file():
+            continue
+        if file.suffix.lower() not in image_extensions:
+            continue
+        if trash_dir in file.parents:
+            continue
+
+        try:
+            with Image.open(file) as img:
+                img.verify()
+
+            with Image.open(file) as img:
+                img.load()
+
+        except Exception as exc:
+            logger.warning(
+                "Broken image, moving to Trash: %s -> %s",
+                file,
+                exc,
+            )
+
+            destination = trash_dir / file.name
+
+            if destination.exists():
+                stem = destination.stem
+                suffix = destination.suffix
+                counter = 1
+
+                while destination.exists():
+                    destination = trash_dir / f"{stem}_{counter}{suffix}"
+                    counter += 1
+
+            shutil.move(str(file), str(destination))
 
 def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = False):
     _configure_quiet_logging()
@@ -481,6 +525,7 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
     _consume_game_mode_web_off(config)
 
     cleanup_missing_cameras(config)
+    cleanup_broken_images(config)
 
     if not validate_system():
         raise RuntimeError("System validation failed. Aborting boot.")

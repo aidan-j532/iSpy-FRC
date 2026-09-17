@@ -66,7 +66,7 @@
     </div>
     <div id="calibration-body"></div>
     <div class="modal-actions calib-footer">
-      <button onclick="resetCalibration()" class="btn-sm btn-warn">Reset calibration</button>
+      <button onclick="confirmResetCalibration()" class="btn-sm btn-warn">Reset calibration</button>
       <span style="flex:1"></span>
       <button onclick="closeCalibrationWizard()" class="btn-secondary">Close</button>
     </div>
@@ -526,6 +526,16 @@ function readSchemaList(el, def) {
     if (hasValue) rows.push(row);
   });
   return rows;
+}
+
+function confirmResetCalibration() {
+    showTimeWarning({
+        header: 'Reset calibration',
+        duration: 5,
+        description: 'Resetting calibration will remove your current calibration data. This cannot be undone.',
+        continueMessage: 'Reset calibration',
+        onClose: resetCalibration
+    });
 }
 
 function buildField(key, def, source) {
