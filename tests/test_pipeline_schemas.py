@@ -140,8 +140,8 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         from iSpy.vision.Object import Object
 
         class DummyDetector:
-            def detectMarkers(self, gray):
-                return [], None, []
+            def detect(self, gray):
+                return []
 
         camera = AprilTagPipeline.__new__(AprilTagPipeline)
         camera.get_frame = lambda: np.zeros((20, 20, 3), dtype=np.uint8)

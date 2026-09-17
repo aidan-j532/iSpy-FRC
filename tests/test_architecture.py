@@ -48,9 +48,9 @@ class _SpyDetector:
     def __init__(self):
         self.called = False
 
-    def detectMarkers(self, gray):
+    def detect(self, gray):
         self.called = True
-        return [], None, []
+        return []
 
 
 # ---------------------------------------------------------------------------
