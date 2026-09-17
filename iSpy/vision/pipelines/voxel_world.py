@@ -224,6 +224,10 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         self._debug = getattr(self, "_debug", None) or {}
         debug = self._debug
         debug["reason"] = ""
+
+        def warn(message: str) -> None:
+            existing = debug.get("warning")
+            debug["warning"] = f"{existing}; {message}" if existing else message
         if depth is None or getattr(depth, "size", 0) == 0:
             debug["reason"] = "no depth map produced"
             return
@@ -278,7 +282,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             # A far plane under a meter makes every point land almost on the
             # camera, so the whole map collapses into a tiny blob. Almost
             # always a mis-set Max Depth / Depth Scale.
-            debug["warning"] = (
+            warn(
                 f"far plane is only {far_plane_m * self._z_scale:.2f} "
                 f"{self._unit_label} - raise Max Depth / Depth Scale or the "
                 f"world collapses"
@@ -305,7 +309,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             )
             return
 
-        world = camera_points_to_robot(
+        world_all = camera_points_to_robot(
             cam_points,
             self.camera_x,
             self.camera_y,
@@ -313,14 +317,36 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             self.camera_yaw,
             self.camera_pitch,
         )
-        world = world[world[:, 2] >= self.min_height]
+        world_z_min = float(world_all[:, 2].min())
+        world_z_max = float(world_all[:, 2].max())
+        debug.update(
+            camera_height=round(float(self.camera_height), 3),
+            camera_pitch=round(float(self.camera_pitch), 1),
+            camera_yaw=round(float(self.camera_yaw), 1),
+            min_height=round(float(self.min_height), 3),
+            world_z_min=round(world_z_min, 3),
+            world_z_max=round(world_z_max, 3),
+        )
+        world = world_all[world_all[:, 2] >= self.min_height]
         debug["past_min_height"] = int(world.shape[0])
-        if world.size == 0:
-            debug["reason"] = (
-                f"every point is below Min Height "
-                f"({self.min_height:.3f} {self._unit_label})"
+        if abs(float(self.camera_height)) < 1e-9:
+            # The world origin is the floor, so a mount height of 0 puts the
+            # whole scene below z=0 and the Min Height floor then eats it.
+            warn(
+                "camera Height is 0 - set the real mount height so the floor "
+                "sits at z=0"
             )
-            return
+        if world.size == 0:
+            # The configured floor is below the entire scene (almost always a
+            # camera-height/pitch that does not match the world origin). Rather
+            # than silently blanking the whole world, keep the geometry and say
+            # so - the user can then fix Min Height / the camera mount.
+            world = world_all
+            warn(
+                f"Min Height ({self.min_height:.2f} {self._unit_label}) "
+                f"removed every point (world z {world_z_min:.2f}..{world_z_max:.2f})"
+                f" - floor clip ignored, lower Min Height"
+            )
 
         debug["integrated"] = int(self.voxel_map.integrate(world))
 

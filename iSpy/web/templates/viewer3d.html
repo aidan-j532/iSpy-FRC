@@ -778,6 +778,12 @@ function renderTable(objects, overlays) {
       if (dbg.back_projected != null) dbgBits.push(`bp ${dbg.back_projected}`);
       if (dbg.past_min_depth != null) dbgBits.push(`>minD ${dbg.past_min_depth}`);
       if (dbg.past_min_height != null) dbgBits.push(`>minH ${dbg.past_min_height}`);
+      if (dbg.world_z_min != null && dbg.world_z_max != null) {
+        dbgBits.push(`worldZ ${dbg.world_z_min}..${dbg.world_z_max} (clip ${dbg.min_height})`);
+      }
+      if (dbg.camera_height != null) {
+        dbgBits.push(`cam h${dbg.camera_height} p${dbg.camera_pitch} y${dbg.camera_yaw}`);
+      }
       if (dbg.integrated != null) dbgBits.push(`new ${dbg.integrated}`);
       if (vm.degenerate) {
         voxelStatus += ` &middot; <span style="color:#e76f51">world collapsed to ${ext}</span>`;

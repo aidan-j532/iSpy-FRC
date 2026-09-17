@@ -247,6 +247,30 @@ class VoxelWorldPipelineTests(unittest.TestCase):
             self.assertTrue(all(math.isfinite(v) for v in voxel[:3]))
         self.assertIsNotNone(out_frame)
 
+    def test_min_height_never_blanks_the_world(self):
+        # A floor clip above the whole reconstruction (a camera height/pitch
+        # that does not match the world origin) must not silently delete the
+        # map - the clip is skipped and surfaced as a warning instead.
+        pipeline = self._build_pipeline()
+        pipeline.min_height = 100.0
+        frame = np.zeros((80, 80, 3), dtype=np.uint8)
+
+        def fake_depth(f):
+            rows = np.linspace(1.0, 0.0, f.shape[0], dtype=np.float64)
+            return np.tile(rows[:, None], (1, f.shape[1]))
+
+        pipeline.get_frame = lambda: frame
+        pipeline._is_processable = lambda: True
+        pipeline._infer_depth = fake_depth
+        pipeline._annotate = lambda f, d: f
+
+        objects, _ = pipeline.run()
+        self.assertEqual(len(objects), 1)
+        meta = objects[0].vis_meta
+        self.assertGreater(meta["count"], 0)
+        self.assertEqual(meta["debug"]["past_min_height"], 0)
+        self.assertIn("Min Height", meta["debug"].get("warning", ""))
+
     def test_run_reuses_depth_between_inference_frames(self):
         pipeline = self._build_pipeline()
         pipeline._every = 5
