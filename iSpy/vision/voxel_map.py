@@ -27,16 +27,37 @@ def relative_depth_to_distance(
 
     Depth Anything V2 emits relative inverse depth (larger = closer). The far
     plane ``max_depth`` pins the scale; ``depth_scale`` is a user trim.
+
+    Normalization clips to a percentile band (~2%-98%) instead of the raw
+    min/max so a handful of outlier pixels (specular glints, dark voids) cannot
+    grab d_min/d_max and squash the whole scene into a razor-thin closeness
+    band. A thin band is what silently collapses the integrated world to a
+    few voxels right on top of the camera.
     """
     depth = np.asarray(depth, dtype=np.float64)
-    span = float(d_max) - float(d_min)
+    if depth.size == 0:
+        return depth
+
+    finite = depth[np.isfinite(depth)]
+    if finite.size == 0:
+        return np.full_like(depth, 0.0)
+
+    lo = float(np.percentile(finite, 2.0))
+    hi = float(np.percentile(finite, 98.0))
+    span = hi - lo
     if span <= 1e-9:
-        # flat depth map: there is no relative signal to scale, but collapsing
-        # to distance 0 would put every point at the origin and the min-depth
-        # filter would then discard the whole frame. Mid-range is a safer guess.
-        closeness = np.full_like(depth, 0.5)
+        # no usable spread in the middle 96%: try the full min/max range, and
+        # only then fall back to a mid-distance guess. A near-uniform map must
+        # not become a 10m wall of voxels just because float noise has a span.
+        span = float(d_max) - float(d_min)
+        if span > 1e-9:
+            lo, hi = float(d_min), float(d_max)
+            closeness = (depth - lo) / span
+        else:
+            closeness = np.full_like(depth, 0.5)
     else:
-        closeness = (depth - float(d_min)) / span
+        closeness = (depth - lo) / span
+
     closeness = np.clip(closeness, 0.0, 1.0)
     distance = (1.0 - closeness) * float(max_depth) * float(depth_scale)
     return np.nan_to_num(distance, nan=0.0, posinf=0.0, neginf=0.0)

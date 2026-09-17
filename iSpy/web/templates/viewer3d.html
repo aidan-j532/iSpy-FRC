@@ -125,6 +125,12 @@ controls.dampingFactor = 0.08;
 controls.target.set(0, 0, 0);
 controls.update();
 
+// tracked so the one-time voxel auto-frame only fires until the user
+// grabs the view themselves
+let autoFramedByVoxels = false;
+let viewUserInteracted = false;
+controls.addEventListener('start', () => { viewUserInteracted = true; });
+
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
 scene.add(ambientLight);
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -516,12 +522,30 @@ function cleanupBox(key) {
   delete boxes[key];
 }
 
+// point the camera at the voxel world once, the first time one shows up,
+// so even a small / awkwardly-placed map is never rendered off-screen
+function maybeAutoFrameVoxels(o) {
+  if (autoFramedByVoxels || viewUserInteracted) return;
+  const vm = o.vis_meta || {};
+  const ext = Array.isArray(vm.extent) ? vm.extent.map(Number) : [0, 0, 0];
+  const span = Math.max(0, ext[0] || 0, ext[1] || 0, ext[2] || 0);
+  if (!span) return;
+  autoFramedByVoxels = true;
+  const target = toViewer(o.x || 0, o.y || 0, o.z || 0);
+  controls.target.copy(target);
+  const dist = Math.max(span, 0.5) * 2.5;
+  const dir = new THREE.Vector3(1, 1, 1).normalize();
+  camera.position.copy(target).add(dir.multiplyScalar(dist));
+  controls.update();
+}
+
 function syncDetections(objects) {
   const seen = new Set();
   for (const o of objects) {
     seen.add(o.id);
     const key = o.id;
     const visType = resolveVisType(o);
+    if (visType === 'voxels') maybeAutoFrameVoxels(o);
     if (!boxes[key] || boxes[key].userData.visType !== visType) {
       boxes[key] = createBoxForDetection(o);
     }
@@ -732,18 +756,31 @@ function renderTable(objects, overlays) {
       voxelStatus = `<span class="ws-strong">Voxel world</span>: ${vm.exported || 0} shown / ${vm.count || 0} total`
                   + ` &middot; voxel ${size}${vm.unit ? ' ' + vm.unit : ''}`
                   + ` &middot; extent ${ext}`;
-      if (!vm.exported) {
-        const dbg = vm.debug || {};
-        const mdl = vm.model || {};
-        const bits = [];
-        if (mdl && mdl.load_error) bits.push(`model: ${mdl.load_error}`);
-        if (mdl && mdl.estimate_depth === false) bits.push('depth estimation disabled');
-        if (dbg.infer && dbg.infer !== 'ok') bits.push(`inference: ${dbg.infer}`);
-        if (dbg.reason) bits.push(dbg.reason);
-        if (dbg.back_projected != null) bits.push(`back-projected ${dbg.back_projected} pts`);
-        if (dbg.past_min_depth != null) bits.push(`past min-depth ${dbg.past_min_depth}`);
-        if (dbg.past_min_height != null) bits.push(`past min-height ${dbg.past_min_height}`);
-        if (bits.length) voxelStatus += ` &middot; <span style="color:#f4a261">${bits.join('; ')}</span>`;
+      const dbg = vm.debug || {};
+      const mdl = vm.model || {};
+      const dbgBits = [];
+      if (mdl && mdl.load_error) dbgBits.push(`model: ${mdl.load_error}`);
+      if (mdl && mdl.estimate_depth === false) dbgBits.push('depth estimation disabled');
+      if (dbg.infer && dbg.infer !== 'ok') dbgBits.push(`inference: ${dbg.infer}`);
+      if (dbg.reason) dbgBits.push(dbg.reason);
+      if (dbg.dmin != null) dbgBits.push(`raw ${dbg.dmin}..${dbg.dmax}`);
+      if (dbg.dist_min != null && dbg.dist_max != null) {
+        dbgBits.push(`dist ${dbg.dist_min}..${dbg.dist_max}${vm.unit ? ' ' + vm.unit : ''}`);
+      }
+      if (dbg.max_depth != null && dbg.depth_scale != null) {
+        dbgBits.push(`max_depth ${dbg.max_depth} x${dbg.depth_scale}`);
+      }
+      if (dbg.depth_w != null && dbg.frame_w != null && dbg.depth_w !== dbg.frame_w) {
+        dbgBits.push(`depth ${dbg.depth_w} vs frame ${dbg.frame_w}`);
+      }
+      if (dbg.back_projected != null) dbgBits.push(`bp ${dbg.back_projected}`);
+      if (dbg.past_min_depth != null) dbgBits.push(`>minD ${dbg.past_min_depth}`);
+      if (dbg.past_min_height != null) dbgBits.push(`>minH ${dbg.past_min_height}`);
+      if (dbg.integrated != null) dbgBits.push(`new ${dbg.integrated}`);
+      if (vm.degenerate) {
+        voxelStatus += ` &middot; <span style="color:#e76f51">world collapsed to ${ext}</span>`;
+      } else if (dbgBits.length) {
+        voxelStatus += ` &middot; <span style="color:#8a8a8a">${dbgBits.join('; ')}</span>`;
       }
     }
     const selectedCls = (selectedId === o.id) ? 'selected' : '';

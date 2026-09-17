@@ -229,18 +229,31 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             self.depth_scale,
         )
         distance = distance_m * self._z_scale
+        dist_finite = distance[np.isfinite(distance)]
 
+        # focal is resolved in frame-pixel space (the calibration matrix /
+        # FOV belong to the live camera resolution). The depth map can come
+        # back at a different resolution (e.g. the HF pipeline sends ~518px
+        # tensors), so rescale the focal to the grid we actually back-project
+        # from - otherwise every point lands on the wrong ray.
         focal = focal_length_pixels(
             frame.shape[1], self.calibration, default_fov=60.0
         )
+        if depth.shape[1] != frame.shape[1]:
+            focal = focal * depth.shape[1] / float(max(frame.shape[1], 1))
         cam_points = depth_to_camera_points(
             distance, focal, stride=self.pixel_stride
         )
         debug.update(
             dmin=round(self._dmin, 4),
             dmax=round(self._dmax, 4),
+            dist_min=round(float(dist_finite.min()), 4) if dist_finite.size else 0.0,
+            dist_max=round(float(dist_finite.max()), 4) if dist_finite.size else 0.0,
             max_depth=self.max_depth,
+            depth_scale=self.depth_scale,
             focal=round(float(focal), 1),
+            depth_w=int(depth.shape[1]),
+            frame_w=int(frame.shape[1]),
             back_projected=int(cam_points.shape[0]),
         )
         if cam_points.size == 0:
@@ -289,6 +302,13 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         else:
             centroid = np.zeros(3, dtype=np.float64)
             extent = [0.0, 0.0, 0.0]
+        # A map that only spans a couple of voxel cells in every axis means the
+        # depth->distance mapping collapsed (nothing survives much farther than
+        # the camera). Surface that so the 3D viewer does not just silently
+        # fail to show a world.
+        degenerate = bool(
+            voxels and max(float(e) for e in extent) < self.voxel_size * 4
+        )
 
         meta = {
             "kind": "voxel_map",
@@ -298,6 +318,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             "exported": len(voxels),
             "unit": self.unit,
             "extent": extent,
+            "degenerate": degenerate,
             "geometry": {
                 "camera_height": round(float(getattr(self, "camera_height", 0.0)), 4),
                 "camera_pitch": getattr(self, "camera_pitch", 0.0),
