@@ -75,6 +75,25 @@ class VoxelMapTests(unittest.TestCase):
         self.assertEqual(len(exported), 1)
         self.assertAlmostEqual(exported[0][0], 1.05)
 
+    def test_integrate_averages_color_per_voxel(self):
+        # two red-ish and one blue point in the same cell -> weighted average
+        vmap = SparseVoxelMap(voxel_size=0.5)
+        pts = np.array([[0.05, 0.05, 0.05], [0.10, 0.10, 0.10]])
+        vmap.integrate(pts, colors=np.array([[200, 0, 0], [200, 0, 0]]))
+        vmap.integrate(np.array([[0.20, 0.20, 0.20]]), colors=np.array([[0, 0, 100]]))
+        exported = vmap.export()
+        self.assertEqual(len(exported[0]), 7)
+        r, g, b = exported[0][4:7]
+        self.assertAlmostEqual(r, (200 * 2 + 0) / 3, delta=1)
+        self.assertEqual(g, 0)
+        self.assertAlmostEqual(b, (0 * 2 + 100) / 3, delta=1)
+
+    def test_export_defaults_uncolored_voxels_to_grey(self):
+        vmap = SparseVoxelMap(voxel_size=0.1)
+        vmap.integrate(np.array([[0.0, 0.0, 0.0]]))
+        exported = vmap.export()
+        self.assertEqual(exported[0][4:7], [170, 170, 170])
+
 
 class GeometryTests(unittest.TestCase):
     def test_vectorized_transform_matches_scalar(self):
@@ -185,6 +204,7 @@ class VoxelWorldPipelineTests(unittest.TestCase):
             "min_height",
             "voxel_min_depth",
             "near_depth",
+            "auto_ground",
         ):
             self.assertIn(key, schema)
             self.assertIn(schema[key]["type"], ("number", "toggle", "select"))
@@ -207,6 +227,8 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         pipeline.pixel_stride = 4
         pipeline.voxel_min_depth = 0.0
         pipeline.min_height = -100.0
+        pipeline.auto_ground = True
+        pipeline._ground_offset = None
         pipeline.voxel_size = 0.1
         pipeline.export_max_voxels = 1000
         pipeline.min_voxel_count = 1
@@ -243,9 +265,61 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         self.assertGreater(meta["count"], 0)
         self.assertTrue(meta["voxels"])
         for voxel in meta["voxels"]:
-            self.assertEqual(len(voxel), 4)
+            self.assertEqual(len(voxel), 7)
             self.assertTrue(all(math.isfinite(v) for v in voxel[:3]))
+            self.assertTrue(all(0 <= c <= 255 for c in voxel[4:7]))
         self.assertIsNotNone(out_frame)
+
+    def test_voxel_color_is_sampled_from_the_frame(self):
+        # a solid red frame (BGR) must produce red voxels
+        pipeline = self._build_pipeline()
+        frame = np.zeros((80, 80, 3), dtype=np.uint8)
+        frame[:, :, 2] = 255  # red in BGR
+
+        def fake_depth(f):
+            rows = np.linspace(1.0, 0.0, f.shape[0], dtype=np.float64)
+            return np.tile(rows[:, None], (1, f.shape[1]))
+
+        pipeline.get_frame = lambda: frame
+        pipeline._is_processable = lambda: True
+        pipeline._infer_depth = fake_depth
+        pipeline._annotate = lambda f, d: f
+
+        objects, _ = pipeline.run()
+        voxels = objects[0].vis_meta["voxels"]
+        self.assertTrue(voxels)
+        for v in voxels:
+            self.assertGreater(v[4], 200)  # red
+            self.assertLess(v[5], 20)
+            self.assertLess(v[6], 20)
+
+    def test_auto_ground_lifts_a_scene_below_the_origin(self):
+        # A straight-down camera (pitch 90) with height 0 maps every point
+        # below z=0. Auto ground must shift the map so it straddles the grid
+        # instead of hanging entirely underneath it.
+        pipeline = self._build_pipeline()
+        pipeline.camera_height = 0.0
+        pipeline.camera_pitch = 90.0
+        pipeline.min_height = -100.0
+        pipeline.auto_ground = True
+        pipeline._ground_offset = None
+        frame = np.zeros((80, 80, 3), dtype=np.uint8)
+
+        def fake_depth(f):
+            rows = np.linspace(1.0, 0.0, f.shape[0], dtype=np.float64)
+            return np.tile(rows[:, None], (1, f.shape[1]))
+
+        pipeline.get_frame = lambda: frame
+        pipeline._is_processable = lambda: True
+        pipeline._infer_depth = fake_depth
+        pipeline._annotate = lambda f, d: f
+
+        objects, _ = pipeline.run()
+        meta = objects[0].vis_meta
+        self.assertIsNotNone(pipeline._ground_offset)
+        self.assertNotAlmostEqual(meta["debug"]["world_z_max"], meta["debug"]["world_z_min"])
+        # after centering, the densest plane sits at z~0, so the max is >= 0
+        self.assertGreaterEqual(meta["debug"]["world_z_max"], 0.0)
 
     def test_min_height_never_blanks_the_world(self):
         # A floor clip above the whole reconstruction (a camera height/pitch
@@ -270,6 +344,12 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         self.assertGreater(meta["count"], 0)
         self.assertEqual(meta["debug"]["past_min_height"], 0)
         self.assertIn("Min Height", meta["debug"].get("warning", ""))
+
+        # a second tick must not append the same warning again - the viewer
+        # used to show one giant repeating string
+        objects, _ = pipeline.run()
+        warning = objects[0].vis_meta["debug"].get("warning", "")
+        self.assertEqual(warning.count("removed every point"), 1)
 
     def test_run_reuses_depth_between_inference_frames(self):
         pipeline = self._build_pipeline()

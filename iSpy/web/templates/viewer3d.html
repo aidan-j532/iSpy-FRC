@@ -434,8 +434,8 @@ function updateVoxelGroup(g, o) {
     const geo = new THREE.BoxGeometry(1, 1, 1);
     const mat = new THREE.MeshStandardMaterial({
       vertexColors: true, transparent: false, opacity: 1.0,
-      roughness: 0.55, metalness: 0.0,
-      emissive: 0xffffff, emissiveIntensity: 0.18,
+      roughness: 0.62, metalness: 0.0,
+      emissive: 0xffffff, emissiveIntensity: 0.08,
     });
     mesh = new THREE.InstancedMesh(geo, mat, cap);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -459,8 +459,16 @@ function updateVoxelGroup(g, o) {
     const p = toViewer(v[0], v[1], v[2]);
     m.compose(p, q, s);
     mesh.setMatrixAt(i, m);
-    const t = Math.min(1, Math.abs(v[2]) / maxAbsZ);
-    color.setHSL(0.58 - 0.52 * t, 0.72, 0.42 + 0.20 * (1 - t));
+    if (v.length >= 7) {
+      // real color sampled from the camera frame (r, g, b in 0-255). The
+      // values are sRGB; three.js works in linear-sRGB.
+      color.setRGB(v[4] / 255, v[5] / 255, v[6] / 255);
+      if (color.convertSRGBToLinear) color.convertSRGBToLinear();
+    } else {
+      // legacy/uncaptured color -> height ramp so the ground still reads
+      const t = Math.min(1, Math.abs(v[2]) / maxAbsZ);
+      color.setHSL(0.58 - 0.52 * t, 0.72, 0.42 + 0.20 * (1 - t));
+    }
     mesh.setColorAt(i, color);
   }
   // park unused instances at zero scale so they never render
@@ -779,7 +787,11 @@ function renderTable(objects, overlays) {
       if (dbg.past_min_depth != null) dbgBits.push(`>minD ${dbg.past_min_depth}`);
       if (dbg.past_min_height != null) dbgBits.push(`>minH ${dbg.past_min_height}`);
       if (dbg.world_z_min != null && dbg.world_z_max != null) {
-        dbgBits.push(`worldZ ${dbg.world_z_min}..${dbg.world_z_max} (clip ${dbg.min_height})`);
+        const clip = (dbg.min_height == null) ? 'auto' : dbg.min_height;
+        dbgBits.push(`worldZ ${dbg.world_z_min}..${dbg.world_z_max} (clip ${clip})`);
+      }
+      if (dbg.ground_offset != null && dbg.ground_offset) {
+        dbgBits.push(`ground ${dbg.ground_offset}`);
       }
       if (dbg.camera_height != null) {
         dbgBits.push(`cam h${dbg.camera_height} p${dbg.camera_pitch} y${dbg.camera_yaw}`);

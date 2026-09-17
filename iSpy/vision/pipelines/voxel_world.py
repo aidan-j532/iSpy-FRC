@@ -143,6 +143,15 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                     "pins the near end of the scale against Max Depth. Lower it "
                     "if the near parts of the scene look too far away.",
                 },
+                "auto_ground": {
+                    "type": "toggle",
+                    "label": "Auto Ground Level",
+                    "default": True,
+                    "help": "When the camera mount height is 0/unknown, drop the "
+                    "scene so its densest plane (the floor) sits at z=0 instead "
+                    "of floating below the grid. Turn off once you set the real "
+                    "camera height.",
+                },
             }
         )
         return schema
@@ -192,6 +201,11 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         self.voxel_min_depth = (
             max(as_float("voxel_min_depth", 0.05), 0.0) * self._z_scale
         )
+        self.auto_ground = bool(setting("auto_ground", True))
+        # Resolved on the first integrated frame (see _integrate_depth) and then
+        # held constant so the accumulated map does not smear as the estimate
+        # jitters frame to frame.
+        self._ground_offset: float | None = None
 
         self.voxel_map = SparseVoxelMap(
             voxel_size=self.voxel_size,
@@ -224,6 +238,9 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         self._debug = getattr(self, "_debug", None) or {}
         debug = self._debug
         debug["reason"] = ""
+        # diagnostics describe this frame only - without this the warning list
+        # grows once per frame and the viewer shows the same text forever
+        debug.pop("warning", None)
 
         def warn(message: str) -> None:
             existing = debug.get("warning")
@@ -260,8 +277,8 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         )
         if depth.shape[1] != frame.shape[1]:
             focal = focal * depth.shape[1] / float(max(frame.shape[1], 1))
-        cam_points = depth_to_camera_points(
-            distance, focal, stride=self.pixel_stride
+        cam_points, cam_pixels = depth_to_camera_points(
+            distance, focal, stride=self.pixel_stride, return_pixels=True
         )
         far_plane_m = float(self.max_depth) * float(self.depth_scale)
         debug.update(
@@ -300,7 +317,9 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             debug["reason"] = "depth -> camera back-projection produced no points"
             return
 
-        cam_points = cam_points[cam_points[:, 2] >= self.voxel_min_depth]
+        keep = cam_points[:, 2] >= self.voxel_min_depth
+        cam_points = cam_points[keep]
+        cam_pixels = cam_pixels[keep]
         debug["past_min_depth"] = int(cam_points.shape[0])
         if cam_points.size == 0:
             debug["reason"] = (
@@ -308,6 +327,13 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                 f"({self.voxel_min_depth:.3f} {self._unit_label})"
             )
             return
+
+        # Sample the live frame so every voxel carries the color of the pixels
+        # that produced it - this is what turns the map from a height ramp into
+        # a recognizable, real-color reconstruction. Frames are BGR (OpenCV),
+        # the viewer wants RGB. Depth-map pixels are scaled to frame pixels
+        # because the model may run at a different resolution than the camera.
+        colors = self._sample_colors(frame, cam_pixels, depth.shape)
 
         world_all = camera_points_to_robot(
             cam_points,
@@ -317,24 +343,49 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             self.camera_yaw,
             self.camera_pitch,
         )
+
+        ground_offset = getattr(self, "_ground_offset", None)
+        # Auto-ground only matters when the mount height is unknown (0); once a
+        # real height is set the world is already anchored to the floor.
+        auto_level = bool(self.auto_ground) and abs(float(self.camera_height)) < 1e-9
+        if ground_offset is None and auto_level:
+            # The world origin is the floor but the camera height is not known
+            # (unset -> 0), so the whole scene floats. Use the densest z plane -
+            # which for the downward/robot view is the floor - as z=0. Held
+            # constant afterwards so the map does not smear.
+            ground_offset = float(np.median(world_all[:, 2]))
+            self._ground_offset = ground_offset
+        ground_offset = float(ground_offset or 0.0)
+        if ground_offset:
+            world_all = world_all.copy()
+            world_all[:, 2] -= ground_offset
+
+        # While auto-levelling the origin is arbitrary, so an absolute Min
+        # Height would slice the scene in half - skip the clip and let the user
+        # set a real camera height to get a true floor filter back.
+        effective_min_height = float("-inf") if auto_level else float(self.min_height)
         world_z_min = float(world_all[:, 2].min())
         world_z_max = float(world_all[:, 2].max())
         debug.update(
             camera_height=round(float(self.camera_height), 3),
             camera_pitch=round(float(self.camera_pitch), 1),
             camera_yaw=round(float(self.camera_yaw), 1),
-            min_height=round(float(self.min_height), 3),
+            min_height=(None if auto_level else round(float(self.min_height), 3)),
+            ground_offset=round(ground_offset, 3),
+            auto_level=auto_level,
             world_z_min=round(world_z_min, 3),
             world_z_max=round(world_z_max, 3),
         )
-        world = world_all[world_all[:, 2] >= self.min_height]
+        keep = world_all[:, 2] >= effective_min_height
+        world = world_all[keep]
+        world_colors = colors[keep] if colors is not None else None
         debug["past_min_height"] = int(world.shape[0])
-        if abs(float(self.camera_height)) < 1e-9:
+        if abs(float(self.camera_height)) < 1e-9 and not auto_level:
             # The world origin is the floor, so a mount height of 0 puts the
             # whole scene below z=0 and the Min Height floor then eats it.
             warn(
-                "camera Height is 0 - set the real mount height so the floor "
-                "sits at z=0"
+                "camera Height is 0 - set the real mount height (or enable "
+                "Auto Ground) so the floor sits at z=0"
             )
         if world.size == 0:
             # The configured floor is below the entire scene (almost always a
@@ -342,13 +393,42 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             # than silently blanking the whole world, keep the geometry and say
             # so - the user can then fix Min Height / the camera mount.
             world = world_all
+            world_colors = colors
             warn(
                 f"Min Height ({self.min_height:.2f} {self._unit_label}) "
                 f"removed every point (world z {world_z_min:.2f}..{world_z_max:.2f})"
                 f" - floor clip ignored, lower Min Height"
             )
 
-        debug["integrated"] = int(self.voxel_map.integrate(world))
+        if world.size == 0:
+            debug["reason"] = "no world points survived filtering"
+            return
+
+        debug["integrated"] = int(
+            self.voxel_map.integrate(world, colors=world_colors)
+        )
+
+    def _sample_colors(
+        self, frame: np.ndarray, pixels: np.ndarray, depth_shape: tuple
+    ) -> np.ndarray | None:
+        """Look up the RGB (0-255) of each back-projected pixel in the frame."""
+        if pixels.size == 0 or frame is None or frame.ndim < 2:
+            return None
+        fh, fw = frame.shape[0], frame.shape[1]
+        dh, dw = depth_shape[0], depth_shape[1]
+        u = np.clip(
+            (pixels[:, 0] * fw / max(dw, 1)).astype(np.int64), 0, max(fw - 1, 0)
+        )
+        v = np.clip(
+            (pixels[:, 1] * fh / max(dh, 1)).astype(np.int64), 0, max(fh - 1, 0)
+        )
+        sampled = frame[v, u]
+        if sampled.ndim == 1:
+            return None
+        # gray -> broadcast, BGR -> RGB, BGRA -> RGB
+        if sampled.shape[1] >= 3:
+            return sampled[:, 2::-1][:, :3].astype(np.float64)
+        return np.repeat(sampled[:, :1], 3, axis=1).astype(np.float64)
 
     def _voxel_object(self) -> Object:
         voxels = self.voxel_map.export(
@@ -387,6 +467,8 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                 "camera_yaw": getattr(self, "camera_yaw", 0.0),
                 "min_height": getattr(self, "min_height", 0.0),
                 "min_depth": getattr(self, "voxel_min_depth", 0.0),
+                "ground_offset": round(float(getattr(self, "_ground_offset", 0.0) or 0.0), 4),
+                "auto_ground": bool(getattr(self, "auto_ground", False)),
                 "pixel_stride": getattr(self, "pixel_stride", 0),
                 "process_every": getattr(self, "_every", 0),
             },

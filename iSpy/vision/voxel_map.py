@@ -120,17 +120,25 @@ def focal_length_pixels(
 
 
 def depth_to_camera_points(
-    depth: np.ndarray, focal_px: float, stride: int = 8
-) -> np.ndarray:
+    depth: np.ndarray,
+    focal_px: float,
+    stride: int = 8,
+    return_pixels: bool = False,
+):
     """Back-project a depth map into camera-frame (right, down, forward) points.
 
     ``depth`` is forward distance in output units. Pixels are sampled on a
     ``stride`` grid so the point count (and therefore voxel cost) is bounded.
     Non-finite / non-positive samples are dropped.
+
+    With ``return_pixels`` the sampled integer pixel coordinates are returned
+    too as a ``(N, 2)`` ``(u, v)`` array in *depth-map* pixel space, so callers
+    can look up the matching color and give every point a real color.
     """
     depth = np.asarray(depth, dtype=np.float64)
     if depth.ndim != 2 or depth.size == 0:
-        return np.empty((0, 3), dtype=np.float64)
+        empty = np.empty((0, 3), dtype=np.float64)
+        return (empty, np.empty((0, 2), dtype=np.int64)) if return_pixels else empty
 
     h, w = depth.shape
     stride = max(1, int(stride))
@@ -140,7 +148,8 @@ def depth_to_camera_points(
 
     valid = np.isfinite(sampled) & (sampled > 0.0)
     if not valid.any():
-        return np.empty((0, 3), dtype=np.float64)
+        empty = np.empty((0, 3), dtype=np.float64)
+        return (empty, np.empty((0, 2), dtype=np.int64)) if return_pixels else empty
 
     uu, vv = np.meshgrid(xs, ys)
     u = uu[valid].astype(np.float64)
@@ -151,7 +160,11 @@ def depth_to_camera_points(
     f = max(float(focal_px), 1e-6)
     x = (u - cx) / f * d
     y = (v - cy) / f * d
-    return np.stack([x, y, d], axis=1)
+    points = np.stack([x, y, d], axis=1)
+    if not return_pixels:
+        return points
+    pixels = np.stack([u, v], axis=1).astype(np.int64)
+    return points, pixels
 
 
 def camera_points_to_robot(
@@ -202,24 +215,57 @@ class SparseVoxelMap:
         self.decay_seconds = float(decay_seconds)
         self._voxels: dict[tuple[int, int, int], list] = {}
 
-    def integrate(self, points: np.ndarray, now: float | None = None) -> int:
+    def integrate(
+        self,
+        points: np.ndarray,
+        colors: np.ndarray | None = None,
+        now: float | None = None,
+    ) -> int:
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
         if pts.size == 0:
             return 0
-        pts = pts[np.isfinite(pts).all(axis=1)]
+        finite = np.isfinite(pts).all(axis=1)
+        pts = pts[finite]
         if pts.size == 0:
             return 0
 
+        col = None
+        if colors is not None:
+            col = np.asarray(colors, dtype=np.float64).reshape(-1, 3)
+            if col.shape[0] == finite.shape[0]:
+                col = col[finite]
+            else:
+                col = None
+
         indices = np.floor(pts / self.voxel_size).astype(np.int64)
-        unique, counts = np.unique(indices, axis=0, return_counts=True)
+        unique, inverse, counts = np.unique(
+            indices, axis=0, return_inverse=True, return_counts=True
+        )
+        color_sum = None
+        if col is not None:
+            color_sum = np.zeros((unique.shape[0], 3), dtype=np.float64)
+            np.add.at(color_sum, inverse, col)
+
         now = time.monotonic() if now is None else now
-        for key, count in zip(map(tuple, unique.tolist()), counts.tolist()):
+        for i, key in enumerate(map(tuple, unique.tolist())):
+            count = int(counts[i])
+            # per-batch mean color for this voxel cell (None when uncolored)
+            rgb = color_sum[i] / max(count, 1) if color_sum is not None else None
             entry = self._voxels.get(key)
             if entry is None:
-                self._voxels[key] = [int(count), now]
-            else:
-                entry[0] += int(count)
-                entry[1] = now
+                self._voxels[key] = [count, now, rgb]
+                continue
+            old = entry[0]
+            total = old + count
+            if rgb is not None:
+                prev = entry[2] if len(entry) > 2 else None
+                merged = rgb if prev is None else (prev * old + rgb * count) / total
+                if len(entry) > 2:
+                    entry[2] = merged
+                else:
+                    entry.append(merged)
+            entry[0] = total
+            entry[1] = now
         self._enforce_capacity()
         return int(unique.shape[0])
 
@@ -262,7 +308,12 @@ class SparseVoxelMap:
     def export(
         self, max_points: int | None = None, min_count: int = 1
     ) -> list[list[float]]:
-        """Return ``[x, y, z, count]`` entries, most-observed first."""
+        """Return ``[x, y, z, count, r, g, b]`` entries, most-observed first.
+
+        ``r, g, b`` are 0-255 and are the average frame color of the points
+        that landed in that voxel (mid-grey when the caller never supplied
+        colors), so the 3D viewer can draw a real-color world.
+        """
         items = [
             (key, entry)
             for key, entry in self._voxels.items()
@@ -274,12 +325,22 @@ class SparseVoxelMap:
         if max_points is not None:
             items = items[: max(0, int(max_points))]
         half = self.voxel_size / 2.0
+
+        def rgb(entry: list) -> tuple[int, int, int]:
+            stored = entry[2] if len(entry) > 2 else None
+            if stored is None:
+                return (170, 170, 170)
+            return tuple(
+                int(max(0, min(255, round(float(channel))))) for channel in stored
+            )
+
         return [
             [
                 key[0] * self.voxel_size + half,
                 key[1] * self.voxel_size + half,
                 key[2] * self.voxel_size + half,
                 int(entry[0]),
+                *rgb(entry),
             ]
             for key, entry in items
         ]
