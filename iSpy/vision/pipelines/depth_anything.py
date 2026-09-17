@@ -965,14 +965,19 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         span = d_max - d_min
         if span <= 1e-9:
-            return self.max_depth
+            return self.max_depth * self._z_scale
 
-        closeness = (norm - d_min) / span
+        # Depth Anything V2 emits relative *inverse* depth, so recover distance
+        # with inverse interpolation between the near and far planes. A linear
+        # ramp would pile the whole scene onto the far plane.
+        closeness = float(np.clip((norm - d_min) / span, 0.0, 1.0))
+        z_far = max(self.max_depth, 1e-3)
+        z_near = float(getattr(self, "near_depth", 0.3) or 0.3)
+        if not (0.0 < z_near < z_far):
+            z_near = max(1e-3, z_far * 0.05)
 
-        # Depth Anything gives relative depth, not real meters
-        distance_m = self.max_depth * float(np.clip(1.0 - closeness, 0.0, 1.0))
-
-        return distance_m * self._z_scale
+        inv_distance = (1.0 - closeness) / z_far + closeness / z_near
+        return (1.0 / max(inv_distance, 1e-9)) * self._z_scale
 
     def _objects_from_depth(
         self,

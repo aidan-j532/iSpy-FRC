@@ -22,17 +22,20 @@ def relative_depth_to_distance(
     d_max: float,
     max_depth: float,
     depth_scale: float = 1.0,
+    near_depth: float = 0.3,
 ) -> np.ndarray:
     """Map Depth Anything's relative depth to an approximate forward distance.
 
-    Depth Anything V2 emits relative inverse depth (larger = closer). The far
-    plane ``max_depth`` pins the scale; ``depth_scale`` is a user trim.
+    Depth Anything V2 emits relative *inverse* depth (disparity-like: larger =
+    closer). The correct way back to a forward distance is therefore inverse
+    interpolation between a near and a far plane, not a linear ramp - a linear
+    ramp piles almost the whole scene onto the far plane (a room spanning
+    2-5 m collapses to "everything is ~10 m") and destroys the geometry.
 
-    Normalization clips to a percentile band (~2%-98%) instead of the raw
-    min/max so a handful of outlier pixels (specular glints, dark voids) cannot
-    grab d_min/d_max and squash the whole scene into a razor-thin closeness
-    band. A thin band is what silently collapses the integrated world to a
-    few voxels right on top of the camera.
+    The far plane is ``max_depth * depth_scale`` (both user trims) and the
+    near plane is ``near_depth``; the 2%-98% percentile band of the map is
+    stretched across that disparity range so a few outlier pixels cannot
+    squash the scene.
     """
     depth = np.asarray(depth, dtype=np.float64)
     if depth.size == 0:
@@ -47,8 +50,8 @@ def relative_depth_to_distance(
     span = hi - lo
     if span <= 1e-9:
         # no usable spread in the middle 96%: try the full min/max range, and
-        # only then fall back to a mid-distance guess. A near-uniform map must
-        # not become a 10m wall of voxels just because float noise has a span.
+        # only then fall back to a flat disparity. A near-uniform map must not
+        # become a wall of voxels just because float noise has a span.
         span = float(d_max) - float(d_min)
         if span > 1e-9:
             lo, hi = float(d_min), float(d_max)
@@ -58,8 +61,16 @@ def relative_depth_to_distance(
     else:
         closeness = (depth - lo) / span
 
+    # closeness: 1 = nearest (highest disparity), 0 = furthest
     closeness = np.clip(closeness, 0.0, 1.0)
-    distance = (1.0 - closeness) * float(max_depth) * float(depth_scale)
+
+    z_far = max(float(max_depth) * float(depth_scale), 1e-3)
+    z_near = float(near_depth)
+    if not (0.0 < z_near < z_far):
+        z_near = max(1e-3, z_far * 0.05)
+
+    inv_distance = (1.0 - closeness) / z_far + closeness / z_near
+    distance = 1.0 / np.maximum(inv_distance, 1e-9)
     return np.nan_to_num(distance, nan=0.0, posinf=0.0, neginf=0.0)
 
 

@@ -133,6 +133,16 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                     "help": "Points closer than this are ignored (they are "
                     "usually on the robot itself).",
                 },
+                "near_depth": {
+                    "type": "number",
+                    "label": "Near Plane (m)",
+                    "default": 0.3,
+                    "step": 0.1,
+                    "help": "Forward distance assigned to the nearest pixel. "
+                    "Depth Anything is a relative (inverse-depth) model, so this "
+                    "pins the near end of the scale against Max Depth. Lower it "
+                    "if the near parts of the scene look too far away.",
+                },
             }
         )
         return schema
@@ -174,6 +184,10 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         self.min_voxel_count = max(1, as_int("min_voxel_count", 1))
         self.decay_seconds = max(0.0, as_float("decay_seconds", 8.0))
         self.depth_scale = max(as_float("depth_scale", 1.0), 1e-6)
+        # near_depth is consumed in meters by relative_depth_to_distance (the
+        # returned distance is scaled into output units afterwards), so it must
+        # NOT be pre-scaled by _z_scale.
+        self.near_depth = max(as_float("near_depth", 0.3), 1e-3)
         self.min_height = as_float("min_height", -0.25) * self._z_scale
         self.voxel_min_depth = (
             max(as_float("voxel_min_depth", 0.05), 0.0) * self._z_scale
@@ -227,6 +241,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             self._dmax,
             self.max_depth,
             self.depth_scale,
+            self.near_depth,
         )
         distance = distance_m * self._z_scale
         dist_finite = distance[np.isfinite(distance)]
@@ -244,6 +259,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         cam_points = depth_to_camera_points(
             distance, focal, stride=self.pixel_stride
         )
+        far_plane_m = float(self.max_depth) * float(self.depth_scale)
         debug.update(
             dmin=round(self._dmin, 4),
             dmax=round(self._dmax, 4),
@@ -251,11 +267,31 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             dist_max=round(float(dist_finite.max()), 4) if dist_finite.size else 0.0,
             max_depth=self.max_depth,
             depth_scale=self.depth_scale,
+            near_depth=round(float(self.near_depth) * self._z_scale, 3),
+            far_plane=round(far_plane_m * self._z_scale, 3),
             focal=round(float(focal), 1),
             depth_w=int(depth.shape[1]),
             frame_w=int(frame.shape[1]),
             back_projected=int(cam_points.shape[0]),
         )
+        if far_plane_m < 1.0:
+            # A far plane under a meter makes every point land almost on the
+            # camera, so the whole map collapses into a tiny blob. Almost
+            # always a mis-set Max Depth / Depth Scale.
+            debug["warning"] = (
+                f"far plane is only {far_plane_m * self._z_scale:.2f} "
+                f"{self._unit_label} - raise Max Depth / Depth Scale or the "
+                f"world collapses"
+            )
+            self.logger.warning(
+                "Camera '%s': voxel far plane is %.2f %s (max_depth=%s x "
+                "depth_scale=%s) - raise it or the world collapses.",
+                self.config.get("name", "?"),
+                far_plane_m * self._z_scale,
+                self._unit_label,
+                self.max_depth,
+                self.depth_scale,
+            )
         if cam_points.size == 0:
             debug["reason"] = "depth -> camera back-projection produced no points"
             return

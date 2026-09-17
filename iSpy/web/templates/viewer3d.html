@@ -433,8 +433,9 @@ function updateVoxelGroup(g, o) {
     const cap = Math.max(voxels.length, 64);
     const geo = new THREE.BoxGeometry(1, 1, 1);
     const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true, transparent: true, opacity: 0.9,
-      roughness: 0.7, metalness: 0.05,
+      vertexColors: true, transparent: false, opacity: 1.0,
+      roughness: 0.55, metalness: 0.0,
+      emissive: 0xffffff, emissiveIntensity: 0.18,
     });
     mesh = new THREE.InstancedMesh(geo, mat, cap);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -763,12 +764,13 @@ function renderTable(objects, overlays) {
       if (mdl && mdl.estimate_depth === false) dbgBits.push('depth estimation disabled');
       if (dbg.infer && dbg.infer !== 'ok') dbgBits.push(`inference: ${dbg.infer}`);
       if (dbg.reason) dbgBits.push(dbg.reason);
+      if (dbg.warning) dbgBits.push(dbg.warning);
       if (dbg.dmin != null) dbgBits.push(`raw ${dbg.dmin}..${dbg.dmax}`);
       if (dbg.dist_min != null && dbg.dist_max != null) {
         dbgBits.push(`dist ${dbg.dist_min}..${dbg.dist_max}${vm.unit ? ' ' + vm.unit : ''}`);
       }
-      if (dbg.max_depth != null && dbg.depth_scale != null) {
-        dbgBits.push(`max_depth ${dbg.max_depth} x${dbg.depth_scale}`);
+      if (dbg.near_depth != null && dbg.far_plane != null) {
+        dbgBits.push(`plane ${dbg.near_depth}..${dbg.far_plane}${vm.unit ? ' ' + vm.unit : ''}`);
       }
       if (dbg.depth_w != null && dbg.frame_w != null && dbg.depth_w !== dbg.frame_w) {
         dbgBits.push(`depth ${dbg.depth_w} vs frame ${dbg.frame_w}`);
@@ -779,7 +781,8 @@ function renderTable(objects, overlays) {
       if (dbg.integrated != null) dbgBits.push(`new ${dbg.integrated}`);
       if (vm.degenerate) {
         voxelStatus += ` &middot; <span style="color:#e76f51">world collapsed to ${ext}</span>`;
-      } else if (dbgBits.length) {
+      }
+      if (dbgBits.length) {
         voxelStatus += ` &middot; <span style="color:#8a8a8a">${dbgBits.join('; ')}</span>`;
       }
     }

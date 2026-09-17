@@ -110,16 +110,49 @@ class GeometryTests(unittest.TestCase):
 
     def test_nearer_relative_depth_maps_to_smaller_distance(self):
         depth = np.array([[0.0, 1.0]], dtype=np.float64)
-        dist = relative_depth_to_distance(depth, 0.0, 1.0, 10.0)
+        dist = relative_depth_to_distance(depth, 0.0, 1.0, 10.0, near_depth=0.5)
         # higher relative depth = nearer = smaller distance
         self.assertLess(dist[0, 1], dist[0, 0])
-        self.assertAlmostEqual(dist[0, 1], 0.0)
-        self.assertAlmostEqual(dist[0, 0], 10.0)
+        self.assertAlmostEqual(dist[0, 1], 0.5)  # near plane
+        self.assertAlmostEqual(dist[0, 0], 10.0)  # far plane
+
+    def test_inverse_depth_recovers_perspective_not_linear_ramp(self):
+        # A disparity (1/z) map for z in 1..10 m, expressed as DAV2 relative
+        # depth, must come back with a near/far spread - not pile every point
+        # onto the far plane the way a linear ramp does.
+        z_true = np.linspace(1.0, 10.0, 400).reshape(1, -1)
+        relative = 1.0 / z_true
+        dist = relative_depth_to_distance(relative, relative.min(), relative.max(), 10.0, near_depth=0.5)
+        self.assertLess(dist.max(), 10.5)
+        self.assertGreaterEqual(dist.min(), 0.49)
+        # the recovered distance range should cover most of the scale, proving
+        # the scene is not squashed onto one plane
+        self.assertGreater(dist.max() - dist.min(), 7.0)  # 1..10 m scene
+        # and it must stay monotonic (nearer stays nearer): relative depth
+        # decreases with index, so distance must never decrease (the ends are
+        # flat because of percentile clipping).
+        self.assertTrue(np.all(np.diff(dist[0]) >= -1e-9))
 
     def test_flat_depth_map_does_not_divide_by_zero(self):
         depth = np.full((10, 10), 4.0, dtype=np.float64)
         dist = relative_depth_to_distance(depth, 4.0, 4.0, 10.0)
         self.assertTrue(np.isfinite(dist).all())
+
+    def test_room_depth_map_builds_meter_scale_world(self):
+        # A depth map of a room 2-5 m deep, expressed as DAV2 relative inverse
+        # depth, must integrate into a world that is meters across - not the
+        # sub-30cm blob you get when the scale collapses.
+        z_true = np.linspace(2.0, 5.0, 64).reshape(1, -1)
+        relative = np.repeat(1.0 / z_true, 48, axis=0)
+        dist = relative_depth_to_distance(
+            relative, relative.min(), relative.max(), 10.0
+        )
+        cam = depth_to_camera_points(dist, focal_px=200.0, stride=1)
+        world = camera_points_to_robot(cam, 0.0, 0.0, 1.0, 0.0, 0.0)
+        world = world[world[:, 2] >= -25.0]
+        extent = world.max(axis=0) - world.min(axis=0)
+        self.assertGreater(extent[1], 1.0)  # forward axis spans > 1 m
+        self.assertGreater(world[:, 1].max(), 2.0)  # reaches well past the near plane
 
     def test_focal_length_prefers_fov_then_defaults(self):
         fov_focal = focal_length_pixels(640, {"fov": 60.0})
@@ -151,6 +184,7 @@ class VoxelWorldPipelineTests(unittest.TestCase):
             "depth_scale",
             "min_height",
             "voxel_min_depth",
+            "near_depth",
         ):
             self.assertIn(key, schema)
             self.assertIn(schema[key]["type"], ("number", "toggle", "select"))
@@ -169,6 +203,7 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         pipeline.max_depth = 10.0
         pipeline._z_scale = 1.0
         pipeline.depth_scale = 1.0
+        pipeline.near_depth = 0.3
         pipeline.pixel_stride = 4
         pipeline.voxel_min_depth = 0.0
         pipeline.min_height = -100.0
