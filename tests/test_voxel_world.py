@@ -7,12 +7,10 @@ the pipeline's output contract, without loading any model weights.
 
 import math
 import unittest
-from unittest import mock
 
 import numpy as np
 
 from iSpy.vision import triangulation
-from iSpy.vision import voxel_map
 from iSpy.vision.pipelines import get_pipeline_classes
 from iSpy.vision.pipelines.voxel_world import VoxelWorldPipeline
 from iSpy.vision.voxel_map import (
@@ -96,68 +94,6 @@ class VoxelMapTests(unittest.TestCase):
         vmap.integrate(np.array([[0.0, 0.0, 0.0]]))
         exported = vmap.export()
         self.assertEqual(exported[0][4:7], [170, 170, 170])
-
-
-class VoxelMapFallbackTests(unittest.TestCase):
-    """Same store contract when Open3D is not importable (e.g. Orange Pi).
-
-    Open3D has no aarch64 wheels, so the map must degrade to a plain dict
-    store instead of failing pipeline startup. The fallback exercises
-    construction, dedup/count, color averaging, decay, and capacity.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        cls._patch = mock.patch.object(voxel_map, "_open3d", return_value=None)
-        cls._patch.start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._patch.stop()
-
-    def test_builds_and_integrates_without_open3d(self):
-        vmap = SparseVoxelMap(voxel_size=0.1)
-        pts = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [5.0, 5.0, 5.0]])
-        self.assertEqual(vmap.integrate(pts), 3)
-        self.assertEqual(vmap.count(), 3)
-        low, high = vmap.bounds()
-        for value, expected in zip(low, (0.0, 0.0, 0.0)):
-            self.assertAlmostEqual(value, expected)
-        for value, expected in zip(high, (5.1, 5.1, 5.1)):
-            self.assertAlmostEqual(value, expected)
-
-    def test_color_average_and_grey_default(self):
-        vmap = SparseVoxelMap(voxel_size=0.5)
-        vmap.integrate(
-            np.array([[0.05, 0.05, 0.05], [0.10, 0.10, 0.10]]),
-            colors=np.array([[200, 0, 0], [200, 0, 0]]),
-        )
-        vmap.integrate(np.array([[0.20, 0.20, 0.20]]), colors=np.array([[0, 0, 100]]))
-        r, g, b = vmap.export()[0][4:7]
-        self.assertAlmostEqual(r, 200 * 2 / 3, delta=1)
-        self.assertEqual(g, 0)
-
-        plain = SparseVoxelMap(voxel_size=0.1)
-        plain.integrate(np.array([[0.0, 0.0, 0.0]]))
-        self.assertEqual(plain.export()[0][4:7], [170, 170, 170])
-
-    def test_decay_and_capacity(self):
-        vmap = SparseVoxelMap(voxel_size=0.1, max_voxels=2, decay_seconds=1.0)
-        vmap.integrate(np.array([[0.0, 0.0, 0.0]]), now=1.0)
-        vmap.integrate(np.array([[1.0, 0.0, 0.0]]), now=1.2)
-        vmap.integrate(np.array([[2.0, 0.0, 0.0]]), now=1.5)
-        centers = sorted(round(v[0], 2) for v in vmap.export())
-        self.assertEqual(centers, [1.05, 2.05])
-        self.assertEqual(vmap.count(), 2)
-        self.assertEqual(vmap.decay(now=2.0), 0)
-        self.assertEqual(vmap.count(), 2)
-        self.assertEqual(vmap.decay(now=3.0), 2)
-        self.assertEqual(vmap.count(), 0)
-
-        aged = SparseVoxelMap(voxel_size=0.1, decay_seconds=1.0)
-        aged.integrate(np.array([[0.0, 0.0, 0.0]]), now=10.0)
-        self.assertEqual(aged.decay(now=12.0), 1)
-        self.assertEqual(aged.count(), 0)
 
 
 class GeometryTests(unittest.TestCase):

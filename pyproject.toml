@@ -41,10 +41,9 @@ dependencies = [
     "scipy>=1.10.0",
 ]
 
-# Optional pipeline extras. open3d backs the voxel world's occupancy grid when
-# present; it has no reliable Orange Pi/aarch64 wheels, so it stays an opt-in
-# extra rather than a universal dep - the map falls back to a pure-Python
-# store without it. Install with: pip install "ispy-frc[voxel]"
+# Optional pipeline extras. open3d backs the voxel world's occupancy grid; it
+# has no reliable Orange Pi/aarch64 wheels, so it stays an opt-in extra rather
+# than a universal dep - install with: pip install "ispy-frc[voxel]"
 [project.optional-dependencies]
 voxel = [
     "open3d>=0.18.0",
