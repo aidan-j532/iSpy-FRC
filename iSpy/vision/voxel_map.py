@@ -1,11 +1,12 @@
 """Sparse monocular voxel occupancy core.
 
 The pipeline turns a Depth Anything depth map into world-frame points and
-integrates them into a bounded voxel map. The occupancy grid itself is an
-Open3D ``VoxelGrid``; two small maps keep the per-voxel hit count and
-last-observed time that Open3D has nowhere to store (they drive decay,
-eviction, and the viewer's Min Hits filter). Nothing here is model aware -
-pure geometry plus the voxel store.
+integrates them into a bounded voxel map. Occupancy and per-voxel color live
+in a small store: an Open3D ``VoxelGrid`` when Open3D is importable, a plain
+dict otherwise (Open3D still has no Orange Pi/aarch64 wheels). Two maps keep
+the per-voxel hit count and last-observed time that neither store can hold -
+they drive decay, eviction, and the viewer's Min Hits filter. Nothing here is
+model aware - pure geometry plus the voxel store.
 
 Camera convention matches iSpy/vision/triangulation.py:
     camera point = (right, down, forward), all in output units
@@ -25,11 +26,8 @@ def _open3d():
     if _o3d is None:
         try:
             import open3d as o3d
-        except ImportError as exc:
-            raise RuntimeError(
-                "open3d is required for the voxel world pipeline; install it "
-                'with: pip install "ispy-frc[voxel]"'
-            ) from exc
+        except ImportError:
+            return None
         _o3d = o3d
     return _o3d
 
@@ -245,11 +243,12 @@ def camera_points_to_robot(
 
 
 class SparseVoxelMap:
-    """Open3D ``VoxelGrid`` occupancy map with hit counts, decay, and a cap.
+    """Voxel occupancy map with hit counts, decay, and a cap.
 
-    ``_grid`` owns the voxels and their colors; ``_hits`` / ``_seen`` are
-    observation metadata Open3D cannot represent (a VoxelGrid member stores
-    only a grid index and a color).
+    Occupancy and per-voxel color live in ``_grid`` - an Open3D ``VoxelGrid``
+    when Open3D is importable, a dict ``key -> color`` otherwise. ``_hits`` /
+    ``_seen`` are observation metadata a VoxelGrid member cannot represent
+    (only a grid index and a color), so they are kept here either way.
     """
 
     def __init__(
@@ -258,11 +257,14 @@ class SparseVoxelMap:
         max_voxels: int = 20000,
         decay_seconds: float = 8.0,
     ):
-        _open3d()
+        self._o3d = _open3d()
         self.voxel_size = max(float(voxel_size), 1e-4)
         self.max_voxels = max(1, int(max_voxels))
         self.decay_seconds = float(decay_seconds)
-        self._grid = _open3d().geometry.VoxelGrid()
+        if self._o3d is not None:
+            self._grid = self._o3d.geometry.VoxelGrid()
+        else:
+            self._grid: dict[tuple[int, int, int], np.ndarray] = {}
         self._hits: dict[tuple[int, int, int], int] = {}
         self._seen: dict[tuple[int, int, int], float] = {}
 
@@ -270,13 +272,23 @@ class SparseVoxelMap:
     def _key(grid_index) -> tuple[int, int, int]:
         return int(grid_index[0]), int(grid_index[1]), int(grid_index[2])
 
-    def _add_voxel(self, key: tuple[int, int, int], color) -> None:
-        o3d = _open3d()
-        idx = np.asarray(key, dtype=np.int32)
-        self._grid.add_voxel(o3d.geometry.Voxel(idx, np.asarray(color)))
+    def _colors(self) -> dict[tuple[int, int, int], np.ndarray]:
+        if self._o3d is not None:
+            return {self._key(v.grid_index): v.color for v in self._grid.get_voxels()}
+        return dict(self._grid)
+
+    def _put_voxel(self, key: tuple[int, int, int], color) -> None:
+        if self._o3d is not None:
+            idx = np.asarray(key, dtype=np.int32)
+            self._grid.add_voxel(self._o3d.geometry.Voxel(idx, np.asarray(color)))
+        else:
+            self._grid[key] = np.asarray(color)
 
     def _remove_voxel(self, key: tuple[int, int, int]) -> None:
-        self._grid.remove_voxel(np.asarray(key, dtype=np.int32))
+        if self._o3d is not None:
+            self._grid.remove_voxel(np.asarray(key, dtype=np.int32))
+        else:
+            self._grid.pop(key, None)
         self._hits.pop(key, None)
         self._seen.pop(key, None)
 
@@ -304,9 +316,9 @@ class SparseVoxelMap:
         if col is None:
             col = np.full((pts.shape[0], 3), 170.0)
 
-        # Bucket the frame, then merge its voxels into the live grid. Per-voxel
+        # Bucket the frame, then merge its voxels into the live store. Per-voxel
         # hit counts come from numpy (Open3D averages colors but cannot report
-        # how many points landed in a voxel); the grid itself is Open3D's.
+        # how many points landed in a voxel); the occupancy store holds the rest.
         indices = np.floor(pts / self.voxel_size).astype(np.int64)
         unique, inverse, counts = np.unique(
             indices, axis=0, return_inverse=True, return_counts=True
@@ -314,24 +326,21 @@ class SparseVoxelMap:
         rgb_sum = np.zeros((unique.shape[0], 3), dtype=np.float64)
         np.add.at(rgb_sum, inverse, col)
 
-        existing = {
-            self._key(v.grid_index): v
-            for v in self._grid.get_voxels()
-        }
+        existing = self._colors()
         now = time.monotonic() if now is None else now
         for i, key in enumerate(map(tuple, unique.tolist())):
             count = int(counts[i])
             mean = rgb_sum[i] / count
             old_hits = self._hits.get(key, 0)
             total = old_hits + count
-            old_voxel = existing.get(key)
-            if old_voxel is not None and old_hits:
-                merged = (old_voxel.color * 255.0 * old_hits + mean * count) / total
+            old_color = existing.get(key)
+            if old_color is not None and old_hits:
+                merged = (old_color * 255.0 * old_hits + mean * count) / total
             else:
                 merged = mean
             self._hits[key] = total
             self._seen[key] = now
-            self._add_voxel(key, merged / 255.0)
+            self._put_voxel(key, merged / 255.0)
         self._enforce_capacity()
         return int(unique.shape[0])
 
@@ -358,7 +367,10 @@ class SparseVoxelMap:
             self._remove_voxel(key)
 
     def clear(self) -> None:
-        self._grid = _open3d().geometry.VoxelGrid()
+        if self._o3d is not None:
+            self._grid = self._o3d.geometry.VoxelGrid()
+        else:
+            self._grid = {}
         self._hits.clear()
         self._seen.clear()
 
@@ -382,11 +394,10 @@ class SparseVoxelMap:
         colors (mid-grey when color was never supplied) for the 3D viewer.
         """
         items = []
-        for v in self._grid.get_voxels():
-            key = self._key(v.grid_index)
+        for key, color in self._colors().items():
             count = self._hits.get(key, 0)
             if count >= int(min_count):
-                items.append((key, count, v.color))
+                items.append((key, count, color))
         items.sort(key=lambda item: item[1], reverse=True)
         if max_points is not None:
             items = items[: max(0, int(max_points))]
