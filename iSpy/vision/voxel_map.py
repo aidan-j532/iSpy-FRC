@@ -1,9 +1,11 @@
 """Sparse monocular voxel occupancy core.
 
 The pipeline turns a Depth Anything depth map into world-frame points and
-integrates them into a bounded, sparse voxel map. Nothing here is model aware -
-it is pure geometry plus a dict-backed voxel store so it stays cheap on the
-Orange Pi class hardware iSpy targets.
+integrates them into a bounded voxel map. The occupancy grid itself is an
+Open3D ``VoxelGrid``; two small maps keep the per-voxel hit count and
+last-observed time that Open3D has nowhere to store (they drive decay,
+eviction, and the viewer's Min Hits filter). Nothing here is model aware -
+pure geometry plus the voxel store.
 
 Camera convention matches iSpy/vision/triangulation.py:
     camera point = (right, down, forward), all in output units
@@ -14,6 +16,74 @@ import math
 import time
 
 import numpy as np
+
+_o3d = None
+
+
+def _open3d():
+    global _o3d
+    if _o3d is None:
+        try:
+            import open3d as o3d
+        except ImportError as exc:
+            raise RuntimeError(
+                "open3d is required for the voxel world pipeline; install it "
+                'with: pip install "ispy-frc[voxel]"'
+            ) from exc
+        _o3d = o3d
+    return _o3d
+
+
+def depth_plane_range(
+    depth: np.ndarray,
+    d_min: float,
+    d_max: float,
+    max_depth: float,
+    depth_scale: float = 1.0,
+    near_depth: float = 0.3,
+) -> tuple[float, float, float, float]:
+    """Resolve ``(d_lo, d_hi, z_near, z_far)`` for the inverse-depth model.
+
+    Depth Anything emits relative *inverse* depth (disparity-like: larger =
+    closer), so the only scale-free thing to recover is the scene's depth
+    *ratio*. The nearest robust pixel (98th percentile of disparity) anchors to
+    ``near_depth`` and the far plane follows ``d_hi / d_lo``, capped by
+    ``max_depth * depth_scale`` - otherwise every scene gets force-stretched
+    into a ~10 m funnel.
+    """
+    depth = np.asarray(depth, dtype=np.float64)
+    finite = depth[np.isfinite(depth)]
+    if finite.size == 0:
+        z_near = max(float(near_depth), 1e-3)
+        return 0.0, 1.0, z_near, z_near
+
+    lo = float(np.percentile(finite, 2.0))
+    hi = float(np.percentile(finite, 98.0))
+    if hi - lo <= 1e-9:
+        # no usable spread in the middle 96%: fall back to the caller's range,
+        # and only then to a flat plane at a stable mid distance.
+        lo, hi = float(d_min), float(d_max)
+        if hi - lo <= 1e-9:
+            z_near = max(float(near_depth), 1e-3)
+            z_far = max(float(max_depth) * float(depth_scale), z_near * 1.0001)
+            mid = math.sqrt(z_near * z_far)
+            return 0.0, 1.0, mid, mid
+
+    z_near = max(float(near_depth), 1e-3)
+    z_cap = max(float(max_depth) * float(depth_scale), z_near * 1.0001)
+    ratio = hi / max(lo, 1e-6)
+    z_far = min(z_near * ratio, z_cap)
+    z_far = max(z_far, z_near * 1.0001)
+    return lo, hi, z_near, z_far
+
+
+def inverse_depth_to_distance(
+    value: float, d_lo: float, d_hi: float, z_near: float, z_far: float
+) -> float:
+    """Map one relative (inverse-depth) value to a forward distance."""
+    d = min(max(float(value), float(d_lo)), float(d_hi))
+    distance = float(z_near) * (float(d_hi) / max(d, 1e-9))
+    return min(max(distance, float(z_near)), float(z_far))
 
 
 def relative_depth_to_distance(
@@ -26,51 +96,27 @@ def relative_depth_to_distance(
 ) -> np.ndarray:
     """Map Depth Anything's relative depth to an approximate forward distance.
 
-    Depth Anything V2 emits relative *inverse* depth (disparity-like: larger =
-    closer). The correct way back to a forward distance is therefore inverse
-    interpolation between a near and a far plane, not a linear ramp - a linear
-    ramp piles almost the whole scene onto the far plane (a room spanning
-    2-5 m collapses to "everything is ~10 m") and destroys the geometry.
-
-    The far plane is ``max_depth * depth_scale`` (both user trims) and the
-    near plane is ``near_depth``; the 2%-98% percentile band of the map is
-    stretched across that disparity range so a few outlier pixels cannot
-    squash the scene.
+    Distance is disparity inverted so the nearest robust pixel lands at
+    ``near_depth`` and the far plane follows the scene's own ratio (capped by
+    ``max_depth * depth_scale``). The 2%-98% percentile band stops outliers
+    from squashing the scene. ``near_depth`` is the global scale anchor: raise
+    it to enlarge the whole reconstruction.
     """
     depth = np.asarray(depth, dtype=np.float64)
     if depth.size == 0:
         return depth
 
-    finite = depth[np.isfinite(depth)]
-    if finite.size == 0:
-        return np.full_like(depth, 0.0)
+    d_lo, d_hi, z_near, z_far = depth_plane_range(
+        depth, d_min, d_max, max_depth, depth_scale, near_depth
+    )
+    if z_near == z_far:
+        return np.nan_to_num(
+            np.full_like(depth, z_near), nan=0.0, posinf=0.0, neginf=0.0
+        )
 
-    lo = float(np.percentile(finite, 2.0))
-    hi = float(np.percentile(finite, 98.0))
-    span = hi - lo
-    if span <= 1e-9:
-        # no usable spread in the middle 96%: try the full min/max range, and
-        # only then fall back to a flat disparity. A near-uniform map must not
-        # become a wall of voxels just because float noise has a span.
-        span = float(d_max) - float(d_min)
-        if span > 1e-9:
-            lo, hi = float(d_min), float(d_max)
-            closeness = (depth - lo) / span
-        else:
-            closeness = np.full_like(depth, 0.5)
-    else:
-        closeness = (depth - lo) / span
-
-    # closeness: 1 = nearest (highest disparity), 0 = furthest
-    closeness = np.clip(closeness, 0.0, 1.0)
-
-    z_far = max(float(max_depth) * float(depth_scale), 1e-3)
-    z_near = float(near_depth)
-    if not (0.0 < z_near < z_far):
-        z_near = max(1e-3, z_far * 0.05)
-
-    inv_distance = (1.0 - closeness) / z_far + closeness / z_near
-    distance = 1.0 / np.maximum(inv_distance, 1e-9)
+    d = np.clip(depth, d_lo, d_hi)
+    distance = z_near * (d_hi / np.maximum(d, 1e-9))
+    np.clip(distance, z_near, z_far, out=distance)
     return np.nan_to_num(distance, nan=0.0, posinf=0.0, neginf=0.0)
 
 
@@ -127,13 +173,10 @@ def depth_to_camera_points(
 ):
     """Back-project a depth map into camera-frame (right, down, forward) points.
 
-    ``depth`` is forward distance in output units. Pixels are sampled on a
-    ``stride`` grid so the point count (and therefore voxel cost) is bounded.
-    Non-finite / non-positive samples are dropped.
-
-    With ``return_pixels`` the sampled integer pixel coordinates are returned
-    too as a ``(N, 2)`` ``(u, v)`` array in *depth-map* pixel space, so callers
-    can look up the matching color and give every point a real color.
+    Pixels are sampled on a ``stride`` grid so the point count (and therefore
+    voxel cost) is bounded; non-finite / non-positive samples are dropped. With
+    ``return_pixels`` the matching depth-map pixel coordinates are returned too,
+    so callers can color the points from the frame.
     """
     depth = np.asarray(depth, dtype=np.float64)
     if depth.ndim != 2 or depth.size == 0:
@@ -202,7 +245,12 @@ def camera_points_to_robot(
 
 
 class SparseVoxelMap:
-    """Dict-backed voxel occupancy grid with touch-based decay and a hard cap."""
+    """Open3D ``VoxelGrid`` occupancy map with hit counts, decay, and a cap.
+
+    ``_grid`` owns the voxels and their colors; ``_hits`` / ``_seen`` are
+    observation metadata Open3D cannot represent (a VoxelGrid member stores
+    only a grid index and a color).
+    """
 
     def __init__(
         self,
@@ -210,10 +258,27 @@ class SparseVoxelMap:
         max_voxels: int = 20000,
         decay_seconds: float = 8.0,
     ):
+        _open3d()
         self.voxel_size = max(float(voxel_size), 1e-4)
         self.max_voxels = max(1, int(max_voxels))
         self.decay_seconds = float(decay_seconds)
-        self._voxels: dict[tuple[int, int, int], list] = {}
+        self._grid = _open3d().geometry.VoxelGrid()
+        self._hits: dict[tuple[int, int, int], int] = {}
+        self._seen: dict[tuple[int, int, int], float] = {}
+
+    @staticmethod
+    def _key(grid_index) -> tuple[int, int, int]:
+        return int(grid_index[0]), int(grid_index[1]), int(grid_index[2])
+
+    def _add_voxel(self, key: tuple[int, int, int], color) -> None:
+        o3d = _open3d()
+        idx = np.asarray(key, dtype=np.int32)
+        self._grid.add_voxel(o3d.geometry.Voxel(idx, np.asarray(color)))
+
+    def _remove_voxel(self, key: tuple[int, int, int]) -> None:
+        self._grid.remove_voxel(np.asarray(key, dtype=np.int32))
+        self._hits.pop(key, None)
+        self._seen.pop(key, None)
 
     def integrate(
         self,
@@ -236,36 +301,37 @@ class SparseVoxelMap:
                 col = col[finite]
             else:
                 col = None
+        if col is None:
+            col = np.full((pts.shape[0], 3), 170.0)
 
+        # Bucket the frame, then merge its voxels into the live grid. Per-voxel
+        # hit counts come from numpy (Open3D averages colors but cannot report
+        # how many points landed in a voxel); the grid itself is Open3D's.
         indices = np.floor(pts / self.voxel_size).astype(np.int64)
         unique, inverse, counts = np.unique(
             indices, axis=0, return_inverse=True, return_counts=True
         )
-        color_sum = None
-        if col is not None:
-            color_sum = np.zeros((unique.shape[0], 3), dtype=np.float64)
-            np.add.at(color_sum, inverse, col)
+        rgb_sum = np.zeros((unique.shape[0], 3), dtype=np.float64)
+        np.add.at(rgb_sum, inverse, col)
 
+        existing = {
+            self._key(v.grid_index): v
+            for v in self._grid.get_voxels()
+        }
         now = time.monotonic() if now is None else now
         for i, key in enumerate(map(tuple, unique.tolist())):
             count = int(counts[i])
-            # per-batch mean color for this voxel cell (None when uncolored)
-            rgb = color_sum[i] / max(count, 1) if color_sum is not None else None
-            entry = self._voxels.get(key)
-            if entry is None:
-                self._voxels[key] = [count, now, rgb]
-                continue
-            old = entry[0]
-            total = old + count
-            if rgb is not None:
-                prev = entry[2] if len(entry) > 2 else None
-                merged = rgb if prev is None else (prev * old + rgb * count) / total
-                if len(entry) > 2:
-                    entry[2] = merged
-                else:
-                    entry.append(merged)
-            entry[0] = total
-            entry[1] = now
+            mean = rgb_sum[i] / count
+            old_hits = self._hits.get(key, 0)
+            total = old_hits + count
+            old_voxel = existing.get(key)
+            if old_voxel is not None and old_hits:
+                merged = (old_voxel.color * 255.0 * old_hits + mean * count) / total
+            else:
+                merged = mean
+            self._hits[key] = total
+            self._seen[key] = now
+            self._add_voxel(key, merged / 255.0)
         self._enforce_capacity()
         return int(unique.shape[0])
 
@@ -275,32 +341,34 @@ class SparseVoxelMap:
         now = time.monotonic() if now is None else now
         stale = [
             key
-            for key, entry in self._voxels.items()
-            if now - entry[1] > self.decay_seconds
+            for key, last in self._seen.items()
+            if now - last > self.decay_seconds
         ]
         for key in stale:
-            del self._voxels[key]
+            self._remove_voxel(key)
         return len(stale)
 
     def _enforce_capacity(self) -> None:
-        if len(self._voxels) <= self.max_voxels:
+        if len(self._hits) <= self.max_voxels:
             return
         ordered = sorted(
-            self._voxels.items(), key=lambda kv: (kv[1][1], kv[1][0])
+            self._hits.keys(), key=lambda key: (self._seen[key], self._hits[key])
         )
-        for key, _entry in ordered[: len(self._voxels) - self.max_voxels]:
-            del self._voxels[key]
+        for key in ordered[: len(self._hits) - self.max_voxels]:
+            self._remove_voxel(key)
 
     def clear(self) -> None:
-        self._voxels.clear()
+        self._grid = _open3d().geometry.VoxelGrid()
+        self._hits.clear()
+        self._seen.clear()
 
     def count(self) -> int:
-        return len(self._voxels)
+        return len(self._hits)
 
     def bounds(self) -> tuple[list[float], list[float]] | None:
-        if not self._voxels:
+        if not self._hits:
             return None
-        keys = np.array(list(self._voxels.keys()), dtype=np.float64)
+        keys = np.array(list(self._hits.keys()), dtype=np.float64)
         low = (keys.min(axis=0) + 0.0) * self.voxel_size
         high = (keys.max(axis=0) + 1.0) * self.voxel_size
         return low.tolist(), high.tolist()
@@ -310,37 +378,29 @@ class SparseVoxelMap:
     ) -> list[list[float]]:
         """Return ``[x, y, z, count, r, g, b]`` entries, most-observed first.
 
-        ``r, g, b`` are 0-255 and are the average frame color of the points
-        that landed in that voxel (mid-grey when the caller never supplied
-        colors), so the 3D viewer can draw a real-color world.
+        Positions are voxel centers; ``r, g, b`` are 0-255 hit-weighted frame
+        colors (mid-grey when color was never supplied) for the 3D viewer.
         """
-        items = [
-            (key, entry)
-            for key, entry in self._voxels.items()
-            if entry[0] >= int(min_count)
-        ]
-        if not items:
-            return []
-        items.sort(key=lambda kv: kv[1][0], reverse=True)
+        items = []
+        for v in self._grid.get_voxels():
+            key = self._key(v.grid_index)
+            count = self._hits.get(key, 0)
+            if count >= int(min_count):
+                items.append((key, count, v.color))
+        items.sort(key=lambda item: item[1], reverse=True)
         if max_points is not None:
             items = items[: max(0, int(max_points))]
         half = self.voxel_size / 2.0
-
-        def rgb(entry: list) -> tuple[int, int, int]:
-            stored = entry[2] if len(entry) > 2 else None
-            if stored is None:
-                return (170, 170, 170)
-            return tuple(
-                int(max(0, min(255, round(float(channel))))) for channel in stored
-            )
-
         return [
             [
                 key[0] * self.voxel_size + half,
                 key[1] * self.voxel_size + half,
                 key[2] * self.voxel_size + half,
-                int(entry[0]),
-                *rgb(entry),
+                int(count),
+                *[
+                    int(max(0, min(255, round(float(channel) * 255.0))))
+                    for channel in color
+                ],
             ]
-            for key, entry in items
+            for key, count, color in items
         ]

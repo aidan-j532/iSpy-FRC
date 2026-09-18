@@ -11,6 +11,7 @@ from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
+from iSpy.vision.voxel_map import depth_plane_range, inverse_depth_to_distance
 from iSpy.vision._safe_imports import ensure_torch_imported, import_rknnlite
 
 _DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
@@ -958,26 +959,24 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         return self._postprocess_depth(depth, frame)
 
     def _distance_from_depth(self, raw: float) -> float:
-        norm = float(np.clip(raw, 0.0, 1e6))
-
-        d_min = getattr(self, "_dmin", 0.0)
-        d_max = getattr(self, "_dmax", 1.0)
-
-        span = d_max - d_min
-        if span <= 1e-9:
-            return self.max_depth * self._z_scale
-
-        # Depth Anything V2 emits relative *inverse* depth, so recover distance
-        # with inverse interpolation between the near and far planes. A linear
-        # ramp would pile the whole scene onto the far plane.
-        closeness = float(np.clip((norm - d_min) / span, 0.0, 1.0))
-        z_far = max(self.max_depth, 1e-3)
-        z_near = float(getattr(self, "near_depth", 0.3) or 0.3)
-        if not (0.0 < z_near < z_far):
-            z_near = max(1e-3, z_far * 0.05)
-
-        inv_distance = (1.0 - closeness) / z_far + closeness / z_near
-        return (1.0 / max(inv_distance, 1e-9)) * self._z_scale
+        # Mirrors voxel_map.relative_depth_to_distance so the on-screen label and
+        # the voxel world agree. The plane range is cached per-frame by
+        # _objects_from_depth; recompute only if it is missing.
+        plane = getattr(self, "_depth_plane", None)
+        if plane is None:
+            d_lo, d_hi, z_near, z_far = depth_plane_range(
+                np.asarray([raw], dtype=np.float64),
+                getattr(self, "_dmin", 0.0),
+                getattr(self, "_dmax", 1.0),
+                self.max_depth,
+                1.0,
+                getattr(self, "near_depth", 0.3),
+            )
+        else:
+            d_lo, d_hi, z_near, z_far = plane
+        return inverse_depth_to_distance(
+            float(raw), d_lo, d_hi, z_near, z_far
+        ) * self._z_scale
 
     def _objects_from_depth(
         self,
@@ -988,6 +987,14 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         self._dmin = float(depth.min())
         self._dmax = float(depth.max())
+        self._depth_plane = depth_plane_range(
+            depth,
+            self._dmin,
+            self._dmax,
+            self.max_depth,
+            1.0,
+            getattr(self, "near_depth", 0.3),
+        )
 
         cx, cy = w // 2, h // 2
 

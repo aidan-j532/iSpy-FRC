@@ -432,8 +432,13 @@ function updateVoxelGroup(g, o) {
     }
     const cap = Math.max(voxels.length, 64);
     const geo = new THREE.BoxGeometry(1, 1, 1);
+    // NB: do NOT set vertexColors here. With an InstancedMesh the per-instance
+    // colors (setColorAt -> instanceColor) drive vColor on their own; turning on
+    // vertexColors additionally makes the vertex shader multiply by the geometry
+    // color attribute, which BoxGeometry does not have, collapsing vColor to 0
+    // (every voxel renders black). See three r164 color_vertex/color_fragment.
     const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true, transparent: false, opacity: 1.0,
+      transparent: false, opacity: 1.0,
       roughness: 0.62, metalness: 0.0,
       emissive: 0xffffff, emissiveIntensity: 0.08,
     });

@@ -16,6 +16,7 @@ from iSpy.vision.pipelines.voxel_world import VoxelWorldPipeline
 from iSpy.vision.voxel_map import (
     SparseVoxelMap,
     camera_points_to_robot,
+    depth_plane_range,
     depth_to_camera_points,
     focal_length_pixels,
     relative_depth_to_distance,
@@ -136,21 +137,30 @@ class GeometryTests(unittest.TestCase):
         self.assertAlmostEqual(dist[0, 0], 10.0)  # far plane
 
     def test_inverse_depth_recovers_perspective_not_linear_ramp(self):
-        # A disparity (1/z) map for z in 1..10 m, expressed as DAV2 relative
-        # depth, must come back with a near/far spread - not pile every point
-        # onto the far plane the way a linear ramp does.
+        # A disparity (1/z) map for z in 1..10 m must stay ratio-preserving
+        # (near:far ~ 1:9) and monotonic, not pile onto the far plane.
         z_true = np.linspace(1.0, 10.0, 400).reshape(1, -1)
         relative = 1.0 / z_true
         dist = relative_depth_to_distance(relative, relative.min(), relative.max(), 10.0, near_depth=0.5)
         self.assertLess(dist.max(), 10.5)
-        self.assertGreaterEqual(dist.min(), 0.49)
-        # the recovered distance range should cover most of the scale, proving
-        # the scene is not squashed onto one plane
-        self.assertGreater(dist.max() - dist.min(), 7.0)  # 1..10 m scene
-        # and it must stay monotonic (nearer stays nearer): relative depth
-        # decreases with index, so distance must never decrease (the ends are
-        # flat because of percentile clipping).
+        self.assertGreaterEqual(dist.min(), 0.45)
+        self.assertGreater(dist.max() / dist.min(), 5.0)
+        # nearer stays nearer (the ends are flat because of percentile clipping)
         self.assertTrue(np.all(np.diff(dist[0]) >= -1e-9))
+
+    def test_depth_plane_range_preserves_scene_ratio(self):
+        # self-scaling: the far plane follows the disparity ratio, not Max Depth
+        depth = np.linspace(0.2, 0.8, 500)
+        d_lo, d_hi, z_near, z_far = depth_plane_range(
+            depth, depth.min(), depth.max(), 10.0, near_depth=1.0
+        )
+        self.assertAlmostEqual(z_near, 1.0, places=6)
+        self.assertAlmostEqual(z_far / z_near, d_hi / d_lo, places=6)
+        # Max Depth stays a cap when the scene ratio is huge
+        _, _, _, capped = depth_plane_range(
+            np.array([0.001, 1.0]), 0.001, 1.0, 4.0, near_depth=1.0
+        )
+        self.assertAlmostEqual(capped, 4.0, places=6)
 
     def test_flat_depth_map_does_not_divide_by_zero(self):
         depth = np.full((10, 10), 4.0, dtype=np.float64)
@@ -158,20 +168,23 @@ class GeometryTests(unittest.TestCase):
         self.assertTrue(np.isfinite(dist).all())
 
     def test_room_depth_map_builds_meter_scale_world(self):
-        # A depth map of a room 2-5 m deep, expressed as DAV2 relative inverse
-        # depth, must integrate into a world that is meters across - not the
-        # sub-30cm blob you get when the scale collapses.
+        # A 2-5 m room, expressed as DAV2 relative inverse depth. With the near
+        # plane anchored at the true nearest distance (2 m) the self-scaling
+        # inverse model recovers a ~2-5 m world - not the sub-30cm blob of a
+        # collapsed scale and not the 10 m funnel of a forced near..max stretch.
         z_true = np.linspace(2.0, 5.0, 64).reshape(1, -1)
         relative = np.repeat(1.0 / z_true, 48, axis=0)
         dist = relative_depth_to_distance(
-            relative, relative.min(), relative.max(), 10.0
+            relative, relative.min(), relative.max(), 10.0, near_depth=2.0
         )
+        self.assertAlmostEqual(float(dist.min()), 2.0, places=2)
+        self.assertAlmostEqual(float(dist.max()), 5.0, delta=0.6)
         cam = depth_to_camera_points(dist, focal_px=200.0, stride=1)
         world = camera_points_to_robot(cam, 0.0, 0.0, 1.0, 0.0, 0.0)
         world = world[world[:, 2] >= -25.0]
         extent = world.max(axis=0) - world.min(axis=0)
         self.assertGreater(extent[1], 1.0)  # forward axis spans > 1 m
-        self.assertGreater(world[:, 1].max(), 2.0)  # reaches well past the near plane
+        self.assertGreater(world[:, 1].max(), 4.0)  # reaches the room's far wall
 
     def test_focal_length_prefers_fov_then_defaults(self):
         fov_focal = focal_length_pixels(640, {"fov": 60.0})

@@ -41,7 +41,13 @@ dependencies = [
     "scipy>=1.10.0",
 ]
 
+# Optional pipeline extras. open3d backs the voxel world's occupancy grid; it
+# has no reliable Orange Pi/aarch64 wheels, so it stays an opt-in extra rather
+# than a universal dep - install with: pip install "ispy-frc[voxel]"
 [project.optional-dependencies]
+voxel = [
+    "open3d>=0.18.0",
+]
 # For model training, conversion, and development - x86 only.
 # pip install ".[dev]"   (install-dev.sh handles the rknn-toolkit2 --find-links)
 dev = [

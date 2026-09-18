@@ -112,8 +112,9 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                     "label": "Depth Scale",
                     "default": 1.0,
                     "step": 0.1,
-                    "help": "Trim on the relative-depth-to-distance mapping. "
-                    "Tune against a known distance in the scene.",
+                    "help": "Multiplies the Max Depth cap. The far plane is the "
+                    "smaller of the scene's own depth ratio and Max Depth x "
+                    "Depth Scale, so it only bites on very deep scenes.",
                 },
                 "min_height": {
                     "type": "number",
@@ -139,9 +140,10 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                     "default": 0.3,
                     "step": 0.1,
                     "help": "Forward distance assigned to the nearest pixel. "
-                    "Depth Anything is a relative (inverse-depth) model, so this "
-                    "pins the near end of the scale against Max Depth. Lower it "
-                    "if the near parts of the scene look too far away.",
+                    "Depth Anything is a relative (inverse-depth) model, so the "
+                    "scene's true size is unknown - this anchors the whole "
+                    "reconstruction: raise it to enlarge the world, lower it to "
+                    "shrink it. Max Depth caps how far it can grow.",
                 },
                 "auto_ground": {
                     "type": "toggle",
