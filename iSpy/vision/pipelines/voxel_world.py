@@ -18,8 +18,10 @@ from iSpy.vision.pipelines.depth_anything import DepthAnythingPipeline
 from iSpy.vision.voxel_map import (
     SparseVoxelMap,
     camera_points_to_robot,
+    depth_plane_range,
     depth_to_camera_points,
     focal_length_pixels,
+    inverse_depth_to_distance,
     relative_depth_to_distance,
 )
 
@@ -59,6 +61,24 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         schema = super().config_schema()
         schema.update(
             {
+                "depth_method": {
+                    "type": "select",
+                    "label": "Depth Algorithm",
+                    "default": "depth_anything",
+                    "options": ["depth_anything", "ground_plane", "flat"],
+                    "help": "How per-pixel depth is estimated from the single "
+                    "camera.\n"
+                    "depth_anything: Depth Anything V2 neural model - relative "
+                    "depth map, most accurate, weights are downloaded "
+                    "automatically.\n"
+                    "ground_plane: geometry only, no model - every pixel "
+                    "below the horizon is assumed to sit on a flat floor and "
+                    "distance comes from the camera mount Height and pitch.\n"
+                    "flat: super-light heuristic, no model - the bottom of "
+                    "the frame is assumed nearest and the top farthest, so "
+                    "the camera FOV becomes a solid wedge-shaped world. "
+                    "Crude but always runs with zero setup.",
+                },
                 "voxel_size": {
                     "type": "number",
                     "label": "Voxel Size (m)",
@@ -154,6 +174,18 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                     "of floating below the grid. Turn off once you set the real "
                     "camera height.",
                 },
+                "auto_world_scale": {
+                    "type": "toggle",
+                    "label": "Auto Scale World",
+                    "default": True,
+                    "help": "Depth Anything (and flat) only output relative "
+                    "depth, so the world's absolute size is unknown. When on, "
+                    "the scale is stretched so the scene fills the Max Depth "
+                    "range - a room a few metres deep renders a few metres "
+                    "tall instead of collapsing into a small blob in front of "
+                    "the camera. Turn off to control scale manually with Near "
+                    "Plane / Max Depth.",
+                },
             }
         )
         return schema
@@ -164,6 +196,14 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         config: iSpyConfig,
         core_mask=None,
     ):
+        # Read before super().__init__() - the parent's model load /
+        # optimization decisions (which run in its own __init__) must know
+        # whether a model-backed algorithm is even selected.
+        raw_method = camera_config.get_pipeline_setting("depth_method")
+        self.depth_method = str(raw_method or "depth_anything").strip().lower()
+        if self.depth_method not in ("depth_anything", "ground_plane", "flat"):
+            self.depth_method = "depth_anything"
+
         super().__init__(camera_config, config, core_mask)
         self.logger = logging.getLogger(__name__)
 
@@ -204,6 +244,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             max(as_float("voxel_min_depth", 0.05), 0.0) * self._z_scale
         )
         self.auto_ground = bool(setting("auto_ground", True))
+        self.auto_world_scale = bool(setting("auto_world_scale", True))
         # Resolved on the first integrated frame (see _integrate_depth) and then
         # held constant so the accumulated map does not smear as the estimate
         # jitters frame to frame.
@@ -218,6 +259,102 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         # last tick's diagnostics, surfaced to the 3D viewer so an empty map
         # can explain itself instead of silently rendering nothing
         self._debug: dict = {}
+
+    def _method(self) -> str:
+        # __new__-built instances (tests) never run __init__ - default to the
+        # original Depth Anything behaviour.
+        return getattr(self, "depth_method", "depth_anything")
+
+    # ------------------------------------------------------------------
+    # algorithm selection - the inherited Depth Anything machinery (model
+    # download, optimization, ready/prepare gating) only applies to the
+    # 'depth_anything' method; 'ground_plane' is pure geometry.
+    # ------------------------------------------------------------------
+
+    def _optimization_requested(self) -> bool:
+        if self._method() != "depth_anything":
+            return False
+        return super()._optimization_requested()
+
+    def _load_model(self):
+        if self._method() != "depth_anything":
+            self.logger.info(
+                "Depth method '%s' needs no model - not loading weights.",
+                self._method(),
+            )
+            return
+        super()._load_model()
+
+    def _is_processable(self) -> bool:
+        if getattr(self, "_optimizing", False):
+            return False
+        if self._method() != "depth_anything":
+            return True
+        return super()._is_processable()
+
+    def is_ready(self) -> tuple[bool, str]:
+        if self._method() != "depth_anything":
+            self._set_status("ready")
+            return True, "ready"
+        return super().is_ready()
+
+    def _infer_depth(self, frame: np.ndarray):
+        # ground-plane depth is computed geometry, not a model - the dispatch
+        # stays here so run() (and its last-frame fallbacks) are method-blind.
+        method = self._method()
+        if method == "ground_plane":
+            return self._estimate_ground_plane(frame)
+        if method == "flat":
+            return self._estimate_flat(frame)
+        return super()._infer_depth(frame)
+
+    def _distance_from_depth(self, raw: float) -> float:
+        # ground-plane output is already a metric forward distance (output
+        # units), so the on-screen label must read it directly instead of
+        # inverting it like a relative inverse-depth map.
+        if self._method() == "ground_plane":
+            return float(raw)
+
+        # Keep the label in lock-step with the voxel world: both use the
+        # (possibly auto-scaled) plane resolved at the last integration.
+        plane = getattr(self, "_eff_depth_plane", None)
+        if plane is None:
+            d_lo, d_hi, z_near, z_far = depth_plane_range(
+                np.asarray([raw], dtype=np.float64),
+                getattr(self, "_dmin", 0.0),
+                getattr(self, "_dmax", 1.0),
+                self.max_depth,
+                1.0,
+                getattr(self, "near_depth", 0.3),
+            )
+        else:
+            d_lo, d_hi, z_near, z_far = plane
+        return inverse_depth_to_distance(
+            float(raw), d_lo, d_hi, z_near, z_far
+        ) * self._z_scale
+
+    def _nanless_depth(self, depth: np.ndarray) -> np.ndarray:
+        # above-horizon pixels carry NaN in the ground-plane map (back-
+        # projection drops them); the heatmap/label code must not see NaN.
+        d = np.asarray(depth, dtype=np.float64)
+        return np.where(np.isfinite(d), d, 0.0)
+
+    def _annotate(self, frame, depth) -> np.ndarray:
+        if self._method() == "ground_plane":
+            depth = self._nanless_depth(depth)
+        return super()._annotate(frame, depth)
+
+    def plot(self, frame):
+        if frame is None or self._method() != "ground_plane":
+            return super().plot(frame)
+        saved = getattr(self, "_last_depth", None)
+        self._last_depth = (
+            self._nanless_depth(saved) if saved is not None else saved
+        )
+        try:
+            return super().plot(frame)
+        finally:
+            self._last_depth = saved
 
     def _resolve_geometry(self, camera_config: iSpyCameraConfig) -> None:
         unit = self.unit
@@ -258,7 +395,18 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         self._dmin = float(finite.min())
         self._dmax = float(finite.max())
 
-        distance_m = relative_depth_to_distance(
+        if self._method() == "ground_plane":
+            # _estimate_ground_plane already returns a metric forward-distance
+            # map in output units - skip the relative-depth conversion.
+            return self._integrate_distance_m(depth, frame, method="ground_plane")
+
+        # Depth Anything (and the flat heuristic) produce relative inverse
+        # depth. The plane resolver anchors the nearest robust pixel at Near
+        # Plane and the far plane follows the scene's own ratio, capped by Max
+        # Depth. With Auto Scale World (default) the near anchor is raised so
+        # the far plane reaches that cap - otherwise a room a few metres deep
+        # collapses into a sub-metre blob right in front of the camera.
+        d_lo, d_hi, z_near, z_far = depth_plane_range(
             depth,
             self._dmin,
             self._dmax,
@@ -266,8 +414,119 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             self.depth_scale,
             self.near_depth,
         )
-        distance = distance_m * self._z_scale
+        far_cap = max(float(self.max_depth) * float(self.depth_scale), z_near)
+        eff_near = z_near
+        if bool(getattr(self, "auto_world_scale", True)) and z_far < far_cap - 1e-9:
+            ratio = d_hi / max(d_lo, 1e-6)
+            if ratio > 1.0:
+                eff_near = max(min(far_cap / ratio, far_cap), z_near)
+                z_far = min(eff_near * ratio, far_cap)
+                z_far = max(z_far, eff_near * 1.0001)
+        # The same plane feeds the on-screen label so the depth text shows the
+        # same distances the voxel world is built from.
+        self._eff_depth_plane = (d_lo, d_hi, eff_near, z_far)
+        self._eff_near_depth = eff_near
+
+        distance_m = relative_depth_to_distance(
+            depth,
+            self._dmin,
+            self._dmax,
+            self.max_depth,
+            self.depth_scale,
+            eff_near,
+        )
+        self._integrate_distance_m(
+            distance_m * self._z_scale, frame, method=self._method()
+        )
+
+    def _estimate_ground_plane(self, frame: np.ndarray) -> np.ndarray:
+        """Model-free monocular depth from the flat-ground assumption.
+
+        Every pixel below the horizon is assumed to lie on the floor (robot
+        z=0). Its camera ray is cast into the robot frame with the pipeline's
+        own pitch/yaw transform (so it matches camera_points_to_robot exactly)
+        and the intersection distance becomes the forward depth. Pixels at or
+        above the horizon get NaN and are dropped, keeping the map ground-only.
+        Results are in output units. Without a known mount height the
+        assumption cannot scale, so the map comes back empty with a warning.
+        """
+        cam_h = float(getattr(self, "camera_height", 0.0))
+        if cam_h <= 0:
+            message = (
+                "ground-plane depth needs the camera mount Height - set camera "
+                "Height (or pick Depth Anything)"
+            )
+            self.logger.warning(
+                "Camera '%s': %s", self.config.get("name", "?"), message
+            )
+            return np.full(frame.shape[:2], np.nan, dtype=np.float64)
+
+        h, w = frame.shape[:2]
+        focal = focal_length_pixels(w, self.calibration, default_fov=60.0)
+        far = (
+            max(float(self.max_depth) * float(self.depth_scale), 1e-3)
+            * self._z_scale
+        )
+        min_d = max(float(getattr(self, "voxel_min_depth", 0.0)), 1e-4)
+        cx, cy = w / 2.0, h / 2.0
+        vv, uu = np.meshgrid(np.arange(h), np.arange(w), indexing="ij")
+        ray_cam = np.stack(
+            [
+                (uu - cx).astype(np.float64),
+                (vv - cy).astype(np.float64),
+                np.full((h, w), float(focal), dtype=np.float64),
+            ],
+            axis=-1,
+        )
+        # camera_points_to_robot with a zero translation offset returns the
+        # pure linear part - i.e. the ray direction in robot frame - so the
+        # ground intersection uses the exact same mount transform as the
+        # world geometry above.
+        ray_robot = camera_points_to_robot(
+            ray_cam.reshape(-1, 3),
+            0.0,
+            0.0,
+            0.0,
+            float(getattr(self, "camera_yaw", 0.0)),
+            float(getattr(self, "camera_pitch", 0.0)),
+        ).reshape(h, w, 3)
+        down = ray_robot[..., 2] < 0
+        depth = np.full((h, w), np.nan, dtype=np.float64)
+        if down.any():
+            depth[down] = (-cam_h / ray_robot[..., 2][down]) * float(focal)
+            depth[down] = np.clip(depth[down], min_d, far)
+        return depth
+
+    def _estimate_flat(self, frame: np.ndarray) -> np.ndarray:
+        """Model-free 'cheap wedge' relative depth.
+
+        The simplest possible monocular prior: for a level (or slightly
+        pitched-down) camera the bottom of the frame is nearest and the top is
+        farthest, so a relative inverse-depth ramp down the rows turns the
+        camera FOV into a solid wedge-shaped world. No model, downloads, or
+        calibration needed - it always produces a full 3D reconstruction, at
+        the cost of accuracy.
+        """
+        h, w = frame.shape[:2]
+        # near (bottom) .. far (top); 0.05 keeps the percentile ratio finite
+        ramp = np.linspace(1.0, 0.05, h, dtype=np.float64)
+        return np.tile(ramp[:, None], (1, w))
+
+    def _integrate_distance_m(
+        self,
+        distance: np.ndarray,
+        frame: np.ndarray,
+        method: str = "depth_anything",
+    ) -> None:
+        """Back-project a metric forward-distance map (output units) into the world."""
+        self._debug = getattr(self, "_debug", None) or {}
+        debug = self._debug
+        distance = np.asarray(distance, dtype=np.float64)
         dist_finite = distance[np.isfinite(distance)]
+
+        def warn(message: str) -> None:
+            existing = debug.get("warning")
+            debug["warning"] = f"{existing}; {message}" if existing else message
 
         # focal is resolved in frame-pixel space (the calibration matrix /
         # FOV belong to the live camera resolution). The depth map can come
@@ -277,8 +536,8 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         focal = focal_length_pixels(
             frame.shape[1], self.calibration, default_fov=60.0
         )
-        if depth.shape[1] != frame.shape[1]:
-            focal = focal * depth.shape[1] / float(max(frame.shape[1], 1))
+        if distance.shape[1] != frame.shape[1]:
+            focal = focal * distance.shape[1] / float(max(frame.shape[1], 1))
         cam_points, cam_pixels = depth_to_camera_points(
             distance, focal, stride=self.pixel_stride, return_pixels=True
         )
@@ -286,18 +545,24 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         debug.update(
             dmin=round(self._dmin, 4),
             dmax=round(self._dmax, 4),
+            method=method,
             dist_min=round(float(dist_finite.min()), 4) if dist_finite.size else 0.0,
             dist_max=round(float(dist_finite.max()), 4) if dist_finite.size else 0.0,
             max_depth=self.max_depth,
             depth_scale=self.depth_scale,
-            near_depth=round(float(self.near_depth) * self._z_scale, 3),
+            near_depth=round(
+                float(getattr(self, "_eff_near_depth", self.near_depth))
+                * self._z_scale,
+                3,
+            ),
+            auto_scale=bool(getattr(self, "auto_world_scale", True)),
             far_plane=round(far_plane_m * self._z_scale, 3),
             focal=round(float(focal), 1),
-            depth_w=int(depth.shape[1]),
+            depth_w=int(distance.shape[1]),
             frame_w=int(frame.shape[1]),
             back_projected=int(cam_points.shape[0]),
         )
-        if far_plane_m < 1.0:
+        if far_plane_m < 1.0 and method != "ground_plane":
             # A far plane under a meter makes every point land almost on the
             # camera, so the whole map collapses into a tiny blob. Almost
             # always a mis-set Max Depth / Depth Scale.
@@ -335,7 +600,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         # a recognizable, real-color reconstruction. Frames are BGR (OpenCV),
         # the viewer wants RGB. Depth-map pixels are scaled to frame pixels
         # because the model may run at a different resolution than the camera.
-        colors = self._sample_colors(frame, cam_pixels, depth.shape)
+        colors = self._sample_colors(frame, cam_pixels, distance.shape)
 
         world_all = camera_points_to_robot(
             cam_points,
@@ -476,8 +741,21 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             },
             "debug": dict(getattr(self, "_debug", {})),
             "model": {
+                "method": self._method(),
                 "estimate_depth": getattr(self, "estimate_depth", True),
-                "backend": "onnx" if getattr(self, "_session", None) is not None else "torch",
+                "backend": (
+                    "geometry"
+                    if self._method() == "ground_plane"
+                    else (
+                        "synthetic"
+                        if self._method() == "flat"
+                        else (
+                            "onnx"
+                            if getattr(self, "_session", None) is not None
+                            else "torch"
+                        )
+                    )
+                ),
                 "load_error": getattr(self, "_load_error", None),
             },
         }

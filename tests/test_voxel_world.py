@@ -218,6 +218,7 @@ class VoxelWorldPipelineTests(unittest.TestCase):
             "voxel_min_depth",
             "near_depth",
             "auto_ground",
+            "auto_world_scale",
         ):
             self.assertIn(key, schema)
             self.assertIn(schema[key]["type"], ("number", "toggle", "select"))
@@ -397,6 +398,54 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         objects, out_frame = pipeline.run()
         self.assertEqual(objects, [])
         self.assertTrue(np.array_equal(out_frame, frame))
+
+    def test_auto_world_scale_stretches_a_small_scene(self):
+        # A 1.5 m person in front of a 5 m wall has a disparity ratio of ~3.3.
+        # Anchored at the 0.3 m default near plane that collapses the whole
+        # world to a sub-metre blob; Auto Scale World must stretch it out so
+        # it fills the 10 m cap and the object geometry stays recognizable.
+        pipeline = self._build_pipeline()
+        frame = np.zeros((80, 80, 3), dtype=np.uint8)
+        depth = np.full((80, 80), 5.0)
+        depth[25:65, 20:60] = 1.5
+        relative = 1.0 / depth
+
+        pipeline.get_frame = lambda: frame
+        pipeline._is_processable = lambda: True
+        pipeline._infer_depth = lambda f: relative
+        pipeline._annotate = lambda f, d: f
+
+        objects, _ = pipeline.run()
+        dbg = objects[0].vis_meta["debug"]
+        self.assertTrue(dbg["auto_scale"])
+        self.assertAlmostEqual(dbg["dist_max"], 10.0, delta=0.1)
+
+        # turning it off keeps the old, collapsed behaviour
+        pipeline.auto_world_scale = False
+        objects, _ = pipeline.run()
+        dbg = objects[0].vis_meta["debug"]
+        self.assertFalse(dbg["auto_scale"])
+        self.assertLess(dbg["dist_max"], 1.1)
+
+    def test_flat_method_needs_no_model(self):
+        # 'flat' is a pure heuristic - no optimization, always ready, and the
+        # depth map is synthesized on the fly so no inference backend exists.
+        pipeline = self._build_pipeline()
+        pipeline.depth_method = "flat"
+        frame = np.zeros((80, 80, 3), dtype=np.uint8)
+        pipeline.get_frame = lambda: frame
+        pipeline._is_processable = lambda: True
+        pipeline._annotate = lambda f, d: f
+
+        self.assertFalse(pipeline._optimization_requested())
+        self.assertEqual(pipeline.is_ready(), (True, "ready"))
+
+        objects, _ = pipeline.run()
+        meta = objects[0].vis_meta
+        self.assertEqual(meta["model"]["method"], "flat")
+        self.assertEqual(meta["model"]["backend"], "synthetic")
+        self.assertGreater(meta["count"], 0)
+        self.assertTrue(meta["voxels"])
 
 
 if __name__ == "__main__":
