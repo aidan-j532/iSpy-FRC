@@ -336,6 +336,15 @@ class SparseVoxelMap:
         return int(unique.shape[0])
 
     def decay(self, now: float | None = None) -> int:
+        """Remove voxels not re-observed within ``decay_seconds``.
+
+        Callers should run decay aligned to the observation cadence (e.g. on
+        integration frames only), never on a faster wall-clock cadence:
+        voxels are only re-observed when new depth is integrated, so pruning
+        between integrations starves any map whose ``decay_seconds`` is
+        smaller than the frame period, permanently (see VoxelWorldPipeline.
+        run()).
+        """
         if self.decay_seconds <= 0:
             return 0
         now = time.monotonic() if now is None else now

@@ -778,7 +778,13 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                     self.logger.exception("Voxel world map integration failed.")
                     self._debug["reason"] = f"integration error: {exc}"
 
-        self.voxel_map.decay()
+            # Decay is aligned to the integration cadence, not the wall-clock
+            # frame cadence. A voxel is only ever re-observed on a refresh
+            # frame, so pruning on the intermediate frames starves any map
+            # whose decay_seconds is smaller than the frame time (a 0.1 s
+            # decay on a ~10 fps Pi removes every cell before the next
+            # integration -> a permanently empty/blinking world).
+            self.voxel_map.decay()
 
         obj = self._voxel_object()
         self._last_objects = [obj]

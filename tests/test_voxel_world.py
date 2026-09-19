@@ -410,6 +410,41 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         self.assertEqual(calls["n"], 1)
         self.assertEqual(pipeline.voxel_map.count(), first_count)
 
+    def test_decay_only_runs_on_integration_frames(self):
+        # A voxel is only ever re-observed on a refresh (integration) frame.
+        # decay_seconds smaller than the frame time (0.1 s decay on a slow Pi)
+        # used to empty the whole map on the intermediate frame - before any
+        # cell could be re-observed. Decay must be aligned to that cadence.
+        pipeline = self._build_pipeline()
+        pipeline._every = 2
+        pipeline.decay_seconds = 0.1
+        pipeline.voxel_map = SparseVoxelMap(voxel_size=0.1, decay_seconds=0.1)
+        frame = np.zeros((80, 80, 3), dtype=np.uint8)
+
+        def fake_depth(f):
+            rows = np.linspace(1.0, 0.0, f.shape[0], dtype=np.float64)
+            return np.tile(rows[:, None], (1, f.shape[1]))
+
+        pipeline.get_frame = lambda: frame
+        pipeline._is_processable = lambda: True
+        pipeline._infer_depth = fake_depth
+        pipeline._annotate = lambda f, d: f
+
+        decay_calls = []
+        original_decay = pipeline.voxel_map.decay
+        pipeline.voxel_map.decay = lambda: (decay_calls.append(1) or original_decay())
+
+        objects, _ = pipeline.run()  # frame 1: first frame -> integrate + decay
+        self.assertEqual(len(decay_calls), 1)
+        objects, _ = pipeline.run()  # frame 2: refresh -> integrate + decay
+        self.assertEqual(len(decay_calls), 2)
+        objects, _ = pipeline.run()  # frame 3: no refresh -> NO decay, map intact
+        self.assertEqual(len(decay_calls), 2)
+        self.assertGreater(objects[0].vis_meta["count"], 0)
+        objects, _ = pipeline.run()  # frame 4: refresh -> integrate + decay again
+        self.assertEqual(len(decay_calls), 3)
+        self.assertGreater(objects[0].vis_meta["count"], 0)
+
     def test_run_without_model_returns_raw_frame(self):
         pipeline = self._build_pipeline()
         frame = np.full((20, 20, 3), 7, dtype=np.uint8)
