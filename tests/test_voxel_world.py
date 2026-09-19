@@ -427,11 +427,12 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         self.assertFalse(dbg["auto_scale"])
         self.assertLess(dbg["dist_max"], 1.1)
 
-    def test_flat_method_needs_no_model(self):
-        # 'flat' is a pure heuristic - no optimization, always ready, and the
-        # depth map is synthesized on the fly so no inference backend exists.
+    def test_shadows_method_needs_no_model(self):
+        # 'shadows' is a pure heuristic - no optimization, always ready, and
+        # the depth map is synthesized on the fly so no inference backend
+        # exists.
         pipeline = self._build_pipeline()
-        pipeline.depth_method = "flat"
+        pipeline.depth_method = "shadows"
         frame = np.zeros((80, 80, 3), dtype=np.uint8)
         pipeline.get_frame = lambda: frame
         pipeline._is_processable = lambda: True
@@ -442,10 +443,27 @@ class VoxelWorldPipelineTests(unittest.TestCase):
 
         objects, _ = pipeline.run()
         meta = objects[0].vis_meta
-        self.assertEqual(meta["model"]["method"], "flat")
+        self.assertEqual(meta["model"]["method"], "shadows")
         self.assertEqual(meta["model"]["backend"], "synthetic")
         self.assertGreater(meta["count"], 0)
         self.assertTrue(meta["voxels"])
+
+    def test_shadows_estimator_maps_bright_to_near_and_dark_to_far(self):
+        # HSV value is read as inverse depth: lit pixels keep a high relative
+        # depth (near) and shadowed pixels drop (far) - same convention as
+        # Depth Anything, so the rest of the pipeline is method-blind.
+        pipeline = self._build_pipeline()
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        frame[:, :, :] = (40, 40, 40)  # left half = shadow, dark -> far
+        frame[:, 20:, :] = (220, 220, 220)  # right half = lit, bright -> near
+        depth = pipeline._estimate_shadows(frame)
+        self.assertEqual(depth.shape, frame.shape[:2])
+        self.assertTrue(np.isfinite(depth).all())
+        self.assertGreater(float(depth[:, 20:].mean()), float(depth[:, :20].mean()))
+
+    def test_schema_offers_only_depth_anything_and_shadows(self):
+        schema = VoxelWorldPipeline.config_schema()
+        self.assertEqual(schema["depth_method"]["options"], ["depth_anything", "shadows"])
 
 
 if __name__ == "__main__":
