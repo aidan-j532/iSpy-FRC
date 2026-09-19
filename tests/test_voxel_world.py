@@ -242,6 +242,8 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         pipeline.voxel_min_depth = 0.0
         pipeline.min_height = -100.0
         pipeline.auto_ground = True
+        pipeline.auto_world_scale = True
+        pipeline.debug_viz = False
         pipeline._ground_offset = None
         pipeline.voxel_size = 0.1
         pipeline.export_max_voxels = 1000
@@ -444,6 +446,41 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         objects, _ = pipeline.run()  # frame 4: refresh -> integrate + decay again
         self.assertEqual(len(decay_calls), 3)
         self.assertGreater(objects[0].vis_meta["count"], 0)
+
+    def test_debug_viz_ships_intermediate_geometry(self):
+        # debug_viz must put the raw camera-frame cloud, the settled world
+        # cloud, the camera frustum, and the mount markers in vis_meta so the
+        # 3D viewer can overlay them on the voxels for geometry/visual tests.
+        pipeline = self._build_pipeline()
+        pipeline.debug_viz = True
+        pipeline.camera_pitch = 10.0
+        frame = np.zeros((80, 80, 3), dtype=np.uint8)
+        frame[:, :, 2] = 120
+        frame[:, :, 0] = 200
+
+        def fake_depth(f):
+            rows = np.linspace(1.0, 0.0, f.shape[0], dtype=np.float64)
+            return np.tile(rows[:, None], (1, f.shape[1]))
+
+        pipeline.get_frame = lambda: frame
+        pipeline._is_processable = lambda: True
+        pipeline._infer_depth = fake_depth
+        pipeline._annotate = lambda f, d: f
+
+        objects, _ = pipeline.run()
+        viz = objects[0].vis_meta.get("debug_viz")
+        self.assertIsNotNone(viz)
+        self.assertGreater(len(viz["raw"]), 0)
+        self.assertEqual(len(viz["raw"]), len(viz["world"]))
+        for key in ("near", "far", "cam_origin", "axes_origin", "unit", "frustum"):
+            self.assertIn(key, viz)
+        self.assertEqual(len(viz["frustum"]), 8)  # near rect + far rect corners
+        if viz["colors"]:
+            self.assertEqual(len(viz["colors"]), len(viz["world"]))
+        # every raw point is forward-positive in camera frame (right/down/fwd)
+        self.assertTrue(all(p[2] > 0 for p in viz["raw"][:8]))
+        # the scalar debug row must not balloon with the arrays
+        self.assertNotIn("viz", objects[0].vis_meta["debug"])
 
     def test_run_without_model_returns_raw_frame(self):
         pipeline = self._build_pipeline()

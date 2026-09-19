@@ -201,6 +201,19 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                     "the camera. Turn off to control scale manually with Near "
                     "Plane / Max Depth.",
                 },
+                "debug_viz": {
+                    "type": "toggle",
+                    "label": "Debug Visualization",
+                    "default": False,
+                    "help": "Diagnostic/test mode. Emits overlay geometry into "
+                    "the 3D viewer - the raw camera-frame back-projection, the "
+                    "robot-frame cloud that became voxels, the camera frustum, "
+                    "the robot axes and the settled floor - plus a one-time "
+                    "geometry log on the first integration. Geometry mistakes "
+                    "(wrong mount pitch/yaw/height, collapsed world) become "
+                    "visually obvious instead of silently mangling the map. "
+                    "Leave off for normal use.",
+                },
             }
         )
         return schema
@@ -260,6 +273,8 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         )
         self.auto_ground = bool(setting("auto_ground", True))
         self.auto_world_scale = bool(setting("auto_world_scale", True))
+        self.debug_viz = bool(setting("debug_viz", False))
+        self._logged_geometry = False
         # Resolved on the first integrated frame (see _integrate_depth) and then
         # held constant so the accumulated map does not smear as the estimate
         # jitters frame to frame.
@@ -598,6 +613,19 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         world = world_all[keep]
         world_colors = colors[keep] if colors is not None else None
         debug["past_min_height"] = int(world.shape[0])
+        if getattr(self, "debug_viz", False):
+            self._debug["viz"] = self._viz_payload(
+                cam_points,
+                world_all,
+                colors,
+                focal,
+                distance.shape,
+                ground_offset,
+            )
+
+        if not getattr(self, "_logged_geometry", False):
+            self._logged_geometry = True
+            self._log_geometry_once(debug, ground_offset)
         if abs(float(self.camera_height)) < 1e-9 and not auto_level:
             # The world origin is the floor, so a mount height of 0 puts the
             # whole scene below z=0 and the Min Height floor then eats it.
@@ -624,6 +652,170 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
 
         debug["integrated"] = int(
             self.voxel_map.integrate(world, colors=world_colors)
+        )
+
+    # ------------------------------------------------------------------
+    # debug visualization / test mode
+    # ------------------------------------------------------------------
+
+    _DEBUG_MAX_POINTS = 2000
+
+    def _viz_payload(
+        self,
+        cam_points: np.ndarray,
+        world_all: np.ndarray,
+        colors: np.ndarray | None,
+        focal: float,
+        depth_shape: tuple,
+        ground_offset: float,
+    ) -> dict:
+        """Intermediate geometry for the 3D viewer's debug/test mode.
+
+        Everything is emitted in the SAME frame the voxels use (robot-relative,
+        post ground-offset), so the viewer can literally overlay it on the map:
+
+        ``raw``      - the depth grid back-projected into the camera frame
+                       (right, down, forward) BEFORE the mount transform. The
+                       pyramid-along-image-flat shape of this cloud is the
+                       first thing that must look like the real scene.
+        ``world``    - the same points AFTER camera-to-robot + ground offset,
+                       i.e. exactly what got voxelized. If this does not line
+                       up with the ``raw`` pyramid once the mount is applied,
+                       the pitch/yaw/height config is wrong.
+        ``frustum``  - the camera view volume (near + far rectangle corners) in
+                       the same world frame, so the user sees where the config
+                       says the camera actually points.
+        ``cam_origin`` / ``axes_origin`` - mount position markers.
+
+        Bound to ``_DEBUG_MAX_POINTS`` per cloud so the websocket payload and
+        the browser stay cheap even at stride 1.
+        """
+        step = max(1, int(cam_points.shape[0] // self._DEBUG_MAX_POINTS)) \
+            if cam_points.shape[0] else 1
+        idx = np.arange(0, cam_points.shape[0], step)[: self._DEBUG_MAX_POINTS]
+
+        raw = cam_points[idx]
+        settled = world_all[idx]
+        raw_colors = None
+        if colors is not None and colors.shape[0] == world_all.shape[0]:
+            raw_colors = colors[idx]
+
+        plane = getattr(self, "_eff_depth_plane", None)
+        near = float(self._eff_near_depth) * self._z_scale
+        far = float(plane[3]) * self._z_scale if plane else near
+
+        frustum = self._frustum_corners_world(depth_shape, focal, near, far, ground_offset)
+        cam_origin = self._robot_frame([[0.0, 0.0, 0.0]], ground_offset)
+        return {
+            "raw": raw.tolist(),
+            "world": settled.tolist(),
+            "colors": (
+                raw_colors.astype(np.float64).tolist()
+                if raw_colors is not None
+                else None
+            ),
+            "frustum": frustum.tolist(),
+            "near": round(float(near), 4),
+            "far": round(float(far), 4),
+            "cam_origin": [round(float(v), 4) for v in cam_origin[0]],
+            "axes_origin": [
+                round(float(self.camera_x), 4),
+                round(float(self.camera_y), 4),
+                round(-ground_offset, 4),
+            ],
+            "unit": self.unit,
+        }
+
+    def _robot_frame(self, pts, ground_offset: float) -> np.ndarray:
+        out = camera_points_to_robot(
+            pts,
+            self.camera_x,
+            self.camera_y,
+            self.camera_height,
+            self.camera_yaw,
+            self.camera_pitch,
+        )
+        if ground_offset:
+            out = out.copy()
+            out[:, 2] -= ground_offset
+        return out
+
+    def _frustum_corners_world(
+        self,
+        depth_shape: tuple,
+        focal: float,
+        near: float,
+        far: float,
+        ground_offset: float,
+    ) -> np.ndarray:
+        """Near + far image-rectangle corners, same transform as cam points."""
+        h, w = depth_shape[0], depth_shape[1]
+        cx, cy = w / 2.0, h / 2.0
+        f = max(float(focal), 1e-6)
+        corners = []
+        for (u, v), z in (
+            ((0.0, 0.0), near), ((w, 0.0), near), ((w, h), near), ((0.0, h), near),
+            ((0.0, 0.0), far), ((w, 0.0), far), ((w, h), far), ((0.0, h), far),
+        ):
+            corners.append(((u - cx) / f * z, (v - cy) / f * z, z))
+        return self._robot_frame(np.asarray(corners, dtype=np.float64), ground_offset)
+
+    def _log_geometry_once(self, debug: dict, ground_offset: float) -> None:
+        """One structured line per instance so boot-time geometry is checkable
+        instead of guessed at across hundreds of frames."""
+        pitch = float(debug.get("camera_pitch", 0.0))
+        cam_h = float(debug.get("camera_height", 0.0))
+        hints = []
+        if abs(abs(pitch) - 90.0) < 1.0:
+            hints.append(
+                "pitch ~90 deg = camera points straight down; the scene maps to "
+                "a vertical smear under the robot - check the mount is really "
+                "straight down"
+            )
+        if cam_h == 0.0 and not debug.get("auto_level", False):
+            hints.append(
+                "height 0 = camera at floor level; set the real mount height or "
+                "enable Auto Ground"
+            )
+        ext = float(debug.get("world_z_max", 0.0)) - float(debug.get("world_z_min", 0.0))
+        if ext > 2.0 and abs(abs(pitch) - 90.0) < 1.0:
+            hints.append(
+                "world z-extent %.1f m with a sideways/near-down pitch - the "
+                "depth range collapses into height instead of distance" % ext
+            )
+        if plane := getattr(self, "_eff_depth_plane", None):
+            plane_txt = "d=(%.3f..%.3f) z=(%.2f..%.2f)" % (plane[0], plane[1], plane[2], plane[3])
+        else:
+            plane_txt = "n/a"
+        logger = getattr(self, "logger", None)
+        if logger is None or getattr(logger, "disabled", False):
+            return
+        cam_name = "?"
+        cfg = getattr(self, "config", None)
+        if cfg is not None:
+            cam_name = cfg.get("name", "?") if isinstance(cfg, dict) else "?"
+        logger.info(
+            "VoxelWorld '%s' geometry: method=%s unit=%s depth=%sx%s focal=%.1fpx "
+            "plane=%s far=%.2f%s mount=(x=%.3f y=%.3f h=%.3f pitch=%.1f yaw=%.1f) "
+            "ground_offset=%.3f world_z=%.3f..%.3f%s",
+            cam_name,
+            self._method(),
+            self.unit,
+            debug.get("depth_w", "?"),
+            debug.get("frame_w", "?"),
+            float(debug.get("focal", 0.0)),
+            plane_txt,
+            float(debug.get("far_plane", 0.0)),
+            self._unit_label,
+            self.camera_x,
+            self.camera_y,
+            cam_h,
+            pitch,
+            float(debug.get("camera_yaw", 0.0)),
+            ground_offset,
+            float(debug.get("world_z_min", 0.0)),
+            float(debug.get("world_z_max", 0.0)),
+            f"; {'; '.join(hints)}" if hints else "",
         )
 
     def _sample_colors(
@@ -706,6 +898,17 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                 "load_error": getattr(self, "_load_error", None),
             },
         }
+
+        # Test mode: ship the intermediate geometry under its own key so the
+        # scalar diagnostics row stays numbers-only. (Drop the arrays out of
+        # the scalar dict too - they have no right to bloat the status text.)
+        if getattr(self, "debug_viz", False):
+            viz = dict(getattr(self, "_debug", {}).get("viz") or {})
+            if viz:
+                meta["debug_viz"] = viz
+            meta["debug"] = {
+                k: v for k, v in meta["debug"].items() if k != "viz"
+            }
 
         # Reuse one Object so its identity stays stable across ticks (the map
         # contents change, the detection does not). Always return it - even an
