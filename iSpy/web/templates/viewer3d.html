@@ -399,11 +399,33 @@ function updatePointCloud(g, kpts3d) {
 // Sparse voxel occupancy map (voxel_world pipeline). Rendered as a single
 // InstancedMesh so thousands of cubes stay cheap to upload and draw. Color
 // ramps with height so the ground plane reads differently from obstacles.
+//
+// COORDINATE FRAMES: voxel points arrive ROBOT-relative (+X right, +Y
+// forward, +Z up on the robot - see voxel_world.py's back-projection and
+// voxel_map.camera_points_to_robot). Every other detection (and the robot
+// overlay) is FIELD-absolute, so simply drawing the points as-is pins the
+// cloud to the field origin and it detaches as soon as the robot moves. When
+// the NetworkHandler "robot" overlay is present the whole voxel group is
+// parented to that pose exactly like updateCubeMarker parents a mesh: with no
+// pose (fallback) the group sits at the origin and each instance keeps its
+// old toViewer() transform so nothing regresses for pose-less setups.
 function buildVoxelGroup(o) {
   const g = new THREE.Group();
   g.userData.voxelCap = 0;
   g.userData.voxelMesh = null;
   return g;
+}
+
+function parentVoxelGroupToRobot(g) {
+  if (robotPose) {
+    g.position.copy(toViewer(robotPose.x, robotPose.y, robotPose.z));
+    // same convention as the robot overlay: yaw-only field rotation composed
+    // with the robot->viewer axis swap (M * Rz(yaw) from robotpose.js)
+    g.quaternion.set(...robotToViewerQuat(0, 0, robotPose.yaw));
+  } else {
+    g.position.set(0, 0, 0);
+    g.quaternion.identity();
+  }
 }
 
 function updateVoxelGroup(g, o) {
@@ -459,9 +481,13 @@ function updateVoxelGroup(g, o) {
   const q = new THREE.Quaternion();
   const s = new THREE.Vector3(size, size, size);
   const color = new THREE.Color();
+  const posed = !!robotPose;
   for (let i = 0; i < voxels.length; i++) {
     const v = voxels[i];
-    const p = toViewer(v[0], v[1], v[2]);
+    // robot-relative points stay RAW so the group's robot-pose transform maps
+    // them into the field (M*R*p + t); without a pose fall back to the old
+    // robot->viewer-at-origin placement
+    const p = posed ? new THREE.Vector3(v[0], v[1], v[2]) : toViewer(v[0], v[1], v[2]);
     m.compose(p, q, s);
     mesh.setMatrixAt(i, m);
     if (v.length >= 7) {
@@ -483,6 +509,7 @@ function updateVoxelGroup(g, o) {
   }
   mesh.instanceMatrix.needsUpdate = true;
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  parentVoxelGroupToRobot(g);
 }
 
 const VIS_RENDERERS = {
@@ -505,6 +532,12 @@ const boxes = {};
 // the currently selected target's id (drives row + marker highlight).
 // kept in sync with the target_selector /api status endpoint each poll.
 let selectedId = null;
+
+// live robot pose from the NetworkHandler "robot" overlay (field-absolute).
+// the voxel map is stored robot-relative, so its render group must be parented
+// to this pose every poll to ride along with the robot marker - otherwise the
+// cloud stays anchored in the robot's own frame while the robot drives away.
+let robotPose = null;
 
 function createBoxForDetection(o) {
   const key = o.id;
@@ -545,7 +578,11 @@ function maybeAutoFrameVoxels(o) {
   const span = Math.max(0, ext[0] || 0, ext[1] || 0, ext[2] || 0);
   if (!span) return;
   autoFramedByVoxels = true;
-  const target = toViewer(o.x || 0, o.y || 0, o.z || 0);
+  // target where the voxel group actually renders: the robot pose when the map
+  // is parented to it, otherwise the object's own position
+  const target = robotPose
+    ? toViewer(robotPose.x, robotPose.y, robotPose.z)
+    : toViewer(o.x || 0, o.y || 0, o.z || 0);
   controls.target.copy(target);
   const dist = Math.max(span, 0.5) * 2.5;
   const dir = new THREE.Vector3(1, 1, 1).normalize();
@@ -720,6 +757,9 @@ function syncOverlays(overlays) {
   for (const o of overlays) {
     const id = o.id;
     if (!id) continue;
+    if (id === 'robot') {
+      robotPose = { x: o.x || 0, y: o.y || 0, z: o.z || 0, yaw: o.yaw || 0 };
+    }
     seen.add(id);
     const renderer = OVERLAY_RENDERERS[o.type];
     if (!renderer) continue;
@@ -738,6 +778,11 @@ function syncOverlays(overlays) {
       disposeMesh(overlayMeshes[id].mesh);
       delete overlayMeshes[id];
     }
+  }
+  if (!overlayMeshes['robot']) {
+    // robot stopped publishing (or add-on removed) - fall back to parking the
+    // voxel map at the viewer origin instead of a stale pose
+    robotPose = null;
   }
 }
 

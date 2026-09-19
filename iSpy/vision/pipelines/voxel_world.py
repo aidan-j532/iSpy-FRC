@@ -6,6 +6,21 @@ depth map into world-frame points and accumulates a sparse voxel occupancy map.
 
 This is *approximate* geometry: Depth Anything outputs relative depth, so
 distances are only as good as the far-plane scaling and camera calibration.
+
+Coordinate frames
+-----------------
+``vis_meta["voxels"]`` (and the Object centroid) are **robot-relative**: +X
+right, +Y forward, +Z up measured from the robot origin, i.e. exactly the
+convention ``triangulation.camera_point_to_robot`` (and
+``voxel_map.camera_points_to_robot``) back-projects into - NOT field-absolute.
+
+Trackers convert only the Object's ``x/y/z`` (and rotation) into field
+coordinates via :meth:`Object.relative_to`; they never touch ``vis_meta``. The
+voxel points therefore intentionally stay robot-relative, and the 3D viewer
+(parents ``viewer3d.html``'s voxel group to the live NetworkHandler robot pose
+overlay) applies the robot->field transform at render time so the map rides
+along with the robot marker. Do not switch the points to field coordinates in
+this pipeline without changing the viewer to match, and vice versa.
 """
 
 import logging
@@ -715,6 +730,14 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             obj.z = float(centroid[2])
             obj.confidence = float(min(1.0, len(voxels) / 200.0))
             obj.vis_meta = meta
+        # This single Object is field-converted in place by trackers
+        # (relative_to). The same field pose gets re-added every tick, so re-zero
+        # the rotation the tracker folded in last frame - otherwise yaw/roll/pitch
+        # accumulate a robot_yaw every tick. A voxel occupancy map carries no
+        # attitude; the viewer derives its orientation from the robot pose.
+        obj.roll = 0.0
+        obj.pitch = 0.0
+        obj.yaw = 0.0
         return obj
 
     # ------------------------------------------------------------------

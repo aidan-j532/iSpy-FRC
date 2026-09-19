@@ -121,6 +121,17 @@ class EKFTracker(TrackerBase):
         if not self.tracked_objects:
             return False
 
+        # Same stable-id rule as ObjectTracker: a persistent detection (e.g.
+        # the voxel world's single reused Object) must re-attach to its own
+        # track regardless of how far its centroid moved between ticks, or a
+        # ghost duplicate gets spawned and the original dies on its stale timer.
+        # The Kalman smoothing is skipped for this case on purpose - the
+        # pipeline re-anchors the position every tick anyway.
+        for existing in self.tracked_objects:
+            if existing.id == new_det.id:
+                existing.reset_time()
+                return True
+
         new_pos = np.array(new_det.get_position())
 
         for existing in self.tracked_objects:

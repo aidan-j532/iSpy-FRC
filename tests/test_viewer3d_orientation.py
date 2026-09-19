@@ -163,6 +163,21 @@ class Viewer3dOrientationTests(unittest.TestCase):
         np.testing.assert_allclose(R @ [0, 1, 0], [0, 0, 1], atol=1e-6)
         np.testing.assert_allclose(R @ [0, 0, 1], [0, -1, 0], atol=1e-6)
 
+    def test_voxel_group_parented_to_robot_poses_points_in_field(self):
+        # voxel points arrive robot-relative (+X right, +Y forward, +Z up).
+        # the viewer parents the voxel group to the live NetworkHandler "robot"
+        # overlay (position t, heading yaw) with the same transform updateCubeMarker /
+        # the overlay box apply, and instances stay in raw robot-frame coords.
+        # A point p must then render at M * (Rz(yaw) @ p) + M @ t - its true
+        # field-absolute spot - not at M @ p (the old, robot-frame-at-origin bug).
+        t = np.array([2.0, -1.0, 0.35], dtype=float)  # robot field pose
+        yaw = 1.1
+        p = np.array([0.7, 1.3, 0.2], dtype=float)     # robot-relative voxel
+        R_group = quat_to_matrix(robotpose_quat(0.0, 0.0, yaw))
+        rendered = R_group @ p + M @ t
+        expected = M @ (rot_z(yaw) @ p) + M @ t
+        np.testing.assert_allclose(rendered, expected, atol=1e-6)
+
     def test_tilted_tag_matches_true_orientation(self):
         np.testing.assert_allclose(
             viewer_matrix_for_tag(R_TILT), M @ R_TILT, atol=2e-2

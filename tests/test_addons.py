@@ -196,6 +196,21 @@ class ObjectTrackerTests(unittest.TestCase):
         self.assertEqual(len(tracked), 1)
         self.assertEqual(tracked[0].get_id(), first_id)
 
+    def test_persistent_object_remerges_by_id_not_distance(self):
+        # the voxel world reuses ONE Object across ticks; its centroid jumps
+        # as the robot moves, so a distance gate would spawn a ghost duplicate
+        # (and the original dies on its stale timer -> flicker). Same id must
+        # be treated as the same object no matter how far it "moved".
+        tracker = self._make({"distance_threshold": 0.5})
+        obj = Object(0.0, 0.0)
+        obj.name = "voxel_world"
+        tracked = tracker.update([obj], 0, 0, 0)
+        self.assertEqual(len(tracked), 1)
+        obj.x = 100.0  # far jump, same instance/id
+        tracked = tracker.update([obj], 0, 0, 0)
+        self.assertEqual(len(tracked), 1)
+        self.assertEqual(tracked[0].get_id(), obj.get_id())
+
     def test_stale_objects_are_dropped(self):
         tracker = self._make({"stale_threshold": 0.05})
         tracker.update([Object(0.0, 0.0)], 0, 0, 0)

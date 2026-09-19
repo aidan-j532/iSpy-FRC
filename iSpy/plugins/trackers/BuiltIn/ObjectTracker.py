@@ -85,6 +85,17 @@ class ObjectTracker(TrackerBase):
         if not self.tracked_objects:
             return False
 
+        # A persistent detection keeps a stable id across ticks (the voxel
+        # world reuses one Object). When the tracked entry already carries
+        # that id it IS the same object - re-gating it by distance when its
+        # centroid jumps (a moving robot re-measures the map's mean) would
+        # spawn a ghost duplicate and then let the original die on its stale
+        # timer.
+        for existing in self.tracked_objects:
+            if existing.id == new_det.id:
+                existing.reset_time()
+                return True
+
         new_pos = np.array(new_det.get_position())
 
         for existing in self.tracked_objects:

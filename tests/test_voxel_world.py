@@ -307,6 +307,27 @@ class VoxelWorldPipelineTests(unittest.TestCase):
             self.assertLess(v[5], 20)
             self.assertLess(v[6], 20)
 
+    def test_voxel_object_reuses_instance_and_resets_pose(self):
+        # the voxel world recycles ONE Object so its identity (and the viewer's
+        # render group keyed by o.id) stays stable across ticks
+        pipeline = self._build_pipeline()
+        obj_a = pipeline._voxel_object()
+        self.assertEqual(obj_a.name, "voxel_world")
+        self.assertEqual(obj_a.vis_type, "voxels")
+        obj_b = pipeline._voxel_object()
+        self.assertIs(obj_a, obj_b)
+        self.assertEqual(obj_a.get_id(), obj_b.get_id())
+        # simulate a tracker converting the shared instance in place, then
+        # verify the pipeline re-anchors it every tick so roll/pitch/yaw never
+        # accumulate a robot_yaw (they would feed a bogus pose to the viewer)
+        obj_a.roll = 0.3
+        obj_a.pitch = 0.1
+        obj_a.yaw = 1.2
+        pipeline._voxel_object()
+        self.assertEqual(obj_a.roll, 0.0)
+        self.assertEqual(obj_a.pitch, 0.0)
+        self.assertEqual(obj_a.yaw, 0.0)
+
     def test_auto_ground_lifts_a_scene_below_the_origin(self):
         # A straight-down camera (pitch 90) with height 0 maps every point
         # below z=0. Auto ground must shift the map so it straddles the grid

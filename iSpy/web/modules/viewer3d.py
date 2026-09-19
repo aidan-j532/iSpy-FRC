@@ -99,7 +99,13 @@ class Viewer3DModule(WebModule):
                     "vis_type": getattr(obj, "vis_type", "generic"),
                     "vis_meta": getattr(obj, "vis_meta", {}) or {},
                 }
-            obj_entry["id"] = idx
+            # keep the Object's OWN stable id (to_dict's "id"). Overwriting it
+            # with this frame's list index churns the id every tick for fresh
+            # detections and - worse - splits persistent objects like the voxel
+            # world, whose centroid jumps enough to fail a tracker's distance
+            # gate, into ghost render groups that flicker until their
+            # stale_threshold expires. The legacy plain-object fallback above
+            # already tags those with idx.
             obj_entry["num_keypoints"] = num_kpts
             kpts = obj_entry.get("keypoints_3d")
             if kpts is None:
