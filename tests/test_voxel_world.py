@@ -558,6 +558,134 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         schema = VoxelWorldPipeline.config_schema()
         self.assertEqual(schema["depth_method"]["options"], ["depth_anything", "shadows"])
 
+    # ------------------------------------------------------------------
+    # mount geometry: the whole point of "not correct" debugging. A
+    # level, real-height camera must reconstruct the world as a shallow
+    # floor band stretching FORWARD (+Y), while the Pi's pitch=90/height=0
+    # combination provably collapses the whole depth range into a
+    # vertical smear below the robot (world_z extent >> forward extent).
+    # These tests pin that behaviour so the geometry cannot silently
+    # regress.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _run_mount(pitch, height, yaw=0.0):
+        pipeline = VoxelWorldPipelineTests._build_pipeline()
+        pipeline.camera_pitch = pitch
+        pipeline.camera_height = height
+        pipeline.camera_yaw = yaw
+        pipeline.debug_viz = True
+        frame = np.zeros((80, 80, 3), dtype=np.uint8)
+
+        # row ramp: top row = far (low inverse depth), bottom = near
+        def fake_depth(f):
+            rows = np.linspace(0.1, 1.0, f.shape[0], dtype=np.float64)
+            return np.tile(rows[:, None], (1, f.shape[1]))
+
+        pipeline.get_frame = lambda: frame
+        pipeline._is_processable = lambda: True
+        pipeline._infer_depth = fake_depth
+        pipeline._annotate = lambda f, d: f
+        objects, _ = pipeline.run()
+        return objects[0].vis_meta, pipeline
+
+    @staticmethod
+    def _corr(a, b):
+        """Pearson correlation; the mount-transform semantics being tested were
+        scene-robust correlations, not absolute ranges."""
+        a = np.asarray(a, dtype=np.float64)
+        b = np.asarray(b, dtype=np.float64)
+        if a.size != b.size or a.size < 2:
+            return 0.0
+        am = a - a.mean()
+        bm = b - b.mean()
+        den = float(np.sqrt(float((am ** 2).sum()) * float((bm ** 2).sum())))
+        if den == 0.0:
+            return 0.0
+        return float((am * bm).sum() / den)
+
+    def test_level_camera_distance_flows_forward_not_down(self):
+        # Camera 0.3 m up, level (pitch 0): forward camera distance must ride
+        # robot +Y (forward). Check it two ways - the back-projected cloud's
+        # distance correlates with +Y, and the debug frustum points +Y instead
+        # of straight down.
+        meta, pipeline = self._run_mount(pitch=0.0, height=0.3)
+        viz = meta["debug_viz"]
+        raw_d = [p[2] for p in viz["raw"]]
+        self.assertGreater(self._corr([p[1] for p in viz["world"]], raw_d), 0.85)
+        # forward axis of the mount must be ~horizontal (+Y)
+        dx, dy, dz = self._frustum_forward(viz)
+        self.assertGreater(dy, 0.9)
+        self.assertLess(abs(dz), 0.35)
+        self.assertGreater(len(meta["voxels"]), 0)
+
+    @staticmethod
+    def _frustum_forward(viz):
+        """Normalized direction from cam_origin to the far-rectangle centroid,
+        i.e. where the configured mount says 'forward' is."""
+        o = viz["cam_origin"]
+        far = np.asarray(viz["frustum"][4:], dtype=np.float64)
+        c = far.mean(axis=0)
+        d = c - np.asarray(o, dtype=np.float64)
+        n = float(np.linalg.norm(d))
+        if n == 0:
+            return 0.0, 0.0, 0.0
+        return float(d[0] / n), float(d[1] / n), float(d[2] / n)
+
+    def test_pitch_90_height_0_produces_the_documented_vertical_smear(self):
+        # The Pi config (pitch 90, height 0, yaw 90): forward camera distance
+        # rides robot -Z (straight DOWN), so the entire depth range becomes a
+        # vertical column under the robot instead of distance - the "terrible
+        # and not correct" look from the log. Pin it so nobody "fixes" the
+        # transform into a different bug.
+        meta, pipeline = self._run_mount(pitch=90.0, height=0.0, yaw=90.0)
+        viz = meta["debug_viz"]
+        raw_d = [p[2] for p in viz["raw"]]
+        self.assertLess(self._corr([p[2] for p in viz["world"]], raw_d), -0.85)
+        self.assertLess(abs(self._corr([p[1] for p in viz["world"]], raw_d)), 0.5)
+        # the mount's forward axis must point straight DOWN
+        dx, dy, dz = self._frustum_forward(viz)
+        self.assertLess(dz, -0.9)
+        self.assertLess(abs(dy), 0.3)
+        voxels = np.asarray([v[:3] for v in meta["voxels"]])
+        self.assertGreater(voxels.shape[0], 0)
+        # height extent is comparable to forward extent - the smear
+        z_range = float(voxels[:, 2].max() - voxels[:, 2].min())
+        y_range = float(voxels[:, 1].max() - voxels[:, 1].min())
+        self.assertGreater(z_range, 2.0)
+        self.assertGreaterEqual(z_range, 0.6 * y_range)
+
+    def test_debug_frustum_rotates_with_the_mount(self):
+        # The debug frustum must be transformed with the same camera->robot
+        # matrix as the voxels, so checking it in the viewer is honest.
+        pipeline = self._build_pipeline()
+        pipeline.debug_viz = True
+        pipeline.camera_pitch = 20.0
+        pipeline.camera_height = 0.25
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+
+        def fake_depth(f):
+            rows = np.linspace(0.1, 1.0, f.shape[0], dtype=np.float64)
+            return np.tile(rows[:, None], (1, f.shape[1]))
+
+        pipeline.get_frame = lambda: frame
+        pipeline._is_processable = lambda: True
+        pipeline._infer_depth = fake_depth
+        pipeline._annotate = lambda f, d: f
+        objects, _ = pipeline.run()
+        viz = objects[0].vis_meta["debug_viz"]
+
+        # pitch 20 tilts the view volume up from level: far-top corner must be
+        # the highest point and still ahead of the camera in +Y
+        far = viz["frustum"][4:]
+        self.assertTrue(all(c[1] > 0 for c in far))
+        self.assertGreater(max(c[2] for c in far), min(c[2] for c in far))
+        near = viz["frustum"][:4]
+        # near plane is closer than the far plane along +Y
+        self.assertLess(max(c[1] for c in near), min(c[1] for c in far))
+        self.assertIn("axes_origin", viz)
+        self.assertIn("cam_origin", viz)
+
 
 if __name__ == "__main__":
     unittest.main()
