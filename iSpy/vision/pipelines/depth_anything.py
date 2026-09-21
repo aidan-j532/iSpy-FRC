@@ -332,9 +332,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         # artifact locations are derived, not stored - nothing to persist
         pass
 
-    def _optimized_active(self) -> bool:
-        return getattr(self, "_session", None) is not None
-
     def _is_processable(self) -> bool:
         if getattr(self, "_optimizing", False):
             return False

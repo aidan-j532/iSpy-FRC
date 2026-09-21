@@ -9,6 +9,16 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+
+def _open3d_available() -> bool:
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("open3d") is not None
+    except ImportError:
+        return False
+
+
 # Fake rknnlite (import-order-dependent: monkeypatch sys.modules;
 # works if this file is the FIRST import of iSpy.vision.genericYolo)
 rknnlite_mod = types.ModuleType("rknnlite")
@@ -1036,6 +1046,157 @@ class TestCalibrationGating(unittest.TestCase):
             )
         finally:
             camera.destroy()
+
+
+class TestObjectResetRegression(unittest.TestCase):
+    def test_reset_time_clears_destroyed_and_alive(self):
+        # Bug 3: age an Object past alive_time so update() marks it destroyed,
+        # then reset_time() must clear destroyed/alive so the next update()
+        # does not immediately re-destroy it (the voxel world reuses one
+        # Object forever).
+        import time
+
+        from iSpy.vision.Object import Object
+
+        obj = Object(x=0.0, y=0.0, z=0.0, alive_time=0.01)
+        obj.start_time = time.perf_counter() - 5.0
+        obj.update()
+        self.assertTrue(obj.destroyed)
+
+        obj.reset_time()
+        self.assertFalse(obj.destroyed)
+        self.assertEqual(obj.alive, 0)
+
+        obj.update()
+        self.assertFalse(obj.destroyed, "reset object must not re-destroy")
+
+    def test_tracker_revives_stale_detection(self):
+        # Bug 3: after an object ages out (destroyed -> filtered -> re-appended),
+        # _merge must restart its age clock instead of leaving it permanently
+        # destroyed.
+        import time
+
+        from iSpy.plugins.trackers.BuiltIn.ObjectTracker import ObjectTracker
+        from iSpy.vision.Object import Object
+
+        tracker = ObjectTracker(
+            {
+                "config": {"distance_threshold": 1.0, "stale_threshold": 0.05},
+                "global_config": None,
+            }
+        )
+        obj = Object(x=1.0, y=0.0, z=0.0, name="voxel_world", id=7)
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+
+        # age the object far past its stale threshold so the next tick drops it
+        obj.start_time = time.perf_counter() - 5.0
+        obj.update()
+        self.assertTrue(obj.destroyed)
+
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(
+            len(tracker.tracked_objects),
+            1,
+            "stale-absent detection must be revived, not left destroyed",
+        )
+        # and the revived track must survive the following tick too
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+
+    def test_ekf_tracker_revives_stale_detection(self):
+        import time
+
+        from iSpy.plugins.trackers.BuiltIn.EKFTracker import EKFTracker
+        from iSpy.vision.Object import Object
+
+        tracker = EKFTracker(
+            {
+                "config": {
+                    "process_noise": 0.5,
+                    "measurement_noise": 0.1,
+                    "distance_threshold": 1.0,
+                    "stale_threshold": 0.05,
+                },
+                "global_config": None,
+            }
+        )
+        obj = Object(x=1.0, y=0.0, z=0.0, name="voxel_world", id=7)
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+
+        obj.start_time = time.perf_counter() - 5.0
+        obj.update()
+        self.assertTrue(obj.destroyed)
+
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+
+
+class TestVoxelMapRegression(unittest.TestCase):
+    def test_depth_plane_range_uniform_map_keeps_real_bounds(self):
+        # Bug 5: a fully uniform depth map must not fall back to hardcoded
+        # [0, 1] bounds - it must derive them from the map's real values.
+        from iSpy.vision.voxel_map import depth_plane_range
+
+        depth = np.full((8, 8), 40.0)
+        d_lo, d_hi, z_near, z_far = depth_plane_range(
+            depth, 40.0, 40.0, 10.0, 1.0, 0.3
+        )
+        self.assertAlmostEqual(d_lo, 40.0, places=6)
+        self.assertAlmostEqual(d_hi, 40.0, places=6)
+        self.assertGreater(
+            d_lo, 1.0, "degenerate fallback must not normalize against [0, 1]"
+        )
+        self.assertGreaterEqual(z_far, z_near)
+
+    def test_depth_plane_range_varied_frame_unchanged(self):
+        from iSpy.vision.voxel_map import depth_plane_range
+
+        rng = np.random.default_rng(3)
+        depth = rng.uniform(20.0, 100.0, size=(16, 16))
+        before = depth_plane_range(depth, 20.0, 100.0, 10.0, 1.0, 0.3)
+        after = depth_plane_range(depth, 20.0, 100.0, 10.0, 1.0, 0.3)
+        self.assertEqual(before, after)
+
+    def test_depth_to_camera_points_threads_fy(self):
+        # Bug 4: back-projection must support separate horizontal/vertical
+        # focal lengths so non-square depth maps are not distorted.
+        from iSpy.vision.voxel_map import depth_to_camera_points
+
+        depth = np.full((4, 4), 1.0, dtype=np.float64)
+        pts, px = depth_to_camera_points(depth, 10.0, stride=1, return_pixels=True)
+        base = {(int(p[0]), int(p[1])): pts[i] for i, p in enumerate(px)}
+
+        pts_y, px_y = depth_to_camera_points(
+            depth, 10.0, focal_px_y=5.0, stride=1, return_pixels=True
+        )
+        alt = {(int(p[0]), int(p[1])): pts_y[i] for i, p in enumerate(px_y)}
+
+        self.assertAlmostEqual(base[(0, 0)][0], alt[(0, 0)][0])  # x uses fx
+        self.assertAlmostEqual(base[(0, 0)][1], -0.2, places=6)  # y uses fx
+        self.assertAlmostEqual(alt[(0, 0)][1], -0.4, places=6)  # fy halved -> y doubled
+
+    @unittest.skipUnless(_open3d_available(), "open3d not installed")
+    def test_integrate_merges_distinct_colors_to_mean(self):
+        # Bug 6: two points in the same voxel with distinct colors must merge
+        # their colors (mean), catching a silent np.unique inverse shape
+        # regression on any NumPy version.
+        from iSpy.vision.voxel_map import SparseVoxelMap
+
+        m = SparseVoxelMap(voxel_size=0.1, max_voxels=100)
+        pts = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.05]])
+        cols = np.array([[255.0, 0.0, 0.0], [0.0, 255.0, 0.0]])
+        n = m.integrate(pts, colors=cols)
+        self.assertEqual(n, 1)  # both points land in the same voxel
+        voxels = m.export()
+        self.assertEqual(len(voxels), 1)
+        r, g, b = voxels[0][4], voxels[0][5], voxels[0][6]
+        self.assertAlmostEqual(r, 127.5, delta=1)
+        self.assertAlmostEqual(g, 127.5, delta=1)
+        self.assertAlmostEqual(b, 0.0, delta=1)
 
 
 if __name__ == "__main__":

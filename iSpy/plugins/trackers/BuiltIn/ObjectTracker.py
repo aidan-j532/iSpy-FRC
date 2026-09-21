@@ -79,6 +79,10 @@ class ObjectTracker(TrackerBase):
         for det in detections:
             if not self._exists_and_update(det):
                 det.alive_time = self.stale_threshold
+                # the object may have just been filtered out as destroyed -
+                # reset_time() clears destroyed/alive so re-appending gives it
+                # a fresh age clock instead of an instantly-dead track
+                det.reset_time()
                 self.tracked_objects.append(det)
 
     def _exists_and_update(self, new_det: Object) -> bool:

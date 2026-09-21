@@ -440,6 +440,35 @@ def _wait_for_pipeline_ready(
     logger.info("All camera pipelines ready.")
 
 
+def _ensure_open3d() -> None:
+    """open3d backs the voxel_world pipeline's SparseVoxelMap and is a base
+    dependency of ispy-frc since 2.2.15, so fresh `pip install .` gets it.
+
+    Existing installs that predate the promotion from the old `[voxel]` extra
+    may still be missing it - install it on first boot, exactly like the
+    hardware backend deps in install_special_dependencies do.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("open3d") is not None:
+        logger.debug("open3d already installed - nothing to do.")
+        return
+    logger.warning(
+        "open3d not found - installing it for the voxel_world pipeline "
+        "(base dependency of ispy-frc)..."
+    )
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-q", "open3d>=0.18.0"]
+        )
+        logger.info("open3d installed.")
+    except subprocess.CalledProcessError:
+        logger.error(
+            "Failed to install open3d. The voxel_world pipeline will not be "
+            "available; you can retry with: pip install \"open3d>=0.18.0\""
+        )
+
+
 def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = False):
     _configure_quiet_logging()
     logger.info("ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix)
@@ -466,6 +495,14 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
             logger.exception(
                 "First-boot dependency install failed - continuing boot anyway; "
                 "the relevant pipeline will fall back or error clearly at runtime."
+            )
+
+        try:
+            _ensure_open3d()
+        except Exception:
+            logger.exception(
+                "open3d install check failed - continuing boot anyway; the "
+                "voxel_world pipeline will report it clearly at runtime."
             )
     else:
         setup_files(fresh=False)

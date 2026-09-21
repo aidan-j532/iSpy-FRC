@@ -27,8 +27,10 @@ def _open3d():
             import open3d as o3d
         except ImportError as exc:
             raise RuntimeError(
-                "open3d is required for the voxel world pipeline; install it "
-                'with: pip install "ispy-frc[voxel]"'
+                "open3d is required for the voxel world pipeline and is a base "
+                "dependency of ispy-frc, but it is not importable here. Fresh "
+                'installs get it automatically; fix this one with: pip install '
+                '"open3d>=0.18.0"'
             ) from exc
         _o3d = o3d
     return _o3d
@@ -64,10 +66,21 @@ def depth_plane_range(
         # and only then to a flat plane at a stable mid distance.
         lo, hi = float(d_min), float(d_max)
         if hi - lo <= 1e-9:
+            # Fully degenerate frame (uniform depth). Bounds must stay
+            # consistent with the model's real value range instead of the
+            # hardcoded [0, 1] - a uniform map around 40.0 would otherwise
+            # clip every pixel into [0, 1] and flatten a legitimately varied
+            # depth map to a single distance.
+            f_lo = float(finite.min())
+            f_hi = float(finite.max())
+            if f_hi - f_lo > 1e-9:
+                lo, hi = f_lo, f_hi
+            else:
+                lo = hi = f_lo
             z_near = max(float(near_depth), 1e-3)
             z_far = max(float(max_depth) * float(depth_scale), z_near * 1.0001)
             mid = math.sqrt(z_near * z_far)
-            return 0.0, 1.0, mid, mid
+            return lo, hi, mid, mid
 
     z_near = max(float(near_depth), 1e-3)
     z_cap = max(float(max_depth) * float(depth_scale), z_near * 1.0001)
@@ -168,6 +181,7 @@ def focal_length_pixels(
 def depth_to_camera_points(
     depth: np.ndarray,
     focal_px: float,
+    focal_px_y: float | None = None,
     stride: int = 8,
     return_pixels: bool = False,
 ):
@@ -201,8 +215,9 @@ def depth_to_camera_points(
 
     cx, cy = w / 2.0, h / 2.0
     f = max(float(focal_px), 1e-6)
+    fy = max(float(focal_px_y), 1e-6) if focal_px_y is not None else f
     x = (u - cx) / f * d
-    y = (v - cy) / f * d
+    y = (v - cy) / fy * d
     points = np.stack([x, y, d], axis=1)
     if not return_pixels:
         return points
@@ -311,6 +326,10 @@ class SparseVoxelMap:
         unique, inverse, counts = np.unique(
             indices, axis=0, return_inverse=True, return_counts=True
         )
+        # np.unique(axis=0) has historically returned `inverse` with an extra
+        # trailing dimension on some NumPy 2.0.x builds - flatten it to 1-D so
+        # np.add.at scatters into rgb_sum correctly on every version.
+        inverse = np.asarray(inverse).reshape(-1)
         rgb_sum = np.zeros((unique.shape[0], 3), dtype=np.float64)
         np.add.at(rgb_sum, inverse, col)
 

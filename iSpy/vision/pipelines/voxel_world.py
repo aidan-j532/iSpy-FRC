@@ -498,14 +498,24 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         # FOV belong to the live camera resolution). The depth map can come
         # back at a different resolution (e.g. the HF pipeline sends ~518px
         # tensors), so rescale the focal to the grid we actually back-project
-        # from - otherwise every point lands on the wrong ray.
-        focal = focal_length_pixels(
+        # from - otherwise every point lands on the wrong ray. The horizontal
+        # and vertical squash factors are generally different whenever the
+        # source frame isn't square, so scale fx and fy independently instead
+        # of reusing one focal for both axes.
+        focal_x = focal_length_pixels(
             frame.shape[1], self.calibration, default_fov=60.0
         )
+        focal_y = focal_x  # square pixels: fy in pixels == fx
         if distance.shape[1] != frame.shape[1]:
-            focal = focal * distance.shape[1] / float(max(frame.shape[1], 1))
+            focal_x = focal_x * distance.shape[1] / float(max(frame.shape[1], 1))
+        if distance.shape[0] != frame.shape[0]:
+            focal_y = focal_y * distance.shape[0] / float(max(frame.shape[0], 1))
         cam_points, cam_pixels = depth_to_camera_points(
-            distance, focal, stride=self.pixel_stride, return_pixels=True
+            distance,
+            focal_x,
+            focal_px_y=focal_y,
+            stride=self.pixel_stride,
+            return_pixels=True,
         )
         far_plane_m = float(self.max_depth) * float(self.depth_scale)
         debug.update(
@@ -523,7 +533,8 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             ),
             auto_scale=bool(getattr(self, "auto_world_scale", True)),
             far_plane=round(far_plane_m * self._z_scale, 3),
-            focal=round(float(focal), 1),
+            focal=round(float(focal_x), 1),
+            focal_y=round(float(focal_y), 1),
             depth_w=int(distance.shape[1]),
             frame_w=int(frame.shape[1]),
             back_projected=int(cam_points.shape[0]),
@@ -618,7 +629,8 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                 cam_points,
                 world_all,
                 colors,
-                focal,
+                focal_x,
+                focal_y,
                 distance.shape,
                 ground_offset,
             )
@@ -665,7 +677,8 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         cam_points: np.ndarray,
         world_all: np.ndarray,
         colors: np.ndarray | None,
-        focal: float,
+        focal_x: float,
+        focal_y: float,
         depth_shape: tuple,
         ground_offset: float,
     ) -> dict:
@@ -704,7 +717,9 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         near = float(self._eff_near_depth) * self._z_scale
         far = float(plane[3]) * self._z_scale if plane else near
 
-        frustum = self._frustum_corners_world(depth_shape, focal, near, far, ground_offset)
+        frustum = self._frustum_corners_world(
+            depth_shape, focal_x, focal_y, near, far, ground_offset
+        )
         cam_origin = self._robot_frame([[0.0, 0.0, 0.0]], ground_offset)
         return {
             "raw": raw.tolist(),
@@ -743,7 +758,8 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
     def _frustum_corners_world(
         self,
         depth_shape: tuple,
-        focal: float,
+        focal_x: float,
+        focal_y: float,
         near: float,
         far: float,
         ground_offset: float,
@@ -751,13 +767,14 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         """Near + far image-rectangle corners, same transform as cam points."""
         h, w = depth_shape[0], depth_shape[1]
         cx, cy = w / 2.0, h / 2.0
-        f = max(float(focal), 1e-6)
+        fx = max(float(focal_x), 1e-6)
+        fy = max(float(focal_y), 1e-6)
         corners = []
         for (u, v), z in (
             ((0.0, 0.0), near), ((w, 0.0), near), ((w, h), near), ((0.0, h), near),
             ((0.0, 0.0), far), ((w, 0.0), far), ((w, h), far), ((0.0, h), far),
         ):
-            corners.append(((u - cx) / f * z, (v - cy) / f * z, z))
+            corners.append(((u - cx) / fx * z, (v - cy) / fy * z, z))
         return self._robot_frame(np.asarray(corners, dtype=np.float64), ground_offset)
 
     def _log_geometry_once(self, debug: dict, ground_offset: float) -> None:

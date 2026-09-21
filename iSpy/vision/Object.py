@@ -82,6 +82,12 @@ class Object:
 
     def reset_time(self):
         self.start_time = time.perf_counter()
+        # "restarting the age clock" must also mean "no longer destroyed":
+        # VoxelWorldPipeline reuses one Object forever, so after it gets aged
+        # out (destroyed -> filtered -> re-appended) nothing would ever clear
+        # these without the reset, leaving it permanently destroyed.
+        self.alive = 0
+        self.destroyed = False
 
     def get_position_normally(self) -> tuple[float, float, float]:
         return (self.x, self.y, self.z)

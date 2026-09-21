@@ -39,17 +39,17 @@ dependencies = [
     "onnxruntime>=1.16.0",  # CPU ONNX fallback - works everywhere, used until boot picks a better backend
     "transformers",
     "scipy>=1.10.0",
-]
-
-# Optional pipeline extras. open3d backs the voxel world's occupancy grid; it
-# has no reliable Orange Pi/aarch64 wheels, so it stays an opt-in extra rather
-# than a universal dep - install with: pip install "ispy-frc[voxel]"
-[project.optional-dependencies]
-voxel = [
+    # open3d backs the voxel_world pipeline's SparseVoxelMap occupancy grid.
+    # It ships native wheels for Windows, macOS and Linux on BOTH x86_64 and
+    # ARM64/aarch64 (since 0.14), so it is a universal base dep now rather
+    # than the old opt-in "voxel" extra. boot.py heals pre-existing installs
+    # that predate this change (see boot._ensure_open3d).
     "open3d>=0.18.0",
 ]
+
 # For model training, conversion, and development - x86 only.
 # pip install ".[dev]"   (install-dev.sh handles the rknn-toolkit2 --find-links)
+[project.optional-dependencies]
 dev = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
