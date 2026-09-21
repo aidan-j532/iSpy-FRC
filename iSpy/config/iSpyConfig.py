@@ -272,6 +272,9 @@ class iSpyConfig:
 
         self.default_config = {
             "num_gpus": "auto",
+            "temperature_unit": "fahrenheit",
+            "temperature_warning": 80,
+            
             "device": 0,
             # "frc" = FRC/WPILib convention: outputs in meters (what robot code
             # expects, matches Limelight/PhotonVision), calibration inputs in inches.

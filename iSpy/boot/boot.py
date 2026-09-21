@@ -12,8 +12,6 @@ from pathlib import Path
 
 from PIL import Image
 
-from iSpy.boot.opencv_fix import ensure_csi_capable_opencv
-from iSpy.config.AutoOpt import has_jetson
 from iSpy.config.iSpyConfig import get_pipeline_name, iSpyConfig
 from iSpy.dataset.dataset import get_active_dataset_dir
 from iSpy.validations.validate_system import validate_system
@@ -36,7 +34,7 @@ _ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
 _READINESS_POLL_S = 2.0
 _READINESS_WAIT_TIMEOUT_S = 1200
 
-# grab real stdout/stderr before anything swaps sys.stdout so silencing 3rd-party libs cant kill our logging
+# grab real stdout/stderr before anything swaps sys.stdout so silencing 3rd-party libs cant kill my logging
 _REAL_STDOUT_FD = os.dup(1)
 _REAL_STDERR_FD = os.dup(2)
 _REAL_STDOUT = os.fdopen(_REAL_STDOUT_FD, "w", buffering=1, closefd=False)
@@ -85,9 +83,6 @@ def _bootstrap_default_camera(config: iSpyConfig):
     )
 
 
-# vid/pid (+uvc interface) chunk of a windows-style device id - the trailing
-# instance segment changes whenever a cam moves to another usb port, so
-# presence checks match on this instead of the raw id
 _USB_ID_RE = re.compile(r"VID_[0-9A-F]+&PID_[0-9A-F]+(?:&MI_\d+)?", re.IGNORECASE)
 _IMAGE_SOURCE_EXTS = (".png", ".jpg", ".jpeg", ".bmp")
 
@@ -100,8 +95,7 @@ def _usb_signature(device_id) -> str | None:
 
 
 def _is_non_device_source(source) -> bool:
-    # network streams and image files are not pluggable hardware - never
-    # retire a camera just because no local capture device matches them
+    # network streams and image files are not pluggable hardware, dont report a camera just because no local capture device matches them
     if not isinstance(source, str):
         return False
     return "://" in source or source.lower().endswith(_IMAGE_SOURCE_EXTS)
@@ -124,16 +118,9 @@ def _camera_present(
     if src_str in probed_paths:
         return True
     if isinstance(source, str) and ("/" in source or "\\" in source):
-        # path-like sources (/dev/video0 ...) are stable identities - trust
-        # the filesystem over the probe result
+        # path-like sources (/dev/video0) are more are stable ids
         return os.path.exists(source)
-    if device_id:
-        # hardware identity is known and nothing on the system matched it -
-        # the camera is genuinely unplugged
-        return False
-    # bare index without a device_id: index assignment shifts when cams unplug,
-    # so there is no trustworthy signal here - keep the entry
-    return True
+    return not device_id
 
 
 def cleanup_missing_cameras(config: iSpyConfig) -> None:
@@ -173,14 +160,13 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
     if not missing:
         return
 
-    # never retire everything - validate_system and the vision core both need
-    # at least one configured camera to boot
+    # never retire everythin,  validate_system and the vision core both need at least one configured camera to boot
     if len(missing) >= len(cams):
         kept = next(iter(cams))
         missing = [name for name in missing if name != kept]
         logger.warning(
             "Every configured camera is missing from the system - keeping "
-            "'%s' anyway so the boot still has something to run.",
+            "'%s' anyway so the boot still has something to run. ",
             kept,
         )
 
@@ -205,21 +191,7 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
 
 
 def _consume_game_mode_web_off(config: iSpyConfig) -> None:
-    """One-shot "Game Mode" web-off, armed from Settings > Advanced.
-
-    Two boots are involved:
-
-    * The boot that consumes game_mode_web_off_next_run stashes the current
-      app_mode in game_mode_app_mode_backup, forces app_mode to False for
-      this boot only (so the run process - which reloads config.json fresh -
-      starts with the web UI off), then clears the flag and saves quietly.
-    * The NEXT boot sees game_mode_app_mode_backup and puts app_mode back to
-      the stashed value (web on again), clearing the backup.
-
-    Because every save below persists to disk regardless of how the run
-    finally exits, a crash mid-run can never leave the board stuck with the
-    web UI off forever.
-    """
+    # This is the one time turn off web mode for gaem
     backup = config.get("game_mode_app_mode_backup")
     if backup is not None:
         config.config["app_mode"] = backup
@@ -266,7 +238,7 @@ def _configure_quiet_logging() -> None:
 
     formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
-    # bind to the real stdout captured before sys.stdout gets swapped, so silencing 3rd-party libs cant kill our logging
+    # bind to the real stdout captured before sys.stdout gets swapped, so silencing 3rd-party libs cant kill my logging
     stream_handler = logging.StreamHandler(_REAL_STDOUT)
     stream_handler.setLevel(logging.INFO)
     stream_handler.setFormatter(formatter)
@@ -329,12 +301,7 @@ def setup_files(fresh: bool = False):
 
     pytorch_dir = yolo_dir / "pytorch"
 
-    # Default models (detect, pose, v26 fuel) are no longer bundled in the
-    # repo - they are downloaded on first boot into YoloModels/pytorch/ (see
-    # iSpy.boot.default_models). A failed download (offline board) or an empty
-    # download URL leaves no file behind; the model-backed pipelines already
-    # tolerate a missing model rather than failing boot. Files already present
-    # above the size floor are left alone - no re-downloads.
+    # Default models (detect, pose, v26 fuel) are no longer bundled in the repo
     from iSpy.boot.default_models import (
         download_default_models,
         write_default_models_license,
@@ -441,6 +408,7 @@ def _wait_for_pipeline_ready(
         )
     logger.info("All camera pipelines ready.")
 
+
 def cleanup_broken_images(config: iSpyConfig) -> None:
     # delte/move broken images
     dataset_dir = get_active_dataset_dir()
@@ -484,12 +452,10 @@ def cleanup_broken_images(config: iSpyConfig) -> None:
 
             shutil.move(str(file), str(destination))
 
+
 def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = False):
     _configure_quiet_logging()
     logger.info("ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix)
-
-    # in iSpy/boot/boot.py, inside on_boot(), right after setup_files(fresh=True)
-    # and iSpyConfig construction, before cleanup_missing_cameras:
 
     if fresh:
         logger.info("boot -f: forcefully fresh installation state")
@@ -498,9 +464,7 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
         config = iSpyConfig(config_path, create=True)
         _bootstrap_default_camera(config)
 
-        # fresh install with no prior deps installed - pull in whatever backend
-        # this hardware needs (rknn wheel, onnxruntime-gpu, etc.) so first boot
-        # doesn't fail on a missing import mid-pipeline-construction
+        # fresh install with no prior deps installed - pull in whatever backend it needs (rknn wheel, onnxruntime-gpu, etc.) so first boot doesn't fail on a missing import mid-pipeline-construction
         try:
             from iSpy.vision.optimizer import install_special_dependencies
 
@@ -537,7 +501,6 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
     logger.info("Boot sequence complete.")
 
     # Start UDP announce beacon so tools/find_ispy.py can locate this board
-    # even when mDNS and DHCP hostname resolution both fail.
     try:
         from iSpy.boot.announce import start_announcer
 
@@ -559,19 +522,6 @@ def on_boot(install_service: bool = False, fresh: bool = False, wait: bool = Fal
         logger.info("Skipping service installation. Run with -s to install.")
 
 
-def _any_camera_uses_csi() -> bool:
-    config_path = search_for_config()
-    if not config_path:
-        return False
-    try:
-        with open(config_path) as f:
-            data = json.load(f)
-        cams = data.get("config", data).get("camera_configs", {})
-        return any(c.get("csi", False) for c in cams.values())
-    except Exception:
-        return False
-
-
 def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "-s",
@@ -589,11 +539,6 @@ def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
 
 
 def main():
-    if has_jetson() and _any_camera_uses_csi():
-        if ensure_csi_capable_opencv(auto_fix=True):
-            logger.info("OpenCV fixed - re-executing boot.py to pick it up...")
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-
     parser = argparse.ArgumentParser(description="iSpy boot sequence")
     parser = add_boot_arguments(parser)
     parser.add_argument(
@@ -607,8 +552,7 @@ def main():
     args = parser.parse_args()
     on_boot(install_service=args.service, fresh=args.fresh, wait=args.wait)
 
-    # RKNN/OpenCV native extensions segfault during Python interpreter
-    # teardown on ARM.  Flush everything and hard-exit to avoid it.
+    # Flush everything and hard-exit to avoid Segfualt stuff.
     logging.shutdown()
     sys.stdout.flush()
     sys.stderr.flush()

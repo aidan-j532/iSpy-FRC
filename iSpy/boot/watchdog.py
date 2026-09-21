@@ -4,8 +4,7 @@ import logging
 import sys
 from pathlib import Path
 
-# make the iSpy package importable when this file is run directly with a bare
-# system python (no pip-installed iSpy)
+# make the iSpy package importable when this file is run directly with a bare python
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -29,9 +28,6 @@ def main(argv=None) -> int:
 
     script = argv[1]
 
-    # Single-source the interpreter: the marker written at install time wins
-    # over whatever interpreter launched this script, so the supervised child
-    # always runs under the exact venv iSpy was installed into.
     launcher = sys.executable
     python = resolve_launch_python(fallback=launcher)
     marked = read_marked_python()

@@ -128,19 +128,37 @@
         function ensure() {
           if (!el) {
             el = document.createElement("div");
-            el.className = "conn-banner";
+            el.className = "conn-overlay";
             el.setAttribute("role", "alert");
-            el.textContent = "Connection lost - reconnecting\u2026";
-            const content = document.querySelector("main.content");
-            (content || document.body).prepend(el);
+
+            el.innerHTML = `
+                <div class="conn-overlay-content">
+                    <svg class="conn-overlay-icon" viewBox="0 0 64 64" aria-hidden="true">
+                        <!-- your favicon SVG -->
+                    </svg>
+
+                    <div class="conn-overlay-title">Connection Lost</div>
+                    <div class="conn-overlay-subtitle">
+                        Reconnecting<span class="loading-dots">
+                            <span>.</span><span>.</span><span>.</span>
+                        </span>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(el);
           }
           return el;
         }
         window.connLost = function () {
-          ensure().classList.add("visible");
+            document.body.classList.add("connection-lost");
+            ensure().classList.add("visible");
         };
+
         window.connOk = function () {
-          if (el) el.classList.remove("visible");
+            if (el) {
+                el.classList.remove("visible");
+                document.body.classList.remove("connection-lost");
+            }
         };
         window.connTracker = function (threshold) {
           threshold = threshold || 2;

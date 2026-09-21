@@ -259,7 +259,19 @@ function applyFull(data) {
 function applySystem(sys) {
   document.getElementById('sys-cpu').textContent = sys.cpu_percent != null ? sys.cpu_percent + '%' : '--';
   document.getElementById('sys-mem').textContent = sys.memory_percent != null ? `${sys.memory_percent}% (${sys.memory_used_mb}/${sys.memory_total_mb} MB)` : '--';
-  document.getElementById('sys-temp').textContent = sys.temperature != null ? sys.temperature + '\u00B0C' : '--';
+  const tempUnit = sys.temperature_unit === 'fahrenheit' ? '°F' : '°C';
+
+  document.getElementById('sys-temp').textContent =
+      sys.temperature != null
+          ? sys.temperature + tempUnit
+          : '--';
+  const tempItem = document.getElementById('sys-temp').parentElement;
+
+  if (sys.temperature >= sys.temperature_warning) {
+      tempItem.classList.add('overheating');
+  } else {
+      tempItem.classList.remove('overheating');
+  }
 
   const cpuBarWrap = document.getElementById('cpu-bar-wrap');
   const memBarWrap = document.getElementById('mem-bar-wrap');

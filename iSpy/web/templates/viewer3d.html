@@ -1,36 +1,145 @@
-{% extends "base.html" %}
-{% block title %}3D Viewer - iSpy{% endblock %}
-{% block head %}
+{% extends "base.html" %} {% block title %}3D Viewer - iSpy{% endblock %} {%
+block head %}
 <style>
-.viewer-layout { display:flex; gap:12px; align-items:stretch; }
-#scene-container { flex:1; min-width:0; height:65vh; background:#0a0a0f; border-radius:var(--radius); position:relative; overflow:hidden; }
-#scene-container canvas { display:block; }
-.viewer-panel { width:190px; flex:none; height:65vh; display:flex; flex-direction:column; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px; overflow-y:auto; }
-.panel-title { font-size:0.72rem; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-dim); margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid var(--border); }
-.scale-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
-.axis { width:20px; height:20px; flex:none; display:inline-flex; align-items:center; justify-content:center; border-radius:var(--radius-sm); font-size:0.72rem; font-weight:700; color:#f7f8fa; }
-.axis-x { background:#ff4d4d; }
-.axis-y { background:#3ddc84; }
-.axis-z { background:#4d7eff; }
-.scale-row input[type=range] { flex:1; min-width:0; accent-color:var(--accent); }
-.scale-row input[type=number] { width:60px; flex:none; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:4px 6px; border-radius:var(--radius-sm); font-family:var(--mono); font-size:0.8rem; }
-.scale-hint { font-size:0.72rem; color:var(--text-muted); line-height:1.5; margin-top:2px; }
-#scale-reset { margin-top:auto; }
-.viewer-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
-.viewer-toolbar label { color:var(--text-dim); font-size:0.85rem; display:flex; align-items:center; gap:6px; }
-.viewer-toolbar select { background:var(--bg); color:var(--text); border:1px solid var(--border); padding:4px 8px; border-radius:var(--radius); }
-#object-list { max-height:200px; overflow-y:auto; }
-#object-list table { width:100%; }
-.obj-row td { font-size:0.82rem; }
-.obj-row { cursor:pointer; }
-.obj-row.selected td { background:rgba(76,139,245,0.22); outline:1px solid #4c8bf5; }
-.empty-row-note { color:var(--text-dim); font-size:0.8rem; }
+  .viewer-layout {
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+  }
+  #scene-container {
+    flex: 1;
+    min-width: 0;
+    height: 65vh;
+    background: #0a0a0f;
+    border-radius: var(--radius);
+    position: relative;
+    overflow: hidden;
+  }
+  #scene-container canvas {
+    display: block;
+  }
+  .viewer-panel {
+    width: 190px;
+    flex: none;
+    height: 65vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    overflow-y: auto;
+  }
+  .panel-title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .scale-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .axis {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #f7f8fa;
+  }
+  .axis-x {
+    background: #ff4d4d;
+  }
+  .axis-y {
+    background: #3ddc84;
+  }
+  .axis-z {
+    background: #4d7eff;
+  }
+  .scale-row input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--accent);
+  }
+  .scale-row input[type="number"] {
+    width: 60px;
+    flex: none;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 6px;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono);
+    font-size: 0.8rem;
+  }
+  .scale-hint {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin-top: 2px;
+  }
+  #scale-reset {
+    margin-top: auto;
+  }
+  .viewer-toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .viewer-toolbar label {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .viewer-toolbar select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    border-radius: var(--radius);
+  }
+  #object-list {
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  #object-list table {
+    width: 100%;
+  }
+  .obj-row td {
+    font-size: 0.82rem;
+  }
+  .obj-row {
+    cursor: pointer;
+  }
+  .obj-row.selected td {
+    background: rgba(76, 139, 245, 0.22);
+    outline: 1px solid #4c8bf5;
+  }
+  .empty-row-note {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+  }
 </style>
-{% endblock %}
-{% block content %}
+{% endblock %} {% block content %}
 <h1>3D Detection Viewer</h1>
 <div class="viewer-toolbar">
-  <label>Camera
+  <label
+    >Camera
     <select id="view-preset" onchange="setViewPreset()">
       <option value="default">Default</option>
       <option value="top">Top-down</option>
@@ -38,17 +147,25 @@
       <option value="side">Side</option>
     </select>
   </label>
-  <label style="margin-left:auto;">
-    <input type="checkbox" id="show-grid" checked onchange="toggleGrid()"> Grid
+  <label style="margin-left: auto">
+    <input type="checkbox" id="show-grid" checked onchange="toggleGrid()" />
+    Grid
   </label>
   <label>
-    <input type="checkbox" id="show-axes" checked onchange="toggleAxes()"> Axes
+    <input type="checkbox" id="show-axes" checked onchange="toggleAxes()" />
+    Axes
   </label>
   <label>
-    <input type="checkbox" id="light-bg" onchange="toggleLightBg()"> White BG
+    <input type="checkbox" id="light-bg" onchange="toggleLightBg()" /> White BG
   </label>
   <label>
-    <input type="checkbox" id="show-overlays" checked onchange="toggleOverlays()"> Overlays
+    <input
+      type="checkbox"
+      id="show-overlays"
+      checked
+      onchange="toggleOverlays()"
+    />
+    Overlays
   </label>
 </div>
 <div class="viewer-layout">
@@ -57,694 +174,846 @@
     <div class="panel-title">View Scale</div>
     <div class="scale-row">
       <span class="axis axis-x">X</span>
-      <input type="range" id="scale-x-range" min="-10" max="10" step="0.1" value="1" aria-label="X scale">
-      <input type="number" id="scale-x-value" value="1" step="0.1" aria-label="X scale value">
+      <input
+        type="range"
+        id="scale-x-range"
+        min="-10"
+        max="10"
+        step="0.1"
+        value="1"
+        aria-label="X scale"
+      />
+      <input
+        type="number"
+        id="scale-x-value"
+        value="1"
+        step="0.1"
+        aria-label="X scale value"
+      />
     </div>
     <div class="scale-row">
       <span class="axis axis-y">Y</span>
-      <input type="range" id="scale-y-range" min="-10" max="10" step="0.1" value="1" aria-label="Y scale">
-      <input type="number" id="scale-y-value" value="1" step="0.1" aria-label="Y scale value">
+      <input
+        type="range"
+        id="scale-y-range"
+        min="-10"
+        max="10"
+        step="0.1"
+        value="1"
+        aria-label="Y scale"
+      />
+      <input
+        type="number"
+        id="scale-y-value"
+        value="1"
+        step="0.1"
+        aria-label="Y scale value"
+      />
     </div>
     <div class="scale-row">
       <span class="axis axis-z">Z</span>
-      <input type="range" id="scale-z-range" min="-10" max="10" step="0.1" value="1" aria-label="Z scale">
-      <input type="number" id="scale-z-value" value="1" step="0.1" aria-label="Z scale value">
+      <input
+        type="range"
+        id="scale-z-range"
+        min="-10"
+        max="10"
+        step="0.1"
+        value="1"
+        aria-label="Z scale"
+      />
+      <input
+        type="number"
+        id="scale-z-value"
+        value="1"
+        step="0.1"
+        aria-label="Z scale value"
+      />
     </div>
-    <div class="scale-hint">Scale detections per axis. Set a negative value to flip an axis.</div>
+    <div class="scale-hint">
+      Scale detections per axis. Set a negative value to flip an axis.
+    </div>
     <button type="button" class="btn" id="scale-reset">Reset Scale</button>
   </div>
 </div>
-<div class="card" style="margin-top:12px;">
+<div class="card" style="margin-top: 12px">
   <h3>Detections And Overlays</h3>
   <div id="object-list">
     <table>
-      <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th><th>Pitch</th><th>Yaw</th><th>Roll</th><th>Vis</th></tr></thead>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>X</th>
+          <th>Y</th>
+          <th>Z</th>
+          <th>Pitch</th>
+          <th>Yaw</th>
+          <th>Roll</th>
+          <th>Vis</th>
+        </tr>
+      </thead>
       <tbody id="obj-tbody"></tbody>
     </table>
   </div>
 </div>
 
 <script type="importmap">
-{
-  "imports": {
-    "three": "/static/vendor/three.module.js",
-    "three/addons/": "/static/vendor/",
-    "robotpose": "/static/js/robotpose.js"
+  {
+    "imports": {
+      "three": "/static/vendor/three.module.js",
+      "three/addons/": "/static/vendor/",
+      "robotpose": "/static/js/robotpose.js"
+    }
   }
-}
 </script>
 <script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/OrbitControls.js';
-import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
-import { robotToViewer, robotToViewerQuat } from 'robotpose';
+  import * as THREE from "three";
+  import { OrbitControls } from "three/addons/OrbitControls.js";
+  import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+  import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+  import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
+  import { robotToViewer, robotToViewerQuat } from "robotpose";
 
-const container = document.getElementById('scene-container');
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a0a0f);
-scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
+  const container = document.getElementById("scene-container");
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a0f);
+  scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
 
-const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 200);
-camera.position.set(9, 9, 9);
-camera.lookAt(0, 0, 0);
+  const camera = new THREE.PerspectiveCamera(
+    60,
+    container.clientWidth / container.clientHeight,
+    0.1,
+    200,
+  );
+  camera.position.set(9, 9, 9);
+  camera.lookAt(0, 0, 0);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(container.clientWidth, container.clientHeight);
-renderer.shadowMap.enabled = true;
-container.appendChild(renderer.domElement);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.shadowMap.enabled = true;
+  container.appendChild(renderer.domElement);
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.target.set(0, 0, 0);
-controls.update();
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.target.set(0, 0, 0);
+  controls.update();
 
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-scene.add(ambientLight);
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-dirLight.position.set(5, 10, 5);
-dirLight.castShadow = true;
-scene.add(dirLight);
-const hemiLight = new THREE.HemisphereLight(0x4c8bf5, 0x111318, 0.3);
-scene.add(hemiLight);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambientLight);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(5, 10, 5);
+  dirLight.castShadow = true;
+  scene.add(dirLight);
+  const hemiLight = new THREE.HemisphereLight(0x4c8bf5, 0x111318, 0.3);
+  scene.add(hemiLight);
 
-// --- thick (fat) lines ---
-// WebGL caps LineBasicMaterial linewidth at 1px on most platforms, which makes
-// thin wireframes shimmer/alias at glancing angles. LineSegments2 + LineMaterial
-// render true pixel-width lines instead, so "slightly thicker" actually works.
-const fatMats = [];
-function trackFat(mat) {
-  mat.resolution.set(renderer.domElement.width, renderer.domElement.height);
-  fatMats.push(mat);
-  return mat;
-}
-function updateFatRes() {
-  const r = renderer.domElement;
-  for (const m of fatMats) m.resolution.set(r.width, r.height);
-}
-
-const GRID_EXTENT = 20;
-const GRID_DIVS = 80;
-
-function buildFatGrid(centerColor, gridColor, linewidth) {
-  const positions = [];
-  const half = GRID_EXTENT / 2;
-  const step = GRID_EXTENT / GRID_DIVS;
-  for (let i = 0; i <= GRID_DIVS; i++) {
-    const p = -half + i * step;
-    positions.push(-half, 0, p, half, 0, p);   // line along X
-    positions.push(p, 0, -half, p, 0, half);   // line along Z
+  // --- thick (fat) lines ---
+  // WebGL caps LineBasicMaterial linewidth at 1px on most platforms, which makes
+  // thin wireframes shimmer/alias at glancing angles. LineSegments2 + LineMaterial
+  // render true pixel-width lines instead, so "slightly thicker" actually works.
+  const fatMats = [];
+  function trackFat(mat) {
+    mat.resolution.set(renderer.domElement.width, renderer.domElement.height);
+    fatMats.push(mat);
+    return mat;
   }
-  const segCount = positions.length / 6;
-  const geo = new LineSegmentsGeometry().setPositions(positions);
-  geo.setColors(gridColorArray(segCount, centerColor, gridColor));
-  const mat = trackFat(new LineMaterial({ color: 0xffffff, linewidth, vertexColors: true }));
-  const mesh = new LineSegments2(geo, mat);
-  mesh.userData.segCount = segCount;
-  mesh.frustumCulled = false;
-  return mesh;
-}
+  function updateFatRes() {
+    const r = renderer.domElement;
+    for (const m of fatMats) m.resolution.set(r.width, r.height);
+  }
 
-function gridColorArray(segCount, centerColor, gridColor) {
-  const out = new Float32Array(segCount * 6);
-  const half = GRID_EXTENT / 2;
-  const step = GRID_EXTENT / GRID_DIVS;
-  const cc = new THREE.Color(centerColor);
-  const cg = new THREE.Color(gridColor);
-  let s = 0;
-  for (let i = 0; i <= GRID_DIVS; i++) {
-    const isCenter = Math.abs(-half + i * step) < step * 0.5;
-    const c = isCenter ? cc : cg;
-    for (let l = 0; l < 2; l++) {
-      out[s++] = c.r; out[s++] = c.g; out[s++] = c.b;
-      out[s++] = c.r; out[s++] = c.g; out[s++] = c.b;
+  const GRID_EXTENT = 20;
+  const GRID_DIVS = 80;
+
+  function buildFatGrid(centerColor, gridColor, linewidth) {
+    const positions = [];
+    const half = GRID_EXTENT / 2;
+    const step = GRID_EXTENT / GRID_DIVS;
+    for (let i = 0; i <= GRID_DIVS; i++) {
+      const p = -half + i * step;
+      positions.push(-half, 0, p, half, 0, p); // line along X
+      positions.push(p, 0, -half, p, 0, half); // line along Z
+    }
+    const segCount = positions.length / 6;
+    const geo = new LineSegmentsGeometry().setPositions(positions);
+    geo.setColors(gridColorArray(segCount, centerColor, gridColor));
+    const mat = trackFat(
+      new LineMaterial({ color: 0xffffff, linewidth, vertexColors: true }),
+    );
+    const mesh = new LineSegments2(geo, mat);
+    mesh.userData.segCount = segCount;
+    mesh.frustumCulled = false;
+    return mesh;
+  }
+
+  function gridColorArray(segCount, centerColor, gridColor) {
+    const out = new Float32Array(segCount * 6);
+    const half = GRID_EXTENT / 2;
+    const step = GRID_EXTENT / GRID_DIVS;
+    const cc = new THREE.Color(centerColor);
+    const cg = new THREE.Color(gridColor);
+    let s = 0;
+    for (let i = 0; i <= GRID_DIVS; i++) {
+      const isCenter = Math.abs(-half + i * step) < step * 0.5;
+      const c = isCenter ? cc : cg;
+      for (let l = 0; l < 2; l++) {
+        out[s++] = c.r;
+        out[s++] = c.g;
+        out[s++] = c.b;
+        out[s++] = c.r;
+        out[s++] = c.g;
+        out[s++] = c.b;
+      }
+    }
+    return out;
+  }
+
+  function setGridColors(centerColor, gridColor) {
+    const colors = gridColorArray(
+      gridHelper.userData.segCount,
+      centerColor,
+      gridColor,
+    );
+    const attrs = gridHelper.geometry.attributes;
+    if (attrs.instanceColorStart && attrs.instanceColorStart.data) {
+      attrs.instanceColorStart.data.array.set(colors);
+      attrs.instanceColorStart.data.needsUpdate = true;
     }
   }
-  return out;
-}
 
-function setGridColors(centerColor, gridColor) {
-  const colors = gridColorArray(gridHelper.userData.segCount, centerColor, gridColor);
-  const attrs = gridHelper.geometry.attributes;
-  if (attrs.instanceColorStart && attrs.instanceColorStart.data) {
-    attrs.instanceColorStart.data.array.set(colors);
-    attrs.instanceColorStart.data.needsUpdate = true;
-  }
-}
+  const gridHelper = buildFatGrid(0x2a2e38, 0x1a1d24, 1.6);
+  scene.add(gridHelper);
 
-const gridHelper = buildFatGrid(0x2a2e38, 0x1a1d24, 1.6);
-scene.add(gridHelper);
-
-function solidAxes(size) {
-  // Solid-color X/Y/Z axes as 3D geometry (shaft + cone tip). Lines rendered
-  // as polylines - even the fat-line shader - calculate NaN when a segment is
-  // viewed nearly end-on, which makes them flicker/disappear while orbiting.
-  // Solid cylinders project cleanly from every angle.
-  const R = Math.max(0.015, size * 0.004);
-  function axis(len, color) {
-    const mat = new THREE.MeshStandardMaterial({
-      color, emissive: color, emissiveIntensity: 0.25, fog: false,
+  function solidAxes(size) {
+    // Solid-color X/Y/Z axes as 3D geometry (shaft + cone tip). Lines rendered
+    // as polylines - even the fat-line shader - calculate NaN when a segment is
+    // viewed nearly end-on, which makes them flicker/disappear while orbiting.
+    // Solid cylinders project cleanly from every angle.
+    const R = Math.max(0.015, size * 0.004);
+    function axis(len, color) {
+      const mat = new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.25,
+        fog: false,
+      });
+      const grp = new THREE.Group();
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(R, R, len, 10),
+        mat,
+      );
+      shaft.position.y = len / 2;
+      const tip = new THREE.Mesh(
+        new THREE.ConeGeometry(R * 2.4, R * 6, 10),
+        mat,
+      );
+      tip.position.y = len + R * 3;
+      grp.add(shaft, tip);
+      return grp;
+    }
+    const x = axis(size, 0xff0000);
+    x.rotation.z = -Math.PI / 2; // +X
+    const y = axis(size, 0x00ff00); // +Y
+    const z = axis(size, 0x0000ff);
+    z.rotation.x = Math.PI / 2; // +Z
+    const g = new THREE.Group();
+    g.add(x, y, z);
+    g.traverse((o) => {
+      if (o.isMesh) o.frustumCulled = false;
     });
-    const grp = new THREE.Group();
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(R, R, len, 10), mat);
-    shaft.position.y = len / 2;
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(R * 2.4, R * 6, 10), mat);
-    tip.position.y = len + R * 3;
-    grp.add(shaft, tip);
-    return grp;
+    return g;
   }
-  const x = axis(size, 0xff0000); x.rotation.z = -Math.PI / 2; // +X
-  const y = axis(size, 0x00ff00);                              // +Y
-  const z = axis(size, 0x0000ff); z.rotation.x = Math.PI / 2;  // +Z
-  const g = new THREE.Group();
-  g.add(x, y, z);
-  g.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
-  return g;
-}
-const axesHelper = solidAxes(8);
-scene.add(axesHelper);
+  const axesHelper = solidAxes(8);
+  scene.add(axesHelper);
 
-// detections and overlays live in this group so the per-axis scale controls
-// can transform them without touching the grid or axes.
-const worldGroup = new THREE.Group();
-scene.add(worldGroup);
+  // detections and overlays live in this group so the per-axis scale controls
+  // can transform them without touching the grid or axes.
+  const worldGroup = new THREE.Group();
+  scene.add(worldGroup);
 
-window.toggleGrid = function() {
-  gridHelper.visible = document.getElementById('show-grid').checked;
-};
-window.toggleAxes = function() {
-  axesHelper.visible = document.getElementById('show-axes').checked;
-};
-let lightBg = false;
-window.toggleLightBg = function() {
-  lightBg = document.getElementById('light-bg').checked;
-  if (lightBg) {
-    scene.background = new THREE.Color(0xf0f0f0);
-    scene.fog = null;
-    setGridColors(0x888888, 0xcccccc);
-    container.style.background = '#f0f0f0';
-  } else {
-    scene.background = new THREE.Color(0x0a0a0f);
-    scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
-    setGridColors(0x2a2e38, 0x1a1d24);
-    container.style.background = '#0a0a0f';
+  window.toggleGrid = function () {
+    gridHelper.visible = document.getElementById("show-grid").checked;
+  };
+  window.toggleAxes = function () {
+    axesHelper.visible = document.getElementById("show-axes").checked;
+  };
+  let lightBg = false;
+  window.toggleLightBg = function () {
+    lightBg = document.getElementById("light-bg").checked;
+    if (lightBg) {
+      scene.background = new THREE.Color(0xf0f0f0);
+      scene.fog = null;
+      setGridColors(0x888888, 0xcccccc);
+      container.style.background = "#f0f0f0";
+    } else {
+      scene.background = new THREE.Color(0x0a0a0f);
+      scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
+      setGridColors(0x2a2e38, 0x1a1d24);
+      container.style.background = "#0a0a0f";
+    }
+  };
+
+  const PRESETS = {
+    default: { pos: [9, 9, 9], target: [0, 0, 0] },
+    top: { pos: [0, 22, 0.01], target: [0, 0, 0] },
+    front: { pos: [0, 2, 18], target: [0, 0, 0] },
+    side: { pos: [18, 2, 0], target: [0, 0, 0] },
+  };
+  window.setViewPreset = function () {
+    const p =
+      PRESETS[document.getElementById("view-preset").value] || PRESETS.default;
+    camera.position.set(...p.pos);
+    controls.target.set(...p.target);
+    controls.update();
+  };
+
+  // --- constants ---
+  const GRID_UNIT = 0.25;
+  const CUBE_SIZE = 0.25;
+  const DOT_RADIUS = 0.05;
+  const BOX_COLOR = 0x4c8bf5;
+
+  // --- helpers ---
+  function disposeMesh(obj) {
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) {
+      if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+      else obj.material.dispose();
+    }
+    if (obj.children) {
+      for (const c of obj.children.slice()) disposeMesh(c);
+    }
   }
-};
 
-const PRESETS = {
-  default: { pos: [9, 9, 9], target: [0, 0, 0] },
-  top: { pos: [0, 22, 0.01], target: [0, 0, 0] },
-  front: { pos: [0, 2, 18], target: [0, 0, 0] },
-  side: { pos: [18, 2, 0], target: [0, 0, 0] },
-};
-window.setViewPreset = function() {
-  const p = PRESETS[document.getElementById('view-preset').value] || PRESETS.default;
-  camera.position.set(...p.pos);
-  controls.target.set(...p.target);
-  controls.update();
-};
-
-// --- constants ---
-const GRID_UNIT = 0.25;
-const CUBE_SIZE = 0.25;
-const DOT_RADIUS = 0.05;
-const BOX_COLOR = 0x4c8bf5;
-
-// --- helpers ---
-function disposeMesh(obj) {
-  if (obj.geometry) obj.geometry.dispose();
-  if (obj.material) {
-    if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
-    else obj.material.dispose();
+  // Pixel-width line wrapper used for all detection/overlay wireframes.
+  function makeFatEdges(edgesGeo, color, opacity, linewidth) {
+    const geo = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeo);
+    const mat = trackFat(
+      new LineMaterial({
+        color,
+        transparent: true,
+        opacity,
+        linewidth,
+      }),
+    );
+    return new LineSegments2(geo, mat);
   }
-  if (obj.children) {
-    for (const c of obj.children.slice()) disposeMesh(c);
+
+  function toViewer(px, py, pz) {
+    const [x, y, z] = robotToViewer(px, py, pz);
+    return new THREE.Vector3(x, y, z);
   }
-}
 
-// Pixel-width line wrapper used for all detection/overlay wireframes.
-function makeFatEdges(edgesGeo, color, opacity, linewidth) {
-  const geo = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeo);
-  const mat = trackFat(new LineMaterial({
-    color, transparent: true, opacity, linewidth,
-  }));
-  return new LineSegments2(geo, mat);
-}
+  // ============================================================
+  // Detection renderers (existing -- renders vision detections)
+  // ============================================================
 
-function toViewer(px, py, pz) {
-  const [x, y, z] = robotToViewer(px, py, pz);
-  return new THREE.Vector3(x, y, z);
-}
-
-// ============================================================
-// Detection renderers (existing -- renders vision detections)
-// ============================================================
-
-function makeCubeMarker() {
-  const geo = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
-  const mat = new THREE.MeshStandardMaterial({ color: BOX_COLOR, transparent: true, opacity: 0.85 });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
-  const wireGeo = new THREE.EdgesGeometry(geo);
-  mesh.add(makeFatEdges(wireGeo, 0xffffff, 0.3, 2));
-  return mesh;
-}
-
-function updateCubeMarker(mesh, o) {
-  mesh.position.copy(toViewer(o.x, o.y, o.z));
-  // Object roll/pitch/yaw are robot-frame (R = Rz(yaw)*Ry(pitch)*Rx(roll), the
-  // order _matrix_to_euler decodes), so move them into the viewer frame as a
-  // quaternion. A frame-swapped euler folds tilted objects into the wrong plane.
-  mesh.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
-  // selected target gets a distinct, brighter outline
-  const wire = mesh.children.find(c => c.isLineSegments || c.isLineSegments2);
-  if (wire) {
-    wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
-    wire.material.opacity = selectedId === o.id ? 0.9 : 0.3;
+  function makeCubeMarker() {
+    const geo = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
+    const mat = new THREE.MeshStandardMaterial({
+      color: BOX_COLOR,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    const wireGeo = new THREE.EdgesGeometry(geo);
+    mesh.add(makeFatEdges(wireGeo, 0xffffff, 0.3, 2));
+    return mesh;
   }
-}
 
-function makePlanarMarker(o) {
-  const g = new THREE.Group();
-  const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
-  const planeGeo = new THREE.PlaneGeometry(size, size);
-  const planeMat = new THREE.MeshStandardMaterial({
-    color: 0xffaa00, transparent: true, opacity: 0.75, side: THREE.DoubleSide,
-  });
-  g.add(new THREE.Mesh(planeGeo, planeMat));
-  g.add(makeFatEdges(new THREE.EdgesGeometry(planeGeo), 0xffffff, 0.5, 2));
-  const tagAxes = solidAxes(size * 0.6);
-  g.add(tagAxes);
-  g.userData.planarSize = size;
-  return g;
-}
-
-function updatePlanarMarker(g, o) {
-  g.position.copy(toViewer(o.x, o.y, o.z));
-  // same convention as updateCubeMarker: eulers are robot-frame ZYX, applied
-  // as a quaternion so the tag tilts the way it actually tilts on the field
-  g.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
-  const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
-  g.scale.setScalar(size / (g.userData.planarSize || size));
-  // selected target gets a distinct outline color
-  const wire = g.children.find(c => c.isLineSegments || c.isLineSegments2);
-  if (wire) {
-    wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
-    wire.material.opacity = selectedId === o.id ? 0.9 : 0.5;
+  function updateCubeMarker(mesh, o) {
+    mesh.position.copy(toViewer(o.x, o.y, o.z));
+    // Object roll/pitch/yaw are robot-frame (R = Rz(yaw)*Ry(pitch)*Rx(roll), the
+    // order _matrix_to_euler decodes), so move them into the viewer frame as a
+    // quaternion. A frame-swapped euler folds tilted objects into the wrong plane.
+    mesh.quaternion.set(
+      ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+    );
+    // selected target gets a distinct, brighter outline
+    const wire = mesh.children.find(
+      (c) => c.isLineSegments || c.isLineSegments2,
+    );
+    if (wire) {
+      wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
+      wire.material.opacity = selectedId === o.id ? 0.9 : 0.3;
+    }
   }
-}
 
-function buildPointCloud(kpts3d) {
-  const g = new THREE.Group();
-  const pts = kpts3d.map(k => toViewer(k[0], k[1], k[2]));
-  const dotGeo = new THREE.SphereGeometry(DOT_RADIUS, 12, 12);
-  const dotMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
-  for (const p of pts) {
-    const m = new THREE.Mesh(dotGeo, dotMat);
-    m.position.copy(p);
-    g.add(m);
+  function makePlanarMarker(o) {
+    const g = new THREE.Group();
+    const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
+    const planeGeo = new THREE.PlaneGeometry(size, size);
+    const planeMat = new THREE.MeshStandardMaterial({
+      color: 0xffaa00,
+      transparent: true,
+      opacity: 0.75,
+      side: THREE.DoubleSide,
+    });
+    g.add(new THREE.Mesh(planeGeo, planeMat));
+    g.add(makeFatEdges(new THREE.EdgesGeometry(planeGeo), 0xffffff, 0.5, 2));
+    const tagAxes = solidAxes(size * 0.6);
+    g.add(tagAxes);
+    g.userData.planarSize = size;
+    return g;
   }
-  g.userData.dotRadius = DOT_RADIUS;
-  return g;
-}
 
-function updatePointCloud(g, kpts3d) {
-  const pts = kpts3d.map(k => toViewer(k[0], k[1], k[2]));
-  while (g.children.length < pts.length) {
-    const dotGeo = new THREE.SphereGeometry(g.userData.dotRadius || DOT_RADIUS, 12, 12);
+  function updatePlanarMarker(g, o) {
+    g.position.copy(toViewer(o.x, o.y, o.z));
+    // same convention as updateCubeMarker: eulers are robot-frame ZYX, applied
+    // as a quaternion so the tag tilts the way it actually tilts on the field
+    g.quaternion.set(
+      ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+    );
+    const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
+    g.scale.setScalar(size / (g.userData.planarSize || size));
+    // selected target gets a distinct outline color
+    const wire = g.children.find((c) => c.isLineSegments || c.isLineSegments2);
+    if (wire) {
+      wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
+      wire.material.opacity = selectedId === o.id ? 0.9 : 0.5;
+    }
+  }
+
+  function buildPointCloud(kpts3d) {
+    const g = new THREE.Group();
+    const pts = kpts3d.map((k) => toViewer(k[0], k[1], k[2]));
+    const dotGeo = new THREE.SphereGeometry(DOT_RADIUS, 12, 12);
     const dotMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
-    g.add(new THREE.Mesh(dotGeo, dotMat));
+    for (const p of pts) {
+      const m = new THREE.Mesh(dotGeo, dotMat);
+      m.position.copy(p);
+      g.add(m);
+    }
+    g.userData.dotRadius = DOT_RADIUS;
+    return g;
   }
-  while (g.children.length > pts.length) {
-    const extra = g.children.pop();
-    disposeMesh(extra);
+
+  function updatePointCloud(g, kpts3d) {
+    const pts = kpts3d.map((k) => toViewer(k[0], k[1], k[2]));
+    while (g.children.length < pts.length) {
+      const dotGeo = new THREE.SphereGeometry(
+        g.userData.dotRadius || DOT_RADIUS,
+        12,
+        12,
+      );
+      const dotMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
+      g.add(new THREE.Mesh(dotGeo, dotMat));
+    }
+    while (g.children.length > pts.length) {
+      const extra = g.children.pop();
+      disposeMesh(extra);
+    }
+    for (let i = 0; i < pts.length; i++) {
+      g.children[i].position.copy(pts[i]);
+    }
   }
-  for (let i = 0; i < pts.length; i++) {
-    g.children[i].position.copy(pts[i]);
+
+  const VIS_RENDERERS = {
+    generic: { create: () => makeCubeMarker(), update: updateCubeMarker },
+    points: {
+      create: (o) => buildPointCloud(o.keypoints_3d),
+      update: (g, o) => updatePointCloud(g, o.keypoints_3d),
+    },
+    planar: { create: (o) => makePlanarMarker(o), update: updatePlanarMarker },
+  };
+
+  function resolveVisType(o) {
+    const hasKp = o.keypoints_3d && o.keypoints_3d.length >= 3;
+    if (hasKp) return "points";
+    if (o.vis_type && VIS_RENDERERS[o.vis_type]) return o.vis_type;
+    return "generic";
   }
-}
 
-const VIS_RENDERERS = {
-  generic: { create: () => makeCubeMarker(),     update: updateCubeMarker },
-  points:  { create: (o) => buildPointCloud(o.keypoints_3d),
-             update: (g, o) => updatePointCloud(g, o.keypoints_3d) },
-  planar:  { create: (o) => makePlanarMarker(o), update: updatePlanarMarker },
-};
+  // detection sync
+  const boxes = {};
+  // the currently selected target's id (drives row + marker highlight).
+  // kept in sync with the target_selector /api status endpoint each poll.
+  let selectedId = null;
 
-function resolveVisType(o) {
-  const hasKp = o.keypoints_3d && o.keypoints_3d.length >= 3;
-  if (hasKp) return "points";
-  if (o.vis_type && VIS_RENDERERS[o.vis_type]) return o.vis_type;
-  return "generic";
-}
-
-// detection sync
-const boxes = {};
-// the currently selected target's id (drives row + marker highlight).
-// kept in sync with the target_selector /api status endpoint each poll.
-let selectedId = null;
-
-function createBoxForDetection(o) {
-  const key = o.id;
-  const visType = resolveVisType(o);
-  const prev = boxes[key];
-  if (prev) {
-    if (prev.userData.visType === visType) return prev;
-    cleanupBox(key);
-  }
-  const renderer = VIS_RENDERERS[visType] || VIS_RENDERERS.generic;
-  const obj3d = renderer.create(o);
-  obj3d.userData.visType = visType;
-  worldGroup.add(obj3d);
-  return obj3d;
-}
-
-function updateExistingBox(obj3d, o) {
-  const visType = obj3d.userData.visType || "generic";
-  const renderer = VIS_RENDERERS[visType] || VIS_RENDERERS.generic;
-  renderer.update(obj3d, o);
-}
-
-function cleanupBox(key) {
-  const obj = boxes[key];
-  if (!obj) return;
-  // boxes live under worldGroup, not scene
-  worldGroup.remove(obj);
-  disposeMesh(obj);
-  delete boxes[key];
-}
-
-function syncDetections(objects) {
-  const seen = new Set();
-  for (const o of objects) {
-    seen.add(o.id);
+  function createBoxForDetection(o) {
     const key = o.id;
     const visType = resolveVisType(o);
-    if (!boxes[key]) {
-      boxes[key] = createBoxForDetection(o);
-    } else if (boxes[key].userData.visType !== visType) {
-      boxes[key] = createBoxForDetection(o);
-    } else {
-      updateExistingBox(boxes[key], o);
+    const prev = boxes[key];
+    if (prev) {
+      if (prev.userData.visType === visType) return prev;
+      cleanupBox(key);
     }
+    const renderer = VIS_RENDERERS[visType] || VIS_RENDERERS.generic;
+    const obj3d = renderer.create(o);
+    obj3d.userData.visType = visType;
+    worldGroup.add(obj3d);
+    return obj3d;
   }
-  for (const k in boxes) {
-    const idNum = parseInt(k, 10);
-    if (!isNaN(idNum) && !seen.has(idNum)) {
-      cleanupBox(k);
+
+  function updateExistingBox(obj3d, o) {
+    const visType = obj3d.userData.visType || "generic";
+    const renderer = VIS_RENDERERS[visType] || VIS_RENDERERS.generic;
+    renderer.update(obj3d, o);
+  }
+
+  function cleanupBox(key) {
+    const obj = boxes[key];
+    if (!obj) return;
+    // boxes live under worldGroup, not scene
+    worldGroup.remove(obj);
+    disposeMesh(obj);
+    delete boxes[key];
+  }
+
+  function syncDetections(objects) {
+    const seen = new Set();
+    for (const o of objects) {
+      seen.add(o.id);
+      const key = o.id;
+      const visType = resolveVisType(o);
+      if (!boxes[key]) {
+        boxes[key] = createBoxForDetection(o);
+      } else if (boxes[key].userData.visType !== visType) {
+        boxes[key] = createBoxForDetection(o);
+      } else {
+        updateExistingBox(boxes[key], o);
+      }
     }
-  }
-}
-
-// ============================================================
-// Overlay renderers (generic -- any add-on can push overlays)
-//
-// Each renderer is a { create(overlay), update(mesh, overlay) }
-// pair keyed by the overlay's "type" field.  Add-ons push
-// overlay dicts via Viewer3DModule.add_overlay(); the frontend
-// renders them through this registry.
-// ============================================================
-
-function parseColor(hex, fallback) {
-  if (!hex) return fallback;
-  try { return parseInt(hex.replace('#', ''), 16); } catch { return fallback; }
-}
-
-const OVERLAY_RENDERERS = {
-  box: {
-    create(o) {
-      const d = o.data || {};
-      const w = d.width || 0.5, h = d.height || 0.5, dep = d.depth || 0.5;
-      const geo = new THREE.BoxGeometry(w, h, dep);
-      const col = parseColor(o.color, 0x4c8bf5);
-      const mat = new THREE.MeshStandardMaterial({ color: col, transparent: true, opacity: 0.8 });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.castShadow = true;
-      const wireGeo = new THREE.EdgesGeometry(geo);
-      mesh.add(makeFatEdges(wireGeo, 0xffffff, 0.25, 2));
-      return mesh;
-    },
-    update(mesh, o) {
-      mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
-      mesh.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
-    },
-  },
-
-  sphere: {
-    create(o) {
-      const d = o.data || {};
-      const r = d.radius || 0.25;
-      const geo = new THREE.SphereGeometry(r, 20, 20);
-      const col = parseColor(o.color, 0x4caf50);
-      const mat = new THREE.MeshStandardMaterial({ color: col, transparent: true, opacity: 0.8 });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.castShadow = true;
-      return mesh;
-    },
-    update(mesh, o) {
-      mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
-      mesh.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
-    },
-  },
-
-  camera: {
-    create(o) {
-      const g = new THREE.Group();
-      // body: small rectangular camera box, LONG along +Z (look direction),
-      // narrow side to side - like a Limelight/Lifecam body.
-      const bw = 0.15, bh = 0.13, bd = 0.28;
-      const bodyGeo = new THREE.BoxGeometry(bw, bh, bd);
-      const bodyMat = new THREE.MeshStandardMaterial({
-        color: 0x232732, roughness: 0.55, metalness: 0.35,
-      });
-      const body = new THREE.Mesh(bodyGeo, bodyMat);
-      body.castShadow = true;
-      body.add(makeFatEdges(new THREE.EdgesGeometry(bodyGeo), 0xffffff, 0.55, 1.5));
-      g.add(body);
-      // lens barrel on the front face (+Z)
-      const barrelGeo = new THREE.CylinderGeometry(0.045, 0.05, 0.05, 20);
-      const barrelMat = new THREE.MeshStandardMaterial({
-        color: 0x0d0f13, roughness: 0.3, metalness: 0.6,
-      });
-      const barrel = new THREE.Mesh(barrelGeo, barrelMat);
-      barrel.rotation.x = Math.PI / 2; // cylinder axis onto +Z
-      barrel.position.z = bd / 2 + 0.025;
-      g.add(barrel);
-      // glass - the glowing dot that makes "this face is the front" obvious
-      const glassGeo = new THREE.CircleGeometry(0.037, 24);
-      const glassMat = new THREE.MeshStandardMaterial({
-        color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.35,
-        roughness: 0.15, side: THREE.DoubleSide,
-      });
-      const glass = new THREE.Mesh(glassGeo, glassMat);
-      glass.position.z = bd / 2 + 0.055;
-      g.add(glass);
-      return g;
-    },
-    update(g, o) {
-      g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
-      g.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
-    },
-  },
-
-  group: {
-    create(o) {
-      const g = new THREE.Group();
-      g.userData.overlayDef = o;
-      return g;
-    },
-    update(g, o) {
-      g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
-      g.quaternion.set(...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0));
-      const children = (o.data && o.data.children) || [];
-      syncOverlayChildren(g, children);
-    },
-  },
-};
-
-function syncOverlayChildren(group, childrenDef) {
-  const existing = group.userData.childMeshes || {};
-  const seen = new Set();
-  for (const childDef of childrenDef) {
-    const cid = childDef.id || (childDef.type + '_' + seen.size);
-    seen.add(cid);
-    const renderer = OVERLAY_RENDERERS[childDef.type];
-    if (!renderer) continue;
-    if (!existing[cid]) {
-      const mesh = renderer.create(childDef);
-      mesh.userData.overlayId = cid;
-      group.add(mesh);
-      existing[cid] = { mesh, def: childDef, type: childDef.type };
-    } else {
-      const entry = existing[cid];
-      if (entry.type === childDef.type) {
-        renderer.update(entry.mesh, childDef);
+    for (const k in boxes) {
+      const idNum = parseInt(k, 10);
+      if (!isNaN(idNum) && !seen.has(idNum)) {
+        cleanupBox(k);
       }
     }
   }
-  for (const cid in existing) {
-    if (!seen.has(cid)) {
-      group.remove(existing[cid].mesh);
-      disposeMesh(existing[cid].mesh);
-      delete existing[cid];
+
+  // ============================================================
+  // Overlay renderers (generic -- any add-on can push overlays)
+  //
+  // Each renderer is a { create(overlay), update(mesh, overlay) }
+  // pair keyed by the overlay's "type" field.  Add-ons push
+  // overlay dicts via Viewer3DModule.add_overlay(); the frontend
+  // renders them through this registry.
+  // ============================================================
+
+  function parseColor(hex, fallback) {
+    if (!hex) return fallback;
+    try {
+      return parseInt(hex.replace("#", ""), 16);
+    } catch {
+      return fallback;
     }
   }
-  group.userData.childMeshes = existing;
-}
 
-// overlay sync
-const overlayMeshes = {};
+  const OVERLAY_RENDERERS = {
+    box: {
+      create(o) {
+        const d = o.data || {};
+        const w = d.width || 0.5,
+          h = d.height || 0.5,
+          dep = d.depth || 0.5;
+        const geo = new THREE.BoxGeometry(w, h, dep);
+        const col = parseColor(o.color, 0x4c8bf5);
+        const mat = new THREE.MeshStandardMaterial({
+          color: col,
+          transparent: true,
+          opacity: 0.8,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.castShadow = true;
+        const wireGeo = new THREE.EdgesGeometry(geo);
+        mesh.add(makeFatEdges(wireGeo, 0xffffff, 0.25, 2));
+        return mesh;
+      },
+      update(mesh, o) {
+        mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
+        mesh.quaternion.set(
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+        );
+      },
+    },
 
-function syncOverlays(overlays) {
-  const seen = new Set();
-  for (const o of overlays) {
-    const id = o.id;
-    if (!id) continue;
-    seen.add(id);
-    const renderer = OVERLAY_RENDERERS[o.type];
-    if (!renderer) continue;
-    if (!overlayMeshes[id]) {
-      const mesh = renderer.create(o);
-      mesh.userData.overlayId = id;
-      worldGroup.add(mesh);
-      overlayMeshes[id] = { mesh, type: o.type };
-    } else if (overlayMeshes[id].type === o.type) {
-      renderer.update(overlayMeshes[id].mesh, o);
+    sphere: {
+      create(o) {
+        const d = o.data || {};
+        const r = d.radius || 0.25;
+        const geo = new THREE.SphereGeometry(r, 20, 20);
+        const col = parseColor(o.color, 0x4caf50);
+        const mat = new THREE.MeshStandardMaterial({
+          color: col,
+          transparent: true,
+          opacity: 0.8,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.castShadow = true;
+        return mesh;
+      },
+      update(mesh, o) {
+        mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
+        mesh.quaternion.set(
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+        );
+      },
+    },
+
+    camera: {
+      create(o) {
+        const g = new THREE.Group();
+        // body: small rectangular camera box, LONG along +Z (look direction),
+        // narrow side to side - like a Limelight/Lifecam body.
+        const bw = 0.15,
+          bh = 0.13,
+          bd = 0.28;
+        const bodyGeo = new THREE.BoxGeometry(bw, bh, bd);
+        const bodyMat = new THREE.MeshStandardMaterial({
+          color: 0x232732,
+          roughness: 0.55,
+          metalness: 0.35,
+        });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.castShadow = true;
+        body.add(
+          makeFatEdges(new THREE.EdgesGeometry(bodyGeo), 0xffffff, 0.55, 1.5),
+        );
+        g.add(body);
+        // lens barrel on the front face (+Z)
+        const barrelGeo = new THREE.CylinderGeometry(0.045, 0.05, 0.05, 20);
+        const barrelMat = new THREE.MeshStandardMaterial({
+          color: 0x0d0f13,
+          roughness: 0.3,
+          metalness: 0.6,
+        });
+        const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+        barrel.rotation.x = Math.PI / 2; // cylinder axis onto +Z
+        barrel.position.z = bd / 2 + 0.025;
+        g.add(barrel);
+        // glass - the glowing dot that makes "this face is the front" obvious
+        const glassGeo = new THREE.CircleGeometry(0.037, 24);
+        const glassMat = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          emissive: 0xffffff,
+          emissiveIntensity: 0.35,
+          roughness: 0.15,
+          side: THREE.DoubleSide,
+        });
+        const glass = new THREE.Mesh(glassGeo, glassMat);
+        glass.position.z = bd / 2 + 0.055;
+        g.add(glass);
+        return g;
+      },
+      update(g, o) {
+        g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
+        g.quaternion.set(
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+        );
+      },
+    },
+
+    group: {
+      create(o) {
+        const g = new THREE.Group();
+        g.userData.overlayDef = o;
+        return g;
+      },
+      update(g, o) {
+        g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
+        g.quaternion.set(
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+        );
+        const children = (o.data && o.data.children) || [];
+        syncOverlayChildren(g, children);
+      },
+    },
+  };
+
+  function syncOverlayChildren(group, childrenDef) {
+    const existing = group.userData.childMeshes || {};
+    const seen = new Set();
+    for (const childDef of childrenDef) {
+      const cid = childDef.id || childDef.type + "_" + seen.size;
+      seen.add(cid);
+      const renderer = OVERLAY_RENDERERS[childDef.type];
+      if (!renderer) continue;
+      if (!existing[cid]) {
+        const mesh = renderer.create(childDef);
+        mesh.userData.overlayId = cid;
+        group.add(mesh);
+        existing[cid] = { mesh, def: childDef, type: childDef.type };
+      } else {
+        const entry = existing[cid];
+        if (entry.type === childDef.type) {
+          renderer.update(entry.mesh, childDef);
+        }
+      }
+    }
+    for (const cid in existing) {
+      if (!seen.has(cid)) {
+        group.remove(existing[cid].mesh);
+        disposeMesh(existing[cid].mesh);
+        delete existing[cid];
+      }
+    }
+    group.userData.childMeshes = existing;
+  }
+
+  // overlay sync
+  const overlayMeshes = {};
+
+  function syncOverlays(overlays) {
+    const seen = new Set();
+    for (const o of overlays) {
+      const id = o.id;
+      if (!id) continue;
+      seen.add(id);
+      const renderer = OVERLAY_RENDERERS[o.type];
+      if (!renderer) continue;
+      if (!overlayMeshes[id]) {
+        const mesh = renderer.create(o);
+        mesh.userData.overlayId = id;
+        worldGroup.add(mesh);
+        overlayMeshes[id] = { mesh, type: o.type };
+      } else if (overlayMeshes[id].type === o.type) {
+        renderer.update(overlayMeshes[id].mesh, o);
+      }
+    }
+    for (const id in overlayMeshes) {
+      if (!seen.has(id)) {
+        worldGroup.remove(overlayMeshes[id].mesh);
+        disposeMesh(overlayMeshes[id].mesh);
+        delete overlayMeshes[id];
+      }
     }
   }
-  for (const id in overlayMeshes) {
-    if (!seen.has(id)) {
-      worldGroup.remove(overlayMeshes[id].mesh);
-      disposeMesh(overlayMeshes[id].mesh);
-      delete overlayMeshes[id];
+
+  window.toggleOverlays = function () {
+    const show = document.getElementById("show-overlays").checked;
+    for (const id in overlayMeshes) {
+      overlayMeshes[id].mesh.visible = show;
     }
+  };
+
+  // ============================================================
+  // Table rendering
+  // ============================================================
+
+  function renderTable(objects, overlays) {
+    const tbody = document.getElementById("obj-tbody");
+    let rows = "";
+    for (const o of objects) {
+      const nk =
+        o.num_keypoints || (o.keypoints_3d ? o.keypoints_3d.length : 0);
+      const visType = resolveVisType(o);
+      const label =
+        visType === "points"
+          ? `${nk} pts`
+          : visType === "planar"
+            ? o.vis_meta && o.vis_meta.tag_id != null
+              ? `tag ${o.vis_meta.tag_id}`
+              : "planar"
+            : "-";
+      const selectedCls = selectedId === o.id ? "selected" : "";
+      rows += `<tr class="obj-row ${selectedCls}" data-id="${o.id}"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${((o.pitch * 180) / Math.PI)?.toFixed(1)}&deg;</td><td>${((o.yaw * 180) / Math.PI)?.toFixed(1)}&deg;</td><td>${((o.roll * 180) / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
+    }
+    for (const o of overlays) {
+      if (!o.id) continue;
+      const label = o.label || o.type;
+      rows += `<tr class="obj-row" style="color:#4c8bf5"><td>${o.id}</td><td>${(o.x || 0).toFixed(2)}</td><td>${(o.y || 0).toFixed(2)}</td><td>${(o.z || 0).toFixed(2)}</td><td>-</td><td>${(((o.yaw || 0) * 180) / Math.PI).toFixed(1)}&deg;</td><td>-</td><td>${label}</td></tr>`;
+    }
+    tbody.innerHTML =
+      rows || '<tr><td colspan="8" class="empty-state">No detections</td></tr>';
   }
-}
 
-window.toggleOverlays = function() {
-  const show = document.getElementById('show-overlays').checked;
-  for (const id in overlayMeshes) {
-    overlayMeshes[id].mesh.visible = show;
+  function selectRowById(trackId) {
+    // optimistically highlight immediately; the server is the source of truth
+    selectedId = trackId;
+    fetch("/api/target-selector/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track_id: trackId }),
+    }).catch(() => {});
   }
-};
 
-// ============================================================
-// Table rendering
-// ============================================================
-
-function renderTable(objects, overlays) {
-  const tbody = document.getElementById('obj-tbody');
-  let rows = '';
-  for (const o of objects) {
-    const nk = o.num_keypoints || (o.keypoints_3d ? o.keypoints_3d.length : 0);
-    const visType = resolveVisType(o);
-    const label = visType === 'points' ? `${nk} pts`
-                : visType === 'planar' ? (o.vis_meta && o.vis_meta.tag_id != null ? `tag ${o.vis_meta.tag_id}` : 'planar')
-                : '-';
-    const selectedCls = (selectedId === o.id) ? 'selected' : '';
-    rows += `<tr class="obj-row ${selectedCls}" data-id="${o.id}"><td>${o.id}</td><td>${o.x?.toFixed(2)}</td><td>${o.y?.toFixed(2)}</td><td>${o.z?.toFixed(2)}</td><td>${(o.pitch * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.yaw * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${(o.roll * 180 / Math.PI)?.toFixed(1)}&deg;</td><td>${label}</td></tr>`;
+  function clearSelection() {
+    selectedId = null;
+    fetch("/api/target-selector/clear", { method: "POST" }).catch(() => {});
   }
-  for (const o of overlays) {
-    if (!o.id) continue;
-    const label = o.label || o.type;
-    rows += `<tr class="obj-row" style="color:#4c8bf5"><td>${o.id}</td><td>${(o.x||0).toFixed(2)}</td><td>${(o.y||0).toFixed(2)}</td><td>${(o.z||0).toFixed(2)}</td><td>-</td><td>${((o.yaw||0) * 180 / Math.PI).toFixed(1)}&deg;</td><td>-</td><td>${label}</td></tr>`;
-  }
-  tbody.innerHTML = rows || '<tr><td colspan="8" class="empty-state">No detections</td></tr>';
-}
 
-function selectRowById(trackId) {
-  // optimistically highlight immediately; the server is the source of truth
-  selectedId = trackId;
-  fetch('/api/target-selector/select', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ track_id: trackId }),
-  }).catch(() => {});
-}
-
-function clearSelection() {
-  selectedId = null;
-  fetch('/api/target-selector/clear', { method: 'POST' }).catch(() => {});
-}
-
-// delegated click-to-select on the detection table
-document.getElementById('obj-tbody').addEventListener('click', (ev) => {
-  const tr = ev.target.closest('tr.obj-row');
-  if (!tr) return;
-  const id = tr.getAttribute('data-id');
-  if (id == null) return;
-  selectRowById(Number(id));
-});
-
-// ============================================================
-// Per-axis view scale
-// ============================================================
-
-const SCALE_MIN = -10;
-const SCALE_MAX = 10;
-
-function setAxisScale(axis, value) {
-  const v = Math.min(SCALE_MAX, Math.max(SCALE_MIN, value));
-  worldGroup.scale[axis] = v;
-  const range = document.getElementById(`scale-${axis}-range`);
-  const num = document.getElementById(`scale-${axis}-value`);
-  range.value = v;
-  num.value = v;
-}
-
-function bindScale(axis) {
-  const range = document.getElementById(`scale-${axis}-range`);
-  const num = document.getElementById(`scale-${axis}-value`);
-  range.addEventListener('input', () => setAxisScale(axis, parseFloat(range.value)));
-  num.addEventListener('change', () => {
-    const v = parseFloat(num.value);
-    setAxisScale(axis, isFinite(v) ? v : 1);
+  // delegated click-to-select on the detection table
+  document.getElementById("obj-tbody").addEventListener("click", (ev) => {
+    const tr = ev.target.closest("tr.obj-row");
+    if (!tr) return;
+    const id = tr.getAttribute("data-id");
+    if (id == null) return;
+    selectRowById(Number(id));
   });
-}
 
-['x', 'y', 'z'].forEach(bindScale);
-document.getElementById('scale-reset').addEventListener('click', () => {
-  ['x', 'y', 'z'].forEach(a => setAxisScale(a, 1));
-});
+  // ============================================================
+  // Per-axis view scale
+  // ============================================================
 
-// ============================================================
-// Poll & animate
-// ============================================================
+  const SCALE_MIN = -10;
+  const SCALE_MAX = 10;
 
-async function poll() {
-  try {
-    const [detRes, ovRes, selRes] = await Promise.all([
-      fetch('/api/detections/latest').then(r => r.json()),
-      fetch('/api/overlays').then(r => r.json()),
-      fetch('/api/target-selector/status').then(r => r.json()).catch(() => ({ selected_id: null })),
-    ]);
-    const objects = detRes.objects || [];
-    const overlays = ovRes.overlays || [];
-    if (selRes && typeof selRes.selected_id !== 'undefined') {
-      selectedId = selRes.selected_id;
-    }
-    syncDetections(objects);
-    syncOverlays(overlays);
-    renderTable(objects, overlays);
-  } catch (_) {}
-}
-setInterval(poll, 200);
+  function setAxisScale(axis, value) {
+    const v = Math.min(SCALE_MAX, Math.max(SCALE_MIN, value));
+    worldGroup.scale[axis] = v;
+    const range = document.getElementById(`scale-${axis}-range`);
+    const num = document.getElementById(`scale-${axis}-value`);
+    range.value = v;
+    num.value = v;
+  }
 
-window.addEventListener('resize', () => {
-  camera.aspect = container.clientWidth / container.clientHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(container.clientWidth, container.clientHeight);
-  updateFatRes();
-});
+  function bindScale(axis) {
+    const range = document.getElementById(`scale-${axis}-range`);
+    const num = document.getElementById(`scale-${axis}-value`);
+    range.addEventListener("input", () =>
+      setAxisScale(axis, parseFloat(range.value)),
+    );
+    num.addEventListener("change", () => {
+      const v = parseFloat(num.value);
+      setAxisScale(axis, isFinite(v) ? v : 1);
+    });
+  }
 
-function animate() {
-  requestAnimationFrame(animate);
-  controls.update();
-  renderer.render(scene, camera);
-}
-animate();
+  ["x", "y", "z"].forEach(bindScale);
+  document.getElementById("scale-reset").addEventListener("click", () => {
+    ["x", "y", "z"].forEach((a) => setAxisScale(a, 1));
+  });
+
+  // ============================================================
+  // Poll & animate
+  // ============================================================
+
+  async function poll() {
+    try {
+      const [detRes, ovRes, selRes] = await Promise.all([
+        fetch("/api/detections/latest").then((r) => r.json()),
+        fetch("/api/overlays").then((r) => r.json()),
+        fetch("/api/target-selector/status")
+          .then((r) => r.json())
+          .catch(() => ({ selected_id: null })),
+      ]);
+      const objects = detRes.objects || [];
+      const overlays = ovRes.overlays || [];
+      if (selRes && typeof selRes.selected_id !== "undefined") {
+        selectedId = selRes.selected_id;
+      }
+      syncDetections(objects);
+      syncOverlays(overlays);
+      renderTable(objects, overlays);
+    } catch (_) {}
+  }
+  setInterval(poll, 200);
+
+  window.addEventListener("resize", () => {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    updateFatRes();
+  });
+
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
 </script>
 {% endblock %}

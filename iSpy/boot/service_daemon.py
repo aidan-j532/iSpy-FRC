@@ -33,20 +33,16 @@ class VisionSupervisor:
     def __init__(self, entry_point: str):
         self.entry_point = entry_point
         self.proc: subprocess.Popen | None = None
-        self.status = "stopped"  # stopped | running | paused | error
+        self.status = "stopped" # stopped | running | paused | error, these r the only status
         self.last_error = None
         self.lock = threading.RLock()
         self._watch_thread: threading.Thread | None = None
-        # talks to the control channel the vision process publishes in the
-        # state file (control_port); replaces the old stdin pipe
         self._control = SupervisorControlClient()
 
     def start(self):
         with self.lock:
             if self.proc and self.proc.poll() is None:
                 return {"ok": False, "error": "already running"}
-            # single-source the interpreter from the install-time marker so the
-            # vision child runs under the same venv the rest of iSpy booted with
             python = resolve_launch_python()
             logger.info(
                 "launching vision process %r with python=%r (this daemon: %r, prefix=%r)",
@@ -115,8 +111,7 @@ class VisionSupervisor:
                 self._save_state()
                 return {"ok": True}
             self.status = "stopping"
-            # best-effort graceful request; if the control channel isn't up
-            # yet (child still booting) we fall through to terminate/kill
+            # best-effort graceful request
             self._send("SHUTDOWN")
         try:
             self.proc.wait(timeout=timeout)
@@ -144,8 +139,7 @@ class VisionSupervisor:
         state_file = state_file_path()
         state_file.parent.mkdir(parents=True, exist_ok=True)
         pid = self.proc.pid if (self.proc and self.proc.poll() is None) else None
-        # merge instead of overwrite - the vision process owns control_port
-        # in this same file and must survive our status updates
+        # merge instead of overwrite
         try:
             state = json.loads(state_file.read_text())
             if not isinstance(state, dict):
@@ -180,14 +174,11 @@ class VisionSupervisor:
 
 def create_service_app(entry_point: str) -> Flask:
     app = Flask(__name__)
-    # service control endpoints take no request body - a tight ceiling rejects
-    # junk payloads outright
+    # service control endpoints take no request body, so this rejects bad payloads
     app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
     sup = VisionSupervisor(entry_point)
 
-    # start/stop/restart/pause/resume can kill the vision pipeline or the whole
-    # boot: only allow them from localhost, or from a remote client presenting
-    # ISPY_ADMIN_TOKEN (same trust model as /api/plugins/* admin endpoints).
+    # start/stop/restart/pause/resume can kill the vision pipeline or the whole thing, so only trust localhost or token
     from iSpy.web.Backend.PluginStatus import require_local_or_token
 
     @app.route("/service/status")

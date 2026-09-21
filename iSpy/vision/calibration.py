@@ -472,14 +472,7 @@ def detect_charuco_auto(frame, preferred_pattern=None, preferred_dict=None):
 
 
 def _calibration_sane(rms, cam_mat, dist, img_size, max_rms: float = 100.0) -> bool:
-    """Reject degenerate solves before they can poison the pipeline.
-
-    OpenCV's native ChArUco solver is ~30x faster than the scipy fallback but
-    occasionally lands on a garbage-but-low-RMS baseline (huge focal lengths,
-    principal point far outside the frame). Mirror the sanity bounds used by
-    _estimate_initial_intrinsics so the slow scipy path only runs on inputs the
-    native solver could not explain.
-    """
+    # Reject degenerate solves before they get to the pipeliine
     if rms is None or cam_mat is None or dist is None:
         return False
     try:

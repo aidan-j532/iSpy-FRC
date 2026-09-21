@@ -48,6 +48,7 @@ class TestSettingsPageKeys(unittest.TestCase):
             "debug_mode",
             "log_level",
             "health_stale_threshold",
+            "temperature_unit",
         }
         self.assertTrue(
             set(data_keys(SETTINGS_HTML)) <= valid, data_keys(SETTINGS_HTML)

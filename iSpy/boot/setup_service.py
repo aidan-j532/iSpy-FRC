@@ -7,8 +7,7 @@ import hashlib
 import getpass
 from pathlib import Path
 
-# make the iSpy package importable even when this file is run directly (not
-# via `pip install -e .` / `python -m iSpy.boot.*`)
+# make the iSpy package importable even when this file is run directly 
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -19,9 +18,7 @@ FIRST_BOOT_SERVICE_NAME = "ispy-first-boot"
 
 MDNS_HOSTNAME = "ispy"
 
-# If set, use exactly this value instead of the derived per-board name.
 MDNS_HOSTNAME_ENV = "ISPY_MDNS_HOSTNAME"
-
 
 def _board_identifier() -> str:
     for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
@@ -121,7 +118,6 @@ def _setup_mdns_macos(hostname: str | None = None) -> None:
             )
             return
 
-    # bounce mDNSResponder so the new LocalHostName takes effect immediately
     run(["sudo", "killall", "-HUP", "mDNSResponder"], check=False)
     print(f"mDNS ready - board will be reachable at http://{hostname}.local:5000")
 
@@ -386,7 +382,7 @@ def setup_windows(script_path):
     if result.returncode != 0:
         print(f"Failed to create task: {result.stderr.strip()}")
 
-        # If we're not already admin, re-run just the schtasks command elevated.
+        # If I'm not already admin, re-run just the schtasks command elevated.
         if not _is_admin_windows():
             print("Requesting administrator privileges via UAC...")
             if _relaunch_as_admin_windows(cmd):
@@ -397,7 +393,7 @@ def setup_windows(script_path):
             else:
                 print("UAC elevation was declined or the task creation failed.")
 
-        # either we're admin and schtasks still failed, or elevation got declined - fall back to a per-user startup entry
+        # either I'm admin and schtasks still failed, or elevation got declined - fall back to a per-user startup entry
         try:
             appdata = str(Path.home() / "AppData" / "Roaming")
             startup_dir = os.path.join(

@@ -8,31 +8,23 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_MODEL_DIR = _PROJECT_ROOT / "YoloModels" / "pytorch"
 
-# Same size floor as genericYolo.py::_validate_model_file.
+# Same size floor as genericYolo.py._validate_model_file.
 _MIN_MODEL_BYTES = 1024
 
 # Download URLs for the three stock default models.
-# detect/pose reuse the already-verified Ultralytics release assets that
-# iSpy.vision.optimizer.ensure_default_model() has always downloaded from -
-# keep the two in sync. The v26 checkpoint URL is unresolved until the project
-# owner supplies it: a None URL is logged and skipped, never guessed.
 _DEFAULT_MODEL_URLS = {
     "_default_detect.pt": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt",
     "_default_pose.pt": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n-pose.pt",
-    "_default_v26_detect_for_fuel.pt": "https://github.com/aidan-j532/iSpy-FRC/releases/download/Fuel_Detect_Model/fuel_detection_v26.pt",
+    "_default_v26_detect_for_fuel.pt": "https://github.com/aidan-j532/iSpy-FRC/releases/download/Fuel_Detect_Model/fuel_detection_v26.pt", # Mine :)
 }
 
 # Per-model license status. All three default checkpoints are AGPL-3.0:
-# _default_detect.pt and _default_pose.pt are stock Ultralytics pretrained
-# weights (AGPL-3.0 by Ultralytics); _default_v26_detect_for_fuel.pt was
-# trained by the project owner and is also released under AGPL-3.0.
 _MODEL_LICENSE_STATUS = {name: "AGPL-3.0" for name in _DEFAULT_MODEL_URLS}
 
 
 def _session() -> requests.Session:
     sess = requests.Session()
-    # TLS verification stays ON (requests default) - models come from the same
-    # GitHub/HTTPS endpoints we already trust for calibration images.
+    # TLS verification stays ON (requests default) - models come from the same GitHub/HTTPS endpoints I already trust for calibration images.
     for scheme in ("http://", "https://"):
         adapter = sess.get_adapter(scheme)
         adapter.max_retries = requests.adapters.Retry(

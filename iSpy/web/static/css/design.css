@@ -298,6 +298,24 @@ pre {
 .cam-name { font-weight: 500; font-size: 0.88rem; }
 .cam-meta { margin-left: auto; color: var(--text-dim); font-size: 0.8rem; font-family: var(--mono); }
 
+@keyframes overheating {
+  0%, 100% {
+    border-color: var(--border);
+    box-shadow: none;
+  }
+  50% {
+    border-color: #ff3b30;
+    box-shadow: 0 0 12px rgba(255, 59, 48, 0.7);
+  }
+}
+
+.sys-item.overheating {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  animation: overheating 0.8s infinite;
+}
+
 /* System metrics */
 .sys-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px; }
 .sys-item { display: flex; flex-direction: column; gap: 2px; }
@@ -569,16 +587,88 @@ pre {
   animation: skeleton-shimmer 1.5s ease-in-out infinite;
 }
 
-/* Connection-lost banner (shared across pages) */
-.conn-banner {
-  display: none; align-items: center; justify-content: center; gap: 8px;
-  position: sticky; top: 0; z-index: 5000;
-  margin: -28px -36px 20px; padding: 6px 12px;
-  background: var(--bad-dim); color: var(--bad);
-  border-bottom: 1px solid var(--bad);
-  font-size: 0.82rem; font-weight: 600;
+.conn-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: rgba(0, 0, 0, 0.65);
+
+    /* Block interaction with everything underneath */
+    pointer-events: all;
+    touch-action: none;
+    user-select: none;
+    cursor: wait;
 }
-.conn-banner.visible { display: flex; }
+
+body.connection-lost {
+    overflow: hidden;
+}
+
+.conn-overlay-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+
+    text-align: center;
+}
+
+.conn-overlay-icon {
+    width: 90px;
+    height: 90px;
+    margin-bottom: 20px;
+
+    color: white;
+}
+
+.conn-overlay-title {
+    font-size: 28px;
+    font-weight: 600;
+    color: white;
+}
+
+.conn-overlay-subtitle {
+    margin-top: 6px;
+
+    font-size: 17px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.loading-dots span {
+    opacity: 0;
+    animation: reconnect-dot 1.4s infinite;
+}
+
+.loading-dots span:nth-child(1) {
+    animation-delay: 0s;
+}
+
+.loading-dots span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.loading-dots span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes reconnect-dot {
+    0%, 20% {
+        opacity: 0;
+    }
+
+    40%, 80% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0;
+    }
+}
 
 /* Metrics chart "waiting for data" overlay */
 .chart-card { position: relative; }

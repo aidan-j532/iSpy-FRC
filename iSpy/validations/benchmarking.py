@@ -1,5 +1,3 @@
-"""Benchmark available inference backends against your .pt models."""
-
 import argparse
 import contextlib
 import hashlib
@@ -11,7 +9,7 @@ import time
 import warnings
 from pathlib import Path
 
-from iSpy.config.AutoOpt import has_rockchip_npu, has_nvidia, has_tensorrt, has_tpu
+from iSpy.config.AutoOpt import has_nvidia, has_rockchip_npu, has_tensorrt, has_tpu
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.optimizer import _convert_model_subprocess
 

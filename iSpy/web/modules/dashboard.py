@@ -279,15 +279,34 @@ class DashboardModule(WebModule):
         except Exception:
             pass
 
+        temperature_unit = self.config.get("temperature_unit", "celsius")
+
+        display_temp = temp
+        display_warning = self.config.get("temperature_warning", 80)
+
+        if temperature_unit == "fahrenheit":
+            if display_temp is not None:
+                display_temp = round(display_temp * 9 / 5 + 32, 1)
+
+            display_warning = round(display_warning * 9 / 5 + 32, 1)
+
+        config = self.context.get("config")
+        temperature_warning = (
+            config.get("temperature_warning", 80)
+            if config
+            else 80
+        )
+
         return {
             "cpu_percent": cpu,
             "memory_percent": round(mem.percent, 1) if mem else None,
             "memory_used_mb": mem_used,
             "memory_total_mb": mem_total,
             "temperature": temp,
+            "temperature_warning": temperature_warning,
             "hardware": self._get_hardware(),
         }
-
+        
     def _get_hardware(self) -> list[dict]:
         cams = self.context.get("cameras") or []
         grouped: dict[str, set[str]] = {}

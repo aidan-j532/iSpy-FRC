@@ -43,8 +43,7 @@ class iSpy:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-        # bring the web app up FIRST so the UI is reachable while cameras/models/
-        # plugins are still loading - they wire in later via set_cameras()/set_vision_instance()
+        # bring the web app up FIRST!! so the UI is reachable
         self.web_app = web_app
         if self.web_app is None and config.config.get("app_mode", False):
             self.web_app = create_app(cameras=[], config=config)
@@ -75,9 +74,7 @@ class iSpy:
         if self.web_app is not None:
             self.web_app.set_cameras(self.cameras)
 
-        # shared "what object is currently selected" primitive - one instance on
-        # the shared context so any tracker/utility can read/set it without
-        # depending on a specific add-on (see iSpy.plugins.selection).
+        # shared "what object is currently selected (for tracking)"
         from iSpy.plugins.selection import SelectionState
 
         self.selection = SelectionState()
@@ -148,7 +145,7 @@ class iSpy:
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
         if self.web_app:
-            # server thread already started above; just wire in what loaded since then
+            # server thread already started above, just wire in what loaded since then
             dash = self.web_app.modules.get("dashboard")
             if dash and hasattr(dash, "set_plugins"):
                 dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
@@ -162,16 +159,16 @@ class iSpy:
                 for name, processor in self.frame_processors.items():
                     camera.add_frame_processor(processor)
 
-        # I think has to be at very bottom
+        # I think this has to be at very bottom
         if self.web_app:
             self.web_app.set_vision_instance(self)
 
     @staticmethod
     def _build_cameras_from_config(config: iSpyConfig) -> list[VisionPipeline]:
         repo_root = Path.cwd()
+        from iSpy.config.iSpyConfig import get_pipeline_settings
         from iSpy.validations.model_validator import enforce_model_organization
         from iSpy.vision.pipelines import get_pipeline_classes
-        from iSpy.config.iSpyConfig import get_pipeline_settings
 
         is_valid, corrected_model_path = enforce_model_organization(
             repo_root, config.config
@@ -362,7 +359,7 @@ class iSpy:
             return objects, frame
         except Exception:
             self.logger.exception("Solo-vision exception")
-            # never kill the loop on one pipeline hiccup - fall back to the raw frame so the feed keeps flowing
+            # never kill the loop on one pipeline error, fall back to the raw frame so the feed keeps flowing
             return [], camera.get_frame() if hasattr(camera, "get_frame") else None
 
     def validate_vision_model(self, repo_root: Path | None = None):
@@ -434,7 +431,7 @@ class iSpy:
         t_track = time.perf_counter()
         opted_trackers_s = 0.0
         for name, tracker in self.trackers.items():
-            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
+            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so change
             t0 = time.perf_counter()
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
@@ -519,7 +516,7 @@ class iSpy:
         t_track = time.perf_counter()
         opted_trackers_s = 0.0
         for name, tracker in self.trackers.items():
-            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so negate
+            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so change
             t0 = time.perf_counter()
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
