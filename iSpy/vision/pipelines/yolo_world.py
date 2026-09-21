@@ -15,6 +15,7 @@ from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.vision.pipelines.optimizable import (
     OptimizableModelPipeline,
     SUPPORTED_TARGET_FORMATS,
+    _profile_hardware_warning,
 )
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
@@ -35,6 +36,29 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
     calibration_sections = []
 
     _OPT_OPTIONS_EXTRA = ("input_size",)
+
+    @classmethod
+    def uses_model_profile(cls) -> bool:
+        return True
+
+    @classmethod
+    def derive_profile_name(cls, settings: dict) -> str:
+        return f"{settings.get('model_size') or 's'} \u2014 {str(settings.get('prompt') or 'A dog.')[:40]}"
+
+    @classmethod
+    def check_profile(cls, settings: dict) -> dict:
+        fmt = str(settings.get("target_format") or "auto").strip().lower()
+        resolved = cls.recommended_format() if fmt == "auto" else fmt
+        details = {
+            "model_size": settings.get("model_size") or "s",
+            "prompt": settings.get("prompt") or "A dog.",
+            "resolved_target_format": resolved,
+            "quantize": bool(settings.get("quantize", False)),
+        }
+        warn = _profile_hardware_warning(fmt)
+        if warn:
+            return {"valid": True, "level": "warn", "message": warn, "details": details}
+        return {"valid": True, "level": "ok", "message": "ready", "details": details}
 
     @classmethod
     def show_calibration(cls) -> bool:

@@ -64,6 +64,102 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
     # model reports pose keypoints - see cameras.html openCalibrationWizardFor.
     calibration_sections = ["charuco", "focal"]
 
+    @classmethod
+    def uses_model_profile(cls) -> bool:
+        return True
+
+    @classmethod
+    def derive_profile_name(cls, settings: dict) -> str:
+        vm = settings.get("vision_model")
+        if isinstance(vm, dict):
+            src = vm.get("source_pt") or vm.get("file_path") or ""
+            if src:
+                return Path(str(src)).stem
+        return "model profile"
+
+    @classmethod
+    def check_profile(cls, settings: dict) -> dict:
+        # profile status = can this saved model config actually load on this
+        # machine? touches only files on disk (stat + metadata sidecar) and
+        # never builds anything. a missing artifact for a requested format
+        # warns (the .pt still runs) but a missing model/sidecar errors.
+        vm = settings.get("vision_model")
+        if not isinstance(vm, dict):
+            return {
+                "valid": False,
+                "level": "error",
+                "message": "No vision_model configured.",
+                "details": {},
+            }
+        src = vm.get("source_pt") or vm.get("file_path") or ""
+        pt = Path(str(src))
+        if not pt.is_absolute():
+            pt = Path.cwd() / pt
+        details = {
+            "file_path": src,
+            "task": "unknown",
+            "nc": None,
+            "input_size": None,
+            "size_mb": None,
+            "active_format": "pytorch",
+        }
+        if not pt.exists():
+            return {
+                "valid": False,
+                "level": "error",
+                "message": f"Model file missing: {src}",
+                "details": details,
+            }
+        try:
+            details["size_mb"] = round(pt.stat().st_size / (1024 * 1024), 2)
+        except OSError:
+            details["size_mb"] = None
+        try:
+            from iSpy.vision.metadata import read_metadata
+        except Exception:
+            read_metadata = None
+        meta = read_metadata(pt) if read_metadata is not None else None
+        if meta is None:
+            return {
+                "valid": False,
+                "level": "error",
+                "message": f"Missing metadata sidecar for {pt.name}",
+                "details": details,
+            }
+        details.update(
+            {
+                "task": meta.get("task", "unknown"),
+                "nc": meta.get("nc"),
+                "input_size": meta.get("input_size"),
+            }
+        )
+        fmt = str(settings.get("target_format") or "auto").strip().lower()
+        active = cls.recommended_format() if fmt == "auto" else fmt
+        details["active_format"] = active
+        if fmt and fmt != "auto":
+            try:
+                from iSpy.vision.optimizer import existing_artifact_for
+            except Exception:
+                return {
+                    "valid": True,
+                    "level": "ok",
+                    "message": "ready",
+                    "details": details,
+                }
+            artifact = existing_artifact_for(pt, fmt)
+            if artifact:
+                details["file_path"] = artifact
+            else:
+                return {
+                    "valid": True,
+                    "level": "warn",
+                    "message": (
+                        f"{active} artifact not built yet - falls back to the .pt."
+                    ),
+                    "details": details,
+                }
+        return {"valid": True, "level": "ok", "message": "ready", "details": details}
+
     def __init__(
         self,
         camera_config: iSpyCameraConfig,

@@ -16,6 +16,33 @@ SUPPORTED_TARGET_FORMATS = (
 )
 
 
+def _profile_hardware_warning(target_format: str) -> str | None:
+    """Warn when a saved profile asks for an accelerator this board doesn't
+    expose. Only formats that need dedicated hardware are checked - onnx/tflite
+    always run on CPU, so a profile specifying them never warns."""
+    if not target_format or target_format in ("auto", "onnx", "tflite"):
+        return None
+    try:
+        from iSpy.config import AutoOpt
+    except Exception:
+        return None
+    if target_format == "rknn" and not AutoOpt.has_rockchip_npu():
+        return "RKNN needs a Rockchip NPU - this profile will fall back to CPU."
+    if target_format == "hailo" and not AutoOpt.has_hailo_npu():
+        return "HEF needs a Hailo NPU - this profile will fall back to CPU."
+    if target_format == "qnn" and not AutoOpt.has_qualcomm_npu():
+        return "QNN needs a Qualcomm NPU - this profile will fall back to CPU."
+    if target_format == "engine" and not AutoOpt.has_nvidia():
+        return "TensorRT needs an NVIDIA GPU - this profile will fall back to CPU."
+    if target_format == "coreml" and not AutoOpt.has_apple_silicon():
+        return "CoreML needs Apple Silicon - this profile will fall back to CPU."
+    if target_format == "openvino" and not (
+        AutoOpt.has_intel_gpu() or AutoOpt.has_intel_vpu()
+    ):
+        return "OpenVINO needs an Intel GPU/VPU - this profile will fall back to CPU."
+    return None
+
+
 class OptimizableModelPipeline:
     #: extra config-schema keys surfaced by get_optimization_options()
     _OPT_OPTIONS_EXTRA: tuple[str, ...] = ()

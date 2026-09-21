@@ -223,6 +223,38 @@ def _resolve_vision_model_files(settings: dict) -> None:
     vm["file_path"] = artifact or pt_rel
 
 
+def _profile_pipeline_class(pipeline_name: str):
+    try:
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        cls = get_pipeline_classes().get(pipeline_name)
+    except Exception:
+        return None
+    if cls is None or not getattr(cls, "uses_model_profile", lambda: False)():
+        return None
+    return cls
+
+
+def _save_model_profile(config, pipeline_name: str, settings: dict) -> None:
+    """Side effect of every camera add/edit: validated model-backed settings
+    become the camera's profile snapshot. Never saves a broken config, so the
+    Load Profile tab only ever offers settings that can actually run."""
+    cls = _profile_pipeline_class(pipeline_name)
+    if cls is None:
+        return
+    try:
+        status = cls.check_profile(settings)
+        if status.get("valid"):
+            config.upsert_model_profile(
+                pipeline_name,
+                cls.derive_profile_name(settings),
+                settings,
+                save=False,
+            )
+    except Exception:
+        pass
+
+
 def _windows_cameras_from_registry():
     devices = []
     try:
@@ -551,6 +583,24 @@ class CamerasModule(WebModule):
         )
         flask_app.add_url_rule(
             "/api/camera_schemas", "api_camera_schemas", self._camera_schemas
+        )
+        flask_app.add_url_rule(
+            "/api/model_profiles/<pipeline>",
+            "api_model_profiles",
+            self._model_profiles,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/model_profiles/<pipeline>/check",
+            "api_model_profiles_check",
+            self._model_profile_check,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/model_profiles/<pipeline>/<name>",
+            "api_model_profiles_delete",
+            self._model_profile_delete,
+            methods=["DELETE"],
         )
         flask_app.add_url_rule(
             "/api/cameras/calibration/<cam_name>",
@@ -1009,6 +1059,53 @@ class CamerasModule(WebModule):
             except Exception:
                 schemas[cam_type] = {}
         return jsonify(schemas=schemas)
+
+    # ------------------------------------------------------------------
+    # Model profiles (auto-saved pipeline settings, see _save_model_profile)
+    # ------------------------------------------------------------------
+
+    def _model_profiles(self, pipeline):
+        cls = _profile_pipeline_class(pipeline)
+        if cls is None:
+            return jsonify(error=f"Pipeline '{pipeline}' has no model profiles"), 404
+        items = []
+        for name, settings in self.context["config"].model_profiles(pipeline).items():
+            if not isinstance(settings, dict):
+                continue
+            try:
+                status = cls.check_profile(settings)
+            except Exception:
+                status = {
+                    "valid": False,
+                    "level": "error",
+                    "message": "Profile could not be checked",
+                    "details": {},
+                }
+            items.append({"name": name, "settings": settings, "status": status})
+        valid = sum(1 for it in items if it["status"].get("valid") is True)
+        return jsonify(profiles=items, pipeline=pipeline, valid=valid)
+
+    def _model_profile_check(self, pipeline):
+        cls = _profile_pipeline_class(pipeline)
+        if cls is None:
+            return jsonify(error=f"Pipeline '{pipeline}' has no model profiles"), 404
+        data = request.get_json(force=True) or {}
+        settings = data.get("settings")
+        if not isinstance(settings, dict):
+            return jsonify(error="settings must be an object"), 400
+        status = cls.check_profile(settings)
+        name = ""
+        if status.get("valid"):
+            name = cls.derive_profile_name(settings)
+        return jsonify(name=name, status=status)
+
+    def _model_profile_delete(self, pipeline, name):
+        cls = _profile_pipeline_class(pipeline)
+        if cls is None:
+            return jsonify(error=f"Pipeline '{pipeline}' has no model profiles"), 404
+        if not self.context["config"].delete_model_profile(pipeline, name):
+            return jsonify(error="Profile not found"), 404
+        return jsonify(success=True)
 
     # ------------------------------------------------------------------
     # Camera calibration (web wizard)
@@ -1838,6 +1935,9 @@ class CamerasModule(WebModule):
         ensure_camera_entries_ready({name: cam_entry})
         _prune_stale_pipeline_settings(cam_entry)
         cams[name] = cam_entry
+        # validated model settings are remembered as a profile so another
+        # camera can re-use them verbatim from the Load Profile tab
+        _save_model_profile(config, pipeline_name, get_pipeline_settings(cam_entry))
         config.set("camera_configs", cams)
         config.save()
 
@@ -1955,6 +2055,7 @@ class CamerasModule(WebModule):
 
         cams.pop(entry_key)
         cams[new_name] = new_entry
+        _save_model_profile(config, pipeline_name, get_pipeline_settings(new_entry))
         config.set("camera_configs", cams)
         config.save()
 

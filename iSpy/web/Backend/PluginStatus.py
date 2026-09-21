@@ -157,6 +157,9 @@ def _build_vision_pipeline_payloads():
             "requires_calibration": bool(cls.requires_calibration()),
             "beta": bool(getattr(cls, "beta", False)),
             "hardware": list(getattr(cls, "hardware_options", lambda: ())()),
+            "uses_model_profile": bool(
+                getattr(cls, "uses_model_profile", lambda: False)()
+            ),
         }
         if hasattr(cls, "recommended_format"):
             try:

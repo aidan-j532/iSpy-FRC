@@ -8,7 +8,10 @@ import numpy as np
 from PIL import Image
 
 from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
-from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
+from iSpy.vision.pipelines.optimizable import (
+    OptimizableModelPipeline,
+    _profile_hardware_warning,
+)
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 from iSpy.vision._safe_imports import ensure_torch_imported, import_rknnlite
@@ -29,6 +32,30 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
     calibration_sections = []
 
     _OPT_OPTIONS_EXTRA = ("input_size", "model_size")
+
+    @classmethod
+    def uses_model_profile(cls) -> bool:
+        return True
+
+    @classmethod
+    def derive_profile_name(cls, settings: dict) -> str:
+        return f"{settings.get('model_size') or 'small'} depth"
+
+    @classmethod
+    def check_profile(cls, settings: dict) -> dict:
+        fmt = str(settings.get("target_format") or "auto").strip().lower()
+        resolved = cls.recommended_format() if fmt == "auto" else fmt
+        details = {
+            "model_size": settings.get("model_size") or "small",
+            "resolved_target_format": resolved,
+            "quantize": bool(settings.get("quantize", False)),
+            "max_depth": settings.get("max_depth", 10.0),
+            "input_size": settings.get("input_size") or _DEPTH_INPUT_SIZE,
+        }
+        warn = _profile_hardware_warning(fmt)
+        if warn:
+            return {"valid": True, "level": "warn", "message": warn, "details": details}
+        return {"valid": True, "level": "ok", "message": "ready", "details": details}
 
     @classmethod
     def show_calibration(cls) -> bool:

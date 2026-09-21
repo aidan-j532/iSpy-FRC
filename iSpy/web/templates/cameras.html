@@ -47,6 +47,11 @@
       <span id="camera-modal-note" class="restart-badge">Restart vision to apply</span>
       <span id="pipeline-warning" class="pill warning-pill hidden"></span>
 </div>
+    <!-- model-backed pipelines offer New/Load Profile: saved runs to copy, or a blank form -->
+    <div id="model-profile-tabs" class="settings-tabs" style="display:none;">
+      <button type="button" class="settings-tab" id="profile-tab-new" onclick="setProfileTab('new')">New Profile</button>
+      <button type="button" class="settings-tab" id="profile-tab-load" onclick="setProfileTab('load')">Load Profile</button>
+    </div>
     <div id="camera-modal-body"></div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeCameraModal()">Cancel</button>
@@ -306,6 +311,12 @@
   .schema-list td { padding: 2px 4px; }
   .schema-list .form-input { width: 100%; min-width: 60px; }
   .schema-list-actions { margin-top: 6px; display: flex; gap: 6px; }
+  /* model profile rows (Load Profile tab) */
+  .profile-row { display: flex; align-items: center; gap: 6px; }
+  .profile-row .folder-picker-item { flex: 1; }
+  .profile-row .status-dot { margin-right: 6px; }
+  .profile-details { font-size: .8rem; color: var(--text-dim); padding: 4px 8px; line-height: 1.5; }
+  .profile-details .profile-detail { display: flex; justify-content: space-between; gap: 12px; }
 </style>
 
 <script>
@@ -324,6 +335,8 @@ const camModal = {
   pipeline: 'object_detection',
   fields: new Map(), // fieldKey -> { el, def, source: 'common' | 'schema' }
   flow: { index: 0 }, // index into the modal's stepped section flow
+  profileTab: 'new', // 'new' | 'load' - model profile tabs on model-backed pipelines
+  profiles: [],      // /api/model_profiles/<pipeline> items
 };
 
 /* Common (non-schema) field definitions */
@@ -914,6 +927,7 @@ async function openCameraModal(mode, arg) {
   pipelineSel.onchange = () => {
     camModal.pipeline = pipelineSel.value;
     renderPipelineSections();
+    renderModelProfileTabs();
     if (mode === 'add') prefillFirstModel();
     initSettingsFlow();
     showPipelineWarning();
@@ -945,6 +959,7 @@ async function openCameraModal(mode, arg) {
 
   // device profile (add mode) fills on top so saved mount values dont get clobbered
   renderPipelineSections();
+  renderModelProfileTabs();
   fillCommonValues();
   if (mode === 'add') { prefillFirstModel(); }
   initSettingsFlow();
@@ -1161,6 +1176,159 @@ function setFieldModelValue(key) {
   const name = modelValue(effectiveValue(key));
   input.value = name;
   input.dataset.original = name;
+}
+
+/* Model profiles: model-backed pipelines offer New/Load Profile. Both tabs
+   share one underlying form state - load just swaps which sections are
+   visible, so fields never change identity (that is whole point lol). */
+
+function renderProfileDetailRows(details) {
+  if (!details || typeof details !== 'object') return '';
+  return Object.entries(details).map(([k, v]) =>
+    `<div class="profile-detail"><span>${escapeHtml(humanizeFieldName(k))}</span><span>${escapeHtml(Array.isArray(v) ? v.join(' \u00d7 ') : String(v))}</span></div>`
+  ).join('');
+}
+
+function renderProfileList() {
+  const list = $id('model-profile-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!camModal.profiles.length) {
+    list.innerHTML = '<div class="empty-state">No saved profiles yet - save a camera and its settings become a profile.</div>';
+    return;
+  }
+  camModal.profiles.forEach(p => {
+    const st = (p.status && p.status.level) || 'ok';
+    const msg = (p.status && p.status.message) || 'ready';
+    const dot = st === 'error' ? 'status-bad' : (st === 'warn' ? 'status-warn' : 'status-ok');
+
+    const wrap = document.createElement('div');
+    wrap.className = 'folder-picker-item';
+    wrap.style.cursor = 'default';
+
+    const line = document.createElement('div');
+    line.className = 'profile-row';
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'folder-picker-item';
+    pick.title = 'Fill the form with these settings';
+    pick.innerHTML =
+      `<span class="status-dot ${dot}"></span><strong>${escapeHtml(p.name)}</strong>` +
+      `<span class="text-dim" style="display:block;font-size:12px;">${escapeHtml(msg)}</span>`;
+    pick.onclick = () => loadProfileByName(p.name);
+    line.appendChild(pick);
+
+    const deets = document.createElement('details');
+    deets.innerHTML =
+      `<summary>Details</summary>` +
+      `<div class="profile-details">${renderProfileDetailRows(p.status && p.status.details)}</div>`;
+    line.appendChild(deets);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'btn-sm btn-warn';
+    del.textContent = 'Delete';
+    del.title = 'Delete this profile';
+    del.onclick = () => confirmDeleteProfile(p.name);
+    line.appendChild(del);
+
+    wrap.appendChild(line);
+    list.appendChild(wrap);
+  });
+}
+
+function loadProfileByName(name) {
+  const p = (camModal.profiles || []).find(x => x.name === name);
+  if (!p) return;
+  Object.entries(p.settings || {}).forEach(([k, v]) => {
+    const def = activeSchema()[k] || {};
+    if (def.type === 'model') {
+      // profile stores vision_model as a dict - the field just shows the basename
+      const field = camModal.fields.get(k);
+      if (!field) return;
+      field.el.value = modelValue(v);
+      field.el.dataset.original = field.el.value;
+    } else {
+      setFieldValue(k, v);
+    }
+  });
+  showToast(`Loaded profile "${name}"`, 'success');
+  setProfileTab('new');
+  $id('camera-modal-body').scrollIntoView({ block: 'start' });
+}
+
+function confirmDeleteProfile(name) {
+  showTimeWarning({
+    header: 'Delete profile',
+    duration: 5,
+    description: `Delete the saved profile "${name}"? This cannot be undone.`,
+    continueMessage: 'Delete profile',
+    onClose: () => deleteProfile(name),
+  });
+}
+
+async function deleteProfile(name) {
+  try {
+    const r = await fetch(`/api/model_profiles/${encodeURIComponent(camModal.pipeline)}/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'Delete failed');
+    camModal.profiles = camModal.profiles.filter(p => p.name !== name);
+    showToast('Profile deleted', 'success');
+    renderProfileList();
+    const hasValid = camModal.profiles.some(p => p.status && p.status.valid === true);
+    setProfileTab(hasValid ? 'load' : 'new');
+  } catch (e) {
+    showToast(e.message || 'Delete failed', 'error');
+  }
+}
+
+function setProfileTab(tab) {
+  camModal.profileTab = tab;
+  $id('profile-tab-new').classList.toggle('active', tab === 'new');
+  $id('profile-tab-load').classList.toggle('active', tab === 'load');
+  const body = $id('camera-modal-body');
+  if (!body) return;
+  body.querySelectorAll('.settings-section').forEach(sec => {
+    const isProfileList = sec.dataset.profileSection === 'true';
+    sec.classList.toggle('camera-hidden', isProfileList ? tab !== 'load' : tab === 'load');
+  });
+  initSettingsFlow();
+}
+
+async function renderModelProfileTabs() {
+  const body = $id('camera-modal-body');
+  const tabs = $id('model-profile-tabs');
+  if (!body || !tabs) return;
+  body.querySelectorAll('[data-profile-section]').forEach(n => n.remove());
+  camModal.profiles = [];
+  const usesProfile = !!(pipelineSchemas[camModal.pipeline] || {}).uses_model_profile;
+  tabs.style.display = usesProfile ? '' : 'none';
+  if (!usesProfile) return;
+
+  // status is re-checked on every open so saved profiles reflect the current
+  // machine + files, not whatever state they were saved under
+  let profiles = [];
+  try {
+    const r = await fetch(`/api/model_profiles/${encodeURIComponent(camModal.pipeline)}`);
+    const d = await r.json();
+    profiles = d.profiles || [];
+  } catch (_) {}
+  camModal.profiles = profiles;
+
+  const panel = renderSection('Load Profile', {});
+  panel.holder.dataset.profileSection = 'true';
+  const list = document.createElement('div');
+  list.className = 'folder-picker-list';
+  list.id = 'model-profile-list';
+  list.style.marginBottom = '0';
+  panel.body.appendChild(list);
+  body.insertBefore(panel.holder, $id('schema-anchor'));
+
+  renderProfileList();
+
+  // default: a saved profile is most useful, otherwise start a fresh one
+  const hasValid = profiles.some(p => p.status && p.status.valid === true);
+  setProfileTab(hasValid ? 'load' : 'new');
 }
 
 /* Value filling */

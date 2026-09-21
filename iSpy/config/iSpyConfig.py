@@ -355,6 +355,10 @@ class iSpyConfig:
                     },
                 }
             },
+            # saved model-backed pipeline settings, keyed pipeline -> profile name.
+            # cameras auto-save their validated pipeline settings here so the
+            # "Load Profile" tab can re-apply them to another camera verbatim.
+            "model_profiles": {},
             "plugins": {
                 # enabled add-ons only - presence == enabled, no flag. each entry maps
                 # a name to that add-on's own settings (schema defaults apply at runtime).
@@ -396,6 +400,7 @@ class iSpyConfig:
 
     def _check_config(self):
         self.config.setdefault("camera_configs", {})
+        self.config.setdefault("model_profiles", {})
         self.config.setdefault("plugins", {})
         self.config["plugins"].setdefault("trackers", {})
         self.config["plugins"].setdefault("utilities", {})
@@ -730,6 +735,54 @@ class iSpyConfig:
         entries[addon_name] = current
         if save:
             self.save()
+
+    # ---------------------------------------------------------------
+    # model-profile config helpers
+    #
+    # model_profiles.<pipeline> maps a profile name to the pipeline settings
+    # dict snapshot it was saved from. The web UI auto-saves every validated
+    # model-backed camera here (see CamerasModule) and loads a profile back
+    # into the add/edit form - no manual create/update endpoints involved.
+    # ---------------------------------------------------------------
+
+    def model_profiles(self, pipeline: str) -> dict:
+        profiles = self.get("model_profiles", {})
+        if not isinstance(profiles, dict):
+            return {}
+        entries = profiles.get(str(pipeline))
+        return entries if isinstance(entries, dict) else {}
+
+    def get_model_profile(self, pipeline: str, name: str) -> dict | None:
+        entries = self.model_profiles(pipeline)
+        if name not in entries:
+            return None
+        settings = entries[name]
+        return settings if isinstance(settings, dict) else {}
+
+    def upsert_model_profile(
+        self, pipeline: str, name: str, settings: dict, save: bool = True
+    ) -> None:
+        profiles = self.get("model_profiles", {})
+        if not isinstance(profiles, dict):
+            self.config["model_profiles"] = profiles = {}
+        entries = profiles.setdefault(str(pipeline), {})
+        if not isinstance(entries, dict):
+            entries = {}
+        # snapshot - the profile must never mutate when the camera it was
+        # saved from changes later
+        entries[str(name)] = json.loads(json.dumps(settings if isinstance(settings, dict) else {}))
+        profiles[str(pipeline)] = entries
+        if save:
+            self.save()
+
+    def delete_model_profile(self, pipeline: str, name: str, save: bool = True) -> bool:
+        entries = self.model_profiles(pipeline)
+        if name not in entries:
+            return False
+        del entries[name]
+        if save:
+            self.save()
+        return True
 
     def set(self, *keys_and_value):
         if len(keys_and_value) < 2:

@@ -172,6 +172,28 @@ class VisionPipeline(Camera, VisionBase):
     def show_calibration(cls) -> bool:
         return True
 
+    # ------------------------------------------------------------------
+    # Model profiles (optional - only the model-backed pipelines implement it)
+    #
+    # A profile is a snapshot of validated pipeline settings that the camera
+    # UI auto-saves when a camera is created/edited. uses_model_profile() opts
+    # the pipeline in, check_profile() reports whether a settings dict is
+    # loadable on this machine (file/artifact/hardware checks only - never
+    # builds or writes), and derive_profile_name() names the snapshot.
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def uses_model_profile(cls) -> bool:
+        return False
+
+    @classmethod
+    def derive_profile_name(cls, settings: dict) -> str:
+        return "profile"
+
+    @classmethod
+    def check_profile(cls, settings: dict) -> dict:
+        return {"valid": True, "level": "ok", "message": "ready", "details": {}}
+
     # Declares which calibration sections the calibration wizard should offer
     # (each section becomes a tab). Subclasses override to opt in/out. The
     # default is the universal ChArUco board intrinsics calibration - every
