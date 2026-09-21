@@ -36,6 +36,7 @@ from iSpy.vision.voxel_map import (
     camera_points_to_robot,
     depth_plane_range,
     depth_to_camera_points,
+    floor_metric_fit,
     focal_length_pixels,
     inverse_depth_to_distance,
     relative_depth_to_distance,
@@ -336,8 +337,16 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         return super()._infer_depth(frame)
 
     def _distance_from_depth(self, raw: float) -> float:
-        # Keep the label in lock-step with the voxel world: both use the
-        # (possibly auto-scaled) plane resolved at the last integration.
+        # Keep the label in lock-step with the voxel world: when the floor
+        # metric fit is active, use the same 1/(a*depth+b) map the voxels were
+        # built from; otherwise fall back to the (possibly auto-scaled) ratio
+        # plane resolved at the last integration.
+        fit = getattr(self, "_floor_fit", None)
+        if fit is not None:
+            a, b = fit
+            far = float(self.max_depth) * float(self.depth_scale)
+            scaled = 1.0 / (a * float(raw) + b)
+            return float(np.clip(scaled, 1e-3, far)) * self._z_scale
         plane = getattr(self, "_eff_depth_plane", None)
         if plane is None:
             d_lo, d_hi, z_near, z_far = depth_plane_range(
@@ -435,7 +444,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             eff_near,
         )
         self._integrate_distance_m(
-            distance_m * self._z_scale, frame, method=self._method()
+            distance_m * self._z_scale, frame, method=self._method(), raw_depth=depth
         )
 
     def _estimate_shadows(self, frame: np.ndarray) -> np.ndarray:
@@ -472,8 +481,9 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         bmax = float(brightness.max())
         if bmax - bmin <= 1e-9:
             # no shading signal - fall back to the row ramp
+            # (top of the image = far, bottom = near)
             return np.tile(
-                np.linspace(1.0, 0.05, h, dtype=np.float64)[:, None], (1, w)
+                np.linspace(0.05, 1.0, h, dtype=np.float64)[:, None], (1, w)
             )
         relative = 0.05 + 0.95 * (brightness - bmin) / (bmax - bmin)
         return np.where(np.isfinite(relative), relative, 0.5).astype(np.float64)
@@ -483,12 +493,12 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         distance: np.ndarray,
         frame: np.ndarray,
         method: str = "depth_anything",
+        raw_depth: np.ndarray | None = None,
     ) -> None:
         """Back-project a metric forward-distance map (output units) into the world."""
         self._debug = getattr(self, "_debug", None) or {}
         debug = self._debug
         distance = np.asarray(distance, dtype=np.float64)
-        dist_finite = distance[np.isfinite(distance)]
 
         def warn(message: str) -> None:
             existing = debug.get("warning")
@@ -510,6 +520,46 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             focal_x = focal_x * distance.shape[1] / float(max(frame.shape[1], 1))
         if distance.shape[0] != frame.shape[0]:
             focal_y = focal_y * distance.shape[0] / float(max(frame.shape[0], 1))
+        far_plane_m = float(self.max_depth) * float(self.depth_scale)
+        far_units = far_plane_m * self._z_scale
+
+        # Metric scale recovery. Depth Anything (and its shadows heuristic)
+        # emit relative affine-inverse depth, so the ratio plane below only has
+        # scale up to the scene's own disparity range and routinely collapses
+        # (or, with Auto Scale World, inflates) the world into something that
+        # does not look like the room. Whenever the robot knows its mount
+        # height, fit 1/t = a*depth + b against the pixels that see the floor -
+        # that pins the *actual* metres: the floor lands flat at z=0 and walls
+        # stand vertical at roughly their true distance. Falls back to the
+        # ratio model when there is no floor evidence (e.g. height unset).
+        self._floor_fit = None
+        fit = None
+        if raw_depth is not None:
+            raw_depth = np.asarray(raw_depth, dtype=np.float64)
+            if raw_depth.shape == distance.shape:
+                fit = floor_metric_fit(
+                    raw_depth,
+                    focal_y,
+                    float(self.camera_height),
+                    float(self.camera_pitch),
+                    far_plane_m,
+                    stride=max(1, int(getattr(self, "pixel_stride", 8))),
+                )
+        if fit is not None:
+            a, b, floor_frac = fit
+            self._floor_fit = (a, b)
+            fitted = 1.0 / np.maximum(a * raw_depth + b, 1e-9)
+            fitted = np.nan_to_num(
+                fitted, nan=far_units, posinf=far_units, neginf=0.0
+            )
+            distance = np.clip(fitted, 1e-6 * self._z_scale, far_units)
+            debug["floor_fit"] = {
+                "a": round(float(a), 6),
+                "b": round(float(b), 6),
+                "floor_fraction": round(float(floor_frac), 3),
+            }
+        dist_finite = distance[np.isfinite(distance)]
+
         cam_points, cam_pixels = depth_to_camera_points(
             distance,
             focal_x,
@@ -517,7 +567,6 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
             stride=self.pixel_stride,
             return_pixels=True,
         )
-        far_plane_m = float(self.max_depth) * float(self.depth_scale)
         debug.update(
             dmin=round(self._dmin, 4),
             dmax=round(self._dmax, 4),
@@ -532,7 +581,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                 3,
             ),
             auto_scale=bool(getattr(self, "auto_world_scale", True)),
-            far_plane=round(far_plane_m * self._z_scale, 3),
+            far_plane=round(far_units, 3),
             focal=round(float(focal_x), 1),
             focal_y=round(float(focal_y), 1),
             depth_w=int(distance.shape[1]),

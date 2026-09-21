@@ -133,6 +133,88 @@ def relative_depth_to_distance(
     return np.nan_to_num(distance, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+def floor_metric_fit(
+    depth: np.ndarray,
+    focal_y: float,
+    camera_height: float,
+    pitch_deg: float,
+    max_distance: float,
+    stride: int = 8,
+    min_floor_fraction: float = 0.02,
+) -> tuple[float, float, float] | None:
+    """Recover approximate metric scale for an affine-inverse depth map.
+
+    Depth Anything V2 (and the shadows heuristic) emits *relative inverse*
+    depth, so a distance map is only defined up to an affine transform. The
+    one piece of scene truth a robot always knows is its own mount height, so
+    the floor becomes the scale anchor: for a camera at ``camera_height`` above
+    a floor at z=0, pitched by ``pitch_deg`` (down-positive, matching
+    ``camera_points_to_robot``), the ray through pixel row ``v`` meets the floor
+    at the camera-forward distance
+
+        t = camera_height / (y_px * cos(pitch) + sin(pitch)),
+        y_px = (v - cy) / focal_y
+
+    wherever the ray actually dips toward the floor. Every such pixel adds one
+    exact (depth, t) sample; fitting ``1/t = a*depth + b`` (least squares) turns
+    the whole affine-inverse output into ``t = 1/(a*depth + b)``, which makes
+    the reconstructed floor flat at z=0 and walls vertical in real meters.
+
+    Returns ``(a, b, floor_fraction)`` on success, or ``None`` when the mount /
+    scene provides no usable floor evidence (height ~0, nothing sees the floor,
+    a degenerate depth band, or a fit that would invert depth).
+    """
+    depth = np.asarray(depth, dtype=np.float64)
+    if depth.ndim != 2 or depth.shape[0] < 2 or depth.shape[1] < 2:
+        return None
+    if not np.isfinite(float(camera_height)) or float(camera_height) <= 1e-3:
+        return None
+    max_distance = max(float(max_distance), 1e-3)
+    fy = max(float(focal_y), 1e-6)
+    stride = max(1, int(stride))
+
+    pitch = math.radians(pitch_deg)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+
+    h, w = depth.shape
+    rows = np.arange(0, h, stride)
+    cols = np.arange(0, w, stride)
+    y_px = (rows - h / 2.0) / fy * cp + sp
+    y_px = np.broadcast_to(y_px[:, None], (len(rows), len(cols)))
+    sampled = depth[np.ix_(rows, cols)]
+
+    sees_floor = y_px > 1e-4
+    valid = np.isfinite(sampled) & (sampled > 0.0) & sees_floor
+    if int(valid.sum()) < max(8, int(min_floor_fraction * sampled.size)):
+        return None
+    yv = y_px[valid]
+    dv = sampled[valid]
+
+    t = camera_height / yv  # camera-forward distance to the floor
+    # skip the floor band at/beyond the far cap - it is behind the visible
+    # scene (or the horizon) and only drags the fit toward infinity
+    usable = t <= max_distance * 1.5
+    if int(usable.sum()) < 8:
+        return None
+    dv, t = dv[usable], t[usable]
+
+    coef, *_ = np.linalg.lstsq(
+        np.stack([dv, np.ones_like(dv)], axis=1), 1.0 / t, rcond=None
+    )
+    a, b = float(coef[0]), float(coef[1])
+
+    # the map must be monotonically closer-is-bigger and the affine transform
+    # must stay positive through the band it was fitted on
+    if not np.isfinite(a) or not np.isfinite(b):
+        return None
+    if a <= 1e-6:
+        return None
+    d_hi = float(np.max(dv))
+    if a * d_hi + b <= 1e-3:
+        return None
+    return a, b, float(valid.sum()) / float(sampled.size)
+
+
 def focal_length_pixels(
     frame_w: int, calibration: dict | None, default_fov: float = 60.0
 ) -> float:

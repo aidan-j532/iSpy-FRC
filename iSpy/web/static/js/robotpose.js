@@ -6,7 +6,7 @@
 
 // rotation matrix helpers; column-vector convention like three.js. row-major
 // flattened ([r00,r01,r02, r10,r11,r12, r20,r21,r22]) so index math is boring.
-const M = [1, 0, 0, 0, 0, 1, 0, -1, 0]; // Rx(-90) rotated col-major: (x,y,z)->(x,z,-y); +Y->-Z, +Z->+Y, +X stays
+const M = [1, 0, 0, 0, 0, -1, 0, 1, 0]; // Rx(-90): +Y->+Z, +Z->-Y, +X stays
 
 function matRx(a) {
   const c = Math.cos(a), s = Math.sin(a);
