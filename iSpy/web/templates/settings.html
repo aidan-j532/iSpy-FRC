@@ -156,6 +156,21 @@ block content %}
     </div>
 
     <div class="form-row">
+      <span class="form-label">Admin Mode</span>
+
+      <select class="form-input" data-key="admin">
+        <option value="true">Enabled</option>
+
+        <option value="false">Disabled</option>
+      </select>
+
+      <span class="text-dim text-sm"
+        >Hides experimental pipelines (Voxel World, QR Code, optical flow) from
+        the camera pipeline dropdown unless enabled.</span
+      >
+    </div>
+
+    <div class="form-row">
       <span class="form-label">Log Level</span>
 
       <select class="form-input" data-key="log_level" data-restart="true">
@@ -339,7 +354,7 @@ block content %}
 
   let defaultsData = {};
 
-  const BOOL_KEYS = new Set(["frame_sync", "metrics", "debug_mode"]);
+  const BOOL_KEYS = new Set(["frame_sync", "metrics", "debug_mode", "admin"]);
 
   function parseValue(el) {
     const val = el.value;

@@ -46,6 +46,7 @@ class TestSettingsPageKeys(unittest.TestCase):
             "frame_sync",
             "metrics",
             "debug_mode",
+            "admin",
             "log_level",
             "health_stale_threshold",
         }

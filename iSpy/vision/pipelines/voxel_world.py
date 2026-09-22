@@ -58,6 +58,7 @@ _INCHES_TO_OUTPUT_UNIT = {
 class VoxelWorldPipeline(DepthAnythingPipeline):
     plugin_name = "voxel_world"
     beta = True
+    display_name = "Voxel World (Beta) (AI)"
 
     # Voxels need real intrinsics for the back-projection to line up with the
     # field, so offer both the ChArUco and known-object focal wizards. The
@@ -202,19 +203,6 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                     "the camera. Turn off to control scale manually with Near "
                     "Plane / Max Depth.",
                 },
-                "debug_viz": {
-                    "type": "toggle",
-                    "label": "Debug Visualization",
-                    "default": False,
-                    "help": "Diagnostic/test mode. Emits overlay geometry into "
-                    "the 3D viewer - the raw camera-frame back-projection, the "
-                    "robot-frame cloud that became voxels, the camera frustum, "
-                    "the robot axes and the settled floor - plus a one-time "
-                    "geometry log on the first integration. Geometry mistakes "
-                    "(wrong mount pitch/yaw/height, collapsed world) become "
-                    "visually obvious instead of silently mangling the map. "
-                    "Leave off for normal use.",
-                },
             }
         )
         return schema
@@ -274,7 +262,6 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         )
         self.auto_ground = bool(setting("auto_ground", True))
         self.auto_world_scale = bool(setting("auto_world_scale", True))
-        self.debug_viz = bool(setting("debug_viz", False))
         self._logged_geometry = False
         # Resolved on the first integrated frame (see _integrate_depth) and then
         # held constant so the accumulated map does not smear as the estimate
@@ -547,6 +534,26 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                 )
         if fit is not None:
             a, b, floor_frac = fit
+            # The fit turns relative depth into *exact meters* when `height`
+            # matches reality. The config default (height: 1 -> ~1 inch) does
+            # not, so the world would collapse into a sub-metric splat right at
+            # the mount: the shape is correct but the scale is off by the mount
+            # ratio. Below a trusted mount height (~2 in) the geometry can't be
+            # trusted for absolute meters, so re-inflate the map to fill the
+            # far cap - the room then reads like a room (flat floor, upright
+            # walls, right proportions) until a real height is configured.
+            rescale = 1.0
+            if float(self.camera_height) < 0.05:
+                inv = 1.0 / np.maximum(a * raw_depth + b, 1e-9)
+                robust_far = float(np.nanpercentile(inv, 98))
+                if robust_far > 1e-9 and robust_far < far_units:
+                    rescale = far_units / robust_far
+                    a, b = a / rescale, b / rescale
+                    warn(
+                        f"camera height is only {float(self.camera_height):.3f} "
+                        f"{self._unit_label} - set the real mount height to get "
+                        "true distances; world rescaled to fill the view"
+                    )
             self._floor_fit = (a, b)
             fitted = 1.0 / np.maximum(a * raw_depth + b, 1e-9)
             fitted = np.nan_to_num(
@@ -557,6 +564,7 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                 "a": round(float(a), 6),
                 "b": round(float(b), 6),
                 "floor_fraction": round(float(floor_frac), 3),
+                "height_rescale": round(float(rescale), 3),
             }
         dist_finite = distance[np.isfinite(distance)]
 
@@ -673,16 +681,6 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         world = world_all[keep]
         world_colors = colors[keep] if colors is not None else None
         debug["past_min_height"] = int(world.shape[0])
-        if getattr(self, "debug_viz", False):
-            self._debug["viz"] = self._viz_payload(
-                cam_points,
-                world_all,
-                colors,
-                focal_x,
-                focal_y,
-                distance.shape,
-                ground_offset,
-            )
 
         if not getattr(self, "_logged_geometry", False):
             self._logged_geometry = True
@@ -714,117 +712,6 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
         debug["integrated"] = int(
             self.voxel_map.integrate(world, colors=world_colors)
         )
-
-    # ------------------------------------------------------------------
-    # debug visualization / test mode
-    # ------------------------------------------------------------------
-
-    _DEBUG_MAX_POINTS = 2000
-
-    def _viz_payload(
-        self,
-        cam_points: np.ndarray,
-        world_all: np.ndarray,
-        colors: np.ndarray | None,
-        focal_x: float,
-        focal_y: float,
-        depth_shape: tuple,
-        ground_offset: float,
-    ) -> dict:
-        """Intermediate geometry for the 3D viewer's debug/test mode.
-
-        Everything is emitted in the SAME frame the voxels use (robot-relative,
-        post ground-offset), so the viewer can literally overlay it on the map:
-
-        ``raw``      - the depth grid back-projected into the camera frame
-                       (right, down, forward) BEFORE the mount transform. The
-                       pyramid-along-image-flat shape of this cloud is the
-                       first thing that must look like the real scene.
-        ``world``    - the same points AFTER camera-to-robot + ground offset,
-                       i.e. exactly what got voxelized. If this does not line
-                       up with the ``raw`` pyramid once the mount is applied,
-                       the pitch/yaw/height config is wrong.
-        ``frustum``  - the camera view volume (near + far rectangle corners) in
-                       the same world frame, so the user sees where the config
-                       says the camera actually points.
-        ``cam_origin`` / ``axes_origin`` - mount position markers.
-
-        Bound to ``_DEBUG_MAX_POINTS`` per cloud so the websocket payload and
-        the browser stay cheap even at stride 1.
-        """
-        step = max(1, int(cam_points.shape[0] // self._DEBUG_MAX_POINTS)) \
-            if cam_points.shape[0] else 1
-        idx = np.arange(0, cam_points.shape[0], step)[: self._DEBUG_MAX_POINTS]
-
-        raw = cam_points[idx]
-        settled = world_all[idx]
-        raw_colors = None
-        if colors is not None and colors.shape[0] == world_all.shape[0]:
-            raw_colors = colors[idx]
-
-        plane = getattr(self, "_eff_depth_plane", None)
-        near = float(self._eff_near_depth) * self._z_scale
-        far = float(plane[3]) * self._z_scale if plane else near
-
-        frustum = self._frustum_corners_world(
-            depth_shape, focal_x, focal_y, near, far, ground_offset
-        )
-        cam_origin = self._robot_frame([[0.0, 0.0, 0.0]], ground_offset)
-        return {
-            "raw": raw.tolist(),
-            "world": settled.tolist(),
-            "colors": (
-                raw_colors.astype(np.float64).tolist()
-                if raw_colors is not None
-                else None
-            ),
-            "frustum": frustum.tolist(),
-            "near": round(float(near), 4),
-            "far": round(float(far), 4),
-            "cam_origin": [round(float(v), 4) for v in cam_origin[0]],
-            "axes_origin": [
-                round(float(self.camera_x), 4),
-                round(float(self.camera_y), 4),
-                round(-ground_offset, 4),
-            ],
-            "unit": self.unit,
-        }
-
-    def _robot_frame(self, pts, ground_offset: float) -> np.ndarray:
-        out = camera_points_to_robot(
-            pts,
-            self.camera_x,
-            self.camera_y,
-            self.camera_height,
-            self.camera_yaw,
-            self.camera_pitch,
-        )
-        if ground_offset:
-            out = out.copy()
-            out[:, 2] -= ground_offset
-        return out
-
-    def _frustum_corners_world(
-        self,
-        depth_shape: tuple,
-        focal_x: float,
-        focal_y: float,
-        near: float,
-        far: float,
-        ground_offset: float,
-    ) -> np.ndarray:
-        """Near + far image-rectangle corners, same transform as cam points."""
-        h, w = depth_shape[0], depth_shape[1]
-        cx, cy = w / 2.0, h / 2.0
-        fx = max(float(focal_x), 1e-6)
-        fy = max(float(focal_y), 1e-6)
-        corners = []
-        for (u, v), z in (
-            ((0.0, 0.0), near), ((w, 0.0), near), ((w, h), near), ((0.0, h), near),
-            ((0.0, 0.0), far), ((w, 0.0), far), ((w, h), far), ((0.0, h), far),
-        ):
-            corners.append(((u - cx) / fx * z, (v - cy) / fy * z, z))
-        return self._robot_frame(np.asarray(corners, dtype=np.float64), ground_offset)
 
     def _log_geometry_once(self, debug: dict, ground_offset: float) -> None:
         """One structured line per instance so boot-time geometry is checkable
@@ -964,17 +851,6 @@ class VoxelWorldPipeline(DepthAnythingPipeline):
                 "load_error": getattr(self, "_load_error", None),
             },
         }
-
-        # Test mode: ship the intermediate geometry under its own key so the
-        # scalar diagnostics row stays numbers-only. (Drop the arrays out of
-        # the scalar dict too - they have no right to bloat the status text.)
-        if getattr(self, "debug_viz", False):
-            viz = dict(getattr(self, "_debug", {}).get("viz") or {})
-            if viz:
-                meta["debug_viz"] = viz
-            meta["debug"] = {
-                k: v for k, v in meta["debug"].items() if k != "viz"
-            }
 
         # Reuse one Object so its identity stays stable across ticks (the map
         # contents change, the detection does not). Always return it - even an

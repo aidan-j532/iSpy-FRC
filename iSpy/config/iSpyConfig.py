@@ -278,6 +278,10 @@ class iSpyConfig:
             "unit": "frc",
             "debug_mode": True,
             "frame_sync": False,
+            # Restrict the pipeline dropdown to the Voxel World (experimental)
+            # / QR Code / optical flow pipelines only. Off = those experimental
+            # pipelines are hidden from normal users.
+            "admin": False,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
             # seconds without a fresh frame before /health reports degraded

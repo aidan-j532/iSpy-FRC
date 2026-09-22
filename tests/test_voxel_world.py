@@ -243,7 +243,6 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         pipeline.min_height = -100.0
         pipeline.auto_ground = True
         pipeline.auto_world_scale = True
-        pipeline.debug_viz = False
         pipeline._ground_offset = None
         pipeline.voxel_size = 0.1
         pipeline.export_max_voxels = 1000
@@ -447,41 +446,6 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         self.assertEqual(len(decay_calls), 3)
         self.assertGreater(objects[0].vis_meta["count"], 0)
 
-    def test_debug_viz_ships_intermediate_geometry(self):
-        # debug_viz must put the raw camera-frame cloud, the settled world
-        # cloud, the camera frustum, and the mount markers in vis_meta so the
-        # 3D viewer can overlay them on the voxels for geometry/visual tests.
-        pipeline = self._build_pipeline()
-        pipeline.debug_viz = True
-        pipeline.camera_pitch = 10.0
-        frame = np.zeros((80, 80, 3), dtype=np.uint8)
-        frame[:, :, 2] = 120
-        frame[:, :, 0] = 200
-
-        def fake_depth(f):
-            rows = np.linspace(1.0, 0.0, f.shape[0], dtype=np.float64)
-            return np.tile(rows[:, None], (1, f.shape[1]))
-
-        pipeline.get_frame = lambda: frame
-        pipeline._is_processable = lambda: True
-        pipeline._infer_depth = fake_depth
-        pipeline._annotate = lambda f, d: f
-
-        objects, _ = pipeline.run()
-        viz = objects[0].vis_meta.get("debug_viz")
-        self.assertIsNotNone(viz)
-        self.assertGreater(len(viz["raw"]), 0)
-        self.assertEqual(len(viz["raw"]), len(viz["world"]))
-        for key in ("near", "far", "cam_origin", "axes_origin", "unit", "frustum"):
-            self.assertIn(key, viz)
-        self.assertEqual(len(viz["frustum"]), 8)  # near rect + far rect corners
-        if viz["colors"]:
-            self.assertEqual(len(viz["colors"]), len(viz["world"]))
-        # every raw point is forward-positive in camera frame (right/down/fwd)
-        self.assertTrue(all(p[2] > 0 for p in viz["raw"][:8]))
-        # the scalar debug row must not balloon with the arrays
-        self.assertNotIn("viz", objects[0].vis_meta["debug"])
-
     def test_run_without_model_returns_raw_frame(self):
         pipeline = self._build_pipeline()
         frame = np.full((20, 20, 3), 7, dtype=np.uint8)
@@ -574,7 +538,6 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         pipeline.camera_pitch = pitch
         pipeline.camera_height = height
         pipeline.camera_yaw = yaw
-        pipeline.debug_viz = True
         frame = np.zeros((80, 80, 3), dtype=np.uint8)
 
         # row ramp: top row = far (low inverse depth), bottom = near
@@ -589,48 +552,23 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         objects, _ = pipeline.run()
         return objects[0].vis_meta, pipeline
 
-    @staticmethod
-    def _corr(a, b):
-        """Pearson correlation; the mount-transform semantics being tested were
-        scene-robust correlations, not absolute ranges."""
-        a = np.asarray(a, dtype=np.float64)
-        b = np.asarray(b, dtype=np.float64)
-        if a.size != b.size or a.size < 2:
-            return 0.0
-        am = a - a.mean()
-        bm = b - b.mean()
-        den = float(np.sqrt(float((am ** 2).sum()) * float((bm ** 2).sum())))
-        if den == 0.0:
-            return 0.0
-        return float((am * bm).sum() / den)
-
     def test_level_camera_distance_flows_forward_not_down(self):
         # Camera 0.3 m up, level (pitch 0): forward camera distance must ride
-        # robot +Y (forward). Check it two ways - the back-projected cloud's
-        # distance correlates with +Y, and the debug frustum points +Y instead
-        # of straight down.
+        # robot +Y (forward). A level mount reconstructs the world as a flat
+        # floor band everything AHEAD of the robot, with horizontal reach
+        # dwarfing the height band - never a vertical wall under it.
         meta, pipeline = self._run_mount(pitch=0.0, height=0.3)
-        viz = meta["debug_viz"]
-        raw_d = [p[2] for p in viz["raw"]]
-        self.assertGreater(self._corr([p[1] for p in viz["world"]], raw_d), 0.85)
-        # forward axis of the mount must be ~horizontal (+Y)
-        dx, dy, dz = self._frustum_forward(viz)
-        self.assertGreater(dy, 0.9)
-        self.assertLess(abs(dz), 0.35)
-        self.assertGreater(len(meta["voxels"]), 0)
-
-    @staticmethod
-    def _frustum_forward(viz):
-        """Normalized direction from cam_origin to the far-rectangle centroid,
-        i.e. where the configured mount says 'forward' is."""
-        o = viz["cam_origin"]
-        far = np.asarray(viz["frustum"][4:], dtype=np.float64)
-        c = far.mean(axis=0)
-        d = c - np.asarray(o, dtype=np.float64)
-        n = float(np.linalg.norm(d))
-        if n == 0:
-            return 0.0, 0.0, 0.0
-        return float(d[0] / n), float(d[1] / n), float(d[2] / n)
+        voxels = np.asarray([v[:3] for v in meta["voxels"]])
+        self.assertGreater(voxels.shape[0], 0)
+        # yaw 0 -> everything the camera sees is ahead of the robot (+Y)
+        self.assertGreaterEqual(voxels[:, 1].min(), 0.0)
+        x_range = float(voxels[:, 0].max() - voxels[:, 0].min())
+        y_range = float(voxels[:, 1].max() - voxels[:, 1].min())
+        z_range = float(voxels[:, 2].max() - voxels[:, 2].min())
+        # distance flows FORWARD: the forward reach beats the height band,
+        # and the floor band's horizontal spread is bigger than its height
+        self.assertGreater(y_range, z_range)
+        self.assertGreater(x_range, z_range)
 
     def test_pitch_90_height_0_produces_the_documented_vertical_smear(self):
         # The Pi config (pitch 90, height 0, yaw 90): forward camera distance
@@ -639,52 +577,29 @@ class VoxelWorldPipelineTests(unittest.TestCase):
         # and not correct" look from the log. Pin it so nobody "fixes" the
         # transform into a different bug.
         meta, pipeline = self._run_mount(pitch=90.0, height=0.0, yaw=90.0)
-        viz = meta["debug_viz"]
-        raw_d = [p[2] for p in viz["raw"]]
-        self.assertLess(self._corr([p[2] for p in viz["world"]], raw_d), -0.85)
-        self.assertLess(abs(self._corr([p[1] for p in viz["world"]], raw_d)), 0.5)
-        # the mount's forward axis must point straight DOWN
-        dx, dy, dz = self._frustum_forward(viz)
-        self.assertLess(dz, -0.9)
-        self.assertLess(abs(dy), 0.3)
         voxels = np.asarray([v[:3] for v in meta["voxels"]])
         self.assertGreater(voxels.shape[0], 0)
         # height extent is comparable to forward extent - the smear
         z_range = float(voxels[:, 2].max() - voxels[:, 2].min())
         y_range = float(voxels[:, 1].max() - voxels[:, 1].min())
+        x_range = float(voxels[:, 0].max() - voxels[:, 0].min())
         self.assertGreater(z_range, 2.0)
         self.assertGreaterEqual(z_range, 0.6 * y_range)
+        # the depth collapse points DOWN: height beats the horizontal spread,
+        # the opposite of the level-mount floor band above
+        self.assertGreater(z_range, x_range)
 
-    def test_debug_frustum_rotates_with_the_mount(self):
-        # The debug frustum must be transformed with the same camera->robot
-        # matrix as the voxels, so checking it in the viewer is honest.
-        pipeline = self._build_pipeline()
-        pipeline.debug_viz = True
-        pipeline.camera_pitch = 20.0
-        pipeline.camera_height = 0.25
-        frame = np.zeros((64, 64, 3), dtype=np.uint8)
-
-        def fake_depth(f):
-            rows = np.linspace(0.1, 1.0, f.shape[0], dtype=np.float64)
-            return np.tile(rows[:, None], (1, f.shape[1]))
-
-        pipeline.get_frame = lambda: frame
-        pipeline._is_processable = lambda: True
-        pipeline._infer_depth = fake_depth
-        pipeline._annotate = lambda f, d: f
-        objects, _ = pipeline.run()
-        viz = objects[0].vis_meta["debug_viz"]
-
-        # pitch 20 tilts the view volume up from level: far-top corner must be
-        # the highest point and still ahead of the camera in +Y
-        far = viz["frustum"][4:]
-        self.assertTrue(all(c[1] > 0 for c in far))
-        self.assertGreater(max(c[2] for c in far), min(c[2] for c in far))
-        near = viz["frustum"][:4]
-        # near plane is closer than the far plane along +Y
-        self.assertLess(max(c[1] for c in near), min(c[1] for c in far))
-        self.assertIn("axes_origin", viz)
-        self.assertIn("cam_origin", viz)
+    def test_pitched_mount_keeps_the_scene_ahead(self):
+        # A tilted-up mount (pitch 20) still resolves everything AHEAD of the
+        # camera (+Y); the cloud keeps its floor-band shape instead of
+        # collapsing sideways or downward through bad mount math.
+        meta, pipeline = self._run_mount(pitch=20.0, height=0.25)
+        voxels = np.asarray([v[:3] for v in meta["voxels"]])
+        self.assertGreater(voxels.shape[0], 0)
+        self.assertGreaterEqual(voxels[:, 1].min(), 0.0)
+        y_range = float(voxels[:, 1].max() - voxels[:, 1].min())
+        z_range = float(voxels[:, 2].max() - voxels[:, 2].min())
+        self.assertLess(z_range, 0.5 * y_range)
 
 
 if __name__ == "__main__":

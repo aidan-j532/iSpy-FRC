@@ -995,7 +995,10 @@ class CamerasModule(WebModule):
         )
 
     def _vision_pipelines(self):
-        return jsonify(pipelines=_build_vision_pipeline_payloads())
+        config = self.context["config"]
+        return jsonify(
+            pipelines=_build_vision_pipeline_payloads(admin=config.get("admin"))
+        )
 
     def _camera_schemas(self):
         # Serve each camera-source's config_schema() straight from the backend

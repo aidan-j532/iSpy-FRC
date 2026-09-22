@@ -52,9 +52,6 @@
   <label>
     <input type="checkbox" id="show-overlays" checked onchange="toggleOverlays()"> Overlays
   </label>
-  <label>
-    <input type="checkbox" id="show-voxel-debug" checked onchange="toggleVoxelDebug()"> Voxel debug
-  </label>
 </div>
 <div id="world-status"></div>
 <div class="viewer-layout">
@@ -446,7 +443,6 @@ function updateVoxelGroup(g, o) {
       g.userData.voxelMesh = null;
       g.userData.voxelCap = 0;
     }
-    updateVoxelDebug(g, meta);
     return;
   }
 
@@ -514,172 +510,6 @@ function updateVoxelGroup(g, o) {
   mesh.instanceMatrix.needsUpdate = true;
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   parentVoxelGroupToRobot(g);
-  updateVoxelDebug(g, meta);
-}
-
-// --- voxel_world debug/test overlays -------------------------------------
-// Shown when the pipeline ships vis_meta.debug_viz (the debug_viz toggle).
-// Everything in it is in the SAME frame as the voxels (robot-relative), so the
-// overlays ride in the voxel group and inherit the robot-pose transform.
-//
-// What each overlay checks (see pipeline _viz_payload):
-//   raw     - the depth grid back-projected into camera frame (right/down/
-//             forward). Should look like a clean perspective pyramid of the
-//             real scene sitting off to the side (drawn at a +X offset so it
-//             doesn't cover the settled cloud).
-//   world   - the same points after the camera->robot mount transform. Matches
-//             the voxels when the mount pitch/yaw/height are right.
-//   frustum - the camera view volume in world frame; shows where the config
-//             says the camera points. If it doesn't resemble the real camera's
-//             line of sight, the mount config is wrong.
-//   cam_origin / axes_origin - where the camera and robot origin sit.
-let showVoxelDebug = true;
-window.toggleVoxelDebug = function () {
-  showVoxelDebug = !!document.getElementById('show-voxel-debug').checked;
-};
-
-function voxelDebugObjects(g) {
-  let sub = g.userData.dbgr;
-  if (sub) return sub;
-  const mkPts = (color, size, opacity) => {
-    const m = new THREE.PointsMaterial({
-      color, size,
-      vertexColors: true,
-      sizeAttenuation: true,
-      transparent: opacity != null,
-      opacity: opacity == null ? 1.0 : opacity,
-      depthWrite: false,
-    });
-    const p = new THREE.Points(new THREE.BufferGeometry(), m);
-    p.frustumCulled = false;
-    return p;
-  };
-  const group = new THREE.Group();
-  group.name = 'voxel-debug';
-  sub = {
-    group,
-    raw: mkPts(0xffffff, 0.028, 0.85),
-    world: mkPts(0x22ff88, 0.03, 0.95),
-    cam: mkPts(0xffffff, 0.06, 1),
-    frustum: new THREE.LineSegments(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: 0x00e0ff, transparent: true, opacity: 0.9 })
-    ),
-    axes: new THREE.LineSegments(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ vertexColors: true })
-    ),
-    floor: new THREE.LineSegments(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.45 })
-    ),
-  };
-  sub.raw.frustumCulled = sub.world.frustumCulled = sub.cam.frustumCulled = false;
-  sub.frustum.frustumCulled = sub.axes.frustumCulled = sub.floor.frustumCulled = false;
-  group.add(sub.raw, sub.world, sub.cam, sub.frustum, sub.axes, sub.floor);
-  g.add(group);
-  g.userData.dbgr = sub;
-  return sub;
-}
-
-// write points into a THREE.Points/LineSegments position buffer, growing it
-// (dispose + rebuild) only when the capacity is exceeded.
-function setBuffer(obj, points, colors) {
-  const n = points.length;
-  let attr = obj.geometry.attributes.position;
-  if (!attr || attr.count < n) {
-    if (obj.geometry) obj.geometry.dispose();
-    obj.geometry = new THREE.BufferGeometry();
-    obj.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
-    if (colors) {
-      obj.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
-    }
-    attr = obj.geometry.attributes.position;
-  }
-  const pa = attr.array;
-  const ca = colors && obj.geometry.attributes.color;
-  for (let i = 0; i < n; i++) {
-    const p = points[i];
-    pa[i * 3] = p[0]; pa[i * 3 + 1] = p[1]; pa[i * 3 + 2] = p[2];
-    if (ca) {
-      const c = colors[i];
-      ca.array[i * 3] = c[0]; ca.array[i * 3 + 1] = c[1]; ca.array[i * 3 + 2] = c[2];
-    }
-  }
-  attr.needsUpdate = true;
-  if (ca) ca.needsUpdate = true;
-  obj.geometry.setDrawRange(0, n);
-}
-
-function disposeDebugGroup(g) {
-  const sub = g.userData.dbgr;
-  if (!sub) return;
-  g.remove(sub.group);
-  const objs = [sub.raw, sub.world, sub.cam, sub.frustum, sub.axes, sub.floor];
-  for (const o of objs) {
-    if (o.geometry) o.geometry.dispose();
-    if (o.material) o.material.dispose();
-  }
-  g.userData.dbgr = null;
-}
-
-function updateVoxelDebug(g, meta) {
-  const d = meta && meta.debug_viz;
-  if (!d) { disposeDebugGroup(g); return; }
-  const sub = voxelDebugObjects(g);
-  sub.group.visible = showVoxelDebug;
-  if (!showVoxelDebug) return;
-
-  // raw camera-frame cloud, parked at +X so it doesn't cover the settled map,
-  // colored red(near) -> cyan(far) by forward distance
-  const near = d.near || 0.3, far = (d.far || 10.0) - near;
-  const rawColors = (d.raw || []).map((v) => {
-    const t = Math.min(1, Math.max(0, (v[2] - near) / far));
-    const c = new THREE.Color().setHSL((1 - t) * 0.66, 0.95, 0.5);
-    return [c.r, c.g, c.b];
-  });
-  const rawOffset = [2.5, 0, 0];
-  setBuffer(sub.raw, (d.raw || []).map((v) => [v[0] + rawOffset[0], v[1] + rawOffset[1], v[2] + rawOffset[2]]), rawColors);
-
-  // robot-frame cloud (greens); colored by sampled frame color when available
-  const wcol = (d.colors || []).map((c) => [c[0] / 255, c[1] / 255, c[2] / 255]);
-  setBuffer(sub.world, d.world || [], wcol);
-
-  setBuffer(sub.cam, [d.cam_origin || [0, 0, 0]], null);
-
-  // camera frustum: near rect (first 4) + far rect (last 4) + connectors
-  const fr = d.frustum || [];
-  if (fr.length >= 8) {
-    const pairs = [];
-    for (const [a, b] of [[0, 1], [1, 2], [2, 3], [3, 0],
-                          [4, 5], [5, 6], [6, 7], [7, 4],
-                          [0, 4], [1, 5], [2, 6], [3, 7]]) {
-      pairs.push(fr[a], fr[b]);
-    }
-    setBuffer(sub.frustum, pairs, null);
-  } else if (sub.frustum.visible) {
-    setBuffer(sub.frustum, [], null);
-  }
-
-  // robot-frame axes: X red, Y green, Z blue, drawn from the axes origin
-  const ao = d.axes_origin || [0, 0, 0];
-  const axisPts = [], axisCols = [];
-  for (const [tip, col] of [
-    [[ao[0] + 1, ao[1], ao[2]], [1, 0, 0]],
-    [[ao[0], ao[1] + 1, ao[2]], [0, 1, 0]],
-    [[ao[0], ao[1], ao[2] + 1], [0, 0, 1]],
-  ]) {
-    axisPts.push(ao, tip);
-    axisCols.push(col, col);
-  }
-  setBuffer(sub.axes, axisPts, axisCols);
-
-  // settled-floor grid: 10 x 10 m at z=0 around the origin
-  const floorPts = [];
-  for (let i = -5; i <= 5; i++) {
-    floorPts.push([i, -5, 0], [i, 5, 0], [-5, i, 0], [5, i, 0]);
-  }
-  setBuffer(sub.floor, floorPts, null);
 }
 
 const VIS_RENDERERS = {

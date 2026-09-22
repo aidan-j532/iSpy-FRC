@@ -125,8 +125,13 @@ def _coerce_setting_value(value, defn: dict):
     return value
 
 
-def _build_vision_pipeline_payloads():
+def _build_vision_pipeline_payloads(admin=None):
     from iSpy.vision.pipelines import get_pipeline_classes
+
+    # Experimental mount-testing pipelines that are only offered to admins.
+    # admin=True shows exactly these; admin=False hides them; admin=None (no
+    # admin setting, i.e. existing callers/tests) shows everything.
+    _ADMIN_ONLY_PIPELINES = ("voxel_world", "qr_code", "optical_flow")
 
     pipelines = []
     try:
@@ -136,6 +141,12 @@ def _build_vision_pipeline_payloads():
         return pipelines
 
     for name, cls in sorted(vision_classes.items()):
+        if admin is not None:
+            is_admin_pipeline = name in _ADMIN_ONLY_PIPELINES
+            if admin and not is_admin_pipeline:
+                continue
+            if not admin and is_admin_pipeline:
+                continue
         try:
             schema = cls.config_schema()
         except Exception:
@@ -148,6 +159,7 @@ def _build_vision_pipeline_payloads():
         payload = {
             "name": name,
             "class_name": cls.__name__,
+            "label": getattr(cls, "display_name", None),
             "config_schema": schema,
             "show_common_fields": bool(
                 getattr(cls, "show_common_fields", lambda: True)()
