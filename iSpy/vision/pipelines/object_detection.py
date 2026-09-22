@@ -1113,11 +1113,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         )
 
     def run(self):
-        if self.is_image:
-            frame = self.get_frame()
-        else:
-            with self.frame_lock:
-                frame = self.frame
+        frame = self.get_frame()
         if frame is None:
             return [], None
 
