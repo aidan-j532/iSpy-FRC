@@ -791,7 +791,7 @@ function populatePipelineSelect() {
     const option = document.createElement('option');
     option.value = name;
     const meta = pipelineSchemas[name] || {};
-    option.textContent = humanizePipelineName(name) + (meta.beta ? ' (beta)' : '');
+    option.textContent = meta.label || (humanizePipelineName(name) + (meta.beta ? ' (beta)' : ''));
 
     if (name === 'object_detection') {
       option.style.fontWeight = '700'; // so i make it obvious that this is the primary pipeline
@@ -1793,13 +1793,15 @@ async function refreshCameras() {
     cameras.forEach(cam => {
       const name = cam.name;
       const age = cam.age_ms != null ? cam.age_ms + 'ms' : '';
-      if (!knownCameras.has(name)) {
-        grid.appendChild(buildCameraCard(name, true, age, cam));
-        knownCameras.set(name, { streaming: true });
-      } else if (!knownCameras.get(name).streaming) {
+      const isStreaming = cam.streaming === true;
+      const prev = knownCameras.get(name);
+      if (!prev) {
+        grid.appendChild(buildCameraCard(name, isStreaming, age, cam));
+        knownCameras.set(name, { streaming: isStreaming });
+      } else if (prev.streaming !== isStreaming) {
         const oldCard = grid.querySelector(`[data-camera="${name}"]`);
-        if (oldCard) oldCard.replaceWith(buildCameraCard(name, true, age, cam));
-        knownCameras.set(name, { streaming: true });
+        if (oldCard) oldCard.replaceWith(buildCameraCard(name, isStreaming, age, cam));
+        knownCameras.set(name, { streaming: isStreaming });
       } else {
         const card = grid.querySelector(`[data-camera="${name}"]`);
         const meta = card.querySelector('.cam-meta');

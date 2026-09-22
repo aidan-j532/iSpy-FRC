@@ -79,11 +79,26 @@ class ObjectTracker(TrackerBase):
         for det in detections:
             if not self._exists_and_update(det):
                 det.alive_time = self.stale_threshold
+                # the object may have just been filtered out as destroyed -
+                # reset_time() clears destroyed/alive so re-appending gives it
+                # a fresh age clock instead of an instantly-dead track
+                det.reset_time()
                 self.tracked_objects.append(det)
 
     def _exists_and_update(self, new_det: Object) -> bool:
         if not self.tracked_objects:
             return False
+
+        # A persistent detection keeps a stable id across ticks (the voxel
+        # world reuses one Object). When the tracked entry already carries
+        # that id it IS the same object - re-gating it by distance when its
+        # centroid jumps (a moving robot re-measures the map's mean) would
+        # spawn a ghost duplicate and then let the original die on its stale
+        # timer.
+        for existing in self.tracked_objects:
+            if existing.id == new_det.id:
+                existing.reset_time()
+                return True
 
         new_pos = np.array(new_det.get_position())
 

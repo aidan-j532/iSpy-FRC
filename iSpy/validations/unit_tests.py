@@ -1038,5 +1038,92 @@ class TestCalibrationGating(unittest.TestCase):
             camera.destroy()
 
 
+class TestObjectResetRegression(unittest.TestCase):
+    def test_reset_time_clears_destroyed_and_alive(self):
+        # Bug 3: age an Object past alive_time so update() marks it destroyed,
+        # then reset_time() must clear destroyed/alive so the next update()
+        # does not immediately re-destroy it (a persistent pipeline reuses one
+        # Object forever).
+        import time
+
+        from iSpy.vision.Object import Object
+
+        obj = Object(x=0.0, y=0.0, z=0.0, alive_time=0.01)
+        obj.start_time = time.perf_counter() - 5.0
+        obj.update()
+        self.assertTrue(obj.destroyed)
+
+        obj.reset_time()
+        self.assertFalse(obj.destroyed)
+        self.assertEqual(obj.alive, 0)
+
+        obj.update()
+        self.assertFalse(obj.destroyed, "reset object must not re-destroy")
+
+    def test_tracker_revives_stale_detection(self):
+        # Bug 3: after an object ages out (destroyed -> filtered -> re-appended),
+        # _merge must restart its age clock instead of leaving it permanently
+        # destroyed.
+        import time
+
+        from iSpy.plugins.trackers.BuiltIn.ObjectTracker import ObjectTracker
+        from iSpy.vision.Object import Object
+
+        tracker = ObjectTracker(
+            {
+                "config": {"distance_threshold": 1.0, "stale_threshold": 0.05},
+                "global_config": None,
+            }
+        )
+        obj = Object(x=1.0, y=0.0, z=0.0, name="voxel_world", id=7)
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+
+        # age the object far past its stale threshold so the next tick drops it
+        obj.start_time = time.perf_counter() - 5.0
+        obj.update()
+        self.assertTrue(obj.destroyed)
+
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(
+            len(tracker.tracked_objects),
+            1,
+            "stale-absent detection must be revived, not left destroyed",
+        )
+        # and the revived track must survive the following tick too
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+
+    def test_ekf_tracker_revives_stale_detection(self):
+        import time
+
+        from iSpy.plugins.trackers.BuiltIn.EKFTracker import EKFTracker
+        from iSpy.vision.Object import Object
+
+        tracker = EKFTracker(
+            {
+                "config": {
+                    "process_noise": 0.5,
+                    "measurement_noise": 0.1,
+                    "distance_threshold": 1.0,
+                    "stale_threshold": 0.05,
+                },
+                "global_config": None,
+            }
+        )
+        obj = Object(x=1.0, y=0.0, z=0.0, name="voxel_world", id=7)
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+
+        obj.start_time = time.perf_counter() - 5.0
+        obj.update()
+        self.assertTrue(obj.destroyed)
+
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+        tracker.update([obj], 0.0, 0.0, 0.0)
+        self.assertEqual(len(tracker.tracked_objects), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

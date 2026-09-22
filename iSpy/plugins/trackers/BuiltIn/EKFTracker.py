@@ -106,6 +106,10 @@ class EKFTracker(TrackerBase):
         for det in detections:
             if not self._exists_and_update(det):
                 det.alive_time = self.stale_threshold
+                # the object may have just been filtered out as destroyed -
+                # reset_time() clears destroyed/alive so re-appending gives it
+                # a fresh age clock instead of an instantly-dead track
+                det.reset_time()
                 self.tracked_objects.append(det)
                 now = time.monotonic()
                 self._filters[det.id] = (
@@ -120,6 +124,17 @@ class EKFTracker(TrackerBase):
     def _exists_and_update(self, new_det: Object) -> bool:
         if not self.tracked_objects:
             return False
+
+        # Same stable-id rule as ObjectTracker: a persistent detection (e.g.
+        # the voxel world's single reused Object) must re-attach to its own
+        # track regardless of how far its centroid moved between ticks, or a
+        # ghost duplicate gets spawned and the original dies on its stale timer.
+        # The Kalman smoothing is skipped for this case on purpose - the
+        # pipeline re-anchors the position every tick anyway.
+        for existing in self.tracked_objects:
+            if existing.id == new_det.id:
+                existing.reset_time()
+                return True
 
         new_pos = np.array(new_det.get_position())
 

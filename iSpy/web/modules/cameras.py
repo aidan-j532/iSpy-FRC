@@ -1045,7 +1045,10 @@ class CamerasModule(WebModule):
         )
 
     def _vision_pipelines(self):
-        return jsonify(pipelines=_build_vision_pipeline_payloads())
+        config = self.context["config"]
+        return jsonify(
+            pipelines=_build_vision_pipeline_payloads(admin=config.get("admin"))
+        )
 
     def _camera_schemas(self):
         # Serve each camera-source's config_schema() straight from the backend
@@ -2098,10 +2101,18 @@ class CamerasModule(WebModule):
 
     def _api_cameras(self):
         now = time.monotonic()
+        config = self.context.get("config")
+        configured = {}
+        if config:
+            for name, entry in (config.get("camera_configs") or {}).items():
+                if isinstance(entry, dict):
+                    configured.setdefault(name, entry)
         with self.lock:
             self._evict_stale(now)
             cameras = []
+            streamed = set()
             for n, d in self.dims.items():
+                streamed.add(n)
                 payload = {
                     "name": n,
                     "w": d[0],
@@ -2131,6 +2142,33 @@ class CamerasModule(WebModule):
                     payload["ready"] = None
                     payload["status"] = None
                     payload["state"] = None
+                payload["streaming"] = True
+                cameras.append(payload)
+
+            # configured-but-idle cameras would otherwise vanish from the grid
+            # (they only ever appear while frames are flowing), which reads as
+            # "no cameras" on a machine whose camera is simply not streaming -
+            # list them so the page shows a card even before vision starts.
+            for name, entry in configured.items():
+                if name in streamed:
+                    continue
+                payload = {
+                    "name": name,
+                    "w": None,
+                    "h": None,
+                    "age_ms": None,
+                    "source": entry.get("source"),
+                    "ready": None,
+                    "status": None,
+                    "state": None,
+                    "calibrated": _camera_calibrated(entry),
+                    "pipeline": (
+                        get_pipeline_name(entry)
+                        if isinstance(entry, dict)
+                        else "object_detection"
+                    ),
+                    "streaming": False,
+                }
                 cameras.append(payload)
         return jsonify(cameras=cameras)
 

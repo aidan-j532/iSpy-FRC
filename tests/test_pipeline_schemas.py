@@ -182,6 +182,29 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         self.assertIsNotNone(frame)
         self.assertTrue(np.all(frame == 0))
 
+    def test_admin_mode_gates_experimental_pipelines(self):
+        all_names = {p["name"] for p in _build_vision_pipeline_payloads()}
+        admin_names = {
+            p["name"] for p in _build_vision_pipeline_payloads(admin=True)
+        }
+        user_names = {
+            p["name"] for p in _build_vision_pipeline_payloads(admin=False)
+        }
+        # admin ON: exactly the experimental pipelines
+        self.assertEqual(admin_names, {"qr_code", "optical_flow"})
+        # admin OFF (normal users): those hidden, the rest kept
+        self.assertFalse(admin_names & user_names)
+        self.assertIn("object_detection", user_names)
+        self.assertIn("april_tag", user_names)
+        self.assertIn("depth_anything", user_names)
+        # no admin setting (default): everything is offered as before
+        self.assertEqual(all_names, admin_names | user_names)
+
+    def test_pipelines_without_display_name_carry_null_label(self):
+        by_name = {p["name"]: p for p in _build_vision_pipeline_payloads()}
+        for name in ("object_detection", "qr_code"):
+            self.assertIsNone(by_name[name]["label"])
+
 
 if __name__ == "__main__":
     unittest.main()

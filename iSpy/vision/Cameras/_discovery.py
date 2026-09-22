@@ -3,9 +3,12 @@ import glob
 import os
 import platform
 import re
+import struct
 import subprocess
 
 import cv2
+
+_WINDOWS_CAMERA_CLASS_GUID = "e5323777-f976-4f5b-9b55-b94699c46e44"
 
 
 @contextlib.contextmanager
@@ -269,6 +272,135 @@ def _windows_camera_name(iface):
     return name or None
 
 
+# Windows has no decode of "currently plugged in" from the DeviceClasses
+# registry key - it keeps entries for cameras that were unplugged long ago
+# (ghosts that then pollute the device list and shift every MSMF index).
+# In the interface class, DIGCF_PRESENT + SetupDiEnumDeviceInterfaces
+# returns exactly the cameras that exist right now, and the associated
+# SP_DEVINFO_DATA hands us the canonical instance id to match ghosts with.
+
+_DIGCF_PRESENT = 0x2
+_DIGCF_DEVICEINTERFACE = 0x10
+
+
+def _windows_present_camera_instance_ids():
+    """Instance ids (e.g. USB\\VID..&PID..&MI_00\\..) of cameras plugged in
+    right now, or None when this can't be determined (caller falls back to
+    the registry list, i.e. previous behaviour)."""
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+
+        setupapi = ctypes.WinDLL("setupapi", use_last_error=True)
+        cm = ctypes.WinDLL("cfgmgr32", use_last_error=True)
+
+        setupapi.SetupDiGetClassDevsW.restype = ctypes.c_void_p
+        setupapi.SetupDiGetClassDevsW.argtypes = [
+            ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint,
+        ]
+        setupapi.SetupDiEnumDeviceInterfaces.restype = ctypes.c_int
+        setupapi.SetupDiEnumDeviceInterfaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
+            ctypes.c_void_p,
+        ]
+        setupapi.SetupDiGetDeviceInterfaceDetailW.restype = ctypes.c_int
+        setupapi.SetupDiGetDeviceInterfaceDetailW.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
+            ctypes.c_void_p, ctypes.c_void_p,
+        ]
+        setupapi.SetupDiDestroyDeviceInfoList.restype = ctypes.c_int
+        setupapi.SetupDiDestroyDeviceInfoList.argtypes = [ctypes.c_void_p]
+        cm.CM_Get_Device_IDW.restype = ctypes.c_uint
+        cm.CM_Get_Device_IDW.argtypes = [
+            ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint,
+        ]
+
+        class SP_DEVINFO_DATA(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wt.DWORD),
+                ("ClassGuid", wt.BYTE * 16),
+                ("DevInst", wt.DWORD),
+                ("Reserved", ctypes.c_void_p),
+            ]
+
+        class SP_DEVICE_INTERFACE_DATA(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wt.DWORD),
+                ("InterfaceClassGuid", wt.BYTE * 16),
+                ("Flags", wt.DWORD),
+                ("Reserved", ctypes.c_void_p),
+            ]
+
+        parts = _WINDOWS_CAMERA_CLASS_GUID.split("-")
+        raw = struct.pack(
+            "<IHH8s",
+            int(parts[0], 16),
+            int(parts[1], 16),
+            int(parts[2], 16),
+            bytes.fromhex(parts[3] + parts[4]),
+        )
+        guid = (ctypes.c_byte * 16).from_buffer_copy(raw)
+        guid_ptr = ctypes.cast(ctypes.pointer(guid), ctypes.c_void_p)
+        hdevs = setupapi.SetupDiGetClassDevsW(
+            guid_ptr, None, None, _DIGCF_PRESENT | _DIGCF_DEVICEINTERFACE
+        )
+        if not hdevs or hdevs == 0xFFFFFFFFFFFFFFFF:
+            return None
+
+        ids = set()
+        try:
+            i = 0
+            while True:
+                ifd = SP_DEVICE_INTERFACE_DATA()
+                ifd.cbSize = ctypes.sizeof(SP_DEVICE_INTERFACE_DATA)
+                if not setupapi.SetupDiEnumDeviceInterfaces(
+                    hdevs, None, guid_ptr, i, ctypes.byref(ifd)
+                ):
+                    break
+                i += 1
+                devinfo = SP_DEVINFO_DATA()
+                devinfo.cbSize = ctypes.sizeof(SP_DEVINFO_DATA)
+                req = wt.DWORD()
+                setupapi.SetupDiGetDeviceInterfaceDetailW(
+                    hdevs, ctypes.byref(ifd), None, 0,
+                    ctypes.byref(req), ctypes.byref(devinfo),
+                )
+                # '\\?\...' wide path, plus room for a long instance id
+                size = max(req.value, 2048)
+                buf = ctypes.create_string_buffer(size + 8)
+                (ctypes.c_uint.from_buffer(buf)).value = 8
+                if not setupapi.SetupDiGetDeviceInterfaceDetailW(
+                    hdevs, ctypes.byref(ifd), buf, size + 8,
+                    None, ctypes.byref(devinfo),
+                ):
+                    continue
+                instance = ctypes.create_unicode_buffer(1024)
+                if cm.CM_Get_Device_IDW(
+                    devinfo.DevInst, instance, 1024, 0
+                ) == 0 and instance.value:
+                    ids.add(instance.value.casefold())
+        finally:
+            setupapi.SetupDiDestroyDeviceInfoList(hdevs)
+        # empty result is ambiguous (no cameras? silent api failure?) - leave
+        # the caller to fall back to the registry list
+        return ids or None
+    except Exception:
+        return None
+
+
+def _windows_camera_is_present(cam, present_ids):
+    # registry interface path:  ##?#USB#VID_x&PID_y&MI_00#instance#{guid}
+    # present instance id:      USB\VID_x&PID_y&MI_00\instance
+    body = cam.get("hw_id") or ""
+    if not body:
+        return False
+    for prefix in ("##?#", "#?#"):
+        if body.startswith(prefix):
+            body = body[len(prefix) :]
+            break
+    return body.replace("#", "\\").casefold() in present_ids
+
+
 def _probe_index_devices(claimed):
     devices = []
     for i in range(0, 10):
@@ -357,19 +489,28 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
     elif system_name == "Windows":
         # no index probing - MSMF cant open by index, every attempt spams
         # "VIDEOIO(MSMF)..." to stderr, and discover reruns on refresh so
-        # it'd spam forever. registry key order == CAP_MSMF index order
+        # it'd spam forever.
+        # DeviceClasses keeps entries for unplugged cameras (ghosts), so
+        # drop anything not physically present and renumber by position
+        # among present devices - once a USB camera is unplugged the
+        # registry order stops matching CAP_MSMF index order.
+        present = _windows_present_camera_instance_ids()
         seen_interfaces = set()
+        index = 0
         for cam in _windows_cameras_from_registry():
+            if present and not _windows_camera_is_present(cam, present):
+                continue
             dedup = cam.get("dedup_key") or cam.get("hw_id")
             if dedup in seen_interfaces:
                 continue
             seen_interfaces.add(dedup)
-            index = str(cam["index"])
-            if index in claimed:
+            cam_index = str(index)
+            index += 1
+            if cam_index in claimed:
                 continue
             devices.append(
                 {
-                    "path": index,
+                    "path": cam_index,
                     "name": cam["name"],
                     "device_id": cam.get("hw_id"),
                 }
