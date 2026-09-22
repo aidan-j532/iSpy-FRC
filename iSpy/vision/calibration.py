@@ -2,7 +2,6 @@ import logging
 
 import cv2
 import numpy as np
-import scipy.optimize
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +190,12 @@ def _calibrate_scipy(all_corners, all_ids, board, img_size):
     K0 = _estimate_initial_intrinsics(all_obj, all_img, img_size)
     rvecs0, tvecs0 = _estimate_initial_extrinsics(all_obj, all_img, K0)
     x0 = _pack_params(K0, np.zeros(5), rvecs0, tvecs0)
+
+    try:
+        import scipy.optimize  # lazy import: only needed for this fallback path
+    except Exception as exc:
+        logger.warning("scipy unavailable - skipping refinement calibration: %s", exc)
+        return None
 
     result = scipy.optimize.least_squares(
         _calibrate_scipy_residuals,

@@ -318,7 +318,7 @@ def _downscale_calib_images(
     return tmp_dir
 
 
-def _rknn_wheel_targets() -> list[tuple[str, str]]:
+def _rknn_wheel_targets(report_missing: bool = True) -> list[tuple[str, str]]:
     key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
     targets: list[tuple[str, str]] = []
 
@@ -334,7 +334,7 @@ def _rknn_wheel_targets() -> list[tuple[str, str]]:
         else:
             logger.warning("Lite wheel not found in package: %s", local_lite)
 
-    if not targets:
+    if not targets and report_missing:
         supported = sorted(f"{a} {v}" for (a, v) in _RKNN_FULL_WHEELS if a == key[0])
         logger.error(
             "No RKNN wheel for %s (Python %s). Supported: %s",
@@ -378,7 +378,7 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
             )
         ],
     }
-    rknn_targets = _rknn_wheel_targets()
+    rknn_targets = _rknn_wheel_targets(report_missing=False)
     if rknn_targets:
         deps["rknn"] = rknn_targets + [
             ("onnx", "onnx<1.17"),
@@ -539,7 +539,22 @@ def install_special_dependencies(auto_install: bool = False):
 
     deps = BACKEND_DEPENDENCIES.get(backend)
     if not deps:
-        logger.info("No extra dependencies required for %s", backend)
+        if backend == "rknn":
+            logger.error(
+                "No RKNN wheel available for %s (Python %s). "
+                "Supported: %s",
+                platform.machine(),
+                _PY_TAG,
+                ", ".join(
+                    sorted(
+                        f"{a} {v}"
+                        for (a, v) in _RKNN_FULL_WHEELS
+                        if a == ("aarch64" if _IS_AARCH64 else "x86_64")
+                    )
+                ),
+            )
+        else:
+            logger.info("No extra dependencies required for %s", backend)
         return
 
     on_jetson = has_jetson()
