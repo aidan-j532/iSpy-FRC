@@ -13,10 +13,13 @@ from iSpy.config.AutoOpt import has_nvidia, has_rockchip_npu, has_tensorrt, has_
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.optimizer import _convert_model_subprocess
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if not (_PROJECT_ROOT / "iSpy").is_dir():
-    _PROJECT_ROOT = Path.cwd()
-sys.path.insert(0, str(_PROJECT_ROOT))
+_REPO_CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
+if (
+    (_REPO_CHECKOUT_ROOT / "iSpy" / "__init__.py").exists()
+    and str(_REPO_CHECKOUT_ROOT) not in sys.path
+):
+    sys.path.insert(0, str(_REPO_CHECKOUT_ROOT))
+_PROJECT_ROOT = Path.cwd()
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -98,6 +101,54 @@ def _add_model_paths_from_config(vm: dict, out: list[Path]):
             p = _PROJECT_ROOT / p
         if p.suffix == ".pt" and p.exists():
             out.append(p.resolve())
+
+
+# --------------------------------------------------------------------------
+# Zero-config fallback: if nothing was found anywhere and the user didn't
+# pass --model, grab a tiny stock YOLOv8n checkpoint so `ispy-bench` still
+# has *something* to test in a brand-new environment (a fresh Colab runtime
+# with no YoloModels/ or Config/ around yet). Same checkpoint/license terms
+# as the "_default_detect.pt" stock model boot/default_models.py downloads
+# (Ultralytics, AGPL-3.0) - it is NOT bundled with ispy-frc, only fetched
+# on demand and only when nothing else is available.
+# --------------------------------------------------------------------------
+_DEFAULT_BENCH_MODEL_NAME = "_default_detect.pt"
+_DEFAULT_BENCH_MODEL_URL = (
+    "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt"
+)
+
+
+def _download_default_bench_model() -> Path | None:
+    target_dir = _PROJECT_ROOT / "YoloModels" / "pytorch"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / _DEFAULT_BENCH_MODEL_NAME
+    if target.exists() and target.stat().st_size > 1024:
+        return target
+
+    print(
+        f"No .pt models found under {_PROJECT_ROOT} - downloading a stock "
+        f"YOLOv8n checkpoint (Ultralytics, AGPL-3.0) to {target} ..."
+    )
+    try:
+        import requests
+
+        tmp = target.with_suffix(".part")
+        with requests.get(_DEFAULT_BENCH_MODEL_URL, stream=True, timeout=60) as resp:
+            resp.raise_for_status()
+            with open(tmp, "wb") as fh:
+                for chunk in resp.iter_content(chunk_size=1 << 16):
+                    fh.write(chunk)
+        tmp.replace(target)
+    except Exception as exc:
+        print(f"Automatic download failed: {exc}")
+        return None
+
+    if target.stat().st_size < 1024:
+        target.unlink(missing_ok=True)
+        print("Downloaded file looked truncated - discarding it.")
+        return None
+
+    return target
 
 
 def _npu_masks() -> list[tuple[int, str]]:
@@ -245,6 +296,18 @@ def main():
     parser.add_argument("--model", default=None, help="benchmark a specific .pt file")
     args = parser.parse_args()
 
+    try:
+        import torch  # noqa: F401
+
+        torch_note = "found"
+    except ImportError:
+        torch_note = (
+            "NOT FOUND - install it (`pip install torch`) or every backend "
+            "below will fail to load"
+        )
+    print(f"Working directory : {_PROJECT_ROOT}")
+    print(f"torch              : {torch_note}")
+
     active = {k: v for k, v in detect_test_plan().items() if v is not None}
     if not active:
         print("No supported backend detected on this machine.")
@@ -257,7 +320,16 @@ def main():
         pt_files = find_pt_files()
 
     if not pt_files:
-        print("No .pt models found.")
+        downloaded = _download_default_bench_model()
+        pt_files = [downloaded] if downloaded else []
+
+    if not pt_files:
+        print(
+            "No .pt models found, and the automatic download failed "
+            "(probably no network access).\n"
+            "Point ispy-bench at a model explicitly instead:\n"
+            "  ispy-bench --model /path/to/your_model.pt"
+        )
         return 1
 
     print(f"Testing {len(active)} backend(s): {', '.join(active)}")
@@ -319,9 +391,7 @@ def main():
         print(f"  {name:40s} {_fmt_result(r)}")
 
     output_path = (
-        Path(args.output)
-        if args.output
-        else Path.cwd() / "Outputs" / "benchmark_results.json"
+        Path(args.output) if args.output else _PROJECT_ROOT / "Outputs" / "benchmark_results.json"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
