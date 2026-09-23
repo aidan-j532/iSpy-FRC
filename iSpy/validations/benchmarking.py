@@ -209,7 +209,52 @@ def detect_test_plan() -> dict:
     return plan
 
 
+# Formats that expect quantization (rknn/tflite are int8-only) or support it
+# (engine/openvino get a real int8 build from the calibration dataset) get a
+# quantized artifact whenever we can build one, because ispy-bench wants the
+# fastest possible FPS for the device - never a float32 fallback.
 _QUANTIZABLE_FORMATS = {"rknn", "tflite", "openvino", "engine"}
+
+
+def _recommended_backend_plan() -> dict[str, tuple]:
+    """Single-backend plan: the exact backend normal iSpy would pick for this
+    machine (AutoOpt.recommend_format) with default settings - no prospecting,
+    no benchmark-only knobs. Formats GenericYolo can't live-run fall back to
+    onnx, which is what normal iSpy would use anyway."""
+    from iSpy.config.AutoOpt import recommend_format, resolve_openvino_device
+
+    fmt = recommend_format(ignore_dependencies=True)
+    if fmt == "engine" and not has_tensorrt():
+        # normal iSpy needs TensorRT installed to build *and* run an engine -
+        # without it recommend_format is wrong, fall back to onnx like the
+        # optimizer's own engine failure path does
+        fmt = "onnx"
+    if fmt in ("coreml", "hailo", "qnn"):
+        fmt = "onnx"
+
+    if fmt == "onnx":
+        if has_nvidia():
+            dev = _cuda_devices()[0][0]
+            label = "Auto/ONNX-CUDA"
+        else:
+            dev = "cpu"
+            label = "Auto/ONNX-CPU"
+    elif fmt == "engine":
+        dev = _cuda_devices()[0][0]
+        label = "Auto/TensorRT"
+    elif fmt == "openvino":
+        dev = resolve_openvino_device()
+        label = "Auto/OpenVINO"
+    elif fmt == "rknn":
+        dev = 0
+        label = "Auto/RKNN"
+    elif fmt == "tflite":
+        dev = "cpu"
+        label = "Auto/TFLite"
+    else:  # tpu
+        dev = "tpu"
+        label = "Auto/TPU"
+    return {fmt: (fmt, dev, [(None, label)])}
 
 
 def _ensure_calibration_dataset(fmt) -> Path:
@@ -249,7 +294,6 @@ def make_base_config(pt_path, model_path, device) -> dict:
         "file_path": str(model_path),
         "source_pt": str(pt_path),
         "task": "detect",
-        "num_classes": 1,
         "input_size": [640, 640],
         "min_conf": 0.5,
         "device": device,
@@ -366,6 +410,12 @@ def main():
     parser.add_argument("--duration", type=float, default=5.0, help="seconds per run")
     parser.add_argument("--output", default=None, help="output json path")
     parser.add_argument("--model", default=None, help="benchmark a specific .pt file")
+    parser.add_argument(
+        "--all-backends",
+        action="store_true",
+        help="prospect every reachable backend (pt/onnx per CUDA device, rknn "
+        "NPU core masks, etc.) instead of the single recommend_format() pick",
+    )
     args = parser.parse_args()
 
     try:
@@ -380,7 +430,8 @@ def main():
     print(f"Working directory : {_PROJECT_ROOT}")
     print(f"torch              : {torch_note}")
 
-    active = {k: v for k, v in detect_test_plan().items() if v is not None}
+    plan = detect_test_plan() if args.all_backends else _recommended_backend_plan()
+    active = {k: v for k, v in plan.items() if v is not None}
     if not active:
         print("No supported backend detected on this machine.")
         return 1
@@ -416,8 +467,22 @@ def main():
 
         for fmt, device, masks in active.values():
             model_path = get_or_convert(pt_path, fmt)
+            fallback_fmt = None
+            if model_path is None and not args.all_backends and fmt != "onnx":
+                # recommended backend couldn't build (e.g. tensorrt absent) -
+                # normal iSpy would fall back to onnx too, so still report a
+                # number instead of silently skipping the model
+                fallback_fmt, model_path = "onnx", get_or_convert(pt_path, "onnx")
             if model_path is None:
                 continue
+            if fallback_fmt:
+                device = _cuda_devices()[0][0] if has_nvidia() else "cpu"
+                fmt = fallback_fmt
+                masks = [
+                    (mask, "Auto/ONNX-CUDA (fallback)" if has_nvidia() else "Auto/ONNX-CPU (fallback)")
+                    for mask, _ in masks
+                ]
+
             cfg = fill_missing_config(make_base_config(pt_path, model_path, device))
 
             for core_mask, label in masks:
