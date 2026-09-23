@@ -1890,6 +1890,9 @@ def convert_model(
         else:
             logger.error("Conversion to %s failed: %s", target_format, e, exc_info=True)
         return model_file
+    except ImportError as e:
+        logger.error("Conversion to %s failed: %s", target_format, e)
+        return model_file
     except Exception as e:
         logger.error("Conversion to %s failed: %s", target_format, e, exc_info=True)
         return model_file

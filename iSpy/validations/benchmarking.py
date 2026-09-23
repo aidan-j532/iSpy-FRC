@@ -209,11 +209,36 @@ def detect_test_plan() -> dict:
     return plan
 
 
+_QUANTIZABLE_FORMATS = {"rknn", "tflite", "openvino", "engine"}
+
+
+def _ensure_calibration_dataset(fmt) -> Path:
+    from iSpy.dataset.dataset import calib_count_for_format, prepare_quantization_dataset
+    from iSpy.vision.optimizer import default_quantization_dataset_dir
+
+    ds = default_quantization_dataset_dir()
+    prepare_quantization_dataset(
+        str(ds),
+        boot=False,
+        keywords=[],
+        count=calib_count_for_format(fmt),
+    )
+    return ds
+
+
 def get_or_convert(pt_path, fmt, input_size=(640, 640)):
     if fmt in ("tpu", "pt"):
         return pt_path
+    quantize = fmt in _QUANTIZABLE_FORMATS
+    dataset_path = str(_ensure_calibration_dataset(fmt)) if quantize else None
     with _quiet():
-        result = _convert_model_subprocess(str(pt_path), fmt, input_size)
+        result = _convert_model_subprocess(
+            str(pt_path),
+            fmt,
+            input_size,
+            quantize=quantize,
+            dataset_path=dataset_path,
+        )
     if not result.exists() or result == pt_path:
         return None
     return result
@@ -231,6 +256,48 @@ def make_base_config(pt_path, model_path, device) -> dict:
     }
 
 
+_BENCH_IMAGE_PATH: Path | None = None
+
+
+def _bench_source_image() -> Path:
+    """Return (and once create) a synthetic image the benchmark camera uses.
+
+    is_image=True sources make the detection pipeline's preprocess worker
+    feed the queue continuously, so real per-frame inference is timed.
+    """
+    global _BENCH_IMAGE_PATH
+    if _BENCH_IMAGE_PATH is not None:
+        return _BENCH_IMAGE_PATH
+
+    import cv2
+    import numpy as np
+
+    out = _PROJECT_ROOT / "Outputs" / "bench_source.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if not out.exists():
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        img[:] = (35, 35, 35)
+        rng = np.random.default_rng(0)
+        noise = rng.integers(0, 80, (480, 640, 3), dtype=np.uint8)
+        img = cv2.addWeighted(img, 0.4, noise, 0.6, 0)
+        cv2.circle(img, (320, 240), 110, (60, 120, 220), -1)
+        cv2.rectangle(img, (80, 70), (250, 260), (60, 200, 90), -1)
+        cv2.putText(
+            img,
+            "bench",
+            (30, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (220, 220, 220),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.imwrite(str(out), img, [cv2.IMWRITE_PNG_COMPRESSION, 6])
+
+    _BENCH_IMAGE_PATH = out
+    return out
+
+
 def benchmark(model_config, core_mask, duration=5.0):
     from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
     from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
@@ -238,7 +305,12 @@ def benchmark(model_config, core_mask, duration=5.0):
     config = iSpyConfig()
     cam_entry = {
         "name": "bench",
-        "source": 99,  # invalid source -> ObjectDetectionPipeline feeds placeholder frames
+        # static image source (is_image=True) -> the pipeline's preprocess
+        # worker keeps feeding frames, so real inference gets timed. An
+        # invalid device source never connects, the preproc queue stays
+        # empty, and every run() just burns the 0.1s queue timeout -> the
+        # benchmark reads exactly 10.0 FPS for every backend.
+        "source": str(_bench_source_image()),
         "fps_cap": 1000,
         "yaw": 0,
         "pitch": 0,
