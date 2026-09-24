@@ -606,7 +606,10 @@ class TestValidateSystemRegression(unittest.TestCase):
 
         bad_dir = Path(tmp.name) / "YoloModels" / "pytorch"
         bad_dir.mkdir(parents=True)
-        (bad_dir / "corrupt model!.txt").write_bytes(b"junk")
+        # NOT a .txt file - validate_model_files exempts .txt from the
+        # invalid-path check, so a .txt "corrupt model" would slip through and
+        # validate_system() would recurse into run_unit_tests() forever.
+        (bad_dir / "corrupt model.svb").write_bytes(b"junk")
         os.chdir(tmp.name)
 
         # validate_model_files() raises on the invalid path -> validate_system()

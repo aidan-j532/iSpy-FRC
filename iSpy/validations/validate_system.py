@@ -58,7 +58,20 @@ def validate_config_files() -> None:
     logger.info("All config files are valid.")
 
 
+_unit_tests_running = False
+
+
 def run_unit_tests() -> bool:
+    global _unit_tests_running
+    if _unit_tests_running:
+        # validate_system() runs this suite, and a regression test calls
+        # validate_system() from inside the suite (after os.chdir into a temp
+        # dir). Re-entering would recurse forever and explode temp dirs / CWD
+        # cleanup on Windows - short-circuit the nested run instead.
+        logger.debug("run_unit_tests re-entered - skipping nested run.")
+        return True
+
+    _unit_tests_running = True
     logger.info("Running unit tests...")
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -86,6 +99,7 @@ def run_unit_tests() -> bool:
         return result.wasSuccessful()
     finally:
         logging.disable(logging.NOTSET)
+        _unit_tests_running = False
 
 
 def get_addon_setting(

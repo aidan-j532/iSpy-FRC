@@ -420,10 +420,17 @@ class CameraBase:
 
             time.sleep(0.15)
 
-        try:
-            self.cap = self._open_capture()
-        except ValueError:
-            self.cap = self._open_capture(extra_backends=True)
+        if platform.system() == "Windows":
+            # MSMF raw-open can hang indefinitely when invoked from a worker
+            # thread on some UVC webcams (Framework laptops), starving the feed
+            # for the full open timeout. DirectShow opens instantly and is
+            # thread-safe, so prefer it on first open - MSMF stays as fallback.
+            self.cap = self._open_capture(extra_backends=True, prefer_dshow=True)
+        else:
+            try:
+                self.cap = self._open_capture()
+            except ValueError:
+                self.cap = self._open_capture(extra_backends=True)
 
         if not self.cap.isOpened():
             raise ValueError(f"Camera lost after configuration: {self.source}")
@@ -506,7 +513,8 @@ class CameraBase:
         try:
             self.cap = self._open_capture(
                 extra_backends=True,
-                prefer_dshow=self._prefer_alternate_backend,
+                prefer_dshow=self._prefer_alternate_backend
+                or platform.system() == "Windows",
             )
             self._connected = True
             self.logger.info("Camera %s: capture re-opened.", self.source)
