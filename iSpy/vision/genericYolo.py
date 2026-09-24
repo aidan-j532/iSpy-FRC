@@ -1138,7 +1138,14 @@ class GenericYolo:
 
             compiled = self._compile_openvino(core, ir_xml, registered)
             self.model = compiled
-            self._openvino_inp_name = next(iter(compiled.inputs)).get_any_name()
+            ov_input = next(iter(compiled.inputs))
+            self._openvino_inp_name = ov_input.get_any_name()
+            try:
+                ov_shape = tuple(ov_input.get_shape())
+                ov_dtype = ov_input.get_element_type().to_dtype()
+            except Exception:
+                ov_shape, ov_dtype = (), None
+            self._align_openvino_input(ov_shape, ov_dtype)
             self.logger.info(
                 "Loaded OpenVINO IR from %s (device %s)", ir_xml, registered
             )
@@ -1157,6 +1164,36 @@ class GenericYolo:
                 exc,
             )
             return core.compile_model(str(ir_xml), "AUTO")
+
+    def _align_openvino_input(self, ov_shape: tuple, ov_dtype) -> None:
+        # The pipeline's input metadata is inherited from the source .pt
+        # (nhwc uint8), but Ultralytics' OpenVINO export is NCHW float32.
+        # The GPU plugin enforces an exact shape/dtype match, so align the
+        # preprocessor to the IR's real input before any prediction runs.
+        if self.input is None or not isinstance(self.input, dict) or len(ov_shape) != 4:
+            return
+        inp = dict(self.input)
+        nchw = ov_shape[3] != 3 or ov_shape[1] in (1, 3)
+        inp["layout"] = "nchw" if nchw else "nhwc"
+        if ov_dtype is not None and ov_dtype != np.dtype("uint8"):
+            inp["dtype"] = "float32"
+            inp["normalize"] = True
+            inp["scale"] = inp.get("scale", 255)
+        else:
+            inp["dtype"] = "uint8"
+        self.input = inp
+        h, w = int(ov_shape[-2]), int(ov_shape[-1])
+        if (h, w) != self.input_size:
+            self.logger.info(
+                "OpenVINO IR input is %dx%d - updating input_size", w, h
+            )
+            self.input_size = (w, h)
+        self.logger.info(
+            "OpenVINO input aligned: layout=%s dtype=%s shape=%s",
+            inp["layout"],
+            inp["dtype"],
+            tuple(ov_shape),
+        )
 
     def _run_engine(self, frame: np.ndarray, orig_shape) -> Results:
         import tensorrt as trt
