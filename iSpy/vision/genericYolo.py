@@ -1223,13 +1223,16 @@ class GenericYolo:
         out["format"] = "raw_detect"
         out["layout"] = "features_first"
         out["box_format"] = "xywh"
-        out["score_mode"] = "objectness" if feat == 5 else "classwise"
-        out.setdefault("scores_are_logits", False)
+        if out.get("score_mode") not in ("objectness", "classwise"):
+            out["score_mode"] = "classwise"
+        out["scores_are_logits"] = True
         self.output = out
         self.logger.info(
-            "OpenVINO output aligned: format=raw_detect layout=%s shape=%s",
+            "OpenVINO output aligned: format=raw_detect layout=%s shape=%s "
+            "score_mode=%s scores_are_logits=True",
             "features_first",
             tuple(ov_out_shape),
+            out["score_mode"],
         )
 
     def _run_engine(self, frame: np.ndarray, orig_shape) -> Results:
@@ -1904,6 +1907,38 @@ class GenericYolo:
         class_ids = class_ids[mask]
         if kpts_raw is not None:
             kpts_raw = kpts_raw[mask]
+
+        kept = np.ones(len(boxes_xyxy), dtype=bool)
+        if self.output.get("input_letterbox", False):
+            oh, ow = orig_shape[:2]
+            tw, th = self.input_size
+            scale = min(tw / ow, th / oh)
+            rw, rh = ow * scale, oh * scale
+            px = (tw - rw) / 2.0
+            py = (th - rh) / 2.0
+            xs1 = np.maximum(boxes_xyxy[:, 0], px)
+            ys1 = np.maximum(boxes_xyxy[:, 1], py)
+            xs2 = np.minimum(boxes_xyxy[:, 2], px + rw)
+            ys2 = np.minimum(boxes_xyxy[:, 3], py + rh)
+            inter = np.maximum(0.0, xs2 - xs1) * np.maximum(0.0, ys2 - ys1)
+            areas = (boxes_xyxy[:, 2] - boxes_xyxy[:, 0]) * (
+                boxes_xyxy[:, 3] - boxes_xyxy[:, 1]
+            )
+            interior = inter / np.maximum(areas, 1e-6)
+            kept = interior >= 0.5
+        drop = int((~kept).sum())
+        if drop:
+            self.logger.debug(
+                "Dropped %d/%d detection(s) lying mostly in the letterbox "
+                "padding band.",
+                drop,
+                len(boxes_xyxy),
+            )
+        boxes_xyxy = boxes_xyxy[kept]
+        confs = confs[kept]
+        class_ids = class_ids[kept]
+        if kpts_raw is not None:
+            kpts_raw = kpts_raw[kept]
 
         if len(boxes_xyxy) == 0:
             return Results([], orig_shape)
