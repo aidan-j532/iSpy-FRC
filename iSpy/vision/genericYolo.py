@@ -1146,6 +1146,11 @@ class GenericYolo:
             except Exception:
                 ov_shape, ov_dtype = (), None
             self._align_openvino_input(ov_shape, ov_dtype)
+            try:
+                ov_out_shape = tuple(next(iter(compiled.outputs)).get_shape())
+            except Exception:
+                ov_out_shape = ()
+            self._align_openvino_output(ov_out_shape)
             self.logger.info(
                 "Loaded OpenVINO IR from %s (device %s)", ir_xml, registered
             )
@@ -1193,6 +1198,38 @@ class GenericYolo:
             inp["layout"],
             inp["dtype"],
             tuple(ov_shape),
+        )
+
+    def _align_openvino_output(self, ov_out_shape: tuple) -> None:
+        # The IR metadata is a verbatim copy of the .pt metadata
+        # (hardware_nms / anchors_first / xyxy), but Ultralytics' OpenVINO
+        # export emits a raw detect tensor [1, F, N] (N anchors, features
+        # first, F = 4 + score columns, coords in cxcywh pixel space). The
+        # old config sent that tensor to the hardware-NMS parser, which read
+        # the wrong axis and produced misplaced boxes. Re-derive the parser
+        # config from the IR's real output instead.
+        if (
+            self.output is None
+            or not isinstance(self.output, dict)
+            or len(ov_out_shape) != 3
+            or ov_out_shape[0] != 1
+        ):
+            return
+        feat = int(ov_out_shape[1])
+        anchors = int(ov_out_shape[2])
+        if anchors < feat:
+            return
+        out = dict(self.output)
+        out["format"] = "raw_detect"
+        out["layout"] = "features_first"
+        out["box_format"] = "xywh"
+        out["score_mode"] = "objectness" if feat == 5 else "classwise"
+        out.setdefault("scores_are_logits", False)
+        self.output = out
+        self.logger.info(
+            "OpenVINO output aligned: format=raw_detect layout=%s shape=%s",
+            "features_first",
+            tuple(ov_out_shape),
         )
 
     def _run_engine(self, frame: np.ndarray, orig_shape) -> Results:
