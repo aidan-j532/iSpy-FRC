@@ -33,6 +33,33 @@ def _run(cmd: str) -> str:
         return ""
 
 
+def _run_powershell(cmd: str) -> str:
+    try:
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-Command", cmd],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        ).stdout.lower()
+    except Exception:
+        return ""
+
+
+def _windows_video_controller_names() -> str:
+    out = _run_powershell("(Get-CimInstance Win32_VideoController).Name")
+    if out.strip():
+        return out
+    return _run("wmic path win32_videocontroller get name")
+
+
+def _windows_pnp_device_names() -> str:
+    out = _run_powershell("(Get-CimInstance Win32_PnPEntity).Name")
+    if out.strip():
+        return out
+    return _run("wmic path win32_pnpentity get name")
+
+
 def _cmd_ok(cmd: str) -> bool:
     try:
         return (
@@ -54,7 +81,7 @@ def _lsusb_output() -> str:
     if os.name != "nt" and _cmd_ok("which lsusb"):
         return _run("lsusb")
     if os.name == "nt":
-        return _run("wmic path win32_pnpentity get name")
+        return _windows_pnp_device_names()
     return ""
 
 
@@ -140,7 +167,7 @@ def has_nvidia() -> bool:
             return True
     except ImportError:
         logger.warning("PyTorch not installed, skipping CUDA check for NVIDIA GPU.")
-    if os.name == "nt" and "nvidia" in _run("wmic path win32_videocontroller get name"):
+    if os.name == "nt" and "nvidia" in _windows_video_controller_names():
         return True
     return False
 
@@ -172,13 +199,13 @@ def has_tpu() -> bool:
 
 def has_amd_gpu() -> bool:
     if os.name == "nt":
-        return "amd" in _run("wmic path win32_videocontroller get name")
+        return "amd" in _windows_video_controller_names()
     return "amd" in _run("lspci") or "radeon" in _run("lspci")
 
 
 def has_intel_gpu() -> bool:
     if os.name == "nt":
-        return "intel" in _run("wmic path win32_videocontroller get name")
+        return "intel" in _windows_video_controller_names()
     return "intel" in platform.processor().lower() or "intel" in _run("lspci")
 
 
@@ -260,18 +287,6 @@ def resolve_openvino_device(requested_device=None) -> str:
 def recommend_format(
     ignore_dependencies: bool = False, runtime_supported: bool = True
 ) -> str:
-    # runtime_supported:
-    #   True  - caller wants the best accelerator *artifact to build/convert*
-    #           (optimizer, dependency installer). Compiler-backed formats
-    #           (engine/openvino/coreml) are all valid picks.
-    #   False - caller only wants a format it can *load and run inference on*
-    #           right now. engine/openvino/coreml are skipped so the pick falls
-    #           through to the next best thing (e.g. onnx on CPU), because
-    #           GenericYolo may not expose a runtime path for every compiled
-    #           format. Only coreml stays unimplemented after Bug 7, but the
-    #           engine/openvino guard keeps the contract honest if a future
-    #           backend regresses either.
-    # 1. embedded NPUs / TPUs
     if has_rockchip_npu():
         logger.info(
             "Rockchip NPU detected - using RKNN format for hardware acceleration."

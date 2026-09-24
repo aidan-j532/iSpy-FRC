@@ -72,7 +72,7 @@ class CameraBase:
     def _get_capture_backend_candidates(sys_platform: str | None = None):
         platform_name = (sys_platform or platform.system()).lower()
         if platform_name == "windows":
-            return [cv2.CAP_MSMF]
+            return [cv2.CAP_MSMF, cv2.CAP_DSHOW]
         if platform_name == "linux":
             return [cv2.CAP_V4L2, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
@@ -323,7 +323,9 @@ class CameraBase:
         while time.perf_counter() < deadline:
             try:
                 if cap.grab():
-                    return True
+                    ok, frame = cap.retrieve()
+                    if ok and frame is not None and frame.max() >= 1:
+                        return True
             except Exception:
                 pass
             time.sleep(0.05)
