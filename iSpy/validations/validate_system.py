@@ -36,7 +36,7 @@ def validate_model_files() -> None:
         ]
         for file in files:
             full_path = os.path.join(root, file)
-            if not is_valid_model_path(full_path):
+            if not is_valid_model_path(full_path) and not full_path.endswith(".txt"):
                 raise ValueError(f"Invalid model file path: {full_path}")
 
     logger.info("All model file paths are valid.")

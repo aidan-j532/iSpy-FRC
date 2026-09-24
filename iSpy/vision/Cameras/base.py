@@ -72,7 +72,7 @@ class CameraBase:
     def _get_capture_backend_candidates(sys_platform: str | None = None):
         platform_name = (sys_platform or platform.system()).lower()
         if platform_name == "windows":
-            return [cv2.CAP_MSMF, cv2.CAP_DSHOW]
+            return [cv2.CAP_MSMF]
         if platform_name == "linux":
             return [cv2.CAP_V4L2, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
