@@ -215,17 +215,40 @@ def has_intel_gpu() -> bool:
     if "intel" in platform.processor().lower() or "intel" in _run("lspci"):
         return True
     # WSL2 never PCI-enumerates the GPU (it is paravirtualized via /dev/dxg),
-    # so lspci/processor can't see it. Probe OpenVINO itself - it only reports
-    # a GPU/NPU device when the compute driver is actually usable, which is
-    # the authoritative answer on whether OpenVINO has an accelerator here.
+    # so lspci/processor can't see it. Prefer OpenVINO's own device listing,
+    # which only reports GPU/NPU when the compute driver is usable; fall back
+    # to detecting the installed Intel compute runtime libs directly, since
+    # backend auto-select runs before openvino gets pip-installed.
     if os.path.exists("/dev/dxg"):
         try:
             from openvino import Core
 
             available = Core().available_devices
         except Exception:
-            return False
-        return any(dev in available for dev in ("GPU", "NPU"))
+            available = ()
+        if any(dev in available for dev in ("GPU", "NPU")):
+            return True
+        if _has_intel_gpu_runtime_libs():
+            return True
+    return False
+
+
+def _has_intel_gpu_runtime_libs() -> bool:
+    import glob
+
+    for pattern in (
+        "/usr/lib/x86_64-linux-gnu/libze_intel_gpu*.so*",
+        "/usr/lib/libze_intel_gpu*.so*",
+        "/usr/lib/x86_64-linux-gnu/libigdrcl*.so*",
+        "/usr/lib/libigdrcl*.so*",
+        "/usr/local/lib/x86_64-linux-gnu/libze_intel_gpu*.so*",
+        "/usr/local/lib/libze_intel_gpu*.so*",
+    ):
+        try:
+            if glob.glob(pattern):
+                return True
+        except Exception:
+            pass
     return False
 
 
