@@ -1808,6 +1808,19 @@ async function refreshCameras() {
         if (meta) meta.textContent = age;
         updateCameraHeader(card, cam);
         updateCameraFooter(card, cam);
+        // A feed <img> that errored ("No signal") never recovers on its own -
+        // MJPEG reconnects require a fresh element (see resumeCameraGridFeeds).
+        // Rebuild the card so a brand-new <img> re-establishes the stream,
+        // throttled so a truly-dead camera doesn't hammer the server every tick.
+        if (isStreaming && card.querySelector('.camera-feed.feed-error')) {
+          const last = Number(card.dataset.feedRetried || 0);
+          const cooldown = 3000;
+          if (Date.now() - last > cooldown) {
+            card.dataset.feedRetried = Date.now();
+            card.replaceWith(buildCameraCard(name, isStreaming, age, cam));
+            knownCameras.set(name, { streaming: isStreaming });
+          }
+        }
       }
     });
 

@@ -1,3 +1,4 @@
+import functools
 import logging
 from pathlib import Path
 
@@ -41,6 +42,13 @@ def _profile_hardware_warning(target_format: str) -> str | None:
     ):
         return "OpenVINO needs an Intel GPU/VPU - this profile will fall back to CPU."
     return None
+
+
+@functools.lru_cache(maxsize=1)
+def _recommended_format_cached() -> str:
+    from iSpy.config.AutoOpt import recommend_format
+
+    return recommend_format(ignore_dependencies=True, runtime_supported=False)
 
 
 class OptimizableModelPipeline:
@@ -178,9 +186,7 @@ class OptimizableModelPipeline:
     @classmethod
     def recommended_format(cls) -> str:
         try:
-            from iSpy.config.AutoOpt import recommend_format
-
-            return recommend_format(ignore_dependencies=True, runtime_supported=False)
+            return _recommended_format_cached()
         except Exception:
             logging.getLogger(__name__).warning(
                 "AutoOpt.recommend_format did NOT work for your device, "

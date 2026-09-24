@@ -918,8 +918,6 @@ class CamerasModule(WebModule):
 
     def update(self, frame_data: dict):
         frame = frame_data.get("frame")
-        if frame is None:
-            return
         cameras = frame_data.get("cameras") or []
         cam_by_name = {
             self._camera_display_name(cam, str(getattr(cam, "source", ""))): cam
@@ -950,6 +948,8 @@ class CamerasModule(WebModule):
                         self.dims[display_name] = f.shape[1], f.shape[0]
                         self.last_seen[display_name] = now
                         self.sources[display_name] = self._device_key(cam)
+            elif frame is None:
+                pass
             elif cameras:
                 cam = cameras[0]
                 name = self._camera_display_name(cam, "camera_1")
@@ -2150,7 +2150,10 @@ class CamerasModule(WebModule):
             # "no cameras" on a machine whose camera is simply not streaming -
             # list them so the page shows a card even before vision starts.
             for name, entry in configured.items():
-                if name in streamed:
+                # a camera streams under its display name, which can differ
+                # from the config key (name "Front Camera" under key "front") -
+                # don't list it twice (once live, once "Not streaming")
+                if name in streamed or (entry.get("name") and entry.get("name") in streamed):
                     continue
                 payload = {
                     "name": name,

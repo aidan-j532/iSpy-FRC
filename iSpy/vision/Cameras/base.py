@@ -72,7 +72,7 @@ class CameraBase:
     def _get_capture_backend_candidates(sys_platform: str | None = None):
         platform_name = (sys_platform or platform.system()).lower()
         if platform_name == "windows":
-            return [cv2.CAP_MSMF]
+            return [cv2.CAP_MSMF, cv2.CAP_DSHOW]
         if platform_name == "linux":
             return [cv2.CAP_V4L2, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
@@ -118,9 +118,6 @@ class CameraBase:
         self._frame_event = threading.Event()
         self._frame_processors = []
 
-        # False until the capture device is successfully opened. While False,
-        # the placeholder frame is served but the reader thread keeps polling
-        # for the device so it recovers automatically when plugged back in.
         self._connected = False
         self._reconnect_failures = 0
         self._placeholder_frame = self._make_placeholder_frame()
@@ -182,10 +179,6 @@ class CameraBase:
             except Exception:
                 pass
 
-    # ------------------------------------------------------------------
-    # Connects a frame source (a raw camera feed). Overridden per source
-    # type; everything else below is source-agnostic.
-    # ------------------------------------------------------------------
 
     def _open_capture(self, extra_backends: bool = False, prefer_dshow: bool = False):
         if self._is_url_source:
@@ -323,7 +316,9 @@ class CameraBase:
         while time.perf_counter() < deadline:
             try:
                 if cap.grab():
-                    return True
+                    ok, frame = cap.retrieve()
+                    if ok and frame is not None and frame.max() >= 1:
+                        return True
             except Exception:
                 pass
             time.sleep(0.05)
@@ -473,10 +468,7 @@ class CameraBase:
             self._open_camera()
         except Exception as exc:
             self._reconnect_failures += 1
-            # A stray non-iSpy process may be holding the v4l2 devnode open,
-            # which OpenCV reports as a reopen failure (e.g. "Inappropriate
-            # ioctl for device" / "Camera ... still waiting"). Force it out so
-            # the next attempt has a real chance - never touch iSpy's own pid.
+
             if (
                 platform.system() == "Linux"
                 and not self._is_url_source
@@ -593,10 +585,6 @@ class CameraBase:
             if frame_interval > 0:
                 next_frame_time = time.perf_counter() + frame_interval
 
-    # ------------------------------------------------------------------
-    # Frame access (the source's contract)
-    # ------------------------------------------------------------------
-
     def get_raw_frame(self) -> np.ndarray | None:
         if self.is_image:
             return self.image.copy() if self.image is not None else None
@@ -652,18 +640,12 @@ class CameraBase:
             return
         self._frame_processors.append(processor)
 
-    # ------------------------------------------------------------------
-    # Source lifecycle
-    # ------------------------------------------------------------------
-
     def is_ready(self) -> tuple[bool, str]:
         if self.is_image:
             return True, "ready"
         return self._connected, ("ready" if self._connected else "waiting for device")
 
     def start(self):
-        # The reader thread is started in __init__/on reconnect - nothing to
-        # do here. Kept so every source satisfies the CameraBase contract.
         pass
 
     def destroy(self):
@@ -691,10 +673,6 @@ class CameraBase:
 
     def release(self):
         self.destroy()
-
-    # ------------------------------------------------------------------
-    # Image tuning (web sliders)
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _clamp_num(value, lo: float, hi: float, default: float) -> float:
@@ -823,10 +801,6 @@ class CameraBase:
             "gain": self._gain,
         }
 
-    # ------------------------------------------------------------------
-    # Calibration mode (shared with the web wizard)
-    # ------------------------------------------------------------------
-
     def set_calibration(self, active: bool):
         self.calibration_active = bool(active)
         self.calibration_last_seen = time.monotonic() if active else 0.0
@@ -840,10 +814,6 @@ class CameraBase:
         return (
             time.monotonic() - self.calibration_last_seen
         ) < self._CALIBRATION_HEARTBEAT_TIMEOUT
-
-    # ------------------------------------------------------------------
-    # Placeholder frames
-    # ------------------------------------------------------------------
 
     def _make_placeholder_frame(
         self,
@@ -869,10 +839,6 @@ class CameraBase:
             frame, text, (cx, cy), font, scale, (180, 180, 180), thickness, cv2.LINE_AA
         )
         return frame
-
-    # ------------------------------------------------------------------
-    # Generic plugin-style hooks (bail-outs for the demo fallbacks)
-    # ------------------------------------------------------------------
 
     def get_debug_frame(self, frame):
         return None

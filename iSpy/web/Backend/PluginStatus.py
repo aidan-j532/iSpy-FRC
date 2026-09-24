@@ -1,4 +1,5 @@
 import ast
+import functools
 import logging
 import os
 import re
@@ -125,6 +126,7 @@ def _coerce_setting_value(value, defn: dict):
     return value
 
 
+@functools.lru_cache(maxsize=3)
 def _build_vision_pipeline_payloads(admin=None):
     from iSpy.vision.pipelines import get_pipeline_classes
 

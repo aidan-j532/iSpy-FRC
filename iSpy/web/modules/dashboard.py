@@ -279,10 +279,11 @@ class DashboardModule(WebModule):
         except Exception:
             pass
 
-        temperature_unit = self.config.get("temperature_unit", "celsius")
+        config = self.context.get("config") or {}
+        temperature_unit = config.get("temperature_unit", "celsius")
 
         display_temp = temp
-        display_warning = self.config.get("temperature_warning", 80)
+        display_warning = config.get("temperature_warning", 80)
 
         if temperature_unit == "fahrenheit":
             if display_temp is not None:
@@ -290,20 +291,13 @@ class DashboardModule(WebModule):
 
             display_warning = round(display_warning * 9 / 5 + 32, 1)
 
-        config = self.context.get("config")
-        temperature_warning = (
-            config.get("temperature_warning", 80)
-            if config
-            else 80
-        )
-
         return {
             "cpu_percent": cpu,
             "memory_percent": round(mem.percent, 1) if mem else None,
             "memory_used_mb": mem_used,
             "memory_total_mb": mem_total,
-            "temperature": temp,
-            "temperature_warning": temperature_warning,
+            "temperature": display_temp,
+            "temperature_warning": display_warning,
             "hardware": self._get_hardware(),
         }
         
