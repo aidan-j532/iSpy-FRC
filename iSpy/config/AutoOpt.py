@@ -212,7 +212,21 @@ def has_amd_gpu() -> bool:
 def has_intel_gpu() -> bool:
     if os.name == "nt":
         return "intel" in _windows_video_controller_names()
-    return "intel" in platform.processor().lower() or "intel" in _run("lspci")
+    if "intel" in platform.processor().lower() or "intel" in _run("lspci"):
+        return True
+    # WSL2 never PCI-enumerates the GPU (it is paravirtualized via /dev/dxg),
+    # so lspci/processor can't see it. Probe OpenVINO itself - it only reports
+    # a GPU/NPU device when the compute driver is actually usable, which is
+    # the authoritative answer on whether OpenVINO has an accelerator here.
+    if os.path.exists("/dev/dxg"):
+        try:
+            from openvino import Core
+
+            available = Core().available_devices
+        except Exception:
+            return False
+        return any(dev in available for dev in ("GPU", "NPU"))
+    return False
 
 
 def has_arm() -> bool:
