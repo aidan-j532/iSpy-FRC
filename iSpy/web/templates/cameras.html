@@ -18,6 +18,7 @@
 <div id="camera-grid" class="grid"></div>
 
 <div id="camera-lightbox" class="camera-lightbox" style="display:none;" onclick="if(event.target===this)closeCameraLightbox()">
+  <button class="lightbox-max-close" onclick="exitLightboxMax()" title="Back to tuning view">&times;</button>
   <div class="camera-lightbox-inner">
     <div class="camera-lightbox-header">
       <strong id="lightbox-title"></strong>
@@ -26,7 +27,7 @@
     </div>
     <div class="camera-lightbox-body">
       <div class="camera-lightbox-feed">
-        <img id="lightbox-feed" src="" alt="">
+        <img id="lightbox-feed" src="" alt="" onclick="toggleLightboxMax()" title="Maximize">
       </div>
       <div class="camera-lightbox-tuning">
         <div class="tune-header">
@@ -299,6 +300,25 @@
   .tune-status { color: var(--text-dim); font-size: 0.8rem; }
   .tune-status.ok { color: var(--ok); }
   .tune-status.err { color: var(--bad); }
+  /* second click on the feed drops the tuning panel and the header, image goes edge to edge */
+  .camera-lightbox-max { padding: 0; }
+  .camera-lightbox-max .camera-lightbox-inner {
+    max-width: none; max-height: none; height: 100%;
+    border: none; border-radius: 0; background: #000;
+  }
+  .camera-lightbox-max .camera-lightbox-header,
+  .camera-lightbox-max .camera-lightbox-tuning { display: none; }
+  .camera-lightbox-max .camera-lightbox-body { flex: 1; }
+  .camera-lightbox-max #lightbox-feed { max-height: none; height: 100%; cursor: zoom-out; }
+  #lightbox-feed { cursor: zoom-in; }
+  .lightbox-max-close {
+    display: none; position: absolute; top: 14px; right: 16px; z-index: 2;
+    width: 38px; height: 38px; padding: 0; line-height: 1; font-size: 1.5rem;
+    background: var(--bg-surface); color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 50%;
+  }
+  .lightbox-max-close:hover { color: var(--text); }
+  .camera-lightbox-max .lightbox-max-close { display: block; }
   @media (max-width: 900px) {
     .camera-lightbox-body { flex-direction: column; }
     .camera-lightbox-feed { order: 1; }
@@ -1850,6 +1870,7 @@ function confirmRemoveCamera(name) {
 function openCameraLightbox(name) {
   $id('lightbox-title').textContent = name;
   $id('lightbox-feed').src = `/video/${encodeURIComponent(name)}`;
+  $id('camera-lightbox').classList.remove('camera-lightbox-max');
   $id('camera-lightbox').style.display = 'flex';
   loadTuning(name);
 }
@@ -1858,8 +1879,25 @@ function closeCameraLightbox() {
   if (tuningTimer) { clearTimeout(tuningTimer); tuningTimer = null; }
   if (tuningState.dirty) saveTuning();
   $id('camera-lightbox').style.display = 'none';
+  $id('camera-lightbox').classList.remove('camera-lightbox-max');
   $id('lightbox-feed').src = '';
   tuningState.camera = null;
+}
+
+function toggleLightboxMax() {
+  $id('camera-lightbox').classList.toggle('camera-lightbox-max');
+}
+
+// esc backs out one step at a time, max view first then the whole lightbox
+function lightboxKey(e) {
+  if (e.key !== 'Escape') return;
+  if ($id('camera-lightbox').style.display === 'none') return;
+  if ($id('camera-lightbox').classList.contains('camera-lightbox-max')) exitLightboxMax();
+  else closeCameraLightbox();
+}
+
+function exitLightboxMax() {
+  $id('camera-lightbox').classList.remove('camera-lightbox-max');
 }
 
 /* ------------------------------------------------------------------
@@ -2867,6 +2905,8 @@ async function resetCalibration() {
     showToast(e.message || 'Reset failed', 'error');
   }
 }
+
+document.addEventListener('keydown', lightboxKey);
 
 refreshCameras();
 refreshTimer = setInterval(refreshCameras, currentRate);

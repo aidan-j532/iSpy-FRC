@@ -43,6 +43,9 @@ dependencies = [
     "packaging>=23.0",
 ]
 
+[project.optional-dependencies]
+# For model training, conversion, and development - x86 only.
+# pip install ".[dev]"   (install-dev.sh handles the rknn-toolkit2 --find-links)
 dev = [
     "torchvision>=0.15.0",  # only for training/conversion scripts
     "tensorflow>=2.13.0",
