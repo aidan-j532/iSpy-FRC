@@ -1,10 +1,7 @@
 import json
 import logging
 import socket
-import struct
-import sys
 import threading
-import time as _time
 
 logger = logging.getLogger(__name__)
 

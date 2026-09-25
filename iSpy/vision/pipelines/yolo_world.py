@@ -8,7 +8,6 @@ import threading
 from pathlib import Path
 
 import cv2
-import numpy as np
 import requests
 
 from iSpy.vision.pipelines.base import BackgroundPreparedPipeline

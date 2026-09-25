@@ -5,7 +5,7 @@ import time
 import json
 import logging
 from pathlib import Path
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 
 from iSpy.boot._venv import resolve_launch_python
 from iSpy.core.control_channel import SupervisorControlClient, state_file_path

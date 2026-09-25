@@ -2,7 +2,6 @@ import logging
 from pathlib import Path
 from iSpy.plugins.bases import UtilityBase
 from iSpy.config.iSpyConfig import get_pipeline_settings
-from iSpy.vision.metadata import metadata_from_pt, write_metadata, metadata_path_for
 from flask import jsonify, request
 
 _PROJECT_ROOT = Path.cwd()

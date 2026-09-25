@@ -9,7 +9,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from iSpy.config.iSpyConfig import iSpyCameraConfig
 from iSpy.vision.Cameras._device_guard import free_camera_device
 from iSpy.vision.Cameras._discovery import _silence_stderr
 from iSpy.vision.Object import Object

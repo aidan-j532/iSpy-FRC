@@ -26,7 +26,6 @@ Requirements: Python 3.10+ (stdlib only — no pip installs needed).
 import argparse
 import json
 import socket
-import sys
 import time
 
 MAGIC = b"ISPY_DISCOVER:"

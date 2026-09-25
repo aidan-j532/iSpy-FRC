@@ -129,7 +129,7 @@ def _configure_dhcp_hostname(hostname: str) -> None:
         try:
             with open(dhcpcd_conf) as f:
                 existing = f.read()
-            marker = f"# iSpy hostname hint"
+            marker = "# iSpy hostname hint"
             if marker not in existing:
                 with open(dhcpcd_conf, "a") as f:
                     f.write(f"\n{marker}\nhostname {hostname}\n")

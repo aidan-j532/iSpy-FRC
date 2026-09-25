@@ -1,7 +1,6 @@
 import logging
-import os
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +197,7 @@ def _check_for_standalone_models(
             rel_path = str(model_path.relative_to(repo_root))
             result.orphan_models[rel_path] = (
                 "cannot infer yolo parameters - model is standalone in repo root. "
-                f"Move to YoloModels/[format]/[size]/ (e.g., YoloModels/pytorch/nano/)"
+                "Move to YoloModels/[format]/[size]/ (e.g., YoloModels/pytorch/nano/)"
             )
             logger.warning(
                 f"[STANDALONE] {rel_path} - Cannot infer YOLO parameters for standalone model"
@@ -216,7 +215,7 @@ def _check_for_standalone_models(
                 rel_path = str(model_path.relative_to(repo_root))
                 result.orphan_models[rel_path] = (
                     "cannot infer yolo parameters - model is in YoloModels root. "
-                    f"Move to YoloModels/[format]/[size]/ (e.g., YoloModels/pytorch/nano/)"
+                    "Move to YoloModels/[format]/[size]/ (e.g., YoloModels/pytorch/nano/)"
                 )
                 logger.warning(
                     f"[STANDALONE] {rel_path} - Cannot infer YOLO parameters - move to organized directory"
@@ -272,7 +271,7 @@ def validate_config_model_paths(
             (
                 config_model_path,
                 rel_path,
-                f"Config path differs from filesystem. Using organized path.",
+                "Config path differs from filesystem. Using organized path.",
             )
         )
         logger.warning(

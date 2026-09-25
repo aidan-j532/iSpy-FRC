@@ -753,8 +753,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
                 finally:
                     rknn.release()
 
-            from iSpy.vision._safe_imports import import_rknnlite
-
             rknn_lite = import_rknnlite()(verbose=False)
             if rknn_lite.load_rknn(str(rknn_path)) != 0:
                 raise RuntimeError(f"Failed to load RKNN model: {rknn_path}")

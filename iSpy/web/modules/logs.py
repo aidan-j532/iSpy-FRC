@@ -1,4 +1,3 @@
-import io
 import logging
 from pathlib import Path
 from flask import jsonify, render_template, request
