@@ -841,11 +841,22 @@ class iSpyConfig:
 
     def _configure_logging(self):
         level_str = self.config.get("log_level", "INFO")
-        level = getattr(logging, level_str.upper(), logging.INFO)
+        level = getattr(logging, str(level_str).upper(), logging.INFO)
+        # getattr can hand back a non-level attribute for a junk value
+        # (e.g. log_level: "handlers"), which setLevel would reject.
+        if not isinstance(level, int):
+            level = logging.INFO
 
         root = logging.getLogger()
         root.handlers.clear()
         root.setLevel(logging.NOTSET)  # let children decide
+
+        # The configured level belongs on the "iSpy" parent, not on root or the
+        # handlers: children inherit it, but a module that sets its own level
+        # (iSpy.py quieting werkzeug, for one) still wins. Boot and the game
+        # loop pin this to INFO before the config is read, so applying it here
+        # is also what lets the setting survive both entrypoints.
+        logging.getLogger("iSpy").setLevel(level)
 
         fmt = logging.Formatter(
             "%(asctime)s [iSpy] %(levelname)s:%(name)s: %(message)s"
