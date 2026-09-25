@@ -1,0 +1,76 @@
+﻿# PNP / HUMAN POSE - point the pipeline at the POSE model + add a pnp block.
+# OpenVINO pose IR is [1,56,8400] (4 box + 1 score + 17x3 kpt); genericYolo.py
+# now aligns it (score_mode preserved) and _solve_pnp runs via _pack_detections.
+# Distances need not be right: any object_points scale -> rotation correct,
+# tvec up to scale. Example vision_model block for Config/config.json:
+{
+  "vision_model": {
+    "model_path": "YoloModels/.../<pose_model>/",
+    "target_format": "openvino",
+    "optimize": "auto",
+    "pnp": {
+      "mode": "flexible",
+      "object_points": [[0,0,0],[0.5,0,0],[0,0.3,0],[0.1,0.2,0.4],[0,0,1]],
+      "camera_matrix": [[1.0,0,320],[0,1.0,240],[0,0,1]],
+      "dist_coeffs": [0,0,0,0,0],
+      "min_keypoint_conf": 0.3
+    }
+  }
+}
+# LINUX - add the pnp block to the RIGHT place without touching other settings:
+# merges into camera_configs.default_cam.pipeline.settings.vision_model only.
+# run from ~/iSpy-FRC-clean, creates a config.json.bak backup first.
+cp ~/iSpy-FRC-clean/Config/config.json ~/iSpy-FRC-clean/Config/config.json.bak
+python3 - <<'EOF'
+import json
+p = "Config/config.json"
+with open(p) as f:
+    cfg = json.load(f)
+vm = cfg["camera_configs"]["default_cam"]["pipeline"]["settings"]["vision_model"]
+vm["pnp"] = {
+    "mode": "flexible",
+    "object_points": [[0,0,0],[0.5,0,0],[0,0.3,0],[0.1,0.2,0.4],[0,0,1]],
+    "camera_matrix": [[1.0,0,320],[0,1.0,240],[0,0,1]],
+    "dist_coeffs": [0,0,0,0,0],
+    "min_keypoint_conf": 0.3,
+}
+with open(p, "w") as f:
+    json.dump(cfg, f, indent=4)
+print("pnp added under vision_model (model:", vm.get("file_path"), ")")
+EOF
+# LINUX - START iSpy with the DEFAULT POSE model on OpenVINO (keeps everything else).
+# Finds the pose .pt (filename contains "pose", else scanning metadata for "task: pose"),
+# points vision_model at it with optimize=auto / target_format=openvino / quantize=false,
+# leaves the pnp block (and all other settings) untouched, then launches the game loop.
+# Run from ~/iSpy-FRC-clean; stop with Ctrl-C.
+cd ~/iSpy-FRC-clean
+cp Config/config.json Config/config.json.bak
+python3 - <<'EOF'
+import json, pathlib, re
+root = pathlib.Path(".")
+cfg_path = root / "Config" / "config.json"
+cfg = json.loads(cfg_path.read_text())
+vm = cfg["camera_configs"]["default_cam"]["pipeline"]["settings"]["vision_model"]
+pt_dir = root / "YoloModels" / "pytorch"
+cands = sorted(pt_dir.glob("*.pt")) if pt_dir.exists() else []
+pose = next((p for p in cands if "pose" in p.stem.lower()), None)
+if pose is None:
+    for y in sorted(root.glob("YoloModels/**/*metadata*.yaml")):
+        if re.search(r"task:\s*pose", y.read_text(errors="ignore")):
+            stem = y.stem.replace("_openvino_model_metadata", "").replace("_model_metadata", "")
+            m = [p for p in cands if stem in p.stem]
+            if m:
+                pose = m[0]
+                break
+if pose is None:
+    print("no pose model found; candidates:", [p.name for p in cands])
+    raise SystemExit(1)
+rel = f"YoloModels/pytorch/{pose.name}"
+vm.update({"file_path": rel, "source_pt": rel,
+           "optimize": "auto", "target_format": "openvino", "quantize": False})
+vm.setdefault("min_conf", 0.5)
+cfg_path.write_text(json.dumps(cfg, indent=4))
+print("vision_model now:", json.dumps(vm, indent=2))
+print("pnp preserved:", "pnp" in vm)
+EOF
+python -m iSpy.core.game_loop
