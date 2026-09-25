@@ -1,4 +1,3 @@
-import json
 import copy
 from flask import jsonify, render_template, request
 from iSpy.web.Backend.WebModule import WebModule

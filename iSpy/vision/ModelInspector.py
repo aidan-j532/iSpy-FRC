@@ -1,6 +1,5 @@
 import logging
 import os
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -424,9 +423,7 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
 
 
 def fill_missing_config(model_config: dict) -> dict:
-    import os
-    from pathlib import Path
-    from iSpy.vision.metadata import read_metadata, metadata_path_for
+    from iSpy.vision.metadata import read_metadata
 
     model_path = model_config.get("file_path", "")
     if not model_path or not os.path.exists(model_path):

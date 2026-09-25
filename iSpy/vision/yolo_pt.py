@@ -4,7 +4,6 @@ from __future__ import annotations
 import math
 import sys
 import types
-from typing import Any
 
 import numpy as np
 import torch

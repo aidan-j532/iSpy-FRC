@@ -4,7 +4,6 @@ import glob
 import json
 import logging
 import os
-import platform
 import re
 import subprocess
 import threading
@@ -26,7 +25,6 @@ from iSpy.config.iSpyConfig import (
 )
 from iSpy.vision import calibration as cam_calibration
 from iSpy.vision.Cameras import OpenCVCamera, TelloCamera
-from iSpy.vision.Cameras.base import CameraOpenTimeout
 
 COCO17_OBJECT_POINTS = [
     [0.00, 0.62, 0.00],  # 0  nose

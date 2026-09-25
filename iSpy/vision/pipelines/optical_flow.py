@@ -204,7 +204,6 @@ class OpticalFlowPipeline(VisionPipeline):
 
         method = str(self._setting("method", "farneback"))
         min_flow = float(self._setting("min_flow", 0.2))
-        sat_px = max(1.0, float(self._setting("flow_saturation", 24)))
         ground_ratio = float(np.clip(self._setting("ground_ratio", 0.6), 0.1, 1.0))
         start_row = int(small.shape[0] * (1.0 - ground_ratio))
 

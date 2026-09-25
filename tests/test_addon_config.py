@@ -10,13 +10,6 @@ from iSpy.config.iSpyConfig import (
 )
 
 
-def _write_config(data: dict) -> str:
-    tmp = tempfile.TemporaryDirectory()
-    path = Path(tmp.name) / "config.json"
-    path.write_text(json.dumps(data))
-    return str(path)
-
-
 class AddonDefaultConfigTests(unittest.TestCase):
     def test_default_plugins_are_dicts_not_lists(self):
         cfg = iSpyConfig()

@@ -3,10 +3,6 @@ import sys
 from pathlib import Path
 from logging import getLogger, WARNING
 import unittest
-import tempfile
-from contextlib import ExitStack
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 
 def unit_tests(verbosity: int = 2) -> bool:
