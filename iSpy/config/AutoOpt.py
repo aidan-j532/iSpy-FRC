@@ -2,6 +2,7 @@ import platform
 import subprocess
 import os
 from functools import lru_cache
+from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -188,16 +189,46 @@ def has_tensorrt() -> bool:
 
 
 @lru_cache()
+def has_tpu_hardware() -> bool:
+    # hardware probe that needs no torch_xla. recommend_format has to be able to
+    # answer "tpu" on a box where torch_xla is still missing, otherwise the
+    # installer can never pull it in.
+    if os.environ.get("COLAB_TPU_ADDR") or os.environ.get("TPU_NAME"):
+        return True
+    if any(Path("/dev").glob("accel*")):
+        return True
+    return any(
+        Path(p).exists()
+        for p in (
+            "/lib/libtpu.so",
+            "/usr/lib/libtpu.so",
+            "/usr/local/lib/libtpu.so",
+        )
+    )
+
+
+@lru_cache()
 def has_tpu() -> bool:
     try:
         import torch_xla
         import torch_xla.core.xla_model as xm
+    except Exception as e:
+        # missing - install_special_dependencies puts it in when the hardware is
+        # there (BACKEND_DEPENDENCIES["tpu"])
+        logger.debug("TPU check: torch_xla unavailable (%s)", e)
+        return False
 
-        dev = xm.xla_device()
+    try:
+        xm.xla_device()
         return True
-    except Exception:
-        pass
-    return False
+    except Exception as e:
+        logger.warning(
+            "TPU check: torch_xla imported but xla_device() failed (%s) - the "
+            "runtime is probably not set to TPU, or the libtpu build does not "
+            "match this pytorch version.",
+            e,
+        )
+        return False
 
 
 @lru_cache()
@@ -357,7 +388,7 @@ def recommend_format(
         return "coreml"
 
     # google TPU - pytorch via XLA
-    if has_tpu():
+    if has_tpu() or (ignore_dependencies and has_tpu_hardware()):
         logger.info("Google TPU detected - using TPU format for hardware acceleration.")
         return "tpu"
 

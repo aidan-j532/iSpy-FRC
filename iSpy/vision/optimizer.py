@@ -613,7 +613,7 @@ def install_special_dependencies(auto_install: bool = False):
             )
             return
 
-    if backend in {"rknn", "engine", "hailo"}:
+    if backend in {"rknn", "engine", "hailo", "tpu"}:
         logger.warning(
             "%s is a hardware/vendor backend - installation may require "
             "system-level setup and can take a few minutes.",

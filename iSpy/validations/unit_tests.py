@@ -193,6 +193,7 @@ def _no_hw_flags():
         "has_edge_tpu": False,
         "has_apple_silicon": False,
         "has_tpu": False,
+        "has_tpu_hardware": False,
         "has_nvidia": False,
         "has_tensorrt": False,
         "has_intel_vpu": False,
@@ -207,11 +208,15 @@ def _recommend(**overrides):
 
     flags = _no_hw_flags()
     runtime_supported = overrides.pop("runtime_supported", True)
+    ignore_dependencies = overrides.pop("ignore_dependencies", False)
     flags.update(overrides)
     with ExitStack() as stack:
         for name, value in flags.items():
             stack.enter_context(patch.object(ao, name, return_value=value))
-        return ao.recommend_format(runtime_supported=runtime_supported)
+        return ao.recommend_format(
+            ignore_dependencies=ignore_dependencies,
+            runtime_supported=runtime_supported,
+        )
 
 
 class TestAutoOpt(unittest.TestCase):
@@ -253,6 +258,24 @@ class TestAutoOpt(unittest.TestCase):
 
     def test_nvidia_with_tensorrt_uses_engine(self):
         self.assertEqual(_recommend(has_nvidia=True, has_tensorrt=True), "engine")
+
+    def test_tpu_uses_tpu_format(self):
+        self.assertEqual(_recommend(has_tpu=True), "tpu")
+
+    def test_tpu_hardware_without_torch_xla_installs_tpu(self):
+        # torch_xla missing but the hardware is there - installer has to be told
+        # tpu so it can pull torch_xla in, same escape hatch tensorrt gets.
+        self.assertEqual(
+            _recommend(
+                has_tpu=False, has_tpu_hardware=True, ignore_dependencies=True
+            ),
+            "tpu",
+        )
+
+    def test_tpu_hardware_without_torch_xla_ignored_by_default(self):
+        self.assertEqual(
+            _recommend(has_tpu=False, has_tpu_hardware=True), "onnx"
+        )
 
     def test_intel_gpu_uses_openvino(self):
         self.assertEqual(_recommend(has_intel_gpu=True), "openvino")

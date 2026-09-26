@@ -21,6 +21,19 @@ if (
     sys.path.insert(0, str(_REPO_CHECKOUT_ROOT))
 _PROJECT_ROOT = Path.cwd()
 
+
+def _repo_root() -> Path | None:
+    # cwd is unreliable here - colab runs it from /content with the repo nested
+    # below. walk up from this file instead, same as tests/compare_models.py.
+    for base in (Path(__file__).resolve().parent, _PROJECT_ROOT):
+        for d in (base, *base.parents):
+            if (d / "iSpy").is_dir() and (d / "pyproject.toml").is_file():
+                return d
+    return None
+
+
+_REPO_ROOT = _repo_root()
+
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
@@ -45,15 +58,22 @@ def _file_fingerprint(path: Path) -> tuple[int, str]:
 def find_pt_files() -> list[Path]:
     raw: list[Path] = []
 
-    for d in (
-        _PROJECT_ROOT / "YoloModels" / "pytorch",
-        _PROJECT_ROOT / "iSpy" / "assets",
-    ):
-        if d.exists():
-            raw.extend(f.resolve() for f in d.glob("*.pt"))
+    roots = [_PROJECT_ROOT]
+    if _REPO_ROOT and _REPO_ROOT != _PROJECT_ROOT:
+        roots.append(_REPO_ROOT)
 
-    config_path = _PROJECT_ROOT / "Config" / "config.json"
-    if config_path.exists():
+    for root in roots:
+        for d in (
+            root / "YoloModels" / "pytorch",
+            root / "iSpy" / "assets",
+        ):
+            if d.exists():
+                raw.extend(f.resolve() for f in d.glob("*.pt"))
+
+    for root in roots:
+        config_path = root / "Config" / "config.json"
+        if not config_path.exists():
+            continue
         try:
             with open(config_path) as f:
                 cfg = json.load(f)
@@ -69,6 +89,8 @@ def find_pt_files() -> list[Path]:
                 _add_model_paths_from_config(cfg.get("vision_model") or {}, raw)
         except Exception:
             pass
+        if raw:
+            break
 
     if Path.home().joinpath("YoloModels", "pytorch").exists():
         try:
@@ -119,9 +141,13 @@ def _download_default_bench_model() -> Path | None:
     if target.exists() and target.stat().st_size > 1024:
         return target
 
+    searched = [_PROJECT_ROOT]
+    if _REPO_ROOT and _REPO_ROOT != _PROJECT_ROOT:
+        searched.append(_REPO_ROOT)
     print(
-        f"No .pt models found under {_PROJECT_ROOT} - downloading a stock "
-        f"YOLOv8n checkpoint (Ultralytics, AGPL-3.0) to {target} ..."
+        f"No .pt models found under {', '.join(str(p) for p in searched)} - "
+        f"downloading a stock YOLOv8n checkpoint (Ultralytics, AGPL-3.0) "
+        f"to {target} ..."
     )
     try:
         import requests
