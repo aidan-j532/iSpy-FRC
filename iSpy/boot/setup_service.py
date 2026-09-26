@@ -145,7 +145,6 @@ def _configure_dhcp_hostname(hostname: str) -> None:
     )
     if nm_conns.returncode == 0 and nm_conns.stdout.strip():
         try:
-            # Get the primary connection name
             primary = run(
                 ["sudo", "nmcli", "-t", "-f", "NAME", "general", "status"], check=False
             )
@@ -200,7 +199,6 @@ def get_platform():
         return "windows"
     if platform.system() == "Darwin":
         return "macos"
-    # Linux, check if systemd is running
     result = run(["pidof", "systemd"], check=False)
     if result.returncode == 0:
         return "linux_systemd"

@@ -8,10 +8,8 @@ from pathlib import Path
 _BOOT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = Path.cwd()
 
-# Serializes config file writes. Background threads (e.g. the optimizer build
-# thread persisting quantization settings) and web handlers share one iSpyConfig
-# instance - interleaved open("w")/write/close from two threads could corrupt
-# config.json, so every save is funneled through this one lock.
+# bg threads (the optimizer persisting quantization settings) and web handlers
+# share one iSpyConfig, and interleaved open("w")/write/close corrupts config.json
 _CONFIG_WRITE_LOCK = threading.RLock()
 
 _MODEL_BACKED_PIPELINES = ("object_detection",)
@@ -651,12 +649,10 @@ class iSpyConfig:
         except (KeyError, TypeError):
             return default
 
-    # ---------------------------------------------------------------
     # add-on config helpers
     #
     # plugins.<type> is a dict of enabled add-on name -> its settings.
     # presence == enabled; the value is the add-on's own settings dict.
-    # ---------------------------------------------------------------
 
     def addon_entries(self, addon_type: str) -> dict:
         if addon_type not in _ADDON_TYPES:
@@ -740,14 +736,12 @@ class iSpyConfig:
         if save:
             self.save()
 
-    # ---------------------------------------------------------------
     # model-profile config helpers
     #
     # model_profiles.<pipeline> maps a profile name to the pipeline settings
-    # dict snapshot it was saved from. The web UI auto-saves every validated
+    # dict snapshot it was saved from. the web UI auto-saves every validated
     # model-backed camera here (see CamerasModule) and loads a profile back
     # into the add/edit form - no manual create/update endpoints involved.
-    # ---------------------------------------------------------------
 
     def model_profiles(self, pipeline: str) -> dict:
         profiles = self.get("model_profiles", {})
@@ -935,11 +929,9 @@ class iSpyCameraConfig:
         if config_dict:
             self.data.update(config_dict)
 
-    # ---------------------------------------------------------------
     # pipeline (pipeline: {name, settings}) accessors. legacy flat entries
     # (bare-string pipeline + settings spread on the cam) migrate lazily on
     # first touch.
-    # ---------------------------------------------------------------
 
     def pipeline_entry(self) -> dict:
         p = self.data.get("pipeline")

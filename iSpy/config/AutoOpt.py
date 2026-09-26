@@ -163,8 +163,7 @@ def has_nvidia() -> bool:
     if _cmd_ok("nvidia-smi"):
         return True
     if os.name == "nt":
-        # Win32_VideoController names are a reliable, cheap probe - skip the
-        # multi-second `import torch` just to answer a yes/no.
+        # wmi name check is cheap, importing torch costs seconds for a yes/no
         return "nvidia" in _windows_video_controller_names()
     try:
         import torch
@@ -214,11 +213,10 @@ def has_intel_gpu() -> bool:
         return "intel" in _windows_video_controller_names()
     if "intel" in platform.processor().lower() or "intel" in _run("lspci"):
         return True
-    # WSL2 never PCI-enumerates the GPU (it is paravirtualized via /dev/dxg),
-    # so lspci/processor can't see it. Prefer OpenVINO's own device listing,
-    # which only reports GPU/NPU when the compute driver is usable; fall back
-    # to detecting the installed Intel compute runtime libs directly, since
-    # backend auto-select runs before openvino gets pip-installed.
+    # wsl2 never pci-enumerates the gpu (paravirtualized via /dev/dxg) so lspci
+    # cant see it. openvino's own device list is the only thing that reports
+    # gpu/npu when the compute driver actually works - but backend auto-select
+    # runs before openvino gets pip-installed, hence the runtime lib sniff too.
     if os.path.exists("/dev/dxg"):
         try:
             from openvino import Core
@@ -351,19 +349,19 @@ def recommend_format(
         )
         return "tflite"
 
-    # 2. apple ecosystem
+    # apple ecosystem
     if has_apple_silicon() and runtime_supported:
         logger.info(
             "Apple Silicon detected - using Core ML format for hardware acceleration."
         )
         return "coreml"
 
-    # 3. google TPU - pytorch via XLA
+    # google TPU - pytorch via XLA
     if has_tpu():
         logger.info("Google TPU detected - using TPU format for hardware acceleration.")
         return "tpu"
 
-    # 4. nvidia - tensorrt engine > onnx for max fps
+    # nvidia - tensorrt engine > onnx for max fps
     if has_nvidia():
         if (has_tensorrt() or ignore_dependencies) and runtime_supported:
             logger.info("NVIDIA GPU detected - using .engine format for maximum FPS.")
@@ -374,7 +372,7 @@ def recommend_format(
         )
         return "onnx"
 
-    # 5. desktop hardware
+    # desktop hardware
     if os.name != "nt" and has_intel_vpu() and runtime_supported:
         logger.info(
             "Intel VPU detected - using OpenVINO format for hardware acceleration."
@@ -389,7 +387,7 @@ def recommend_format(
         logger.info("AMD GPU detected - using ONNX format for hardware acceleration.")
         return "onnx"  # rocm / directml exec providers
 
-    # 6. arm edge (jetson, rpi, etc.)
+    # arm edge (jetson, rpi, etc.)
     if has_arm():
         logger.info(
             "ARM edge device detected - using TFLite format for hardware acceleration."

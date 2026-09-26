@@ -25,7 +25,6 @@ def main():
         args["input_size"],
         quantize=args.get("quantize"),
         force=args.get("force", False),
-        kw=args.get("kw"),
         dataset_path=args.get("dataset_path"),
     )
 

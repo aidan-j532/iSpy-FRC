@@ -8,8 +8,7 @@
     <title>{% block title %}iSpy{% endblock %}</title>
     <link rel="stylesheet" href="/static/css/design.css" />
     <style>
-      /* ---- first-run tutorial ---- */
-      .ispy-welcome {
+    .ispy-welcome {
         display: flex;
         align-items: center;
         gap: 14px;
@@ -107,7 +106,6 @@
     </style>
     {% block head %}{% endblock %}
     <script>
-      // ---- shared utilities (must be defined before template scripts) ----
       function showToast(message, type) {
         type = type || "info";
         const container = document.getElementById("toast-container");
@@ -122,7 +120,6 @@
         }, 3000);
       }
 
-      // ---- connection status banner ----
       (function () {
         let el = null;
         function ensure() {
@@ -351,7 +348,6 @@
         if (a.pathname === location.pathname) a.classList.add("active");
       });
 
-      // ---- sidebar version footer ----
       fetch("/api/version")
         .then((r) => r.json())
         .then((j) => {
@@ -361,16 +357,9 @@
         .catch(() => {});
     </script>
     <script>
-      // ---- time warning popup ----
-      // Blocks the whole page behind a dark overlay until the countdown finishes.
-      // Usage:
-      //   showTimeWarning({
-      //     header: 'Heads up',
-      //     duration: 10,                      // seconds you must wait
-      //     description: 'Read this carefully.',
-      //     continueMessage: 'Got it',         // button label once the wait ends
-      //     onClose: function () {}            // optional callback on dismiss
-      //   });
+      // showTimeWarning blocks the page behind a dark overlay until the
+      // countdown finishes: showTimeWarning({header, duration, description,
+      // continueMessage, onClose})
       (function () {
         const queue = [];
         let overlay = null;
@@ -482,7 +471,6 @@
       })();
     </script>
     <script>
-      // ---- first-run tutorial walkthrough ----
       (function () {
         const KEY = "ispy_tour_index";
         const path = () =>

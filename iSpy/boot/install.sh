@@ -9,7 +9,6 @@ echo "=============="
 
 INSTALL_DIR="${ISPY_INSTALL_DIR:-$HOME/iSpy-FRC}"
 
-# 1. Check python3.10+
 PYTHON_BIN=""
 for candidate in python3.12 python3.11 python3.10 python3; do
     if command -v "$candidate" >/dev/null 2>&1; then
@@ -36,7 +35,6 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 echo "Found: $PYTHON_BIN ($($PYTHON_BIN --version))"
 
-# 2. Clone or update
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo "Existing install found at $INSTALL_DIR - pulling latest..."
     git -C "$INSTALL_DIR" pull
@@ -47,13 +45,12 @@ fi
 
 cd "$INSTALL_DIR"
 
-# 3. Install
 echo "Installing iSpy and dependencies..."
 "$PYTHON_BIN" -m pip install -e . --break-system-packages 2>/dev/null \
     || "$PYTHON_BIN" -m pip install -e .
 
-# 4. Run fresh setup (prefer the `ispy` CLI; fall back to `python -m` if the
-# console script didn't register, e.g. on some non-editable installs)
+# prefer the ispy CLI, fall back to python -m if the console script didn't
+# register (happens on some non-editable installs)
 echo "Running first-time setup..."
 if command -v ispy >/dev/null 2>&1; then
     ispy setup

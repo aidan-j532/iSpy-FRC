@@ -47,7 +47,6 @@ def main():
     cap1 = cv2.VideoCapture(0)
     cap2 = cv2.VideoCapture(2)
 
-    # Enable hardware-level auto exposure
     setup_camera_exposure(cap1)
     setup_camera_exposure(cap2)
 

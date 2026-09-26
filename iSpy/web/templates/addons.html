@@ -127,8 +127,6 @@ function switchNewTab(name, btn) {
   btn.classList.add('active');
 }
 
-// ---------- list ----------
-
 function matchesFilter(p) {
   const q = document.getElementById('addon-search').value.trim().toLowerCase();
   const t = document.getElementById('addon-type-filter').value;
@@ -498,8 +496,6 @@ async function loadStatus(force) {
   }
 }
 
-// ---------- settings (inline) ----------
-
 function toggleSettings(name, type) {
   const key = `${type}::${name}`;
   const panel = document.querySelector(`.addon-settings-panel[data-addon="${CSS.escape(key)}"]`);
@@ -631,8 +627,6 @@ async function toggleGroup(gname, enable) {
   loadStatus(true);
 }
 
-// ---------- source viewer ----------
-
 async function viewSource(type, filename) {
   const modal = document.getElementById('source-modal');
   const pre = document.getElementById('source-view');
@@ -662,8 +656,6 @@ function closeSource() {
 document.getElementById('source-modal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeSource();
 });
-
-// ---------- create / upload ----------
 
 async function submitPasted() {
   const type = document.getElementById('paste-type').value;
@@ -720,8 +712,6 @@ async function handleAddonUpload(file) {
   addonFileInput.value = '';
   loadStatus(true);
 }
-
-// ---------- delete ----------
 
 function openDeleteAddonModal(type, filename, name) {
   pendingDeleteAddon = { type, filename, name };

@@ -272,21 +272,18 @@ def _windows_camera_name(iface):
     return name or None
 
 
-# Windows has no decode of "currently plugged in" from the DeviceClasses
-# registry key - it keeps entries for cameras that were unplugged long ago
-# (ghosts that then pollute the device list and shift every MSMF index).
-# In the interface class, DIGCF_PRESENT + SetupDiEnumDeviceInterfaces
-# returns exactly the cameras that exist right now, and the associated
-# SP_DEVINFO_DATA hands us the canonical instance id to match ghosts with.
+# the DeviceClasses registry key keeps entries for cameras unplugged long ago -
+# those ghosts pollute the device list and shift every MSMF index. DIGCF_PRESENT
+# + SetupDiEnumDeviceInterfaces returns exactly what exists right now, and the
+# SP_DEVINFO_DATA gives us the instance id to match ghosts with.
 
 _DIGCF_PRESENT = 0x2
 _DIGCF_DEVICEINTERFACE = 0x10
 
 
 def _windows_present_camera_instance_ids():
-    """Instance ids (e.g. USB\\VID..&PID..&MI_00\\..) of cameras plugged in
-    right now, or None when this can't be determined (caller falls back to
-    the registry list, i.e. previous behaviour)."""
+    # instance ids (USB\VID..&PID..&MI_00\..) of cameras plugged in right now,
+    # or None when we cant tell - caller falls back to the registry list
     try:
         import ctypes
         import ctypes.wintypes as wt

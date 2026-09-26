@@ -23,11 +23,10 @@ from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
 from iSpy.vision._safe_imports import ensure_torch_imported
 
-#: pipeline-settings keys that live as siblings of vision_model in the config
-#: but must be visible whenever a model config is read. A UI save strips them
-#: out of the vision_model sub-dict on purpose (_normalize_vision_model_settings),
-#: so the raw block alone stops reflecting the user's optimize/quantize/format
-#: choices - merge the siblings back in on every read.
+# pipeline-settings keys that sit as siblings of vision_model in the config but
+# have to be visible on every read. a ui save strips them out of the sub-dict on
+# purpose (_normalize_vision_model_settings), so the raw block alone stops
+# reflecting the users optimize/quantize/format choices - merge them back in
 _VM_PIPELINE_SETTING_KEYS = (
     "quantize",
     "min_conf",
@@ -36,13 +35,11 @@ _VM_PIPELINE_SETTING_KEYS = (
     "quantization_dataset",
     "optimize",
 )
-#: legacy sibling-setting aliases consulted when the canonical key is unset.
+# legacy aliases, consulted when the canonical key is unset
 _VM_PIPELINE_SETTING_LEGACY = {"quantize": "quantized", "optimize": "auto_opt"}
 
 
 def _merge_vm_pipeline_settings(vm: dict, camera_config: iSpyCameraConfig) -> dict:
-    """Return a copy of a vision_model dict with the per-camera pipeline
-    settings (which a UI save strips out of the sub-dict) merged back in."""
     merged = dict(vm)
     for key in _VM_PIPELINE_SETTING_KEYS:
         value = camera_config.get_pipeline_setting(key)
@@ -823,7 +820,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
     def _filter_box(self, box: Box, img_w: int, img_h: int) -> bool:
         x1, y1, x2, y2 = box.xyxy
-        w_px = x2 - x1
         h_px = y2 - y1
         if (
             x1 < self.margin
@@ -834,10 +830,8 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             return False
         if h_px == 0:
             return False
-        aspect = w_px / h_px  # Aspect is calculate but I won't use it because
-        # I want it to continue detections partial objectcs/rectangles
+        # no aspect filter on purpose, partial objects/rectangles still count
         return True
-        # return 0.8 <= aspect <= 1.2
 
     def _box_to_robot_point(
         self,

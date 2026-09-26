@@ -25,9 +25,9 @@ class YourUtility(UtilityBase):
 
     def __init__(self, context: dict):
         super().__init__(context)
-        # self.config = YOUR settings view (defaults merged in); presence == enabled, no flag
+        # self.config is this plugin's settings view, defaults already merged
         self.logger = logging.getLogger(__name__)
-        self.flask_app = context.get("flask_app")  # grab what you need
+        self.flask_app = context.get("flask_app")
         self._ticks = 0
 
         if self.flask_app:

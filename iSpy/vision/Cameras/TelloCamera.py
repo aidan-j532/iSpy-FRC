@@ -13,17 +13,15 @@ _TELLO_DEFAULT_IP = "192.168.10.1"
 _TELLO_DEFAULT_COMMAND_PORT = 8889
 _TELLO_DEFAULT_VIDEO_PORT = 11111
 
-# Simple AT-command handshake. The drone only opens the UDP video stream
-# after it has been told to (command -> streamon), so we must do that before
-# OpenCV opens the udp:// source.
+# at-command handshake. the drone only opens the udp stream once told to, so this
+# has to happen before opencv touches the udp:// source
 _COMMAND_TIMEOUT_S = 3.0
 _HANDSHAKE_RETRIES = 3
 _HANDSHAKE_RETRY_DELAY_S = 1.0
 
-# The first _open_camera runs synchronously from __init__, so it uses a
-# single fast handshake attempt - a full retry loop would stall startup for
-# ~20s when the drone isn't there yet. Full retries happen on the reader
-# thread's automatic reconnect instead.
+# the first _open_camera runs sync from __init__, so one fast attempt - a full
+# retry loop would stall startup ~20s when the drone isnt up yet. real retries
+# happen on the reader threads reconnect
 _QUICK_HANDSHAKE_RETRIES = 1
 _QUICK_COMMAND_TIMEOUT_S = 1.5
 

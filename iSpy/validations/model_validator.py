@@ -4,7 +4,6 @@ from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-# File extensions by format
 MODEL_FORMATS = {
     "pytorch": [".pt"],
     "openvino": [".xml", ".bin"],
@@ -14,7 +13,6 @@ MODEL_FORMATS = {
     "coreml": [".mlpackage"],
 }
 
-# Flatten extensions for lookup
 ALL_EXTENSIONS = {}
 for fmt, exts in MODEL_FORMATS.items():
     for ext in exts:
@@ -39,18 +37,18 @@ class ModelValidationResult:
         if self.valid_organized_models:
             parts.append(f"Valid: {len(self.valid_organized_models)}")
         if self.orphan_models:
-            orphan_files = list(self.orphan_models.keys())[:2]  # Show first 2
+            orphan_files = list(self.orphan_models.keys())[:2]
             orphan_desc = f"{len(self.orphan_models)} ({', '.join(orphan_files)}{'...' if len(self.orphan_models) > 2 else ''})"
             parts.append(f"Orphans: {orphan_desc}")
         if self.config_mismatches:
             parts.append(f"Mismatches: {len(self.config_mismatches)}")
         if self.errors:
-            error_desc = "; ".join(self.errors[:2])  # Show first 2 errors
+            error_desc = "; ".join(self.errors[:2])
             if len(self.errors) > 2:
                 error_desc += "..."
             parts.append(f"Errors: {len(self.errors)} ({error_desc})")
         if self.warnings:
-            warning_desc = "; ".join(self.warnings[:2])  # Show first 2 warnings
+            warning_desc = "; ".join(self.warnings[:2])
             if len(self.warnings) > 2:
                 warning_desc += "..."
             parts.append(f"Warnings: {len(self.warnings)} ({warning_desc})")
@@ -67,12 +65,10 @@ def validate_model_organization(repo_root: Path) -> ModelValidationResult:
         )
         return result
 
-    # Find all model files
-    all_model_files = {}  # extension -> [paths]
+    all_model_files = {}
     for ext in ALL_EXTENSIONS.keys():
         all_model_files[ext] = list(yolo_dir.rglob(f"*{ext}"))
 
-    # Check each model file
     for ext, model_paths in all_model_files.items():
         for model_path in model_paths:
             result_check = _validate_single_model(model_path, yolo_dir, repo_root)
@@ -91,7 +87,6 @@ def validate_model_organization(repo_root: Path) -> ModelValidationResult:
                 logger.warning(f"[WARNING] Orphan model: {rel_path}")
                 logger.warning(f"         {result_check['reason']}")
 
-    # Check for standalone models in root or outside YoloModels
     _check_for_standalone_models(repo_root, result)
 
     return result
@@ -99,7 +94,6 @@ def validate_model_organization(repo_root: Path) -> ModelValidationResult:
 
 def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) -> Dict:
     try:
-        # Get extension
         ext = model_path.suffix.lower()
         fmt = ALL_EXTENSIONS.get(ext)
 
@@ -111,10 +105,8 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
                 "size_mb": 0,
             }
 
-        # Get file size
         size_mb = model_path.stat().st_size / (1024 * 1024)
 
-        # Check if file is at least 0.01MB
         if size_mb < 0.01:
             return {
                 "valid": False,
@@ -123,7 +115,7 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
                 "size_mb": size_mb,
             }
 
-        # Check structure: YoloModels/[format]/[size]/...
+        # YoloModels/[format]/[size]/...
         parts = model_path.relative_to(yolo_dir).parts
 
         if len(parts) < 2:
@@ -136,7 +128,6 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
 
         structure_format = parts[0]
 
-        # Validate format level
         valid_formats = set(MODEL_FORMATS.keys())
         if structure_format not in valid_formats:
             return {
@@ -147,7 +138,6 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
                 "size_mb": size_mb,
             }
 
-        # For OpenVINO, check for .xml and .bin pair
         if fmt == "openvino":
             if ext == ".xml":
                 expected_bin = model_path.with_suffix(".bin")
@@ -187,7 +177,6 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
 def _check_for_standalone_models(
     repo_root: Path, result: ModelValidationResult
 ) -> None:
-    # Check root directory
     root_models = []
     for ext in ALL_EXTENSIONS.keys():
         root_models.extend(repo_root.glob(f"*{ext}"))
@@ -203,7 +192,6 @@ def _check_for_standalone_models(
                 f"[STANDALONE] {rel_path} - Cannot infer YOLO parameters for standalone model"
             )
 
-    # Check if there are model files in YoloModels root
     yolo_dir = repo_root / "YoloModels"
     if yolo_dir.exists():
         yolo_root_models = []
@@ -255,7 +243,6 @@ def validate_config_model_paths(
         except ValueError:
             return str(config_path)
 
-    # Try to find the model in organized structure
     model_filename = config_path.name
     yolo_dir = repo_root / "YoloModels"
     matches = list(yolo_dir.rglob(model_filename))
@@ -306,24 +293,19 @@ def _is_in_organized_structure(model_path: Path, yolo_dir: Path) -> bool:
 
 
 def enforce_model_organization(repo_root: Path, config: Dict) -> Tuple[bool, str]:
-    # Validate filesystem organization
     validation_result = validate_model_organization(repo_root)
 
-    # Log results
     summary = validation_result.summary()
     if summary:
         logger.info(summary)
 
-    # Validate config paths
     corrected_path = validate_config_model_paths(config, repo_root, validation_result)
 
-    # Report final status
     if validation_result.errors:
         logger.error("Model validation failed with errors")
         return False, None
 
     if corrected_path:
-        # logger.info(f"Using model: {corrected_path}")
         return True, corrected_path
     else:
         logger.error("No valid model path determined")

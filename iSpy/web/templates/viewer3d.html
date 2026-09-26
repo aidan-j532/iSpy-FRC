@@ -308,7 +308,6 @@ block head %}
   const hemiLight = new THREE.HemisphereLight(0x4c8bf5, 0x111318, 0.3);
   scene.add(hemiLight);
 
-  // --- thick (fat) lines ---
   // WebGL caps LineBasicMaterial linewidth at 1px on most platforms, which makes
   // thin wireframes shimmer/alias at glancing angles. LineSegments2 + LineMaterial
   // render true pixel-width lines instead, so "slightly thicker" actually works.
@@ -332,8 +331,8 @@ block head %}
     const step = GRID_EXTENT / GRID_DIVS;
     for (let i = 0; i <= GRID_DIVS; i++) {
       const p = -half + i * step;
-      positions.push(-half, 0, p, half, 0, p); // line along X
-      positions.push(p, 0, -half, p, 0, half); // line along Z
+      positions.push(-half, 0, p, half, 0, p);
+      positions.push(p, 0, -half, p, 0, half);
     }
     const segCount = positions.length / 6;
     const geo = new LineSegmentsGeometry().setPositions(positions);
@@ -468,13 +467,11 @@ block head %}
     controls.update();
   };
 
-  // --- constants ---
   const GRID_UNIT = 0.25;
   const CUBE_SIZE = 0.25;
   const DOT_RADIUS = 0.05;
   const BOX_COLOR = 0x4c8bf5;
 
-  // --- helpers ---
   function disposeMesh(obj) {
     if (obj.geometry) obj.geometry.dispose();
     if (obj.material) {
@@ -486,7 +483,6 @@ block head %}
     }
   }
 
-  // Pixel-width line wrapper used for all detection/overlay wireframes.
   function makeFatEdges(edgesGeo, color, opacity, linewidth) {
     const geo = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeo);
     const mat = trackFat(
@@ -504,10 +500,6 @@ block head %}
     const [x, y, z] = robotToViewer(px, py, pz);
     return new THREE.Vector3(x, y, z);
   }
-
-  // ============================================================
-  // Detection renderers (existing -- renders vision detections)
-  // ============================================================
 
   function makeCubeMarker() {
     const geo = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
@@ -531,7 +523,6 @@ block head %}
     mesh.quaternion.set(
       ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
     );
-    // selected target gets a distinct, brighter outline
     const wire = mesh.children.find(
       (c) => c.isLineSegments || c.isLineSegments2,
     );
@@ -568,7 +559,6 @@ block head %}
     );
     const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
     g.scale.setScalar(size / (g.userData.planarSize || size));
-    // selected target gets a distinct outline color
     const wire = g.children.find((c) => c.isLineSegments || c.isLineSegments2);
     if (wire) {
       wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
@@ -626,7 +616,6 @@ block head %}
     return "generic";
   }
 
-  // detection sync
   const boxes = {};
   // the currently selected target's id (drives row + marker highlight).
   // kept in sync with the target_selector /api status endpoint each poll.
@@ -684,14 +673,10 @@ block head %}
     }
   }
 
-  // ============================================================
-  // Overlay renderers (generic -- any add-on can push overlays)
-  //
   // Each renderer is a { create(overlay), update(mesh, overlay) }
   // pair keyed by the overlay's "type" field.  Add-ons push
   // overlay dicts via Viewer3DModule.add_overlay(); the frontend
   // renders them through this registry.
-  // ============================================================
 
   function parseColor(hex, fallback) {
     if (!hex) return fallback;
@@ -781,10 +766,9 @@ block head %}
           metalness: 0.6,
         });
         const barrel = new THREE.Mesh(barrelGeo, barrelMat);
-        barrel.rotation.x = Math.PI / 2; // cylinder axis onto +Z
+        barrel.rotation.x = Math.PI / 2;
         barrel.position.z = bd / 2 + 0.025;
         g.add(barrel);
-        // glass - the glowing dot that makes "this face is the front" obvious
         const glassGeo = new THREE.CircleGeometry(0.037, 24);
         const glassMat = new THREE.MeshStandardMaterial({
           color: 0xffffff,
@@ -853,7 +837,6 @@ block head %}
     group.userData.childMeshes = existing;
   }
 
-  // overlay sync
   const overlayMeshes = {};
 
   function syncOverlays(overlays) {
@@ -888,10 +871,6 @@ block head %}
       overlayMeshes[id].mesh.visible = show;
     }
   };
-
-  // ============================================================
-  // Table rendering
-  // ============================================================
 
   function renderTable(objects, overlays) {
     const tbody = document.getElementById("obj-tbody");
@@ -935,7 +914,6 @@ block head %}
     fetch("/api/target-selector/clear", { method: "POST" }).catch(() => {});
   }
 
-  // delegated click-to-select on the detection table
   document.getElementById("obj-tbody").addEventListener("click", (ev) => {
     const tr = ev.target.closest("tr.obj-row");
     if (!tr) return;
@@ -943,10 +921,6 @@ block head %}
     if (id == null) return;
     selectRowById(Number(id));
   });
-
-  // ============================================================
-  // Per-axis view scale
-  // ============================================================
 
   const SCALE_MIN = -10;
   const SCALE_MAX = 10;
@@ -976,10 +950,6 @@ block head %}
   document.getElementById("scale-reset").addEventListener("click", () => {
     ["x", "y", "z"].forEach((a) => setAxisScale(a, 1));
   });
-
-  // ============================================================
-  // Poll & animate
-  // ============================================================
 
   async function poll() {
     try {

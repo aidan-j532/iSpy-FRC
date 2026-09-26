@@ -11,9 +11,8 @@ logger = logging.getLogger(__name__)
 
 _PROC = Path("/proc")
 
-# Distinct iSpy marker: the repo root of THIS install. Any process holding a
-# camera whose command-line references this path belongs to iSpy and is
-# protected. Falls back to matching the module package name.
+# marker for THIS install - any process holding a camera whose cmdline references
+# this path is ours and gets protected. falls back to the module package name
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 # graceful-then-force timings

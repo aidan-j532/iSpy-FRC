@@ -399,8 +399,6 @@ const COMMON_FIELDS = {
   fps_cap: { label: 'FPS cap', type: 'number', step: 1, nullable: true, help: 'Hard cap on capture framerate. Leave empty for uncapped.' },
 };
 
-/* Small helpers */
-
 function humanizePipelineName(name) {
   return String(name || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
@@ -443,7 +441,6 @@ function modelValue(source) {
   return String(source || '').split('/').pop();
 }
 
-/* schema fields split into model / pipeline / optimization sections */
 function splitSchema(schema) {
   const out = { model: [], pipeline: [], optimization: [] };
   Object.entries(schema || {}).forEach(([key, raw]) => {
@@ -476,10 +473,7 @@ function syncOptimization() {
   });
 }
 
-/* Field building */
-
-/* editable row-table for schema fields of type 'list'
-   (rows are objects keyed by def.fields, e.g. object_heights) */
+/* editable row-table for schema fields of type 'list', rows keyed by def.fields */
 function buildSchemaList(key, def) {
   const fields = def.fields || {};
   const wrap = document.createElement('div');
@@ -742,8 +736,6 @@ function readField(key) {
   return el.value;
 }
 
-/* Modal open / close */
-
 function closeCameraModal() {
   $id('camera-modal').style.display = 'none';
   $id('camera-modal-body').innerHTML = '';
@@ -767,9 +759,8 @@ async function loadPipelines() {
 }
 
 async function loadCameraSchemas() {
-  // config_schema() per camera-source, straight from the backend (BUG 5) so
-  // the frontend does not hardcode a second copy that can silently drift from
-  // iSpy/vision/Cameras/*.config_schema(). Cached like pipelineSchemas.
+  // config_schema() per camera-source, straight from the backend (BUG 5) so the
+  // frontend never hardcodes a second copy that can drift from Cameras/*.config_schema()
   try {
     const data = await fetch('/api/camera_schemas').then(r => r.json());
     cameraSchemas = (data.schemas || {});
@@ -780,8 +771,7 @@ async function loadCameraSchemas() {
 }
 
 function cameraFieldDef(key) {
-  // Backend config_schema() wins (labels/defaults/help/type); fall back to the
-  // hardcoded COMMON_FIELDS so the field still renders on older backends.
+  // backend config_schema() wins (labels/defaults/help/type), COMMON_FIELDS is the fallback
   const camType = camModal && camModal.camera_type;
   const schema = (camType && cameraSchemas[camType]) || {};
   return (schema[key] && schema[key].hasOwnProperty('default')) ? {
@@ -834,11 +824,8 @@ async function populateDevices(preselect) {
   sel.innerHTML = '<option value="" disabled>Detecting cameras...</option>';
   try {
     const data = await fetch('/api/cameras/discover').then(r => r.json());
-    // Edit mode must keep the currently-configured camera visible even though
-    // it is "active": list everything not in use plus the active device that
-    // matches the preselected source, then fall back to the raw configured
-    // value (rtsp:// streams, image files, a now-unplugged index) if discovery
-    // cannot see it at all.
+    // edit mode has to keep the configured camera in the list even though its marked
+    // active - rtsp:// streams, image files and unplugged indexes arent in discovery
     const editing = preselect !== undefined && preselect !== null;
     const want = String(preselect ?? '');
     let available = (data.devices || []).filter(d => !d.active || (editing && String(d.path) === want));
@@ -904,13 +891,11 @@ async function openCameraModal(mode, arg) {
   body.innerHTML = '';
   camModal.fields.clear();
 
-  // Identity (always visible).
   const identity = renderSection('Camera', {});
   const idKeys = mode === 'add' ? ['camera_type', 'device', 'name', 'pipeline'] : ['camera_type', 'source', 'name', 'pipeline'];
   renderSectionBody(identity.body, idKeys.map(k => [k, COMMON_FIELDS[k]]), 'common');
   body.appendChild(identity.holder);
 
-  // Camera type change handler - re-renders source/device field
   const camTypeSel = $id(fieldId('camera_type'));
   if (camTypeSel) {
     camTypeSel.onchange = () => {
@@ -918,21 +903,17 @@ async function openCameraModal(mode, arg) {
       camModal.camera_type = newType;
       renderSourceSection(newType);
     };
-    // Set initial value from data if editing
     if (mode === 'edit' && camModal.data && camModal.data.camera_type) {
       camTypeSel.value = camModal.data.camera_type;
     }
     camModal.camera_type = camTypeSel.value;
-    // Trigger initial render
     renderSourceSection(camTypeSel.value);
   }
 
-  // Anchor where pipeline / optimization sections are (re)inserted.
   const anchor = document.createElement('div');
   anchor.id = 'schema-anchor';
   body.appendChild(anchor);
 
-  // Common collapsible groups.
   const pipeline = pipelineSchemas[camModal.pipeline] || {};
   const showMount = pipeline.show_common_fields !== false;
   COMMON_SECTIONS.forEach(group => {
@@ -986,11 +967,8 @@ async function openCameraModal(mode, arg) {
   $id('camera-modal').style.display = 'flex';
 }
 
-/* Stepped settings flow: one section at a time, "Save and Continue" advances,
-   the last section's button is "Save and Quit". Every visible field must be
-   filled before a section counts as done (nullable numbers and toggles/selects
-   always count as filled). */
-
+/* stepped flow, one section at a time. the last one says "Save and Quit" instead
+   of "Save and Continue". nullable numbers and toggles/selects always count as filled */
 function flowSections() {
   // document order = the section order; gated-off sections (optimization with
   // no master toggle checked) have nothing to fill, so they drop out of the flow
@@ -1006,14 +984,11 @@ function initSettingsFlow() {
   updateSubmitLabel();
 }
 
-/* Render the source/device field based on camera_type */
 function renderSourceSection(cameraType) {
   const body = $id('camera-modal-body');
-  // Find the existing source/device field row
   const existingRow = body.querySelector('[data-field-key="source"], [data-field-key="device"]');
   if (existingRow) existingRow.remove();
 
-  // Find the camera_type row to insert after it
   const camTypeRow = body.querySelector('[data-field-key="camera_type"]');
   if (!camTypeRow) return;
 
@@ -1023,9 +998,8 @@ function renderSourceSection(cameraType) {
 
   if (cameraType === 'opencv') {
     if (camModal.mode === 'edit') {
-      // Editing an already-configured camera: the device is fixed. Just show
-      // what it is, read-only - no editable dropdown, no required picker, so
-      // it never blocks the flow.
+  // editing a configured camera: the device is fixed, so just show it read-only.
+  // no editable dropdown means it can never block the flow
       const field = buildField('source', COMMON_FIELDS.source, 'common');
       const input = field.querySelector('input');
       if (input) input.readOnly = true;
@@ -1054,20 +1028,16 @@ function renderSourceSection(cameraType) {
   }
   holder.insertBefore(newRow, camTypeRow.nextElementSibling);
 
-  // Tello connection details: the tello_* config keys are defined in
-  // COMMON_FIELDS and persisted top-level by the backend, but were never
-  // rendered, so the Tello defaults could not be changed from the UI. Render
-  // them as a dedicated section and drop it on re-render / type switch so the
-  // DOM (and the stepped settings flow) stays consistent.
+  // tello_* keys were in COMMON_FIELDS and saved top-level but never rendered, so
+  // the defaults werent editable from the ui. re-render drops it so the stepped flow stays sane
   const existingTello = body.querySelector('[data-tello-section]');
   if (existingTello) existingTello.remove();
   if (cameraType === 'tello') {
     const sec = renderSection('Tello Connection', {});
     sec.holder.dataset.telloSection = 'true';
     ['tello_ip', 'tello_command_port', 'tello_video_port'].forEach(key => {
-      // Prefer the backend config_schema() (labels/defaults/step/help) so the
-      // UI follows iSpy/vision/Cameras/TelloCamera.config_schema(); the
-      // hardcoded COMMON_FIELDS entry is only a fallback for older backends.
+  // prefer the backend config_schema() so this follows TelloCamera.config_schema(),
+  // the COMMON_FIELDS entry is just the fallback for older backends
       const d = cameraFieldDef(key);
       const v = (camModal.data && camModal.data[key] != null) ? camModal.data[key] : d.default;
       const row = buildField(key, d, 'common');
@@ -1198,9 +1168,8 @@ function setFieldModelValue(key) {
   input.dataset.original = name;
 }
 
-/* Model profiles: model-backed pipelines offer New/Load Profile. Both tabs
-   share one underlying form state - load just swaps which sections are
-   visible, so fields never change identity (that is whole point lol). */
+/* model-backed pipelines offer New/Load Profile. both tabs share one form state,
+   load just swaps which sections are visible so fields never change identity lol */
 
 function renderProfileDetailRows(details) {
   if (!details || typeof details !== 'object') return '';
@@ -1351,8 +1320,6 @@ async function renderModelProfileTabs() {
   setProfileTab(hasValid ? 'load' : 'new');
 }
 
-/* Value filling */
-
 function fillCommonValues() {
   const src = camModal.data || {};
   setFieldValue('x', src.x ?? 0);
@@ -1371,8 +1338,6 @@ function fillCommonValues() {
   }
 }
 
-/* Save */
-
 async function submitCameraModal() {
   const mode = camModal.mode;
   const payload = {};
@@ -1388,9 +1353,8 @@ async function submitCameraModal() {
       payload.source = isNaN(Number(opt.value)) ? opt.value : Number(opt.value);
       payload.device_id = opt.dataset.deviceId || null;
     } else {
-      // The opencv edit path renders a device selector (same as add), so the
-      // configured source is kept in the select. Prefer it over the raw
-      // source field, which only exists for tello / free-text entries.
+  // the opencv edit path renders a device selector too, so prefer it over the raw
+  // source field - that one only exists for tello / free-text entries
       const deviceSel = $id(fieldId('device'));
       if (deviceSel && deviceSel.value !== '') {
         const opt = deviceSel.selectedOptions[0];
@@ -1698,9 +1662,8 @@ function closeModelPicker() {
 
 function statusDotClass(cam) {
   if (cam.ready) {
-    // calibration levels are surfaced through cam.status by the pipeline.
-    // "Needs Calibration" (red) = pipeline blocked until calibration exists;
-    // "Needs Calibration for Better Accuracy" (yellow) = runs, just approximate.
+  // calibration level rides along on cam.status. "Needs Calibration" (red) blocks the
+  // pipeline, "Needs Calibration for Better Accuracy" (yellow) just runs approximate
     const s = (cam.status || '').toLowerCase();
     if (s.includes('needs calibration for better accuracy')) return 'status-warn';
     if (s.includes('needs calibration')) return 'status-bad';
@@ -1710,10 +1673,9 @@ function statusDotClass(cam) {
   return 'status-bad';
 }
 
-/* the dot next to a camera's name: green when streaming + calibrated, yellow
-   when streaming but not calibrated yet (or not streaming). Calibration is a
-   per-camera setup step - a fresh camera works but reports no depth until the
-   user runs the wizard, so its dot stays yellow until that's done. */
+/* the dot next to a cameras name: green when streaming + calibrated, yellow when
+   streaming but not calibrated yet. a fresh camera works but reports no depth until
+   the wizard runs, so the dot stays yellow till then */
 function cameraHeaderDotClass(isStreaming, cam) {
   if (!isStreaming) return 'status-warn';
   if (!cam) return 'status-ok';
@@ -1741,9 +1703,8 @@ function updateCameraFooter(card, cam) {
     footer.innerHTML = '<span class="status-dot"></span><span class="cam-status"></span>';
     card.appendChild(footer);
   }
-  // reuse the existing dot instead of re-creating it every refresh, otherwise
-  // the new element starts a fresh phase and the shared blink clock can't keep
-  // it in sync with the other dots
+  // reuse the existing dot, re-creating it restarts the css animation phase and the
+  // shared blink clock cant get it back in sync with the other dots
   footer.querySelector('.status-dot').className = 'status-dot ' + statusDotClass(cam);
   footer.querySelector('.cam-status').textContent = status;
 }
@@ -1828,10 +1789,9 @@ async function refreshCameras() {
         if (meta) meta.textContent = age;
         updateCameraHeader(card, cam);
         updateCameraFooter(card, cam);
-        // A feed <img> that errored ("No signal") never recovers on its own -
-        // MJPEG reconnects require a fresh element (see resumeCameraGridFeeds).
-        // Rebuild the card so a brand-new <img> re-establishes the stream,
-        // throttled so a truly-dead camera doesn't hammer the server every tick.
+  // a feed <img> that errored never recovers, mjpeg needs a fresh element
+  // (resumeCameraGridFeeds). rebuild the card, throttled so a dead camera
+  // doesnt hammer the server every tick
         if (isStreaming && card.querySelector('.camera-feed.feed-error')) {
           const last = Number(card.dataset.feedRetried || 0);
           const cooldown = 3000;
@@ -1900,11 +1860,7 @@ function exitLightboxMax() {
   $id('camera-lightbox').classList.remove('camera-lightbox-max');
 }
 
-/* ------------------------------------------------------------------
- * Camera image tuning - sliders in the lightbox. Changes apply to the
- * live feed immediately and are saved to the camera config automatically.
- * ------------------------------------------------------------------ */
-
+// camera image tuning - applies to the live feed and autosaves
 const TUNING_FIELDS = {
   brightness: { label: 'Brightness', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Additive brightness offset.' },
   contrast: { label: 'Contrast', type: 'slider', min: -100, max: 100, step: 1, default: 0, help: 'Multiplicative contrast.' },
@@ -2052,10 +2008,7 @@ function setRefreshRate() {
   refreshTimer = setInterval(refreshCameras, currentRate);
 }
 
-/* ------------------------------------------------------------------
- * Camera calibration wizard
- * ------------------------------------------------------------------ */
-
+// camera calibration wizard
 const calibrationState = {
   camera: null,      // camera key (name) used for the API and the raw feed
   pipeline: null,    // camera's pipeline name - decides which wizard sections to run
@@ -2076,9 +2029,8 @@ const calibrationState = {
 let calibrationHeartbeatTimer = null;
 
 function calibrationSectionsFor(pipeline) {
-  // Each pipeline declares which calibration sections (tabs) it needs via
-  // calibration_sections in its config_schema payload. Default is the
-  // universal ChArUco board, so older / unknown pipelines still get it.
+  // each pipeline declares its calibration tabs via calibration_sections in the
+  // config_schema payload. default is charuco so unknown pipelines still get one
   const declared = pipelineSchemas[pipeline]
     ? pipelineSchemas[pipeline].calibration_sections
     : undefined;
@@ -2260,11 +2212,8 @@ async function clearPnpConfig() {
   } catch (e) {}
 }
 
-/* ------------------------------------------------------------------
- * Auto capture: the wizard's live feed stores diverse board frames by
- * itself, runs a rolling solve for a live RMS readout, and saves when it
- * has enough. The user just moves the board around - no clicking.
- * ------------------------------------------------------------------ */
+// auto capture - the feed grabs diverse board frames and solves on its own,
+// user just moves the board around
 
 const autoCaptureState = {
   kind: null,      // 'charuco'
@@ -2348,20 +2297,17 @@ function updateAutoCaptureUi() {
 }
 
 function pauseCameraGridFeeds() {
-  // stop every camera card's live /video stream while calibrating - the
-  // server-side generators only encode while a client is connected, so this
-  // frees real CPU for the calibration feed. The grid is rebuilt fresh on
-  // wizard close (resumeCameraGridFeeds).
+  // stop every camera cards /video stream while calibrating - the server side
+  // generators only encode while a client is connected, so this frees real CPU.
+  // resumeCameraGridFeeds rebuilds the grid on wizard close
   document.querySelectorAll('.camera-feed').forEach(img => {
     img.removeAttribute('src');
   });
 }
 
 function resumeCameraGridFeeds() {
-  // drop the pause markers, then rebuild the grid from scratch - fresh <img>
-  // elements with clean /video URLs always re-establish their MJPEG stream,
-  // whereas re-setting src on an existing <img> does not reliably reconnect
-  // (the thumbnails otherwise stay black after the wizard closes).
+  // rebuild the grid from scratch, fresh <img> elements with clean /video urls always
+  // reconnect - re-setting src on an existing one doesnt, thumbnails stay black
   document.querySelectorAll('.camera-feed').forEach(img => {
     delete img.dataset.pausedSrc;
   });
@@ -2383,9 +2329,8 @@ async function openCalibrationWizardFor(name) {
     // have the calibration_sections declared by the pipeline before building tabs.
     if (!Object.keys(pipelineSchemas).length) await loadPipelines();
     let sections = calibrationSectionsFor(calibrationState.pipeline);
-    // object_detection can run either a detector or a pose model. Pose models
-    // need the keypoint xyz (PnP) tab instead of the focal/FOV tab - ask the
-    // backend which one applies so the right tabs are offered.
+  // object_detection runs either a detector or a pose model. pose models want the
+  // keypoint xyz (pnp) tab instead of focal/fov, so ask the backend which applies
     if (sections.includes('focal') || sections.includes('pnp')) {
       try {
         const p = await fetch(`/api/cameras/calibration/${encodeURIComponent(name)}/pnp`).then(r => r.json());
@@ -2430,7 +2375,6 @@ function openCalibrationWizard() {
     if (!calibrationState.activeSection || !sections.includes(calibrationState.activeSection)) {
       calibrationState.activeSection = sections[0];
     }
-    // tab bar
     const tabsWrap = document.createElement('div');
     tabsWrap.className = 'settings-tabs';
     tabsWrap.id = 'calibration-tabs';
@@ -2443,7 +2387,6 @@ function openCalibrationWizard() {
       tabsWrap.appendChild(b);
     });
     body.appendChild(tabsWrap);
-    // panel
     const panel = document.createElement('div');
     panel.id = 'calibration-panel';
     body.appendChild(panel);
@@ -2912,11 +2855,9 @@ refreshCameras();
 refreshTimer = setInterval(refreshCameras, currentRate);
 _syncUnit();
 
-/* One shared blink clock for all camera status dots: a single timer toggles
-   the same class on every dot at the same moment, so the header + footer dots
-   (and every camera card) flash in sync instead of each element running its
-   own independent CSS animation phase. Yellow blinks slow (~1.4s), red blinks
-   fast (~0.7s). Skipped when the user prefers reduced motion. */
+/* one timer toggles the blink class on every dot at the same instant - per-element
+   css animation phases drift and the grid ends up half synced. yellow 1.4s, red
+   0.7s. skipped when the user prefers reduced motion */
 if (!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) {
   let warnOn = true, badOn = true;
   setInterval(() => {

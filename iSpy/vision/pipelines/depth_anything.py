@@ -330,16 +330,14 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
     def _optimized_active(self) -> bool:
         return getattr(self, "_session", None) is not None
 
-    # ------------------------------------------------------------------
     # stale-artifact resync hooks (see OptimizableModelPipeline)
     #
-    # Depth Anything ships exactly one Hugging Face checkpoint and every
+    # depth anything ships exactly one Hugging Face checkpoint and every
     # artifact path is derived from config at boot (fixed stem + input
     # size + target format), so there is no user-picked source model and
-    # no persisted path that could drift. The hooks exist so the boot
+    # no persisted path that could drift. the hooks exist so the boot
     # guard is callable on every model-backed pipeline instead of raising
     # AttributeError if a future refactor adds persisted state.
-    # ------------------------------------------------------------------
 
     def _resolve_model_path(self, path: str) -> Path | None:
         if not path:

@@ -27,11 +27,9 @@ class CameraOpenTimeout(ValueError):
     pass
 
 
-# Bound on concurrently-live driver-open threads across all cameras. A missing
-# or wedged camera re-opens every few seconds; without a cap each abandoned
-# retry spawns a thread that lingers until the driver returns, leaking threads
-# unboundedly. The slot is only released when the worker actually exits, so
-# once the cap is hit further opens fail fast and resume when a slot frees.
+# a missing or wedged camera retries every few seconds and each abandoned thread
+# lingers until the driver returns, so without a cap they pile up unbounded. the
+# slot frees only when the worker actually exits
 _OPEN_WORKER_MAX = 4
 _open_worker_guard = threading.Lock()
 _open_worker_live = 0

@@ -151,8 +151,6 @@ class OpticalFlowPipeline(VisionPipeline):
         self._last_viz: dict | None = None
         self._set_status("ready")
 
-    # ------------------------------------------------------------------
-
     def _setting(self, key, default):
         try:
             v = self.config.get_pipeline_setting(key)
@@ -383,7 +381,6 @@ class OpticalFlowPipeline(VisionPipeline):
         self._last_objects = [obj] if mag_px > 0.05 else []
         return self._last_objects, frame
 
-    # ------------------------------------------------------------------
     # visualization (called by the run loop after run())
 
     def plot(self, frame):
@@ -511,8 +508,6 @@ class OpticalFlowPipeline(VisionPipeline):
             -1,
         )
         text(4, f"CONF {conf * 100:.0f}%", (230, 230, 230))
-
-    # ------------------------------------------------------------------
 
     def get_data_for_subsystem(self, target: str):
         if getattr(self, "subsystem", "field") != target:

@@ -7,7 +7,7 @@ class YourTracker(TrackerBase):
 
     @classmethod
     def config_schema(cls) -> dict:
-        # declare settings so the web UI can render an editor; omitted keys get defaults at runtime
+        # settings the web ui renders an editor for; omitted keys get defaults
         return {
             "count_start": {
                 "type": "number",
@@ -19,7 +19,7 @@ class YourTracker(TrackerBase):
 
     def __init__(self, context: dict):
         super().__init__(context)
-        # self.config = YOUR settings view (defaults already merged in); presence == enabled, no flag
+        # self.config is this plugin's settings view, defaults already merged
         self.count = int(self.config.get("count_start", 0))
 
     def update(self, detections, robot_x, robot_y, robot_yaw, robot_z: float = 0.0):

@@ -74,7 +74,7 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 
     certain, detected, manual, warnings = [], [], [], []
 
-    # Check for model-specific metadata saved by iSpy during conversion
+    # sidecar written during conversion
     meta_path = Path(model_path).parent / f"{Path(model_path).stem}_metadata.yaml"
     meta_task = task
     meta_nc = None
@@ -429,7 +429,6 @@ def fill_missing_config(model_config: dict) -> dict:
     if not model_path or not os.path.exists(model_path):
         return model_config
 
-    # --- Step 1: load metadata sidecar if present ---
     try:
         sidecar = read_metadata(Path(model_path))
     except Exception:
@@ -439,7 +438,6 @@ def fill_missing_config(model_config: dict) -> dict:
         logger.info("Loaded metadata from %s_metadata.yaml", Path(model_path).stem)
         return _apply_metadata_to_config(sidecar, model_config)
 
-    # --- Step 2: tensor inspection (existing logic) ---
     logger.info(
         "No metadata file for %s - falling back to tensor inspection",
         Path(model_path).name,

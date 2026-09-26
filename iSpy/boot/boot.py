@@ -29,7 +29,6 @@ logging.getLogger().setLevel(logging.INFO)
 _BOOT_DIR = Path(__file__).resolve().parent
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _PROJECT_ROOT = Path.cwd().resolve()
-_ASSETS_DIR = _PACKAGE_ROOT.parent / "assets"
 
 _READINESS_POLL_S = 2.0
 _READINESS_WAIT_TIMEOUT_S = 1200
@@ -284,14 +283,6 @@ def setup_files(fresh: bool = False):
                 _remove_path_for_cleanup(d)
                 logger.info("boot -f: deleted generated %s", d)
 
-    keywords_path = _ASSETS_DIR / "keywords.json"
-
-    try:
-        with open(keywords_path, "r") as f:
-            default_keywords = json.load(f)
-    except FileNotFoundError:
-        default_keywords = {}
-
     yolo_dir.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
     outputs_dir.mkdir(parents=True, exist_ok=True)
@@ -320,9 +311,6 @@ def setup_files(fresh: bool = False):
                 logger.info("Generating metadata for %s", pt_file.name)
                 meta = metadata_from_pt(pt_file)
 
-            # Apply bundled keyword overrides
-            if pt_file.stem in default_keywords:
-                meta["calibration_keywords"] = default_keywords[pt_file.stem]
             write_metadata(meta_path, meta)
             logger.info("Wrote metadata %s", meta_path.name)
 

@@ -45,7 +45,6 @@ class PluginStatusModuleTests(unittest.TestCase):
         )
         return mod, cfg
 
-    # ---------- available ----------
 
     def test_available_lists_all_addons_with_schemas(self):
         mod, cfg = self._module()
@@ -165,7 +164,6 @@ class PluginStatusModuleTests(unittest.TestCase):
         self.assertTrue(nt["enabled"])
         self.assertEqual(nt["settings"], {"network_tables_ip": "10.1.1.1"})
 
-    # ---------- toggle ----------
 
     def test_toggle_enable_adds_dict_entry(self):
         mod, cfg = self._module()
@@ -243,7 +241,6 @@ class PluginStatusModuleTests(unittest.TestCase):
             resp = mod._toggle()
         self.assertEqual(resp[1], 400)
 
-    # ---------- settings ----------
 
     def test_save_settings_merges_into_enabled_addon(self):
         mod, cfg = self._module(
@@ -382,7 +379,6 @@ class PluginStatusModuleTests(unittest.TestCase):
             resp = mod._save_settings()
         self.assertEqual(resp[1], 404)
 
-    # ---------- status ----------
 
     def test_status_reports_loaded_instances(self):
         vision = FakeVision()
@@ -400,7 +396,6 @@ class PluginStatusModuleTests(unittest.TestCase):
         self.assertEqual(by_name["FRC/object_tracker"]["status"], "running")
         self.assertEqual(by_name["rollback"]["status"], "idle")
 
-    # ---------- delete ----------
 
     def test_delete_disables_then_removes_file(self):
         mod, cfg = self._module(

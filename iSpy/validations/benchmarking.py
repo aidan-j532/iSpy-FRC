@@ -103,15 +103,9 @@ def _add_model_paths_from_config(vm: dict, out: list[Path]):
             out.append(p.resolve())
 
 
-# --------------------------------------------------------------------------
-# Zero-config fallback: if nothing was found anywhere and the user didn't
-# pass --model, grab a tiny stock YOLOv8n checkpoint so `ispy-bench` still
-# has *something* to test in a brand-new environment (a fresh Colab runtime
-# with no YoloModels/ or Config/ around yet). Same checkpoint/license terms
-# as the "_default_detect.pt" stock model boot/default_models.py downloads
-# (Ultralytics, AGPL-3.0) - it is NOT bundled with ispy-frc, only fetched
-# on demand and only when nothing else is available.
-# --------------------------------------------------------------------------
+# nothing to test with and no --model, so grab stock yolov8n - same
+# checkpoint/license as the _default_detect.pt boot downloads (ultralytics,
+# AGPL-3.0). not bundled, only fetched when there is literally nothing else
 _DEFAULT_BENCH_MODEL_NAME = "_default_detect.pt"
 _DEFAULT_BENCH_MODEL_URL = (
     "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt"
@@ -209,18 +203,14 @@ def detect_test_plan() -> dict:
     return plan
 
 
-# Formats that expect quantization (rknn/tflite are int8-only) or support it
-# (engine/openvino get a real int8 build from the calibration dataset) get a
-# quantized artifact whenever we can build one, because ispy-bench wants the
-# fastest possible FPS for the device - never a float32 fallback.
+# rknn/tflite are int8-only, engine/openvino get a real int8 build from the
+# calibration dataset. ispy-bench wants max fps, so never a float32 fallback
 _QUANTIZABLE_FORMATS = {"rknn", "tflite", "openvino", "engine"}
 
 
 def _recommended_backend_plan() -> dict[str, tuple]:
-    """Single-backend plan: the exact backend normal iSpy would pick for this
-    machine (AutoOpt.recommend_format) with default settings - no prospecting,
-    no benchmark-only knobs. Formats GenericYolo can't live-run fall back to
-    onnx, which is what normal iSpy would use anyway."""
+    # the exact backend normal iSpy would pick for this machine (AutoOpt.recommend_format)
+    # at default settings. formats GenericYolo cant live-run fall back to onnx
     from iSpy.config.AutoOpt import recommend_format, resolve_openvino_device
 
     fmt = recommend_format(ignore_dependencies=True)
@@ -264,8 +254,6 @@ def _ensure_calibration_dataset(fmt) -> Path:
     ds = default_quantization_dataset_dir()
     prepare_quantization_dataset(
         str(ds),
-        boot=False,
-        keywords=[],
         count=calib_count_for_format(fmt),
     )
     return ds
@@ -304,11 +292,8 @@ _BENCH_IMAGE_PATH: Path | None = None
 
 
 def _bench_source_image() -> Path:
-    """Return (and once create) a synthetic image the benchmark camera uses.
-
-    is_image=True sources make the detection pipeline's preprocess worker
-    feed the queue continuously, so real per-frame inference is timed.
-    """
+    # is_image=True sources make the preprocess worker feed the queue continuously,
+    # so what we time is real per-frame inference and not a one-shot drain
     global _BENCH_IMAGE_PATH
     if _BENCH_IMAGE_PATH is not None:
         return _BENCH_IMAGE_PATH

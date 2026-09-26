@@ -18,12 +18,9 @@ class ObjectStruct:
     yaw: float = 0.0
 
 
-# vision_data is published as raw JSON (a single string topic holding the full
-# universal Object.to_dict() list). Because every pipeline flattens to the same
-# keys, JSON works for object_detection, april_tag, qr_code, optical_flow,
-# depth, etc. - the robot picks the entries it cares about by "name" and
-# "vis_type". The struct[] form remains available for back-compat via the
-# data_type dropdown.
+# vision_data is raw json - one string topic holding the full Object.to_dict()
+# list. every pipeline flattens to the same keys so the robot just picks what it
+# wants by name/vis_type. struct[] is still there for back-compat
 DEFAULT_PUBLISH = [
     {"name": "fps", "data_type": "number", "source": "fps", "nt_topic": "fps"},
     {
@@ -283,7 +280,7 @@ class NetworkTableHandler(UtilityBase):
                 return None
         return obj
 
-    # -- internal helpers --------------------------------------------------
+    # internal helpers
 
     def _get_table(self, table_name: str):
         if table_name not in self._tables:
@@ -332,7 +329,7 @@ class NetworkTableHandler(UtilityBase):
     def _send_boolean(self, value: bool, data_name: str, table_name: str):
         self._send_data(value, data_name, table_name)
 
-    # -- viewer overlay ----------------------------------------------------
+    # viewer overlay
 
     def _update_viewer_overlay(self, frame_data: dict):
         if self._viewer is None:

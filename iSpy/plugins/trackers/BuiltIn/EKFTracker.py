@@ -152,7 +152,6 @@ class EKFTracker(TrackerBase):
                 if not self._same_identity(new_det, existing):
                     continue
 
-                # reset the Object's stale timer
                 existing.reset_time()
 
                 # Kalman predict+update on the merged track's position using

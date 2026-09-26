@@ -336,7 +336,7 @@ def _run_comparison_body(
     subline("Base type", base_model.model_type)
     subline("Optimized type", optimized_model.model_type, "PASS")
 
-    # ── file size ──
+    # file size
     try:
         base_size = Path(base_path).stat().st_size
         opt_size = _path_size(Path(optimized_path))
@@ -350,7 +350,7 @@ def _run_comparison_body(
     except Exception:
         pass
 
-    # ── load test frames once, reuse for both detection + speed ──
+    # load test frames once, reuse for both detection + speed
     loaded: list[tuple[Path, np.ndarray]] = []
     for img_path in images:
         frame = cv2.imread(str(img_path))
@@ -374,7 +374,6 @@ def _run_comparison_body(
     except Exception as e:
         logger.warning("Optimized model warmup failed: %s", e)
 
-    # ── 1. detection agreement ──
     section("1. DETECTION AGREEMENT  -  optimized vs base (.pt) ground truth")
 
     per_image = []
@@ -523,7 +522,6 @@ def _run_comparison_body(
     }
     results.quality = quality_metrics
 
-    # ── 2. speed ──
     section("2. SPEED  -  base (.pt) vs optimized")
 
     frames = [f for _, f in loaded]
@@ -553,7 +551,6 @@ def _run_comparison_body(
 
     results.speed = {"base": base_speed, "optimized": opt_speed, "speedup": speedup}
 
-    # ── 3. model size ──
     if results.file_size:
         section("3. MODEL SIZE")
         subline("Base size", f"{results.file_size['base_mb']} MB")

@@ -28,7 +28,6 @@ def unit_tests(verbosity: int = 2) -> bool:
             result = runner.run(suite)
         return result.wasSuccessful()
     finally:
-        # Restore original log levels
         root_logger.setLevel(prev_level)
         logger.setLevel(prev_logger_level)
 

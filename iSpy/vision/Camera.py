@@ -63,10 +63,8 @@ class Camera:
             return
         object.__delattr__(self, name)
 
-    # ------------------------------------------------------------------
-    # Real methods (no delegate required) - mirror CameraBase so the
-    # plugin/demo contract holds even for __new__-only instances.
-    # ------------------------------------------------------------------
+    # real methods (no delegate required) - mirror CameraBase so the
+    # plugin/demo contract holds even for __new__-only instances
 
     def get_demo_objects(self, frame):
         if frame is None:

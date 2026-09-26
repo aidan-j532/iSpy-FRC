@@ -14,11 +14,9 @@ _STANDARD_LEVEL_NAMES = {
 
 
 def repair_standard_log_levels() -> None:
-    # rknnlite (and friends) replace logging._nameToLevel with single-letter
-    # shorthands at import time. that makes stdlib setLevel('WARNING') throw
-    # "Unknown level: 'WARNING'", which torch's fx bootstrap calls during
-    # import - so a clobbered table kills every torch import. re-adding the
-    # canonical names is idempotent, so just re-assert them.
+    # rknnlite replaces logging._nameToLevel with single letter shorthands at
+    # import, which makes setLevel('WARNING') throw - and torch's fx bootstrap
+    # calls setLevel during import, so a clobbered table kills every torch import.
     name_to_level = logging._nameToLevel
     for name, level in _STANDARD_LEVEL_NAMES.items():
         if name_to_level.get(name) != level:
@@ -30,11 +28,9 @@ _torch_imported = False
 
 
 def ensure_torch_imported() -> None:
-    # scipy.stats triggers `import torch` from inside its own module init.
-    # if a bg thread is mid-import of torch at that moment, scipy can grab
-    # the half-initialized module: "partially initialized module 'torch' has
-    # no attribute 'Tensor'". importing up front on the calling thread makes
-    # every later `import torch` a no-op and kills the race.
+    # scipy.stats imports torch from inside its own init, so a bg thread already
+    # mid-import can hand it the half-initialized module. importing up front on
+    # the calling thread makes every later `import torch` a no-op.
     global _torch_imported
     if _torch_imported:
         return

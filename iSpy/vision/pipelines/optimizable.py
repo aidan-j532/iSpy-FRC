@@ -2,8 +2,8 @@ import functools
 import logging
 from pathlib import Path
 
-#: every backend any model-backed pipeline can build; 'auto' resolution must
-#: pick from this set or fall back to onnx
+# every backend a model-backed pipeline can build; 'auto' resolution has to
+# pick from this set or fall back to onnx
 SUPPORTED_TARGET_FORMATS = (
     "onnx",
     "rknn",
@@ -18,9 +18,8 @@ SUPPORTED_TARGET_FORMATS = (
 
 
 def _profile_hardware_warning(target_format: str) -> str | None:
-    """Warn when a saved profile asks for an accelerator this board doesn't
-    expose. Only formats that need dedicated hardware are checked - onnx/tflite
-    always run on CPU, so a profile specifying them never warns."""
+    # onnx/tflite always run on cpu so they never warn, only formats that need
+    # real hardware are worth checking
     if not target_format or target_format in ("auto", "onnx", "tflite"):
         return None
     try:
@@ -52,17 +51,17 @@ def _recommended_format_cached() -> str:
 
 
 class OptimizableModelPipeline:
-    #: extra config-schema keys surfaced by get_optimization_options()
+    # extra config-schema keys surfaced by get_optimization_options()
     _OPT_OPTIONS_EXTRA: tuple[str, ...] = ()
 
-    #: hardware targets a model-backed pipeline can route its inference onto.
-    #: The active one is resolved from the loaded model at runtime by
-    #: active_hardware() (RKNN->NPU, TPU->TPU, TensorRT/CoreML/OpenVINO->GPU,
-    #: ONNX/TFLite/pytorch->CPU or GPU).
+    # hardware targets a model-backed pipeline can route its inference onto.
+    # the active one is resolved from the loaded model at runtime by
+    # active_hardware() (RKNN->NPU, TPU->TPU, TensorRT/CoreML/OpenVINO->GPU,
+    # ONNX/TFLite/pytorch->CPU or GPU)
     hardware: tuple[str, ...] = ("cpu", "gpu", "npu", "tpu")
 
-    #: resolved-format -> hardware label. 'format' is the _path_format() token
-    #: for the active model artifact/file.
+    # resolved-format -> hardware label. 'format' is the _path_format() token
+    # for the active model artifact/file
     _HARDWARE_BY_FORMAT = {
         "rknn": "npu",
         "hailo": "npu",  # Hailo NPU
@@ -114,9 +113,7 @@ class OptimizableModelPipeline:
             return "cpu"
         return None
 
-    # ------------------------------------------------------------------
     # config schema
-    # ------------------------------------------------------------------
 
     @classmethod
     def _optimization_schema(
@@ -168,9 +165,8 @@ class OptimizableModelPipeline:
                 "browse_root": "QuantizeDataset",
                 "quantization": True,
                 "gated_by": "quantize",
-                "help": "Optional folder of calibration images used for "
-                "quantization. Leave empty to auto-download images "
-                "from the model's calibration keywords.",
+                "help": "Optional folder of uploaded calibration images used "
+                "for quantization. Leave empty to generate synthetic ones.",
             },
         }
         if input_size_default is not None:
@@ -204,9 +200,7 @@ class OptimizableModelPipeline:
         ) + self._OPT_OPTIONS_EXTRA
         return {key: schema[key] for key in keys if key in schema}
 
-    # ------------------------------------------------------------------
     # target format resolution
-    # ------------------------------------------------------------------
 
     def _resolve_target_format(self) -> str:
         explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
@@ -246,9 +240,7 @@ class OptimizableModelPipeline:
             self._target_format = self._resolve_target_format()
         return self._target_format
 
-    # ------------------------------------------------------------------
     # build state
-    # ------------------------------------------------------------------
 
     def _optimization_requested(self) -> bool:
         vm_getter = getattr(self, "_current_vm_config", None)
@@ -341,23 +333,21 @@ class OptimizableModelPipeline:
             self._optimize_error = status
         self._set_status(status)
 
-    # ------------------------------------------------------------------
     # stale-artifact guard (resync-on-boot)
     #
     # vision_model.file_path can drift from source_pt when the model was
     # re-picked in the UI: it may point at an artifact built for an older
-    # model, which would silently keep that old model running. The source
+    # model, which would silently keep that old model running. the source
     # .pt is authoritative - load its already-built artifact when one
     # exists, else the .pt itself (the background optimizer swaps file_path
     # once its fresh build lands).
     #
-    # Only pipelines with a persisted, user-picked source model have a
-    # resync that can actually fire (object_detection today). The other
+    # only pipelines with a persisted, user-picked source model have a
+    # resync that can actually fire (object_detection today). the other
     # model-backed pipelines still implement the three helpers - their
     # paths are derived from config at boot, so _source_model_path()
     # resolves to None and the guard exits immediately - so this stays
     # safely callable everywhere instead of an AttributeError landmine.
-    # ------------------------------------------------------------------
 
     def _resync_stale_model_file_path(self, config) -> None:
         source = self._source_model_path()

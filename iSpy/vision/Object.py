@@ -103,9 +103,7 @@ class Object:
         if self.alive >= self.alive_time:
             self.destroyed = True
 
-    # ------------------------------------------------------------------
-    # Universal output schema (see VisionPipeline.OUTPUT_SCHEMA)
-    # ------------------------------------------------------------------
+    # universal output schema (see VisionPipeline.OUTPUT_SCHEMA)
 
     def to_dict(self) -> dict:
         return {

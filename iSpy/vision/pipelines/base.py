@@ -20,9 +20,7 @@ class VisionPipeline(Camera, VisionBase):
         self._statuses = {"run": "initializing", "build": None}
         Camera.__init__(self, camera_config, input_size, grayscale)
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
+    # lifecycle
 
     def prepare(self):
         pass
@@ -127,9 +125,7 @@ class VisionPipeline(Camera, VisionBase):
     def stop(self):
         self.destroy()
 
-    # ------------------------------------------------------------------
-    # Universal output serialization
-    # ------------------------------------------------------------------
+    # universal output serialization
 
     @staticmethod
     def serialize_detections(objects) -> list[dict]:
@@ -146,9 +142,7 @@ class VisionPipeline(Camera, VisionBase):
         out["schema_version"] = OUTPUT_SCHEMA_VERSION
         return out
 
-    # ------------------------------------------------------------------
-    # Optimization (optional - only model-backed pipelines implement it)
-    # ------------------------------------------------------------------
+    # optimization (optional - only model-backed pipelines implement it)
 
     def get_optimization_options(self) -> dict:
         return {}
@@ -172,15 +166,13 @@ class VisionPipeline(Camera, VisionBase):
     def show_calibration(cls) -> bool:
         return True
 
-    # ------------------------------------------------------------------
-    # Model profiles (optional - only the model-backed pipelines implement it)
+    # model profiles (optional - only the model-backed pipelines implement it)
     #
-    # A profile is a snapshot of validated pipeline settings that the camera
+    # a profile is a snapshot of validated pipeline settings that the camera
     # UI auto-saves when a camera is created/edited. uses_model_profile() opts
     # the pipeline in, check_profile() reports whether a settings dict is
     # loadable on this machine (file/artifact/hardware checks only - never
     # builds or writes), and derive_profile_name() names the snapshot.
-    # ------------------------------------------------------------------
 
     @classmethod
     def uses_model_profile(cls) -> bool:
@@ -208,16 +200,15 @@ class VisionPipeline(Camera, VisionBase):
     def requires_calibration(cls) -> bool:
         return bool(cls.calibration_sections)
 
-    # ------------------------------------------------------------------
-    # Hardware / compute backend
-    # ------------------------------------------------------------------
-    # Each pipeline declares every hardware target it can run inference on
-    # (e.g. ("npu", "tpu", "gpu", "cpu") for a model-backed detector). A pure
+    # hardware / compute backend
+    #
+    # each pipeline declares every hardware target it can run inference on
+    # (e.g. ("npu", "tpu", "gpu", "cpu") for a model-backed detector). a pure
     # CV pipeline like AprilTag runs on the CPU, which is already reported as
     # the CPU load, so it declares the empty tuple and gets no label.
     #
     # active_hardware() resolves (per instance, at runtime) which one the
-    # pipeline's loaded backend is actually using. Subclasses override it;
+    # pipeline's loaded backend is actually using. subclasses override it;
     # the base reports None.
     hardware: tuple[str, ...] = ()
 

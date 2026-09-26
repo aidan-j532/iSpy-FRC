@@ -66,30 +66,6 @@
     </div>
   </div>
 </div>
-<!-- <div class="dash-service-bar">
-  <span class="service-status" id="svc-status">Checking service…</span>
-  <div class="service-controls">
-    <button onclick="serviceCmd('start')">Start</button>
-    <button onclick="serviceCmd('pause')">Pause</button>
-    <button onclick="serviceCmd('resume')">Resume</button>
-    <button onclick="serviceCmd('restart')">Restart</button>
-    <button class="btn-bad" onclick="serviceCmd('stop')">Stop</button>
-  </div>
-</div> -->
-<script>
-async // function pollServiceStatus() {
-//   try {
-//     const r = await fetch(`http://${location.hostname}:5050/service/status`);
-//     const j = await r.json();
-//     document.getElementById('svc-status').textContent =
-//       `Vision: ${j.status}${j.pid ? ' (pid ' + j.pid + ')' : ''}`;
-// } catch (e) {
-//   document.getElementById('svc-status').textContent = 'Service daemon unreachable';
-// }
-// }
-// setInterval(pollServiceStatus, 2000);
-// pollServiceStatus();
-</script>
 
 <script>
 async function serviceCmd(cmd) {
@@ -200,8 +176,7 @@ function renderPluginList(allPlugins) {
 
   lastGroupOrder = Object.keys(groups);
 
-  // 1. Group rows - collapsed by default, click to expand and reveal the
-  // individual plugins inside.
+  // collapsed by default, click to expand and reveal the individual plugins
   const groupHtml = lastGroupOrder.map((groupName, gi) => {
     const items = groups[groupName];
     const open = expandedGroups.has(groupName);
@@ -218,12 +193,10 @@ function renderPluginList(allPlugins) {
       </div>`;
   }).join('');
 
-  // 2. Remaining plugins as individual rows
   const ungroupedHtml = ungrouped.map(plugin =>
     `<div class="plugin-item"><span class="plugin-pill">${plugin.type}</span> ${plugin.name}</div>`
   ).join('');
 
-  // 3. Combine both lists together
   const finalHtml = [...groupHtml, ...ungroupedHtml].join('');
 
   const pluginListElement = document.getElementById('plugin-list');

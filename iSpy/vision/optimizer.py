@@ -103,8 +103,6 @@ def _silence_third_party():
             lg.disabled = _saved_disabled[name]
 
 
-keywords = ["frc game piece", "frc 2025 REBUILT", "frc 2025 fuel"]
-
 _RKNN_QUANTIZE = True
 _RKNN_KNOWN_CHIPS = (
     "rk3588",
@@ -1241,7 +1239,7 @@ def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
     return str(data_yaml)
 
 
-def _resolve_calibration_dataset(dataset_path, keywords_list, count) -> tuple:
+def _resolve_calibration_dataset(dataset_path, count) -> tuple:
     from iSpy.dataset.dataset import prepare_quantization_dataset
 
     if dataset_path:
@@ -1252,25 +1250,22 @@ def _resolve_calibration_dataset(dataset_path, keywords_list, count) -> tuple:
         except FileNotFoundError:
             logger.warning(
                 "User calibration dataset %s has no images - falling back to "
-                "auto-downloading calibration images",
+                "synthetic calibration images",
                 user_ds,
             )
     ds_dir = default_quantization_dataset_dir()
-    prepare_quantization_dataset(
-        str(ds_dir), boot=True, keywords=keywords_list, count=count
-    )
+    prepare_quantization_dataset(str(ds_dir), count=count)
     return ds_dir, False
 
 
 def _convert_rknn(
-    pt_file, input_size, dataset_path=None, task="detect", quantize=None, kw=None
+    pt_file, input_size, dataset_path=None, task="detect", quantize=None
 ):
     from iSpy.dataset.dataset import (
         calib_count_for_format,
     )
     from iSpy.vision.metadata import (
         derive_format_metadata,
-        get_calibration_keywords,
         metadata_from_pt,
         metadata_path_for,
         read_metadata,
@@ -1333,11 +1328,8 @@ def _convert_rknn(
             "RKNN Toolkit not found. Install it to convert to RKNN format."
         )
 
-    effective_kw = (
-        kw if kw is not None else get_calibration_keywords(pt_path, default=keywords)
-    )
     count = calib_count_for_format("rknn")
-    ds_path, _ = _resolve_calibration_dataset(dataset_path, effective_kw, count)
+    ds_path, _ = _resolve_calibration_dataset(dataset_path, count)
     dataset_txt = ds_path / "dataset.txt"
     if not dataset_txt.exists() or not dataset_txt.read_text().strip():
         raise FileNotFoundError(
@@ -1510,12 +1502,10 @@ def _convert_hailo(
     dataset_path=None,
     task="detect",
     quantize=None,
-    kw=None,
     arch: str | None = None,
 ):
     from iSpy.dataset.dataset import calib_count_for_format
     from iSpy.vision.metadata import (
-        get_calibration_keywords,
         read_metadata,
     )
 
@@ -1589,11 +1579,8 @@ def _convert_hailo(
     pt_meta = pt_meta or metadata_from_pt(pt_path)
     nc = int(pt_meta.get("nc", 80))
 
-    effective_kw = (
-        kw if kw is not None else get_calibration_keywords(pt_path, default=keywords)
-    )
     count = calib_count_for_format("hailo")
-    ds_path, _ = _resolve_calibration_dataset(dataset_path, effective_kw, count)
+    ds_path, _ = _resolve_calibration_dataset(dataset_path, count)
 
     arch = arch or os.environ.get("ISPY_HAILO_ARCH", "hailo8")
     hailo_path = _desired_output_path(pt_path, "hailo")
@@ -1673,7 +1660,6 @@ def _convert_qnn(
     dataset_path=None,
     task="detect",
     quantize=None,
-    kw=None,
 ):
     # QNN is NOT a separate artifact format: the onnx artifact IS the qnn
     # artifact, committed under YoloModels/qnn/. GenericYolo's existing onnx
@@ -1716,13 +1702,11 @@ def convert_model(
     input_size,
     quantize=None,
     force=False,
-    kw=None,
     dataset_path=None,
 ):
     from iSpy.dataset.dataset import calib_count_for_format
     from iSpy.vision.metadata import (
         derive_format_metadata,
-        get_calibration_keywords,
         metadata_from_pt,
         metadata_path_for,
         read_metadata,
@@ -1776,7 +1760,6 @@ def convert_model(
                         pt_file=model_file,
                         input_size=input_size,
                         quantize=quantize,
-                        kw=kw,
                         dataset_path=dataset_path,
                     )
                     _run_optimized_model_comparison(model_file, rknn_result)
@@ -1793,7 +1776,6 @@ def convert_model(
             pt_file=model_file,
             input_size=input_size,
             quantize=quantize,
-            kw=kw,
             dataset_path=dataset_path,
         )
 
@@ -1812,7 +1794,6 @@ def convert_model(
             pt_file=model_file,
             input_size=input_size,
             quantize=quantize,
-            kw=kw,
             dataset_path=dataset_path,
         )
         _run_optimized_model_comparison(model_file, hailo_result)
@@ -1833,7 +1814,6 @@ def convert_model(
             pt_file=model_file,
             input_size=input_size,
             quantize=quantize,
-            kw=kw,
             dataset_path=dataset_path,
         )
         _run_optimized_model_comparison(model_file, qnn_result)
@@ -1853,9 +1833,8 @@ def convert_model(
     dataset_root = str(_PROJECT_ROOT / "QuantizeDataset")
     data_yaml = None
     if quantize:
-        kw = get_calibration_keywords(pt_path, default=keywords)
         ds_dir, used_user_ds = _resolve_calibration_dataset(
-            dataset_path, kw, calib_count_for_format(target_format)
+            dataset_path, calib_count_for_format(target_format)
         )
         if used_user_ds:
             data_yaml = _user_calibration_data_yaml(model_file, ds_dir)
@@ -1956,7 +1935,6 @@ def _convert_model_subprocess(
     input_size,
     quantize=None,
     force=False,
-    kw=None,
     dataset_path=None,
 ) -> Path:
     outputs_dir = _PROJECT_ROOT / "Outputs"
@@ -1970,7 +1948,6 @@ def _convert_model_subprocess(
         else [int(input_size), int(input_size)],
         "quantize": quantize,
         "force": force,
-        "kw": kw,
     }
     if dataset_path:
         args["dataset_path"] = str(dataset_path)

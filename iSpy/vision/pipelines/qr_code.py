@@ -38,7 +38,7 @@ class QRCodePipeline(VisionPipeline):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
 
-        # 1. Load Camera & Calibration Settings
+        # camera + calibration settings
         try:
             self.subsystem = camera_config.get("subsystem", "field")
             self.camera_bot_relative_yaw = camera_config.get("yaw", 0.0)
@@ -85,7 +85,7 @@ class QRCodePipeline(VisionPipeline):
 
         super().__init__(camera_config, (640, 480), self.grayscale)
 
-        # 2. Setup OpenCV QR Code Detector
+        # opencv qr detector
         self.detector = cv2.QRCodeDetector()
         self._last_objects: list[Object] = []
 

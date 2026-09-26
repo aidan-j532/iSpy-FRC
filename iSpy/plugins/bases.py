@@ -30,10 +30,10 @@ class StatusMixin:
 
 
 class AddonBase(StatusMixin):
-    # Set to pipeline names to flag incompatible camera assignments.
+    # a camera assigned a pipeline not listed here is flagged incompatible
     supported_pipelines: tuple | None = None
 
-    # Set a label to show this add-on as a separate Metrics series.
+    # show this add-on as its own series in Metrics
     breakdown_label: str | None = None
     breakdown_color: str | None = None
 

@@ -85,11 +85,11 @@ def main():
         "Point iSpy's network_tables_ip at 127.0.0.1 (or this machine's IP if iSpy runs elsewhere)."
     )
 
-    # --- Publisher: robot pose, same topic NetworkTableHandler.get_robot_pose() reads ---
+    # publisher: robot pose, same topic NetworkTableHandler.get_robot_pose() reads
     odom_table = inst.getTable("AdvantageKit/RealOutputs/Odometry")
     pose_pub = odom_table.getStructTopic("Robot", Pose2d).publish()
 
-    # --- Subscribers: everything NetworkTableHandler.update() publishes ---
+    # subscribers: everything NetworkTableHandler.update() publishes
     vision_table = inst.getTable("VisionData")
     fuel_sub = vision_table.getStructArrayTopic("vision_data", FuelStruct).subscribe([])
     fps_sub = vision_table.getDoubleTopic("fps").subscribe(0.0)

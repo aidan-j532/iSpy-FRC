@@ -362,15 +362,14 @@ class _GPUInferencePool:
     def infer_batch(self, frames: list[np.ndarray]):
         num_frames = len(frames)
 
-        # 1. Push all frames into the queue with their original index
         for idx, frame in enumerate(frames):
             self._in_q.put((idx, frame))
 
-        # 2. Collect all results (they will likely come in out-of-order)
+        # results come back out of order
         results = [None] * num_frames
         for _ in range(num_frames):
             idx, res = self._out_q.get()
-            results[idx] = res  # Slot it into the correct position
+            results[idx] = res
 
         return results
 
@@ -1530,13 +1529,6 @@ class GenericYolo:
         raw_outputs = self.model.inference(inputs=[preprocessed])
         if raw_outputs is None:
             return Results([], orig_shape)
-
-        # print(f"\n=== RKNN raw_outputs debug ({self.model_file}) ===")
-        # print(f"count: {len(raw_outputs)}")
-        # for i, o in enumerate(raw_outputs):
-        #     print(f"  [{i}] shape={o.shape} dtype={o.dtype} "
-        #         f"min={o.min():.3f} max={o.max():.3f}")
-        # print("=" * 50)
 
         tensor = self._merge_rknn_outputs(raw_outputs)
         if not self._rknn_fmt_checked:

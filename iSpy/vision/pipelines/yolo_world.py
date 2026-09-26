@@ -328,16 +328,14 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return False
         return self._path_format(path) == self._target_format_cached()
 
-    # ------------------------------------------------------------------
     # stale-artifact resync hooks (see OptimizableModelPipeline)
     #
     # yolo_world derives every model path from config at boot (model_size
     # -> weights -> class-hashed reparameterization -> artifact), so there
     # is no persisted file_path that can drift the way object_detection's
-    # vision_model.file_path can. The hooks exist so the boot guard is
+    # vision_model.file_path can. the hooks exist so the boot guard is
     # callable on every model-backed pipeline instead of raising
     # AttributeError if a future refactor adds persisted state.
-    # ------------------------------------------------------------------
 
     @property
     def yolo_model_file(self):

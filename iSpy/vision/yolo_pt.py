@@ -612,10 +612,8 @@ class DetectionModel(nn.Module):
         return x
 
 
-# ---------------------------------------------------------------------------
-# Namespace shim: register our classes under the exact pickle paths so
-# torch.load can unpickle an Ultralytics .pt checkpoint without the library.
-# ---------------------------------------------------------------------------
+# namespace shim - register our classes under the exact pickle paths so
+# torch.load can unpickle a .pt without ultralytics installed
 
 
 def _register_shim():

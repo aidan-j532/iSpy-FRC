@@ -7,7 +7,6 @@ $ErrorActionPreference = "Stop"
 Write-Host "iSpy Windows Installer" -ForegroundColor Cyan
 Write-Host "======================"
 
-# 1. Check for Python 3.10+
 function Get-PythonCmd {
     foreach ($cmd in @("python", "py -3")) {
         try {
@@ -29,7 +28,6 @@ if (-not $pythonCmd) {
 }
 Write-Host "Found: $pythonCmd" -ForegroundColor Green
 
-# 2. Clone or update the repo
 $installDir = "$env:USERPROFILE\iSpy-FRC"
 if (Test-Path $installDir) {
     Write-Host "Existing install found at $installDir - pulling latest..."
@@ -43,15 +41,14 @@ if (Test-Path $installDir) {
 
 Push-Location $installDir
 
-# 3. Install the package
 Write-Host "Installing iSpy and dependencies..."
 & cmd /c "$pythonCmd -m pip install -e . --break-system-packages" 2>$null
 if ($LASTEXITCODE -ne 0) {
     & cmd /c "$pythonCmd -m pip install -e ."
 }
 
-# 4. Run fresh setup (prefer the `ispy` CLI; fall back to `python -m` if the
-# console script didn't register, e.g. on some non-editable installs)
+# prefer the ispy CLI, fall back to python -m if the console script didn't
+# register (happens on some non-editable installs)
 Write-Host "Running first-time setup..."
 $ispyCommand = Get-Command ispy -ErrorAction SilentlyContinue
 if ($ispyCommand) {

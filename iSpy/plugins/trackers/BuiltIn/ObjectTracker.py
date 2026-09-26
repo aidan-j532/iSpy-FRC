@@ -70,7 +70,6 @@ class ObjectTracker(TrackerBase):
         for det in new_detections:
             det.relative_to(robot_x, robot_y, robot_z, robot_yaw=robot_yaw)
 
-        # merge
         self._merge(new_detections)
 
         return self.tracked_objects
@@ -113,7 +112,6 @@ class ObjectTracker(TrackerBase):
                 if not self._same_identity(new_det, existing):
                     continue
 
-                # reset timer
                 existing.reset_time()
 
                 # EMA smoothing on position

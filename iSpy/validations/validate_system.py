@@ -5,8 +5,6 @@ import logging
 from pathlib import Path
 from iSpy.dataset.dataset import validate_quantization_dataset
 
-# for name in logging.root.manager.loggerDict:
-#     logging.getLogger(name).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 _MODEL_PATTERN = re.compile(
@@ -118,7 +116,6 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
     import json
     from pathlib import Path
 
-    # Create if doesnt exist
     config_file = Path(config_path)
     if not config_file.exists():
         logger.warning(f"Config file not found: {config_path}")

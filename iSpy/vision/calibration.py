@@ -6,10 +6,8 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# OpenCV 4.9+ moved several aruco helpers out of the cv2.aruco namespace into
-# the main cv2 namespace (the old aliases were deleted there). Resolve each
-# from whichever namespace the installed build exposes so the same code runs
-# on both old (<=4.8) and new (>=4.9) wheels.
+# opencv 4.9+ moved the aruco helpers into the main cv2 namespace and deleted
+# the old aliases, so resolve from whichever one the installed build exposes
 def _pick_aruco(*names: tuple) -> callable:
     for obj, name in names:
         fn = getattr(obj, name, None)
@@ -418,9 +416,8 @@ def detect_charuco(
     return found, corners, ids, marker_corners, marker_ids, gray
 
 
-# Layouts/dictionaries swept by detect_charuco_auto when nothing matches the
-# session's stored layout. Kept short on purpose: every miss costs a full
-# detector pass, and this only runs until a board has been matched once.
+# swept by detect_charuco_auto when nothing matches the stored layout. kept short
+# on purpose, every miss costs a full detector pass
 CHARUCO_COMMON_PATTERNS = (
     DEFAULT_CHARUCO_PATTERN,
     (7, 5),

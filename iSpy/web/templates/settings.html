@@ -711,8 +711,6 @@ block content %}
           ? "settings-msg msg-warn"
           : "settings-msg msg-ok";
 
-        // Show unit change warning
-
         const unitWarn = document.getElementById("unit-warning");
 
         if (data.unit && data.unit !== j.old_unit) {
@@ -721,8 +719,6 @@ block content %}
 
           setTimeout(() => (unitWarn.textContent = ""), 8000);
         }
-
-        // Show current frame sync state next to the Frame Sync control
 
         updateFrameSyncNote(data.frame_sync);
 
@@ -745,8 +741,6 @@ block content %}
     configData = data.config || {};
 
     defaultsData = data.defaults || {};
-
-    // ... rest of load function
 
     document.getElementById("cfg").value = JSON.stringify(configData, null, 2);
 

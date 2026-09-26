@@ -6,7 +6,7 @@ import threading
 logger = logging.getLogger(__name__)
 
 MAGIC = b"ISPY_DISCOVER:"
-BROADCAST_PORT = 37429  # Super high port unlikely to collide
+BROADCAST_PORT = 37429  # high port, unlikely to collide
 BROADCAST_INTERVAL_S = 5.0
 WEB_PORT = 5000  # iSpy Flask default
 
