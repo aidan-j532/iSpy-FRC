@@ -913,6 +913,24 @@ def _desired_output_path(pt_path: Path, target_format: str) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir / _artifact_name(pt_path, target_format)
 
+def _engine_loads(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        import tensorrt as trt
+
+        data = path.read_bytes()
+        runtime = trt.Runtime(trt.Logger(trt.Logger.ERROR))
+        engine = runtime.deserialize_cuda_engine(data)
+        return engine is not None
+    except Exception as exc:
+        logger.warning(
+            "Cached TensorRT engine %s failed to load (%s) - it was likely "
+            "built with a different TensorRT version. Rebuilding.",
+            path.name,
+            exc,
+        )
+        return False
 
 # optimized artifacts can be built for any of these - a camera runs whichever
 # backend is active, so "already built" means any of them
@@ -1825,6 +1843,12 @@ def convert_model(
             if desired.exists():
                 logger.info("Cached tflite model found: %s", desired)
                 return str(desired)
+        elif target_format == "engine":
+            if desired.exists() and _engine_loads(desired):
+                logger.info("Cached engine model found: %s", desired)
+                return str(desired)
+            elif desired.exists():
+                _remove_path_for_cleanup(desired)
         else:
             if desired.exists():
                 logger.info("Cached %s model found: %s", target_format, desired)

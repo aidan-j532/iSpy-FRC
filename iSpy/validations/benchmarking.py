@@ -54,6 +54,22 @@ def _file_fingerprint(path: Path) -> tuple[int, str]:
         head = f.read(4096)
     return (size, hashlib.sha256(head).hexdigest())
 
+def _install_plan_dependencies(active: dict) -> None:
+    from iSpy.vision.optimizer import BACKEND_DEPENDENCIES, _is_installed, _pip_install
+
+    fmts = {fmt for fmt, _dev, _masks in active.values()}
+    for fmt in sorted(fmts):
+        deps = BACKEND_DEPENDENCIES.get(fmt)
+        if not deps:
+            continue
+        for entry in deps:
+            mod, target = entry[0], entry[1]
+            extra_args = list(entry[2]) if len(entry) > 2 else None
+            if _is_installed(mod):
+                continue
+            print(f"Installing {target} for backend '{fmt}'...")
+            if not _pip_install(target, extra_args=extra_args):
+                print(f"  failed to install {target} - '{fmt}' will likely fail below")
 
 def find_pt_files() -> list[Path]:
     raw: list[Path] = []
@@ -427,6 +443,13 @@ def main():
         help="prospect every reachable backend (pt/onnx per CUDA device, rknn "
         "NPU core masks, etc.) instead of the single recommend_format() pick",
     )
+    parser.add_argument(
+        "--install-deps",
+        action="store_true",
+        help="Best-effort pip-install the runtime dependencies needed by the "
+        "active backend plan (onnxruntime-gpu, tensorrt, torch_xla, ...) "
+        "before benchmarking.",
+    )
     args = parser.parse_args()
 
     try:
@@ -443,6 +466,8 @@ def main():
 
     plan = detect_test_plan() if args.all_backends else _recommended_backend_plan()
     active = {k: v for k, v in plan.items() if v is not None}
+    if args.install_deps:
+        _install_plan_dependencies(active)
     if not active:
         print("No supported backend detected on this machine.")
         return 1

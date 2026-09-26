@@ -924,15 +924,31 @@ class GenericYolo:
             self.model.get_providers(),
             sess_options.intra_op_num_threads,
         )
+        
+        actual_providers = self.model.get_providers()
+        if "CUDAExecutionProvider" not in actual_providers:
+            try:
+                from iSpy.config.AutoOpt import has_nvidia
+
+                if has_nvidia():
+                    self.logger.warning(
+                        "NVIDIA GPU detected but onnxruntime has no "
+                        "CUDAExecutionProvider (providers=%s) - inference is "
+                        "running on CPU. Install onnxruntime-gpu: "
+                        "pip uninstall -y onnxruntime && pip install onnxruntime-gpu",
+                        actual_providers,
+                    )
+            except Exception:
+                pass
 
     def _load_hailo(self, model_file: str):
         # HailoRT wrapper over the .hef. The python API is stable across
         # recent bindings: VDevice -> configure -> activate -> InferVStreams.
         try:
             from hailo_platform import (
+                HEF,
                 ConfigureParams,
                 FormatType,
-                HEF,
                 HailoStreamInterface,
                 InferVStreams,
                 InputVStreamParams,
