@@ -134,7 +134,9 @@ class CameraBase:
 
         self._exposure_time = camera_config.get("exposure_time", 100)
         self._gain = camera_config.get("gain", 200)
-
+        self._exposure_explicit = (
+            "exposure_time" in camera_config or "gain" in camera_config
+        )
         try:
             self._fps_cap = max(0, float(camera_config.get("fps_cap", 0) or 0))
         except (TypeError, ValueError):
@@ -328,10 +330,19 @@ class CameraBase:
         is_linux = platform.system() == "Linux"
 
         if is_windows:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            requested_fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+            cap.set(cv2.CAP_PROP_FOURCC, requested_fourcc)
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             cap.set(cv2.CAP_PROP_FPS, 30)
+
+            actual_fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+            if actual_fourcc != requested_fourcc:
+                # driver didn't actually accept MJPG, let it use native format (i had a bunch of decoding issues cause of it)
+                self.logger.info(
+                    "Camera %s: MJPG not accepted by driver - using native format.",
+                    self.source,
+                )
         elif is_linux:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
@@ -344,8 +355,8 @@ class CameraBase:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
             cap.set(cv2.CAP_PROP_FPS, 30)
 
-        self._apply_capture_controls(cap)
-
+        self._apply_capture_controls(cap, allow_reopen=False)
+        
     def _open_camera(self):
         sys_platform = platform.system()
         is_linux = sys_platform == "Linux"
@@ -686,7 +697,7 @@ class CameraBase:
         except (TypeError, ValueError):
             return default
 
-    def _apply_capture_controls(self, cap=None):
+    def _apply_capture_controls(self, cap=None, allow_reopen: bool = True):
         cap = cap if cap is not None else getattr(self, "cap", None)
         if cap is None or self._is_url_source or self.is_image:
             return
@@ -713,13 +724,15 @@ class CameraBase:
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
             return
+        if not getattr(self, "_exposure_explicit", False):
+            return  # leave the camera on its default auto-exposure
         try:
             cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
             ok_exp = cap.set(cv2.CAP_PROP_EXPOSURE, self._exposure_time)
             ok_gain = cap.set(cv2.CAP_PROP_GAIN, self._gain)
         except Exception:
             ok_exp = ok_gain = False
-        if not ok_exp or not ok_gain:
+        if allow_reopen and (not ok_exp or not ok_gain):
             self._reopen_requested = True
 
     def _apply_saturation(self, frame, saturation: float) -> np.ndarray:
@@ -786,11 +799,11 @@ class CameraBase:
         if "gamma" in adjustments:
             self._gamma = self._clamp_num(adjustments["gamma"], 0.3, 3.0, 1.0)
         if "exposure_time" in adjustments:
-            self._exposure_time = int(
-                self._clamp_num(adjustments["exposure_time"], 0, 1_000_000, 100)
-            )
+            self._exposure_time = int(self._clamp_num(adjustments["exposure_time"], 0, 1_000_000, 100))
+            self._exposure_explicit = True
         if "gain" in adjustments:
             self._gain = int(self._clamp_num(adjustments["gain"], 0, 4096, 200))
+            self._exposure_explicit = True
         self._apply_capture_controls()
         return self.get_image_adjustments()
 

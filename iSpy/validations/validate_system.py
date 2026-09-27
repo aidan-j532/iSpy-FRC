@@ -92,12 +92,27 @@ def run_unit_tests() -> bool:
             pattern="unit_tests.py",
         )
         with open(os.devnull, "w") as devnull:
-            runner = unittest.TextTestRunner(verbosity=2, stream=devnull)
+            runner = unittest.TextTestRunner(verbosity=0, stream=devnull)
             result = runner.run(suite)
-        return result.wasSuccessful()
     finally:
         logging.disable(logging.NOTSET)
         _unit_tests_running = False
+
+    # summarize after the finally block: logging.disable() above swallows INFO
+    failed = len(result.failures) + len(result.errors)
+    skipped = len(result.skipped)
+    passed = result.testsRun - failed - skipped
+    logger.info(
+        "Unit tests: %d passed, %d failed%s.",
+        passed,
+        failed,
+        f", {skipped} skipped" if skipped else "",
+    )
+    # the per-test runner output goes to devnull, so name the losers here or a
+    # failure at boot has no trace at all
+    for case, _ in result.failures + result.errors:
+        logger.warning("  failed: %s", case.id())
+    return result.wasSuccessful()
 
 
 def get_addon_setting(
@@ -403,14 +418,6 @@ def validate_quantization_dataset_wrapper(
 
     from iSpy.dataset.dataset import _find_images
 
-    if not root.exists() or not _find_images(root):
-        logger.warning(
-            "No quantization dataset found at %s - skipping (only needed for "
-            "RKNN conversion, which runs on demand, not at boot).",
-            dataset_path,
-        )
-        return True
-
     # named datasets live at QuantizeDataset/<name>/ - reusable calibration picked per camera via its 'quantization_dataset' setting, never derived from a model filename. validate each one since that's what conversions actually use now
     per_model_dirs = (
         [
@@ -421,6 +428,17 @@ def validate_quantization_dataset_wrapper(
         if root.exists()
         else []
     )
+
+    # _find_images rglobs, so images inside those named subdirs count here too.
+    # neither present means there is genuinely nothing to convert against.
+    has_images = root.exists() and bool(_find_images(root))
+    if not per_model_dirs and not has_images:
+        logger.info("No quantization datasets found.")
+        return True
+
+    # only reached when something is actually there: named subdirs if any,
+    # otherwise the flat legacy layout where root itself is the dataset
+    logger.info("Quantization dataset(s) found: %d", len(per_model_dirs) or 1)
 
     if not per_model_dirs:
         result = validate_quantization_dataset(dataset_path)
