@@ -1,16 +1,19 @@
+import json
 import logging
 from pathlib import Path
+
 from flask import jsonify, render_template, request
 from werkzeug.utils import secure_filename
-from iSpy.web.Backend.WebModule import WebModule
-from iSpy.web.Backend.PluginStatus import require_local_or_token
+
 from iSpy.config.iSpyConfig import get_pipeline_settings
 from iSpy.vision.metadata import (
-    read_metadata,
     metadata_from_pt,
-    write_metadata,
     metadata_path_for,
+    read_metadata,
+    write_metadata,
 )
+from iSpy.web.Backend.PluginStatus import require_local_or_token
+from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +116,19 @@ class ModelsModule(WebModule):
         flask_app.add_url_rule(
             "/api/models/select", "api_models_select", self._select, methods=["POST"]
         )
+        flask_app.add_url_rule(
+            "/api/models/benchmarks", "api_models_benchmarks", self._benchmarks, methods=["GET"]
+        )
+
+    def _benchmarks(self):
+        path = Path.cwd() / "Outputs" / "benchmark_results.json"
+        if not path.exists():
+            return jsonify(available=False)
+        try:
+            data = json.loads(path.read_text())
+        except Exception as e:
+            return jsonify(available=False, error=str(e))
+        return jsonify(available=True, timestamp=data.get("timestamp"), best=data.get("best", {}))
 
     def _list(self):
         current = self._get_current_model()

@@ -226,6 +226,13 @@ block content %}
         Web dashboard off for one boot, then back automatically.
       </span>
     </div>
+
+    <div class="form-row">
+      <span class="form-label">Share Config</span>
+      <button class="btn btn-secondary" onclick="exportConfig()">Export</button>
+      <button class="btn btn-secondary" onclick="document.getElementById('import-config-input').click()">Import</button>
+      <input type="file" id="import-config-input" accept=".json" style="display:none" onchange="importConfig(this.files[0])">
+    </div>
   </div>
 
   <div class="settings-section">
@@ -871,6 +878,41 @@ block content %}
     note.textContent = frameSyncBool(value)
       ? "Enabled - cameras will wait for synchronized frames"
       : "Disabled - cameras run independently";
+  }
+
+  async function exportConfig() {
+    const r = await fetch('/api/settings/export');
+    const data = await r.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ispy_config_export.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importConfig(file) {
+    if (!file) return;
+    if (!confirm('Import this config? A one-time snapshot of your current settings is saved first.')) {
+      document.getElementById('import-config-input').value = '';
+      return;
+    }
+    try {
+      const data = JSON.parse(await file.text());
+      await fetch('/api/settings/snapshot', { method: 'POST' }); // reuses existing restore-once safety net
+      const r = await fetch('/api/settings/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const j = await r.json();
+      showToast(r.ok ? 'Imported - restart vision to apply' : (j.error || 'Import failed'), r.ok ? 'success' : 'error');
+      if (r.ok) load();
+    } catch (e) {
+      showToast('Invalid JSON file', 'error');
+    }
+    document.getElementById('import-config-input').value = '';
   }
 
   async function armGameMode() {

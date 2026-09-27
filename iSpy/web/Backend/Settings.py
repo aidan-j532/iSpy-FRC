@@ -70,6 +70,34 @@ class SettingsModule(WebModule):
             self._arm_game_mode,
             methods=["POST"],
         )
+        flask_app.add_url_rule(
+            "/api/settings/export", "api_settings_export", self._export, methods=["GET"]
+        )
+        flask_app.add_url_rule(
+            "/api/settings/import", "api_settings_import", self._import, methods=["POST"]
+        )
+
+    def _export(self):
+        config = self.context["config"]
+        export_data = copy.deepcopy(config.config)
+        for cam in export_data.get("camera_configs", {}).values():
+            if isinstance(cam, dict):
+                cam.pop("device_id", None)
+        return jsonify(export_data)
+
+    def _import(self):
+        try:
+            data = request.get_json(force=True)
+            if not isinstance(data, dict) or "camera_configs" not in data:
+                return jsonify(error="Not an iSpy config export (missing camera_configs)"), 400
+            config = self.context["config"]
+            config._update_config(data)
+            config.save()
+            return jsonify(success=True, config=config.config)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        except Exception as e:
+            return jsonify(error=str(e)), 500
 
     def _get(self):
         from iSpy.web.Backend.save_store import read

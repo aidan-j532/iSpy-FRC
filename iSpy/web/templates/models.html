@@ -20,6 +20,13 @@
   </div>
 </div>
 
+<!-- This is the new spot I added for benchmarking results via web UI-->
+<div class="card" id="benchmark-card" style="display:none;">
+  <h3>Hardware Benchmarks</h3>
+  <div id="benchmark-list"></div>
+  <div class="text-dim text-sm" id="benchmark-ts"></div>
+</div>
+
 <table id="models-table">
   <thead><tr><th>Name</th><th>Task</th><th>Classes</th><th>Input</th><th>Size</th><th style="text-align:right">Actions</th></tr></thead>
   <tbody>
@@ -58,6 +65,40 @@ let pendingDelete = null;
 
 const EMPTY_MODEL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>';
 
+async function selectModel(name) {
+  if (!confirm(`Switch to "${name}"? Updates every camera currently using a selectable model. Restart iSpy to apply.`)) return;
+  try {
+    const resp = await fetch('/api/models/select', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ file_path: `YoloModels/pytorch/${name}` }),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      showToast(`${name} selected (${data.cameras.length} camera${data.cameras.length !== 1 ? 's' : ''}) - restart to apply`, 'success');
+    } else {
+      showToast(data.error || 'Select failed', 'error');
+    }
+  } catch (e) {
+    showToast('Select failed: ' + e.message, 'error');
+  }
+  loadModels();
+}
+
+async function loadBenchmarks() {
+  try {
+    const data = await fetch('/api/models/benchmarks').then(r => r.json());
+    if (!data.available) return;
+    const best = data.best || {};
+    const rows = Object.entries(best).map(([model, r]) =>
+      `<div class="det-item"><span class="det-class">${model}</span><span class="det-count">${r.backend}: ${r.fps} FPS</span></div>`
+    ).join('');
+    document.getElementById('benchmark-list').innerHTML = rows || '<div class="empty-state">No results yet</div>';
+    document.getElementById('benchmark-ts').textContent = data.timestamp ? `Last run: ${data.timestamp}` : '';
+    document.getElementById('benchmark-card').style.display = '';
+  } catch (e) { /* ispy-bench never ran (or has ran) - card just stays hidden */ }
+}
+
 async function loadModels() {
   let data;
   try {
@@ -86,7 +127,8 @@ async function loadModels() {
       <td style="text-align:right;">
         ${m.active
           ? '<span class="text-dim text-sm">in use</span>'
-          : `<button class="btn btn-bad btn-sm" onclick="openDeleteModal('${m.name}')" title="Delete model">Delete</button>`
+          : `<button class="btn btn-ok btn-sm" onclick="selectModel('${m.name}')" title="Switch to this model">Use</button>
+             <button class="btn btn-bad btn-sm" onclick="openDeleteModal('${m.name}')" title="Delete model">Delete</button>`
         }
       </td>
     </tr>`).join('');
@@ -224,5 +266,6 @@ document.getElementById('file-input').addEventListener('change', () => {
 });
 
 loadModels();
+loadBenchmarks();
 </script>
 {% endblock %}
