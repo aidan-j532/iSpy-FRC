@@ -79,7 +79,7 @@ class AddonMigrationTests(unittest.TestCase):
         data = {
             "plugins": {
                 "trackers": ["object_tracker", "path_planner"],
-                "utilities": ["video_recorder", "network_table_handler"],
+                "utilities": ["network_table_handler", "target_selector"],
                 "frame_processors": [],
             }
         }
@@ -90,9 +90,25 @@ class AddonMigrationTests(unittest.TestCase):
         )
         self.assertEqual(
             cfg.config["plugins"]["utilities"],
-            {"video_recorder": {}, "FRC/network_table_handler": {}},
+            {"FRC/network_table_handler": {}, "target_selector": {}},
         )
         self.assertEqual(cfg.config["plugins"]["frame_processors"], {})
+
+    def test_legacy_recorder_list_entry_is_dropped(self):
+        # the old list form named the recorder "video_recorder" - it becomes
+        # the top-level rollback block, not a plugins.utilities entry
+        data = {
+            "plugins": {
+                "trackers": [],
+                "utilities": ["video_recorder", "network_table_handler"],
+                "frame_processors": [],
+            }
+        }
+        cfg = self._load(data)
+        self.assertEqual(
+            cfg.config["plugins"]["utilities"],
+            {"FRC/network_table_handler": {}},
+        )
 
     def test_legacy_example_names_move_under_example_namespace(self):
         data = {
@@ -129,18 +145,43 @@ class AddonMigrationTests(unittest.TestCase):
             cfg.get_addon_settings("utilities", "FRC/network_table_handler"),
             {"network_tables_ip": "10.6.6.6"},
         )
-        self.assertEqual(
-            cfg.get_addon_settings("utilities", "video_recorder"),
-            {"record_dir": "CustomDir"},
-        )
+        # record_mode/record_dir are gone - RollBack is a core service now, so
+        # they land in the top-level rollback block instead of an add-on entry
+        self.assertEqual(cfg.config["rollback"]["data_dir"], "CustomDir")
+
+    def test_legacy_recorder_addon_folds_into_the_rollback_block(self):
+        # both the old plugin names migrate into the top-level block, and the
+        # plugin entries are dropped
+        data = self._legacy_config()
+        data["plugins"]["utilities"] = {
+            "rollback": {"fps": 12.0, "output_key": "clash"}
+        }
+        cfg = self._load(data)
+        self.assertNotIn("rollback", cfg.config["plugins"]["utilities"])
+        self.assertEqual(cfg.config["rollback"]["fps"], 12.0)
+        self.assertEqual(cfg.config["rollback"]["data_dir"], "CustomDir")
+        # a key the core service doesnt know about is not carried over
+        self.assertNotIn("output_key", cfg.config["rollback"])
+        # untouched keys keep their shipped default
+        self.assertEqual(cfg.config["rollback"]["segment_minutes"], 5)
+
+    def test_rollback_block_already_set_wins_over_the_legacy_addon(self):
+        data = self._legacy_config()
+        data["rollback"] = {"data_dir": "Mine", "fps": 60.0}
+        data["plugins"]["utilities"] = {"rollback": {"fps": 12.0}}
+        cfg = self._load(data)
+        self.assertEqual(cfg.config["rollback"]["fps"], 60.0)
+        self.assertEqual(cfg.config["rollback"]["data_dir"], "Mine")
 
     def test_legacy_enabled_flags_become_presence(self):
-        # record_mode/use_network_tables are gone - the add-ons they enabled are just present
+        # use_network_tables is gone - the add-on it enabled is just present.
+        # record_mode has no add-on to enable any more, RollBack is always on.
         cfg = self._load(self._legacy_config())
-        self.assertTrue(cfg.is_addon_enabled("utilities", "video_recorder"))
         self.assertTrue(
             cfg.is_addon_enabled("utilities", "FRC/network_table_handler")
         )
+        self.assertFalse(cfg.is_addon_enabled("utilities", "video_recorder"))
+        self.assertFalse(cfg.is_addon_enabled("utilities", "rollback"))
 
     def test_legacy_global_keys_are_removed(self):
         cfg = self._load(self._legacy_config())
@@ -177,6 +218,23 @@ class AddonMigrationTests(unittest.TestCase):
             cfg.is_addon_enabled("utilities", "FRC/network_table_handler")
         )
         self.assertFalse(cfg.is_addon_enabled("utilities", "video_recorder"))
+        # a legacy recording dir still carries over - it is a path, not a toggle
+        self.assertEqual(cfg.config["rollback"]["data_dir"], "CustomDir")
+
+    def test_default_config_has_the_rollback_block(self):
+        cfg = iSpyConfig()
+        self.assertEqual(
+            cfg.config["rollback"],
+            {
+                "enabled": True,
+                "data_dir": "VideoRecordings",
+                "fps": 30.0,
+                "max_queue": 300,
+                "downsample": 1,
+                "segment_minutes": 5,
+                "max_total_mb": 2048,
+            },
+        )
 
     def test_migration_is_idempotent(self):
         # loading twice mustnt duplicate or clobber anything

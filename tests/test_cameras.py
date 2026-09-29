@@ -31,9 +31,9 @@ class CameraRegistryTests(unittest.TestCase):
     def test_registry_maps_expected_sources(self):
         self.assertEqual(
             {name: cls.camera_type for name, cls in BUILTIN_CAMERAS.items()},
-            {"opencv": "opencv", "tello": "tello"},
+            {"opencv": "opencv", "tello": "tello", "replay": "replay"},
         )
-        self.assertEqual(set(get_camera_classes()), {"opencv", "tello"})
+        self.assertEqual(set(get_camera_classes()), {"opencv", "tello", "replay"})
 
     def test_subclasses_declare_unique_types(self):
         types = [cls.camera_type for cls in get_camera_classes().values()]

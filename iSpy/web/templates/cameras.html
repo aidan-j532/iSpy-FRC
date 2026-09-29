@@ -381,9 +381,12 @@ async function _syncUnit() {
 const COMMON_FIELDS = {
   device: { label: 'Device', type: 'device', required: true, help: 'A physical camera detected on this machine.' },
   source: { label: 'Source', type: 'text', required: true, help: 'Camera index (e.g. 0), a /dev/video path, or an RTSP / MJPEG URL.' },
-  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: ['opencv', 'tello'], help: 'Select the camera source type (most likely OpenCV).' },
+  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: ['opencv', 'tello', 'replay'], help: 'Select the camera source type (most likely OpenCV). Replay plays back a recorded session with no robot attached.' },
   name: { label: 'Name', type: 'text', required: true, default: '', help: 'Short unique name used on the dashboard and in code (e.g. front_cam).' },
   pipeline: { label: 'Pipeline', type: 'pipeline', required: true },
+  replay_cam: { label: 'Recorded Camera', type: 'text', default: '', help: 'Which camera to replay out of a session folder. Leave blank to take the first one found.' },
+  replay_speed: { label: 'Replay Speed', type: 'number', step: 0.1, default: 1.0, help: '1.0 is real time, 2.0 is twice as fast.' },
+  loop: { label: 'Loop', type: 'toggle', default: true, help: 'Restart the recording when it reaches the end.' },
   tello_ip: { label: 'Tello IP', type: 'text', default: '192.168.10.1', help: 'IP address of the Tello drone access point.' },
   tello_command_port: { label: 'Command Port', type: 'number', default: 8889, help: 'UDP port for Tello AT commands.' },
   tello_video_port: { label: 'Video Port', type: 'number', default: 11111, help: 'Local UDP port for Tello H.264 video stream.' },

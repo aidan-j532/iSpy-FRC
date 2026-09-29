@@ -80,7 +80,8 @@ class PluginStatusModuleTests(unittest.TestCase):
         by_name = {(p["type"], p["name"]): p for p in payload["available"]}
         # <type>/BuiltIn/ add-ons are builtin - toggleable + configurable but never deletable
         self.assertTrue(by_name[("tracker", "FRC/object_tracker")]["builtin"])
-        self.assertTrue(by_name[("utility", "rollback")]["builtin"])
+        # RollBack moved to iSpy/core/rollback.py, so it is no longer an add-on
+        self.assertNotIn(("utility", "rollback"), by_name)
         # template examples ship with iSpy but live outside BuiltIn/ - they
         # still get the built-in badge so they are never mistaken for
         # user-authored add-ons
@@ -124,10 +125,10 @@ class PluginStatusModuleTests(unittest.TestCase):
     def test_source_serves_bundled_addon_file(self):
         mod, cfg = self._module()
         with _app_context():
-            resp = mod._source("utility", "rollback")
+            resp = mod._source("utility", "FRC/network_table_handler")
         payload = resp.get_json()
-        self.assertIn("class RollBack", payload["source"])
-        self.assertEqual(payload["filename"], "BuiltIn/RollBack.py")
+        self.assertIn("class NetworkTableHandler", payload["source"])
+        self.assertEqual(payload["filename"], "BuiltIn/NetworkHandler.py")
 
     def test_source_serves_custom_addon_file(self):
         mod, cfg = self._module()
@@ -517,9 +518,11 @@ class iSpyAddonLoadingTests(unittest.TestCase):
         self.addCleanup(_rmtree, recordings_dir)
         cfg.config["plugins"] = {
             "trackers": {"example/example_tracker": {"count_start": 5}},
-            "utilities": {"rollback": {"data_dir": recordings_dir, "downsample": 2}},
+            "utilities": {},
             "frame_processors": {"example/example_frame_processor": {}},
         }
+        # RollBack is configured at the top level, not as an add-on
+        cfg.config["rollback"] = {"data_dir": recordings_dir, "downsample": 2}
         return cfg
 
     def test_ispy_instantiates_all_enabled_addons_with_their_settings(self):
@@ -529,17 +532,85 @@ class iSpyAddonLoadingTests(unittest.TestCase):
         ispy = iSpy(cameras=[], config=cfg)
         try:
             self.assertIn("example/example_tracker", ispy.trackers)
-            self.assertIn("rollback", ispy.utilities)
             self.assertIn("example/example_frame_processor", ispy.frame_processors)
 
             tracker = ispy.trackers["example/example_tracker"]
             self.assertEqual(tracker.count, 5)  # own settings applied
 
+            # rollback is core, so it is built even though nothing is enabled
             recorder = ispy.utilities["rollback"]
             self.assertEqual(recorder._downsample, 2)
+            self.assertEqual(
+                recorder._video_output_dir, cfg.config["rollback"]["data_dir"]
+            )
 
             fp = ispy.frame_processors["example/example_frame_processor"]
             self.assertEqual(fp.process(123), 0)
+        finally:
+            ispy._stop_all_plugins()
+
+    def test_ispy_builds_rollback_even_with_no_addons_enabled(self):
+        from iSpy.iSpy import iSpy
+
+        cfg = iSpyConfig()
+        cfg.config["app_mode"] = False
+        cfg.config["plugins"] = {
+            "trackers": {},
+            "utilities": {},
+            "frame_processors": {},
+        }
+        ispy = iSpy(cameras=[], config=cfg)
+        try:
+            self.assertEqual(
+                set(ispy.utilities), {"rollback"}, "rollback must be the only utility"
+            )
+            self.assertTrue(ispy.utilities["rollback"]._enabled)
+        finally:
+            ispy._stop_all_plugins()
+
+    def test_ispy_does_not_build_a_second_recorder_from_a_stale_addon_entry(self):
+        from iSpy.iSpy import iSpy
+
+        recordings_dir = tempfile.mkdtemp(prefix="ispy_rollback_")
+        self.addCleanup(_rmtree, recordings_dir)
+        cfg = iSpyConfig()
+        cfg.config["app_mode"] = False
+        cfg.config["rollback"] = {"data_dir": recordings_dir}
+        cfg.config["plugins"] = {
+            "trackers": {},
+            "utilities": {"rollback": {"data_dir": recordings_dir}},
+            "frame_processors": {},
+        }
+        ispy = iSpy(cameras=[], config=cfg)
+        try:
+            self.assertEqual(sum(1 for _ in ispy.utilities if _ == "rollback"), 1)
+            # the stale entry is ignored, so the top-level data_dir is what counts
+            self.assertEqual(
+                ispy.utilities["rollback"]._video_output_dir, recordings_dir
+            )
+        finally:
+            ispy._stop_all_plugins()
+
+    def test_ispy_survives_a_broken_rollback_config(self):
+        from iSpy.iSpy import iSpy
+
+        cfg = iSpyConfig()
+        cfg.config["app_mode"] = False
+        cfg.config["plugins"] = {
+            "trackers": {},
+            "utilities": {},
+            "frame_processors": {},
+        }
+        cfg.config["rollback"] = "not-a-dict"
+        ispy = iSpy(cameras=[], config=cfg)
+        try:
+            # a malformed block falls back to the schema defaults rather than
+            # taking the vision instance (or the recorder) down with it
+            self.assertIn("rollback", ispy.utilities)
+            self.assertEqual(
+                ispy.utilities["rollback"]._video_output_dir, "VideoRecordings"
+            )
+            self.assertEqual(ispy.trackers, {})
         finally:
             ispy._stop_all_plugins()
 
@@ -573,11 +644,10 @@ class iSpyAddonLoadingTests(unittest.TestCase):
                 "FRC/object_tracker": {},
                 "path_planner": {},
             },
-            "utilities": {
-                "rollback": {"data_dir": recordings_dir},
-            },
+            "utilities": {},
             "frame_processors": {},
         }
+        cfg.config["rollback"] = {"data_dir": recordings_dir}
         ispy = iSpy(cameras=[], config=cfg)
         try:
             self.assertEqual(
@@ -627,6 +697,9 @@ class AllBuiltinsEnabledBootTests(unittest.TestCase):
             for kind in ("trackers", "utilities", "frame_processors"):
                 expected = set(plugins_cfg[kind])
                 loaded = getattr(vision, kind)
+                if kind == "utilities":
+                    # core recorder is not an add-on, so it is not in the config
+                    expected.add("rollback")
                 self.assertEqual(set(loaded), expected)
 
             # no real NT server in CI - report connected so /health is "ok"
@@ -650,6 +723,12 @@ class AllBuiltinsEnabledBootTests(unittest.TestCase):
 
             r3 = client.get("/addons")
             self.assertEqual(r3.status_code, 200)
+            # rollback is not an add-on - it must not be toggleable in /addons
+            listed_addons = {
+                (p["type"], p["name"])
+                for p in client.get("/api/plugins/available").get_json()["available"]
+            }
+            self.assertNotIn(("utility", "rollback"), listed_addons)
         finally:
             vision._stop_all_plugins()
 

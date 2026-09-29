@@ -11,6 +11,7 @@ from iSpy.web.modules.viewer3d import Viewer3DModule
 from iSpy.web.modules.logs import LogsModule
 from iSpy.web.modules.metrics import MetricsModule
 from iSpy.web.modules.onboarding import OnboardingModule
+from iSpy.web.modules.rollback import RollbackModule
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.web.Backend.Settings import SettingsModule
 from iSpy.web.Backend.SetupWizard import SetupWizardModule
@@ -61,6 +62,7 @@ class iSpyWebApp:
             "health": HealthModule(context),
             "logs": LogsModule(context),
             "metrics": MetricsModule(context),
+            "rollback": RollbackModule(context),
             "settings": SettingsModule(context),
             "onboarding": OnboardingModule(context),
             "setup_wizard": SetupWizardModule(context),

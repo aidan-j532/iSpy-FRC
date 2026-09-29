@@ -145,14 +145,13 @@ class DuplicateOutputKeyTests(unittest.TestCase):
 
         cfg = iSpyConfig()
         cfg.config["app_mode"] = False
+        # RollBack is core and declares no output_key, so the collision is
+        # between the two add-on utilities instead
         cfg.config["plugins"] = {
             "trackers": {},
             "utilities": {
                 "example/example_utility": {"output_key": "clash"},
-                "rollback": {
-                    "output_key": "clash",
-                    "data_dir": _temp_recordings_dir(self),
-                },
+                "target_selector": {"output_key": "clash"},
             },
             "frame_processors": {},
         }
@@ -163,7 +162,7 @@ class DuplicateOutputKeyTests(unittest.TestCase):
             self.assertTrue(clash_logs, f"no collision warning in {captured.output}")
             joined = " ".join(clash_logs)
             self.assertIn("example/example_utility", joined)
-            self.assertIn("rollback", joined)
+            self.assertIn("target_selector", joined)
         finally:
             vision._stop_all_plugins()
 
@@ -407,11 +406,8 @@ class PublishSourcesApiTests(unittest.TestCase):
             {
                 "trackers": {},
                 "utilities": {
-"example/example_utility": {"output_key": "clash"},
-                    "rollback": {
-                        "output_key": "clash",
-                        "data_dir": _temp_recordings_dir(self),
-                    },
+                    "example/example_utility": {"output_key": "clash"},
+                    "target_selector": {"output_key": "clash"},
                 },
                 "frame_processors": {},
             }
@@ -421,7 +417,7 @@ class PublishSourcesApiTests(unittest.TestCase):
                 "iSpy.web.Backend.PluginStatus.load_plugins",
                 return_value={
                     "example/example_utility": _OutputUtility,
-                    "rollback": _OutputUtility,
+                    "target_selector": _OutputUtility,
                 },
             ),
             ctx,

@@ -130,10 +130,14 @@ _ADDON_RENAMES = (
 # utilities were removed; their settings fold into top-level keys instead
 _MERGED_HEALTH_ADDONS = ("health_reporter", "status_reporter")
 
+# RollBack became a core service (iSpy/core/rollback.py) - same deal as the
+# health add-ons. Both the old names are folded into the top-level "rollback"
+# block, which is where its settings live now.
+_MERGED_ROLLBACK_ADDONS = ("rollback", "video_recorder")
+
 # legacy enabled flags - the flag value is discarded once it becomes add-on presence
 _ADDON_LEGACY_FLAGS = {
     "use_network_tables": ("utilities", "FRC/network_table_handler"),
-    "record_mode": ("utilities", "video_recorder"),
 }
 
 _ADDON_LEGACY_SETTINGS = {
@@ -142,7 +146,6 @@ _ADDON_LEGACY_SETTINGS = {
         "FRC/network_table_handler",
         "network_tables_ip",
     ),
-    "record_dir": ("utilities", "video_recorder", "record_dir"),
 }
 
 
@@ -361,6 +364,19 @@ class iSpyConfig:
             # cameras auto-save their validated pipeline settings here so the
             # "Load Profile" tab can re-apply them to another camera verbatim.
             "model_profiles": {},
+            # always-on rollback recorder, configured at the top level because
+            # it is core code and not an add-on you can toggle off in /addons
+            "rollback": {
+                "enabled": True,
+                # stays "VideoRecordings" so recordings from the old
+                # plugin-based recorder dont end up orphaned
+                "data_dir": "VideoRecordings",
+                "fps": 30.0,
+                "max_queue": 300,
+                "downsample": 1,
+                "segment_minutes": 5,
+                "max_total_mb": 2048,
+            },
             "plugins": {
                 # enabled add-ons only - presence == enabled, no flag. each entry maps
                 # a name to that add-on's own settings (schema defaults apply at runtime).
@@ -480,6 +496,38 @@ class iSpyConfig:
                 migrated_stale = top_stale
         if migrated_stale is not None:
             self.config["health_stale_threshold"] = migrated_stale
+
+        # same story for RollBack: it is a core service now, so the old
+        # utilities entries and the legacy record_dir key fold into the
+        # top-level "rollback" block and the entries are dropped. A value the
+        # user already set there wins - but "rollback" is seeded from
+        # default_config before this runs, so presence means nothing; compare
+        # against the shipped default to tell the two apart. Idempotent: the
+        # plugin entries are gone after the first load, so there is nothing
+        # left to carry over.
+        rollback = self.config.setdefault("rollback", {})
+        rollback_defaults = self.default_config.get("rollback", {})
+        carried = {}
+        for gone_name in _MERGED_ROLLBACK_ADDONS:
+            gone = utilities.pop(gone_name, None)
+            if isinstance(gone, dict):
+                # first entry wins - video_recorder is the older of the two
+                for key, value in gone.items():
+                    # the oldest video_recorder build spelled it record_dir
+                    if key == "record_dir":
+                        key = "data_dir"
+                    carried.setdefault(key, value)
+        # record_dir predates both plugin names, so it only fills a gap
+        legacy_dir = self.config.get("record_dir")
+        if legacy_dir is not None:
+            carried.setdefault("data_dir", legacy_dir)
+        for key, value in carried.items():
+            # skip keys the core service doesnt know about (a stale
+            # output_key, say) rather than smuggling them into the new block
+            if key not in rollback_defaults:
+                continue
+            if rollback.get(key, rollback_defaults[key]) == rollback_defaults[key]:
+                rollback[key] = value
 
         for legacy_key, (
             addon_type,

@@ -42,6 +42,9 @@ dependencies = [
     "Werkzeug>=3.0",
     "packaging>=23.0",
 ]
+#"torch==2.2.2; platform_system == 'Linux' and platform_machine == 'aarch64'",
+#"torch>=2.2.0; platform_system != 'Linux' or platform_machine != 'aarch64'",
+#"torchvision>=0.15.0",
 
 [project.optional-dependencies]
 # For model training, conversion, and development - x86 only.

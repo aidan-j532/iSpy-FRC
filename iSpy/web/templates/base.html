@@ -228,6 +228,19 @@
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg
           >Health</a
         >
+        <a href="/rollback"
+          ><svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="1 4 1 10 7 10"></polyline>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg
+          >Rollback</a
+        >
         <a href="/metrics"
           ><svg
             viewBox="0 0 24 24"
@@ -487,7 +500,7 @@
             page: "/dashboard",
             target: ".sidebar",
             title: "Everything lives in the sidebar",
-            text: "Each page handles one job: Cameras, Health, Metrics, Models, Datasets, 3D Viewer, Logs, Add-ons and Settings. You can jump to any of them any time - this tour walks you through them all.",
+            text: "Each page handles one job: Cameras, Health, Rollback, Metrics, Models, Datasets, 3D Viewer, Logs, Add-ons and Settings. You can jump to any of them any time - this tour walks you through them all.",
           },
           {
             page: "/dashboard",
@@ -535,6 +548,23 @@
             page: "/health-page",
             title: "Health",
             text: "System health, service state, and camera readiness in one place.",
+          },
+          {
+            page: "/rollback",
+            title: "Rollback",
+            text: "Every run is recorded automatically. This is the recorder's status, your saved sessions, and a player that scrubs through a run frame by frame.",
+          },
+          {
+            page: "/rollback",
+            target: "#rb-sessions",
+            title: "Your recordings",
+            text: "Each iSpy start is one session, listed with its size and frame count. Pin the ones you want to keep - pinned sessions are never removed by the retention cap.",
+          },
+          {
+            page: "/rollback",
+            target: "#rb-strip-canvas",
+            title: "Scrub a run",
+            text: "The strip is detections over time; the ticks mark where a new target first appears. Play, step, change speed, and the top-down view plots the robot pose against everything it detected. 'Replay this run' hands you the command to re-run the whole pipeline over that footage with no robot attached.",
           },
           {
             page: "/metrics",

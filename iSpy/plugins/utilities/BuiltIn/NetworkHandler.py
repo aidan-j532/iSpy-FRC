@@ -114,6 +114,7 @@ class NetworkTableHandler(UtilityBase):
     def __init__(self, context: dict):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
+        self._replay_warned = False
 
         ip = self.config.get("network_tables_ip", "10.0.0.2")
         self.inst = ntcore.NetworkTableInstance.getDefault()
@@ -177,7 +178,22 @@ class NetworkTableHandler(UtilityBase):
             self.logger.error("Failed to get robot pose: %s", e)
             return Pose2d()
 
+    def _replay_mode(self) -> bool:
+        vision = self.context.get("vision_instance")
+        return bool(vision is not None and getattr(vision, "replay_mode", False))
+
     def update(self, frame_data: dict):
+        # a replayed run must never write to a robot that happens to be on the
+        # same network - the recorded values would look like real commands
+        if self._replay_mode():
+            if not self._replay_warned:
+                self._replay_warned = True
+                self.logger.warning(
+                    "REPLAY MODE: NetworkTables publishing is disabled so a "
+                    "recording cannot drive a real robot."
+                )
+            return
+
         self._log_connection_state()
         if not self.isConnected():
             return

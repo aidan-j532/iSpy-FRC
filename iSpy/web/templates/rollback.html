@@ -1,0 +1,833 @@
+{% extends "base.html" %}
+{% block title %}Rollback - iSpy{% endblock %}
+{% block head %}
+<style>
+  .rb-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .rb-player-stage {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .rb-player-stage img { max-width: 100%; display: block; }
+  .rb-player-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .rb-strip { position: relative; }
+  .rb-strip canvas { width: 100%; height: 38px; display: block; cursor: pointer; border-radius: var(--radius-sm); background: var(--bg-surface); }
+  .rb-transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .rb-transport .form-input { width: auto; min-width: 90px; }
+  .rb-scrub { width: 100%; }
+  .rb-meta-line { display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.82rem; color: var(--text-dim); }
+  .rb-roster { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+  .rb-roster-item {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 7px 10px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--bg-surface); font-size: 0.85rem;
+  }
+  .rb-roster-item .rb-dist { margin-left: auto; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .rb-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.8rem; color: var(--text-dim); margin-top: 6px; }
+  .rb-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  .rb-topdown { width: 100%; height: 320px; display: block; border-radius: var(--radius-sm); background: var(--bg-surface); }
+  .rb-sess { cursor: pointer; }
+  .rb-sess.active td { background: var(--accent-dim); }
+  .rb-sess-name { font-weight: 600; }
+  .rb-cmd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.82rem; word-break: break-all;
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 10px 12px; margin-top: 8px;
+  }
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Rollback</h1>
+  <p class="page-sub">Every run is recorded so you can watch it back, scrub it, and feed it back in as a camera.</p>
+</div>
+
+<div id="rb-banner" class="vision-banner"></div>
+
+<div class="grid stats-grid">
+  <div class="card stat-card"><div class="stat-label">Recorder</div><div class="stat-value" id="rb-state">--</div></div>
+  <div class="card stat-card"><div class="stat-label">This session</div><div class="stat-value" id="rb-session">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Frames</div><div class="stat-value" id="rb-frames">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Dropped</div><div class="stat-value" id="rb-dropped">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Disk used</div><div class="stat-value" id="rb-used">--<span class="stat-unit">MB</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Free</div><div class="stat-value" id="rb-free">--<span class="stat-unit">MB</span></div></div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+  <div class="card-head"><h3>Controls</h3></div>
+  <div class="rb-status">
+    <label class="switch" title="Turn the always-on recorder off. Takes effect on the next boot.">
+      <input type="checkbox" id="rb-enabled" class="toggle-input" />
+      <span>Record</span>
+    </label>
+    <span id="rb-enabled-note" class="text-dim text-sm"></span>
+    <button class="btn btn-sm btn-secondary" id="rb-prune">Delete oldest unpinned</button>
+    <button class="btn btn-sm btn-secondary" id="rb-refresh">Refresh</button>
+    <span class="text-dim text-sm" id="rb-path"></span>
+  </div>
+  <div id="rb-disk-warn" class="msg-warn" style="display:none;margin-top:10px;"></div>
+</div>
+
+<div class="dash-columns" style="margin-top:16px;">
+  <div class="dash-col-left">
+    <div class="card">
+      <div class="card-head"><h3>Recordings</h3></div>
+      <div id="rb-sessions"><div class="skeleton-block"></div></div>
+    </div>
+  </div>
+  <div class="dash-col-right">
+    <div class="card">
+      <div class="card-head"><h3>Settings</h3></div>
+      <div id="rb-settings"><div class="skeleton-block"></div></div>
+      <div class="settings-actions">
+        <button class="btn btn-sm btn-ok" id="rb-save">Save settings</button>
+        <span class="settings-msg text-dim text-sm" id="rb-settings-msg"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+  <div class="card-head"><h3>Player</h3></div>
+  <div class="form-row">
+    <span class="form-label">Segment</span>
+    <select class="form-input" id="rb-segment"></select>
+  </div>
+  <div class="form-row">
+    <span class="form-label">Camera</span>
+    <select class="form-input" id="rb-cam"></select>
+  </div>
+
+  <div class="rb-strip" style="margin:10px 0 4px;">
+    <canvas id="rb-strip-canvas" height="38"></canvas>
+  </div>
+  <input type="range" class="form-input rb-scrub" id="rb-scrub" min="0" max="0" value="0" />
+  <div class="rb-transport" style="margin-top:10px;">
+    <button class="btn btn-sm btn-secondary" id="rb-prev" title="Previous frame">&#9664;</button>
+    <button class="btn btn-sm btn-ok" id="rb-play" style="min-width:82px;">Play</button>
+    <button class="btn btn-sm btn-secondary" id="rb-next" title="Next frame">&#9654;</button>
+    <select class="form-input" id="rb-speed" title="Playback speed">
+      <option value="0.25">0.25x</option>
+      <option value="0.5">0.5x</option>
+      <option value="1" selected>1x</option>
+      <option value="2">2x</option>
+      <option value="4">4x</option>
+    </select>
+    <select class="form-input" id="rb-jump" title="Jump to a marker"></select>
+    <span class="text-dim text-sm" id="rb-frame-label"></span>
+  </div>
+
+  <div class="dash-columns" style="margin-top:14px;">
+    <div class="dash-col-left">
+      <div class="rb-player-stage" id="rb-stage">
+        <img id="rb-frame" alt="Recorded frame" />
+        <canvas id="rb-overlay"></canvas>
+      </div>
+      <div class="rb-legend" id="rb-overlay-legend"></div>
+      <div class="rb-roster" id="rb-roster" style="margin-top:10px;"></div>
+    </div>
+    <div class="dash-col-right">
+      <canvas class="rb-topdown" id="rb-topdown"></canvas>
+      <div class="rb-meta-line" style="margin-top:8px;">
+        <span id="rb-topdown-unit"></span>
+        <span id="rb-pose"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="rb-replay-cmd-wrap" style="display:none;margin-top:14px;">
+    <h3>Replay this run</h3>
+    <p class="text-dim text-sm" style="margin:4px 0 0;">
+      Replay swaps the camera stack for the recording, so it runs as its own process and never touches your saved config.
+    </p>
+    <div class="rb-cmd" id="rb-replay-cmd"></div>
+    <div style="margin-top:8px;">
+      <button class="btn btn-sm btn-secondary" id="rb-copy-cmd">Copy command</button>
+      <a class="btn btn-sm btn-secondary" id="rb-dl-clip" href="#">Download clip</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const RB = {
+  sessions: [],
+  session: null,
+  segments: [],
+  stem: null,
+  cam: null,
+  timeline: [],
+  meta: {},
+  unit: 'frc',
+  idx: 0,
+  playing: false,
+  timer: null,
+  lastTick: 0,
+};
+
+// a stable colour per detection name so the roster, the overlay and the
+// top-down view all agree on what a given target is
+function rbColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return 'hsl(' + h + ', 75%, 62%)';
+}
+
+// canvas cannot resolve css vars, so read the real accent off the document
+let RB_ACCENT = null;
+function rbAccent() {
+  if (RB_ACCENT) return RB_ACCENT;
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--accent');
+  RB_ACCENT = (v || '').trim() || '#2f81f7';
+  return RB_ACCENT;
+}
+
+function fmtBytesMb(mb) {
+  return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb.toFixed(1) + ' MB';
+}
+
+function fmtWhen(seconds) {
+  if (!seconds) return '--';
+  const d = new Date(seconds * 1000);
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+async function rbJson(url, opts) {
+  const res = await fetch(url, opts);
+  let body = {};
+  try { body = await res.json(); } catch (e) { body = {}; }
+  if (!res.ok || body.error) throw new Error(body.error || ('HTTP ' + res.status));
+  return body;
+}
+
+// status
+
+async function rbLoadStatus() {
+  let s;
+  try {
+    s = await rbJson('/api/rollback/status');
+  } catch (e) {
+    const b = document.getElementById('rb-banner');
+    b.className = 'vision-banner vision-bad';
+    b.textContent = 'Cannot reach the rollback service';
+    return;
+  }
+
+  const banner = document.getElementById('rb-banner');
+  if (s.replay_mode) {
+    banner.className = 'vision-banner vision-warn';
+    banner.textContent = 'Replay mode - recording is off and NetworkTables publishing is disabled';
+  } else if (s.disk_problem) {
+    banner.className = 'vision-banner vision-bad';
+    banner.textContent = 'Recorder idle: ' + s.disk_problem;
+  } else if (!s.enabled) {
+    banner.className = 'vision-banner vision-warn';
+    banner.textContent = 'Recording is turned off - saved for the next boot';
+  } else if (s.recording) {
+    banner.className = 'vision-banner vision-ok';
+    banner.textContent = 'Recording to ' + (s.session || 'a new session');
+  } else {
+    banner.className = 'vision-banner';
+    banner.textContent = 'Waiting for a live camera';
+  }
+
+  document.getElementById('rb-state').innerHTML = s.recording
+    ? '<span class="status-dot status-ok"></span> recording'
+    : '<span class="status-dot status-warn"></span> idle';
+  document.getElementById('rb-session').textContent = s.session || '--';
+  document.getElementById('rb-frames').textContent = s.counters.frames;
+  document.getElementById('rb-dropped').textContent = s.counters.dropped;
+  document.getElementById('rb-used').innerHTML =
+    fmtBytesMb(s.total_mb) + '<span class="stat-unit">/ ' + Math.round(s.max_total_mb) + ' MB</span>';
+  document.getElementById('rb-free').innerHTML = (s.free_mb == null ? '--' : Math.round(s.free_mb)) + '<span class="stat-unit">MB</span>';
+  document.getElementById('rb-path').textContent = s.data_dir;
+
+  const warn = document.getElementById('rb-disk-warn');
+  if (s.over_cap) {
+    warn.style.display = 'block';
+    warn.textContent = 'Over the retention cap by ' + fmtBytesMb(s.total_mb - s.max_total_mb) +
+      '. Pinned and active sessions are never deleted automatically.';
+  } else {
+    warn.style.display = 'none';
+  }
+
+  const toggle = document.getElementById('rb-enabled');
+  toggle.checked = !!s.enabled;
+  document.getElementById('rb-enabled-note').textContent = toggle.checked
+    ? 'Every run is recorded'
+    : 'Off - will take effect on the next boot';
+}
+
+// sessions
+
+async function rbLoadSessions() {
+  const data = await rbJson('/api/rollback/sessions');
+  RB.sessions = data.sessions || [];
+  const el = document.getElementById('rb-sessions');
+
+  if (!RB.sessions.length) {
+    el.innerHTML = '<div class="empty-state">No recordings yet</div>';
+    RB.session = null;
+    return;
+  }
+
+  const rows = RB.sessions.map(s => `
+    <tr class="rb-sess${s.name === RB.session ? ' active' : ''}" data-name="${esc(s.name)}">
+      <td>
+        <div class="rb-sess-name">${esc(s.name)}</div>
+        <div class="text-dim text-sm">${fmtWhen(s.started)}${s.legacy ? ' &middot; legacy' : ''}</div>
+      </td>
+      <td>${s.segments}</td>
+      <td>${s.frames}</td>
+      <td>${fmtBytesMb(s.size_mb)}</td>
+      <td>${s.pinned ? '<span class="plugin-pill pill-utility">pinned</span>' : ''}</td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-sm btn-secondary" data-act="replay" data-name="${esc(s.name)}">Replay</button>
+        <button class="btn btn-sm btn-secondary" data-act="pin" data-name="${esc(s.name)}">${s.pinned ? 'Unpin' : 'Pin'}</button>
+        <button class="btn btn-sm btn-danger" data-act="delete" data-name="${esc(s.name)}">Delete</button>
+      </td>
+    </tr>`).join('');
+
+  el.innerHTML = `
+    <table class="list-table">
+      <thead><tr><th>Session</th><th>Segments</th><th>Frames</th><th>Size</th><th></th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  if (!RB.session) RB.session = RB.sessions[0].name;
+  await rbSelectSession(RB.session);
+}
+
+async function rbSelectSession(name) {
+  const data = await rbJson('/api/rollback/' + encodeURIComponent(name));
+  RB.session = name;
+  RB.sessionRow = data.session;
+  RB.segments = data.session.segment_list || [];
+  document.querySelectorAll('.rb-sess').forEach(tr => {
+    tr.classList.toggle('active', tr.dataset.name === name);
+  });
+
+  const segSel = document.getElementById('rb-segment');
+  segSel.innerHTML = RB.segments.map(s =>
+    `<option value="${esc(s.stem)}">${esc(s.stem)} &middot; ${s.frames} frames &middot; ${fmtBytesMb(s.size_mb)}</option>`
+  ).join('');
+  RB.stem = RB.segments.length ? RB.segments[0].stem : null;
+  await rbLoadSegment();
+}
+
+async function rbLoadSegment() {
+  RB.stem = document.getElementById('rb-segment').value || RB.stem;
+  if (!RB.session || !RB.stem) return;
+
+  const data = await rbJson(
+    '/api/rollback/' + encodeURIComponent(RB.session) + '/segment/' + encodeURIComponent(RB.stem));
+  RB.timeline = data.timeline || [];
+  RB.meta = data.camera_meta || {};
+  RB.unit = data.unit || 'frc';
+
+  const cams = (data.segment.clips || []).map(c => c.cam);
+  const camSel = document.getElementById('rb-cam');
+  camSel.innerHTML = cams.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  RB.cam = cams.length ? cams[0] : null;
+
+  const last = Math.max(0, RB.timeline.length - 1);
+  const scrub = document.getElementById('rb-scrub');
+  scrub.max = String(last);
+  RB.idx = 0;
+  scrub.value = '0';
+
+  rbDrawStrip();
+  rbDrawMarkers();
+  rbDrawTopdownBounds();
+  rbShow(0);
+  rbRefreshReplayCommand();
+}
+
+function rbStop() {
+  RB.playing = false;
+  if (RB.timer) { clearInterval(RB.timer); RB.timer = null; }
+  document.getElementById('rb-play').textContent = 'Play';
+}
+
+// detection-count strip plus a tick wherever a detection name first appears,
+// which is usually where something happened worth looking at
+function rbDrawStrip() {
+  const cv = document.getElementById('rb-strip-canvas');
+  const w = cv.clientWidth || 800;
+  cv.width = w;
+  const h = 38;
+  cv.height = h;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+
+  const n = RB.timeline.length;
+  if (!n) return;
+  let peak = 1;
+  for (const r of RB.timeline) peak = Math.max(peak, r.n || 0);
+
+  const bw = w / n;
+  for (let i = 0; i < n; i++) {
+    const rec = RB.timeline[i];
+    const bh = Math.round(((rec.n || 0) / peak) * (h - 6));
+    // canvas has no access to the stylesheet, so the accent is read off the
+    // root element rather than handed over as a css var - fillStyle silently
+    // ignores 'var(--accent)' and keeps the previous colour
+    ctx.fillStyle = i === RB.idx ? rbAccent() : 'rgba(120,170,255,0.45)';
+    ctx.fillRect(i * bw, h - bh - 2, Math.max(1, bw - 0.5), bh);
+  }
+
+  const seen = new Set();
+  ctx.fillStyle = 'rgba(255,220,120,0.95)';
+  for (let i = 0; i < n; i++) {
+    for (const d of RB.timeline[i].d || []) {
+      if (seen.has(d.name)) continue;
+      seen.add(d.name);
+      ctx.fillRect(i * bw, 0, 1.5, h);
+    }
+  }
+}
+
+function rbDrawMarkers() {
+  const sel = document.getElementById('rb-jump');
+  const seen = new Set();
+  const out = [];
+  for (let i = 0; i < RB.timeline.length; i++) {
+    for (const d of RB.timeline[i].d || []) {
+      if (seen.has(d.name)) continue;
+      seen.add(d.name);
+      out.push(`<option value="${i}">${esc(d.name)} first seen @ ${i}</option>`);
+    }
+  }
+  sel.innerHTML = '<option value="">Jump to marker</option>' + out.join('');
+}
+
+document.getElementById('rb-strip-canvas').addEventListener('click', e => {
+  const cv = e.currentTarget;
+  const rect = cv.getBoundingClientRect();
+  const n = RB.timeline.length;
+  if (!n) return;
+  rbShow(Math.min(n - 1, Math.max(0, Math.floor(((e.clientX - rect.left) / rect.width) * n))));
+});
+
+// player
+
+function rbFrameUrl(i) {
+  return '/api/rollback/' + encodeURIComponent(RB.session) +
+    '/segment/' + encodeURIComponent(RB.stem) +
+    '/' + encodeURIComponent(RB.cam) + '/frame/' + i;
+}
+
+// robot space back to pixels - the inverse of triangulation.camera_point_to_robot,
+// so a recorded detection lands where it actually was in the picture
+function rbProject(det, w, h) {
+  const meta = RB.meta[RB.cam];
+  if (!meta) return null;
+  const cal = meta.calibration || {};
+  let f = Number(cal.focal_length_pixels) || 0;
+  if (!f && cal.fov) f = (w / 2) / Math.tan((cal.fov * Math.PI) / 360);
+  if (!f) return null;
+
+  const yaw = ((meta.yaw || 0) * Math.PI) / 180;
+  const pitch = ((meta.pitch || 0) * Math.PI) / 180;
+  const xRot = det.x - (meta.x || 0);
+  const yRot = det.y - (meta.y || 0);
+  const down = -((det.z || 0) - (meta.height || 0));
+
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const fx = cy * xRot - sy * yRot;
+  const forward = sy * xRot + cy * yRot;
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const fy = cp * down - sp * forward;
+  const fz = sp * down + cp * forward;
+  if (!(fz > 0.05)) return null;
+
+  return { x: w / 2 + (f * fx) / fz, y: h / 2 + (f * fy) / fz };
+}
+
+function rbDrawOverlay(imgW, imgH) {
+  const cv = document.getElementById('rb-overlay');
+  if (!imgW) return;
+  cv.width = imgW;
+  cv.height = imgH;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, imgW, imgH);
+
+  const rec = RB.timeline[RB.idx];
+  if (!rec) return;
+  const scale = imgW / 800;
+  ctx.font = (13 * scale) + 'px system-ui, sans-serif';
+  ctx.textBaseline = 'top';
+
+  let placed = 0;
+  for (const det of rec.d || []) {
+    const p = rbProject(det, imgW, imgH);
+    if (!p || p.x < 0 || p.x > imgW || p.y < 0 || p.y > imgH) continue;
+    const color = rbColor(det.name);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 11 * scale, 0, Math.PI * 2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2 * scale;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2.5 * scale, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    const label = det.name + ' ' + Math.round((det.confidence || 0) * 100) + '%';
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.62)';
+    ctx.fillRect(p.x + 13 * scale, p.y - 8 * scale, tw + 8 * scale, 17 * scale);
+    ctx.fillStyle = color;
+    ctx.fillText(label, p.x + 17 * scale, p.y - 6 * scale);
+    placed++;
+  }
+
+  document.getElementById('rb-overlay-legend').innerHTML = placed
+    ? '<span>' + placed + ' of ' + (rec.d || []).length + ' projected into frame</span>'
+    : '<span class="text-dim">Nothing projected - camera not calibrated for this run</span>';
+}
+
+function rbDrawRoster() {
+  const rec = RB.timeline[RB.idx];
+  const el = document.getElementById('rb-roster');
+  if (!rec || !(rec.d || []).length) {
+    el.innerHTML = '<div class="empty-state">No detections on this frame</div>';
+    return;
+  }
+  el.innerHTML = rec.d.map(d => `
+    <div class="rb-roster-item">
+      <span class="rb-swatch" style="background:${rbColor(d.name)}"></span>
+      <strong>${esc(d.name)}</strong>
+      <span class="text-dim">${Math.round((d.confidence || 0) * 100)}%</span>
+      <span class="text-dim">${esc(d.vis_type)}</span>
+      <span class="rb-dist">x ${d.x.toFixed(1)} &middot; y ${d.y.toFixed(1)} &middot; z ${d.z.toFixed(1)}</span>
+    </div>`).join('');
+}
+
+function rbDrawTopdownBounds() {
+  RB.bounds = null;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const r of RB.timeline) {
+    const p = r.p;
+    if (p && typeof p.x === 'number' && typeof p.y === 'number') {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    for (const d of r.d || []) {
+      if (typeof d.x !== 'number' || typeof d.y !== 'number') continue;
+      minX = Math.min(minX, d.x); maxX = Math.max(maxX, d.x);
+      minY = Math.min(minY, d.y); maxY = Math.max(maxY, d.y);
+    }
+  }
+  if (minX === Infinity) return;
+  const pad = Math.max((maxX - minX) * 0.15, (maxY - minY) * 0.15, 1);
+  RB.bounds = { minX: minX - pad, maxX: maxX + pad, minY: minY - pad, maxY: maxY + pad };
+}
+
+function rbDrawTopdown() {
+  const cv = document.getElementById('rb-topdown');
+  const w = cv.clientWidth || 480, h = 320;
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  if (!RB.bounds) {
+    ctx.fillStyle = 'rgba(140,150,170,0.7)';
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No poses or detections recorded in this segment', w / 2, h / 2);
+    ctx.textAlign = 'left';
+    return;
+  }
+
+  const b = RB.bounds;
+  const sx = (w - 40) / (b.maxX - b.minX);
+  const sy = (h - 40) / (b.maxY - b.minY);
+  const s = Math.min(sx, sy);
+  const ox = 20 - b.minX * s + ((w - 40) - (b.maxX - b.minX) * s) / 2;
+  const oy = 20 - b.minY * s + ((h - 40) - (b.maxY - b.minY) * s) / 2;
+  const X = v => ox + v * s;
+  const Y = v => oy + v * s;
+
+  ctx.strokeStyle = 'rgba(140,150,170,0.18)';
+  ctx.lineWidth = 1;
+  for (let gx = Math.ceil(b.minX); gx <= b.maxX; gx++) {
+    ctx.beginPath(); ctx.moveTo(X(gx), 0); ctx.lineTo(X(gx), h); ctx.stroke();
+  }
+  for (let gy = Math.ceil(b.minY); gy <= b.maxY; gy++) {
+    ctx.beginPath(); ctx.moveTo(0, Y(gy)); ctx.lineTo(w, Y(gy)); ctx.stroke();
+  }
+
+  ctx.strokeStyle = 'rgba(120,170,255,0.7)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  let started = false;
+  for (const r of RB.timeline) {
+    const p = r.p;
+    if (!p || typeof p.x !== 'number' || typeof p.y !== 'number') { started = false; continue; }
+    if (!started) { ctx.moveTo(X(p.x), Y(p.y)); started = true; }
+    else ctx.lineTo(X(p.x), Y(p.y));
+  }
+  ctx.stroke();
+
+  const rec = RB.timeline[RB.idx] || {};
+  for (const d of rec.d || []) {
+    ctx.beginPath();
+    ctx.arc(X(d.x), Y(d.y), 5, 0, Math.PI * 2);
+    ctx.fillStyle = rbColor(d.name);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(235,240,250,0.92)';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.fillText(d.name, X(d.x) + 8, Y(d.y) + 4);
+  }
+
+  const p = rec.p;
+  document.getElementById('rb-pose').textContent = p
+    ? 'pose x ' + p.x.toFixed(2) + '  y ' + p.y.toFixed(2) + '  h ' + (p.heading != null ? p.heading.toFixed(1) : '--') + 'deg'
+    : 'no pose on this frame';
+  document.getElementById('rb-topdown-unit').textContent = 'robot frame (' + RB.unit + ')';
+
+  if (p && typeof p.x === 'number') {
+    const yaw = ((p.heading || 0) * Math.PI) / 180;
+    const len = 22;
+    ctx.beginPath();
+    ctx.moveTo(X(p.x), Y(p.y));
+    ctx.lineTo(X(p.x) + Math.cos(yaw) * len, Y(p.y) + Math.sin(yaw) * len);
+    ctx.strokeStyle = '#ffd24d';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(X(p.x), Y(p.y), 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffd24d';
+    ctx.fill();
+  }
+}
+
+function rbShow(i) {
+  if (!RB.timeline.length) return;
+  RB.idx = Math.min(RB.timeline.length - 1, Math.max(0, i));
+  const rec = RB.timeline[RB.idx];
+  document.getElementById('rb-scrub').value = String(RB.idx);
+  document.getElementById('rb-frame-label').textContent =
+    'frame ' + RB.idx + ' / ' + (RB.timeline.length - 1) +
+    (rec.i != null ? '  (recorded #' + rec.i + ')' : '') +
+    '  ' + (rec.d || []).length + ' detections';
+
+  const img = document.getElementById('rb-frame');
+  img.onload = () => {
+    rbDrawOverlay(img.naturalWidth, img.naturalHeight);
+    rbDrawTopdown();
+  };
+  img.onerror = () => {
+    rbDrawOverlay(0, 0);
+    document.getElementById('rb-overlay-legend').innerHTML =
+      '<span class="text-dim">That frame could not be decoded</span>';
+  };
+  img.src = rbFrameUrl(RB.idx);
+  rbDrawStrip();
+  rbDrawRoster();
+  rbDrawTopdown();
+}
+
+function rbPlay() {
+  if (RB.playing) { rbStop(); return; }
+  RB.playing = true;
+  document.getElementById('rb-play').textContent = 'Pause';
+  RB.timer = setInterval(() => {
+    const fps = 12 * parseFloat(document.getElementById('rb-speed').value);
+    const now = performance.now();
+    const step = Math.max(1, Math.floor((now - RB.lastTick) / (1000 / fps)));
+    RB.lastTick = now;
+    if (RB.idx + step > RB.timeline.length - 1) {
+      rbShow(RB.timeline.length - 1);
+      rbStop();
+      return;
+    }
+    rbShow(RB.idx + step);
+  }, 1000 / 12);
+}
+
+document.getElementById('rb-scrub').addEventListener('input', e => {
+  rbStop();
+  rbShow(parseInt(e.target.value, 10));
+});
+document.getElementById('rb-play').addEventListener('click', () => {
+  RB.lastTick = performance.now();
+  rbPlay();
+});
+document.getElementById('rb-prev').addEventListener('click', () => { rbStop(); rbShow(RB.idx - 1); });
+document.getElementById('rb-next').addEventListener('click', () => { rbStop(); rbShow(RB.idx + 1); });
+document.getElementById('rb-jump').addEventListener('change', e => {
+  if (e.target.value === '') return;
+  rbStop();
+  rbShow(parseInt(e.target.value, 10));
+});
+document.getElementById('rb-segment').addEventListener('change', () => { rbStop(); rbLoadSegment(); });
+document.getElementById('rb-cam').addEventListener('change', e => {
+  RB.cam = e.target.value;
+  rbShow(RB.idx);
+});
+window.addEventListener('resize', () => { rbDrawStrip(); rbDrawTopdown(); });
+
+async function rbRefreshReplayCommand() {
+  const wrap = document.getElementById('rb-replay-cmd-wrap');
+  if (!RB.session) { wrap.style.display = 'none'; return; }
+  try {
+    const d = await rbJson('/api/rollback/' + encodeURIComponent(RB.session) + '/replay');
+    document.getElementById('rb-replay-cmd').textContent = d.command;
+    const clip = document.getElementById('rb-dl-clip');
+    if (RB.stem && RB.cam) {
+      clip.href = '/api/rollback/' + encodeURIComponent(RB.session) + '/segment/' +
+        encodeURIComponent(RB.stem) + '/' + encodeURIComponent(RB.cam) + '/clip';
+      clip.style.display = '';
+    } else {
+      clip.style.display = 'none';
+    }
+    wrap.style.display = 'block';
+  } catch (e) {
+    wrap.style.display = 'none';
+  }
+}
+
+document.getElementById('rb-copy-cmd').addEventListener('click', async () => {
+  const text = document.getElementById('rb-replay-cmd').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Command copied', 'success');
+  } catch (e) {
+    showToast('Copy blocked by the browser - select it manually', 'error');
+  }
+});
+
+// settings
+
+async function rbLoadSettings() {
+  const data = await rbJson('/api/rollback/settings');
+  const el = document.getElementById('rb-settings');
+  el.innerHTML = Object.entries(data.settings).map(([key, spec]) => {
+    if (spec.type === 'toggle') {
+      return `<div class="form-row">
+        <span class="form-label">${esc(spec.label)}</span>
+        <label class="switch"><input type="checkbox" class="toggle-input" data-key="${esc(key)}" ${spec.value ? 'checked' : ''} /><span class="text-dim">${esc(spec.hint)}</span></label>
+      </div>`;
+    }
+    return `<div class="form-row">
+      <span class="form-label" title="${esc(spec.hint)}">${esc(spec.label)}</span>
+      <input class="form-input" type="${spec.type === 'number' ? 'number' : 'text'}" step="any"
+        data-key="${esc(key)}" value="${esc(spec.value)}" />
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('rb-save').addEventListener('click', async () => {
+  const payload = {};
+  document.querySelectorAll('#rb-settings [data-key]').forEach(inp => {
+    payload[inp.dataset.key] = inp.type === 'checkbox' ? inp.checked : inp.value;
+  });
+  const msg = document.getElementById('rb-settings-msg');
+  try {
+    const d = await rbJson('/api/rollback/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    msg.textContent = 'Saved - restart iSpy to apply';
+    showToast('Rollback settings saved', 'success');
+    await rbLoadStatus();
+  } catch (e) {
+    msg.textContent = e.message;
+    showToast(e.message, 'error');
+  }
+});
+
+document.getElementById('rb-enabled').addEventListener('change', async e => {
+  try {
+    await rbJson('/api/rollback/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: e.target.checked }),
+    });
+    document.getElementById('rb-enabled-note').textContent = e.target.checked
+      ? 'Every run is recorded (next boot)'
+      : 'Off (next boot)';
+    showToast('Saved - restart iSpy to apply', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+});
+
+document.getElementById('rb-prune').addEventListener('click', async () => {
+  try {
+    const d = await rbJson('/api/rollback/prune', { method: 'POST' });
+    if (d.deleted.length) {
+      showToast('Deleted ' + d.deleted.length + ' session(s)', 'success');
+    } else {
+      showToast(d.over_cap ? 'Nothing to delete - the rest is pinned or active' : 'Nothing to delete', 'info');
+    }
+    if (RB.session && d.deleted.includes(RB.session)) RB.session = null;
+    await Promise.all([rbLoadStatus(), rbLoadSessions()]);
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+});
+
+document.getElementById('rb-refresh').addEventListener('click', async () => {
+  await Promise.all([rbLoadStatus(), rbLoadSessions()]);
+  showToast('Refreshed', 'info');
+});
+
+// session row actions
+
+document.getElementById('rb-sessions').addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-act]');
+  const tr = e.target.closest('tr.rb-sess');
+  if (tr && !btn) {
+    try { await rbSelectSession(tr.dataset.name); } catch (err) { showToast(err.message, 'error'); }
+    return;
+  }
+  if (!btn) return;
+  const name = btn.dataset.name;
+  const act = btn.dataset.act;
+
+  try {
+    if (act === 'replay') {
+      rbStop();
+      await rbSelectSession(name);
+      return;
+    }
+    if (act === 'pin') {
+      const pinned = btn.textContent.trim() === 'Pin';
+      await rbJson('/api/rollback/' + encodeURIComponent(name) + (pinned ? '/pin' : '/unpin'), { method: 'POST' });
+      showToast(pinned ? 'Pinned ' + name : 'Unpinned ' + name, 'success');
+    } else if (act === 'delete') {
+      if (!confirm('Delete ' + name + ' and everything in it? This cannot be undone.')) return;
+      await rbJson('/api/rollback/' + encodeURIComponent(name) + '/delete', { method: 'POST' });
+      if (RB.session === name) RB.session = null;
+      showToast('Deleted ' + name, 'success');
+    }
+    await Promise.all([rbLoadStatus(), rbLoadSessions()]);
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+});
+
+rbLoadStatus();
+rbLoadSettings().catch(() => {});
+rbLoadSessions().catch(e => {
+  document.getElementById('rb-sessions').innerHTML =
+    '<div class="empty-state">' + esc(e.message) + '</div>';
+});
+setInterval(rbLoadStatus, 2000);
+</script>
+{% endblock %}

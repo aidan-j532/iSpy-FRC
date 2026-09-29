@@ -141,12 +141,18 @@ The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on dep
         "utilities": {
             "FRC/network_table_handler": {
                 "network_tables_ip": "10.TE.AM.2"
-            },
-            "video_recorder": {
-                "record_dir": "VideoRecordings"
             }
         },
         "frame_processors": {}
+    },
+    "rollback": {
+        "enabled": true,
+        "data_dir": "VideoRecordings",
+        "fps": 30.0,
+        "max_queue": 300,
+        "downsample": 1,
+        "segment_minutes": 5,
+        "max_total_mb": 2048
     },
     "camera_configs": {
         "front_cam": {
@@ -192,7 +198,40 @@ entry; missing settings fall back to defaults declared by the add-on's schema.
 | `trackers.FRC/object_tracker` | `distance_threshold: 0.5`, `stale_threshold: 1.0` | Stitches detections into a single object per camera; drops stale detections |
 | `trackers.path_planner` | `epsilon: 0.3`, `min_samples: 3` | DBSCAN clustering of tracked objects into game-piece piles |
 | `utilities.FRC/network_table_handler` | `network_tables_ip: "10.0.0.2"` | Publishes vision output to the robot over NetworkTables |
-| `utilities.rollback` | `data_dir: "VideoRecordings"`, `fps: 30.0`, `max_queue: 300`, `downsample: 1` | Ring-buffer video recorder for reviewing past footage |
+
+### Rollback (recording and replay)
+
+Rollback is **not** an add-on either. The recorder is always-on core code
+(`iSpy/core/rollback.py`) with the always-on core web module
+(`iSpy/web/modules/rollback.py`, `/rollback` + `/api/rollback`), so it has no
+entry in the Add-ons page. Every run is recorded automatically.
+
+| Setting | Default | What it does |
+|---------|---------|-------------|
+| `enabled` | `true` | Record each run. Turn off to stop writing video |
+| `data_dir` | `"VideoRecordings"` | Where sessions are written |
+| `fps` | `30.0` | Frame rate of the recording, independent of your cameras |
+| `max_queue` | `300` | Frames buffered before the newest are dropped under load |
+| `downsample` | `1` | Write every Nth frame. `2` halves the size and the rate |
+| `segment_minutes` | `5` | Roll to a new video file this often, bounding file size |
+| `max_total_mb` | `2048` | Cap on everything under `data_dir`. Oldest unpinned sessions go first |
+
+Each iSpy start is one **session**: a folder holding one `.avi` per camera plus a
+JSON sidecar with per-frame detections and robot pose. The **Rollback** page
+lists them, and pinning a session exempts it from the size cap forever.
+
+To re-run the whole pipeline over an old session with no robot attached:
+
+```bash
+ispy-boot --replay "VideoRecordings/session_2026-01-01_18-30-00"
+```
+
+`--replay-speed` (default `1.0`), `--replay-cam` (one recorded camera) and
+`--replay-no-loop` are also available. A replay publishes nothing to
+NetworkTables, and the page hands you the exact command rather than launching
+it, since swapping the camera stack out from under a live robot is not safe.
+When a replay ends, iSpy writes `Outputs/replay_<session>_<timestamp>.json`
+diffing what the pipeline found this time against what the sidecar recorded.
 
 Health reporting is **not** an add-on: it is the always-on core web module
 (`iSpy/web/modules/health.py`, `/health` + `/api/health`). Tune its stale-frame
@@ -397,7 +436,8 @@ game_loop.py
         │     └── GenericYolo (dependency-free .pt / RKNN / ONNX / TFLite)
         ├── MultipleCameraHandler (merges multi-camera detections)
         ├── Trackers (FRC/object_tracker -> path_planner -> your plugins)
-        ├── Utilities (rollback, network_handler, your plugins)
+        ├── RollBack (always-on session recorder, core/rollback.py)
+        ├── Utilities (network_handler, your plugins)
         └── CameraApp (Flask web server)
 ```
 
