@@ -508,6 +508,14 @@ class RollBack(UtilityBase):
         return np.ascontiguousarray(frame)
 
     def _disk_problem(self) -> str | None:
+        # the dir itself is checked first: free space on some *other* path is
+        # meaningless, and __init__'s makedirs may have failed (or been
+        # pointed at a file) without that being fatal
+        if not Path(self._video_output_dir).is_dir():
+            return f"output directory {self._video_output_dir} is not a usable folder"
+        if not os.access(self._video_output_dir, os.W_OK):
+            return f"output directory {self._video_output_dir} is not writable"
+
         try:
             usage = shutil.disk_usage(self._video_output_dir)
         except OSError as e:

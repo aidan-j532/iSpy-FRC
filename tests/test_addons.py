@@ -1057,12 +1057,18 @@ class RollBackDiskGuardTests(unittest.TestCase):
 
     def test_unwritable_output_dir_does_not_raise(self):
         # a bad data_dir must not take vision down at boot - the recorder
-        # simply never becomes active
-        rec = RollBack(addon_context(RollBack, {"data_dir": "Z:/nope/not/a/drive"}))
-        self.assertIsNotNone(rec._disk_problem())
-        rec.update({"raw_frames": {"Left": np.zeros((8, 8, 3), np.uint8)}})
-        self.assertFalse(rec._started)
-        rec.stop()
+        # simply never becomes active. a file standing where a folder has to
+        # be fails on every OS, unlike a bare "Z:/..." drive letter
+        with tempfile.TemporaryDirectory() as tmp:
+            blocker = Path(tmp) / "not-a-folder"
+            blocker.write_text("")
+            rec = RollBack(
+                addon_context(RollBack, {"data_dir": str(blocker / "sessions")})
+            )
+            self.assertIsNotNone(rec._disk_problem())
+            rec.update({"raw_frames": {"Left": np.zeros((8, 8, 3), np.uint8)}})
+            self.assertFalse(rec._started)
+            rec.stop()
 
 
 class NetworkTableHandlerTests(unittest.TestCase):
