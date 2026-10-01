@@ -1,10 +1,9 @@
-import json
 import time
 from pathlib import Path
 
 import cv2
 
-from iSpy.core.rollback import _iter_segments, _sanitize_cam
+from iSpy.core.rollback import _iter_segments, _sanitize_cam, read_sidecar
 from iSpy.vision.Cameras.base import CameraBase
 
 # recorded clips are read back in these, in the order the segments were written
@@ -62,48 +61,62 @@ class ReplayCamera(CameraBase):
         self._replay_done = False
         self._replay_pose = None
         self._replay_i = None
+        self._replay_idx = None
         super().__init__(camera_config, input_size, grayscale, **kwargs)
 
     # resolving what to play
 
+    @staticmethod
+    def _sidecar_for(path: Path):
+        # a loose clip has no sidecar of its own - find the longest one whose
+        # stem prefixes the clip's, so rollback_2026_x_Left.avi pairs with
+        # rollback_2026_x.json rather than being guessed at from an rsplit
+        best = None
+        for cand in path.parent.glob("*.json"):
+            if path.stem.startswith(cand.stem + "_") and (
+                best is None or len(cand.stem) > len(best.stem)
+            ):
+                best = cand
+        return best
+
     def _resolve_files(self) -> list:
-        # a folder means "replay this whole session", a file means just that clip
+        # a folder means "replay this whole session", a file means just that
+        # clip. returns (clip, sidecar) pairs - the sidecar comes from the
+        # segment grouping rather than from splitting the filename
         source = Path(str(self.source))
         if source.is_file():
-            return [source]
+            return [(source, self._sidecar_for(source))]
         if not source.is_dir():
             return []
 
         wanted = _sanitize_cam(self._replay_cam) if self._replay_cam else None
-        files = []
+        if wanted is None:
+            # blank means the first recorded camera, not every camera's files
+            # concatenated - a sidecar records one frame per camera
+            for seg in _iter_segments(source):
+                if seg["cams"]:
+                    wanted = _sanitize_cam(seg["cams"][0])
+                    break
+
+        out = []
         # _iter_segments is chronological by stem, which is the write order
         for seg in _iter_segments(source):
+            sidecar = next(
+                (p for p in seg["files"] if p.suffix.lower() == ".json"), None
+            )
             for path in seg["files"]:
                 if path.suffix.lower() not in _VIDEO_EXTS:
                     continue
-                if wanted is not None and not path.stem.endswith(f"_{wanted}"):
+                if wanted is not None and path.stem != f"{seg['stem']}_{wanted}":
                     continue
-                files.append(path)
-        return files
+                out.append((path, sidecar))
+        return out
 
-    def _load_records(self, path: Path) -> list:
-        # the sidecar is named after the segment, not the per-camera file, so
-        # rollback_<ts>_Left.avi pairs with rollback_<ts>.json
-        candidates = [path.with_suffix(".json")]
-        segment = path.stem.rsplit("_", 1)
-        if len(segment) == 2:
-            candidates.append(path.with_name(f"{segment[0]}.json"))
-        for sidecar in candidates:
-            if not sidecar.is_file():
-                continue
-            try:
-                data = json.loads(sidecar.read_text())
-            except (OSError, ValueError):
-                continue
-            records = data.get("records") or []
-            if isinstance(records, list) and records:
-                return records
-        return []
+    def _load_records(self, sidecar) -> list:
+        # read_sidecar is crash tolerant: a sidecar cut off by a power loss
+        # still yields every record it finished writing
+        recs = read_sidecar(sidecar).get("records") if sidecar else None
+        return recs if isinstance(recs, list) else []
 
     def _open_camera(self):
         # CameraBase.__init__ calls this and marks the camera connected on
@@ -112,15 +125,25 @@ class ReplayCamera(CameraBase):
         self._playlist = []
         self._records = []
         self._segment_ends = []
-        for path in self._resolve_files():
-            records = self._load_records(path)
+        for path, sidecar in self._resolve_files():
+            records = self._load_records(sidecar)
+            if not records:
+                # a clip with no recoverable sidecar has no frame alignment, so
+                # playing it would drift against the timeline it belongs to
+                self.logger.warning(
+                    "Skipping %s - no records in its sidecar", path.name
+                )
+                continue
             self._playlist.append(
                 {"path": path, "records": records, "cap": None, "next": 0}
             )
             self._records.extend(records)
             self._segment_ends.append(len(self._records))
-        if not self._playlist:
-            raise ValueError(f"no recorded video found at {self.source}")
+        if not self._records:
+            # the old check only looked at the playlist, which can be non-empty
+            # of clips the reader can never advance through - that left an empty
+            # replay spinning sleep(0.05) forever
+            raise ValueError(f"no replayable records at {self.source}")
         return None
 
     # reading
@@ -157,6 +180,10 @@ class ReplayCamera(CameraBase):
             )
             return None
 
+        # remember the index, not the "i": a record is looked up on every tick
+        # by the compare and by replay_record(), and scanning the sidecar for
+        # it was O(n) per frame
+        self._replay_idx = index
         record = self._records[index] if index < len(self._records) else None
         if record is not None:
             self._replay_pose = record.get("robot_pose")
@@ -228,13 +255,11 @@ class ReplayCamera(CameraBase):
     def replay_record(self):
         # the whole sidecar entry behind the frame being served, which is what a
         # replay-vs-recorded comparison diffs against
-        i = self._replay_i
-        if i is None:
+        if self._replay_i is None or self._replay_idx is None:
             return None
-        for record in self._records:
-            if record.get("i") == i:
-                return record
-        return None
+        if self._replay_idx >= len(self._records):
+            return None
+        return self._records[self._replay_idx]
 
     def replay_session(self) -> str:
         # the session folder this camera is playing, so a replay can label the
@@ -251,4 +276,10 @@ class ReplayCamera(CameraBase):
         # destroy() first - it sets stopped and joins the reader, otherwise the
         # reader just reopens a capture behind us and the file stays locked
         super().release()
+        self._release_caps()
+
+    def destroy(self):
+        # the vision teardown calls destroy() and never release(), so without
+        # this every open capture leaked for the life of the process
+        super().destroy()
         self._release_caps()

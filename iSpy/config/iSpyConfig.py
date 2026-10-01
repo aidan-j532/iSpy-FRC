@@ -42,6 +42,11 @@ _CAMERA_CORE_KEYS = {
     "tello_ip",
     "tello_command_port",
     "tello_video_port",
+    # a replay camera reads these at the top level, so a normalize pass must
+    # not sweep them down into pipeline.settings where it will not find them
+    "replay_cam",
+    "replay_speed",
+    "loop",
 }
 
 # Camera-source config keys that are valid at the top level for every
@@ -372,7 +377,9 @@ class iSpyConfig:
                 # plugin-based recorder dont end up orphaned
                 "data_dir": "VideoRecordings",
                 "fps": 30.0,
-                "max_queue": 300,
+                # one entry carries every camera's frame for a tick, so this is
+                # the stall budget at 30fps - keep it around two seconds
+                "max_queue": 60,
                 "downsample": 1,
                 "segment_minutes": 5,
                 "max_total_mb": 2048,

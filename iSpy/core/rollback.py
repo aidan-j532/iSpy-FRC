@@ -78,12 +78,65 @@ def _dir_bytes(path) -> int:
 
 
 def _sidecar_cams(path: Path) -> list:
+    # only the header is needed here, and _iter_segments runs over every
+    # segment on every listing - so read a prefix and stop rather than parsing
+    # a records array that can hold thousands of entries. a crashed sidecar has
+    # no closing brace at all, which is exactly why this is not a json.loads
     try:
-        data = json.loads(path.read_text())
-    except Exception:
+        with open(path, "r", encoding="utf-8") as f:
+            head = f.read(4096)
+    except OSError:
         return []
-    cams = data.get("cams") if isinstance(data, dict) else None
+    marker = '"cams": '
+    pos = head.find(marker)
+    if pos < 0:
+        return []
+    try:
+        cams, _ = json.JSONDecoder().raw_decode(head, pos + len(marker))
+    except ValueError:
+        return []
     return [str(c) for c in cams] if isinstance(cams, list) else []
+
+
+def read_sidecar(path) -> dict:
+    # tolerant reader for a sidecar written by the streaming writer. a clean
+    # stop closes the array and the object, but a power cut leaves a truncated
+    # JSON document - which is the whole case rollback exists for, so the
+    # records written before the crash are recovered rather than thrown away
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return {}
+
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else {}
+    except ValueError:
+        pass
+
+    marker = '"records": ['
+    pos = text.find(marker)
+    if pos < 0:
+        return {}
+    # everything before the records array is the header, which is always whole
+    try:
+        header = json.loads(text[:pos].rstrip().rstrip(",") + "}")
+    except ValueError:
+        header = {}
+
+    dec, i, n, records = json.JSONDecoder(), pos + len(marker), len(text), []
+    while i < n:
+        while i < n and text[i] in " ,\r\n\t":
+            i += 1
+        if i >= n or text[i] == "]":
+            break
+        try:
+            rec, i = dec.raw_decode(text, i)
+        except ValueError:
+            break  # the last record is the partial one the crash cut off
+        records.append(rec)
+    header["records"] = records
+    return header
 
 
 def _iter_segments(directory):
@@ -242,8 +295,11 @@ class RollBack(UtilityBase):
             "max_queue": {
                 "type": "number",
                 "label": "Max Queue",
+                # one entry holds every camera's frame for a tick, so this is
+                # the stall budget in seconds at 30fps - 60 is about 2s, and
+                # a bigger buffer only buys latency, at ~1MB/frame/camera of RAM
                 "hint": "Maximum buffered frames before dropping.",
-                "default": 300,
+                "default": 60,
             },
             "downsample": {
                 "type": "number",
@@ -272,7 +328,7 @@ class RollBack(UtilityBase):
         self._enabled = bool(self.config.get("enabled", True))
         self._video_output_dir = self.config.get("data_dir", "VideoRecordings")
         self._fps = float(self.config.get("fps", 30.0))
-        self._max_queue = int(self.config.get("max_queue", 300))
+        self._max_queue = int(self.config.get("max_queue", 60))
         self._downsample = max(1, int(self.config.get("downsample", 1)))
         self._segment_seconds = max(1, int(self.config.get("segment_minutes", 5))) * 60
         self._max_total_bytes = (
@@ -297,6 +353,9 @@ class RollBack(UtilityBase):
         self._segment_opened_at = None
         self._sidecar = None
         self._sidecar_records = 0
+        self._last_clean = {}
+        self._disk_paused = False
+        self._idle_logged_at = 0.0
 
         self._session_name = None
         self._session_dir = None
@@ -463,6 +522,14 @@ class RollBack(UtilityBase):
             return
 
         self._frame_counter += 1
+
+        # the guard has to run mid-session too: a card that fills up an hour in
+        # would otherwise keep appending until every write starts failing
+        if self._started and self._frame_counter % 150 == 0:
+            self._disk_paused = bool(self._disk_problem())
+        if self._disk_paused:
+            return
+
         if self._frame_counter % self._downsample != 0:
             return
 
@@ -535,7 +602,12 @@ class RollBack(UtilityBase):
 
         problem = self._disk_problem()
         if problem:
-            self.logger.warning("Rollback recorder idle: %s", problem)
+            # update() runs at camera rate, so an unguarded warning here fills
+            # the log with 30 identical lines a second
+            now = time.monotonic()
+            if now - self._idle_logged_at >= 30:
+                self._idle_logged_at = now
+                self.logger.warning("Rollback recorder idle: %s", problem)
             return False
 
         if self._session_dir is None and not self._open_session():
@@ -548,6 +620,7 @@ class RollBack(UtilityBase):
         self._size = (width, height)
         self._started = True
         self._stopped = False
+        self._last_clean = {}
 
         # never stack workers: if a previous stop() failed to reap its thread,
         # join it before starting a replacement (guard against the sentinel
@@ -568,13 +641,20 @@ class RollBack(UtilityBase):
                 item = self._queue.get()
                 if item is None:
                     break
-                if self._stem is not None and self._should_rotate():
-                    self._close_segment()
-                    self._adopt_pending_cams()
-                    self._open_segment()
-                if self._stem is not None:
-                    self._write_segment(item)
-                self._queue.task_done()
+                # a failure while encoding one tick must not take the thread
+                # down: the recorder would stay _started while silently writing
+                # nothing for the rest of the run
+                try:
+                    if self._stem is not None and self._should_rotate():
+                        self._close_segment()
+                        self._adopt_pending_cams()
+                        self._open_segment()
+                    if self._stem is not None:
+                        self._write_segment(item)
+                except Exception:
+                    self.logger.exception("Rollback worker error - frame dropped")
+                finally:
+                    self._queue.task_done()
         except Exception as e:
             self.logger.error("Error in video worker: %s", e)
         finally:
@@ -583,13 +663,16 @@ class RollBack(UtilityBase):
                 self._thread = None
 
     def _write_segment(self, item):
-        for cam, frame in item["frames"].items():
-            writer = self._writers.get(cam)
-            if writer is None:
-                continue
-            clean = self._clean_frame(frame, self._size)
+        for cam, writer in self._writers.items():
+            clean = self._clean_frame(item["frames"].get(cam), self._size)
             if clean is None:
-                continue
+                # a camera with no usable frame this tick still has to produce
+                # one, or its clip ends up a frame shorter than the sidecar and
+                # every later frame is compared against the wrong record
+                clean = self._last_clean.get(cam)
+                if clean is None:
+                    clean = np.zeros((self._size[1], self._size[0], 3), np.uint8)
+            self._last_clean[cam] = clean
             writer.write(clean)
         self._write_sidecar(item["record"])
 
@@ -636,6 +719,11 @@ class RollBack(UtilityBase):
                 self._sidecar.write(",")
             self._sidecar.write(json.dumps(record, default=str))
             self._sidecar_records += 1
+            # the file is only closed on a clean stop, so a crash would throw
+            # away every buffered record. a periodic flush bounds that loss to
+            # half a second of footage
+            if self._sidecar_records % 30 == 0:
+                self._sidecar.flush()
         except OSError as e:
             self.logger.error("Sidecar write failed: %s", e)
             self._close_sidecar()
@@ -738,8 +826,18 @@ class RollBack(UtilityBase):
             return
 
         try:
+            # make room by evicting the OLDEST tick: keeping the newest frames
+            # is worth more than keeping the stalest ones when the disk stalls.
+            # task_done() is required here, not just in _stop_recorder - an
+            # unaccounted-for get leaves unfinished_tasks above zero forever
+            # and any join() on the queue never returns
             if self._queue.full():
-                self._queue.get_nowait()
+                try:
+                    self._queue.get_nowait()
+                    self._queue.task_done()
+                    self._dropped += 1
+                except queue.Empty:
+                    pass
             self._queue.put_nowait(item)
         except queue.Full:
             self._dropped += 1
@@ -796,12 +894,20 @@ class ReplayCompare:
         self._frames = []
         self._per_name = {}
         self._written = None
+        self._last_i = None
 
     def add(self, record, detections) -> bool:
         # record is the sidecar entry the replay camera is serving, detections
         # is what the pipeline just returned for that same frame
         if not isinstance(record, dict):
             return False
+        # --replay-no-loop holds the final frame, so the vision loop keeps
+        # handing back the same record every tick. counting it once is what
+        # stops the frame totals from ballooning on a finished replay
+        index = record.get("i")
+        if index == self._last_i:
+            return False
+        self._last_i = index
         recorded = [d for d in _serialize_detections(record.get("detections"))]
         live = _serialize_detections(detections)
         recorded_names = sorted({str(d.get("name", "unknown")) for d in recorded})

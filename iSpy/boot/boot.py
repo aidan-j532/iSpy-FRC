@@ -560,6 +560,10 @@ def on_boot(
         rollback = dict(config.get("rollback", {}) or {})
         rollback["enabled"] = False
         config.set("rollback", rollback)
+        # calibration, the optimizer and the web settings all call
+        # config.save() mid-run - point the object at a scratch file so a
+        # replay can never write the replay cameras into the real config.json
+        config.file_path = str(_PROJECT_ROOT / "Outputs" / "replay_config.json")
         banner = "!" * 72
         logger.warning(
             "\n%s\n%s\nREPLAY MODE: serving %s\n"
@@ -602,6 +606,8 @@ def on_boot(
             raise RuntimeError("Boot failed during service installation.")
     else:
         logger.info("Skipping service installation. Run with -s to install.")
+
+    return config
 
 
 def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -656,7 +662,7 @@ def main():
         "default setup",
     )
     args = parser.parse_args()
-    on_boot(
+    config = on_boot(
         install_service=args.service,
         fresh=args.fresh,
         wait=args.wait,
@@ -665,6 +671,16 @@ def main():
         replay_cam=args.replay_cam,
         replay_loop=not args.replay_no_loop,
     )
+
+    if args.replay:
+        # on_boot built the replay config in memory but cannot run it itself -
+        # handing it straight to the vision loop is what keeps Config/config.json
+        # untouched. run() blocks until Ctrl-C and the replay compare json is
+        # written in its finally
+        from iSpy.core.game_loop import main as run_vision
+
+        run_vision(config=config)
+        return
 
     # Flush everything and hard-exit to avoid Segfualt stuff.
     logging.shutdown()

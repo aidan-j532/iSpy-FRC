@@ -285,7 +285,7 @@ class RollBackTests(unittest.TestCase):
             rec = RollBack(addon_context(RollBack, {"data_dir": tmp}))
             self.assertEqual(rec._video_output_dir, tmp)
             self.assertEqual(rec._fps, 30.0)
-            self.assertEqual(rec._max_queue, 300)
+            self.assertEqual(rec._max_queue, 60)
             self.assertEqual(rec._downsample, 1)
             self.assertEqual(rec._segment_seconds, 300)
             self.assertEqual(rec._max_total_bytes, 2048 * 1024 * 1024)
@@ -1069,6 +1069,199 @@ class RollBackDiskGuardTests(unittest.TestCase):
             rec.update({"raw_frames": {"Left": np.zeros((8, 8, 3), np.uint8)}})
             self.assertFalse(rec._started)
             rec.stop()
+
+
+class RollBackWorkerResilienceTests(unittest.TestCase):
+    def _started(self, tmp, **settings):
+        rec = RollBack(addon_context(RollBack, {"data_dir": tmp, **settings}))
+        frame = np.zeros((48, 64, 3), dtype=np.uint8)
+        rec.update({"raw_frames": {"Left": frame}})
+        deadline = time.time() + 5
+        while not rec._writers and time.time() < deadline:
+            time.sleep(0.01)
+        return rec, frame
+
+    def test_one_bad_tick_does_not_stop_the_worker(self):
+        # a raised encoder error used to kill the thread outright, leaving
+        # _started True and silently recording nothing for the rest of the run
+        with tempfile.TemporaryDirectory() as tmp:
+            rec, frame = self._started(tmp)
+            self.assertTrue(rec._started)
+
+            calls = []
+            real = rec._write_segment
+
+            def flaky(item):
+                if not calls:
+                    calls.append("boom")
+                    raise RuntimeError("encoder")
+                calls.append("ok")
+                return real(item)
+
+            with mock.patch.object(rec, "_write_segment", side_effect=flaky):
+                rec.update({"raw_frames": {"Left": frame}})
+                deadline = time.time() + 5
+                while len(calls) < 2 and time.time() < deadline:
+                    rec.update({"raw_frames": {"Left": frame}})
+
+            self.assertIsNotNone(rec._thread, "worker thread died")
+            self.assertGreaterEqual(len(calls), 2, "recording did not resume")
+            self.assertEqual(calls[:2], ["boom", "ok"])
+            rec.stop()
+
+    def test_full_queue_drops_the_oldest_tick_and_counts_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rec, _frame = self._started(tmp, max_queue=2)
+            rec.stop()
+
+        # a standalone recorder over a full queue - no worker to drain it, so
+        # the eviction path is what has to keep the newest ticks
+        rec = RollBack(addon_context(RollBack, {"data_dir": tmp, "max_queue": 2}))
+        rec._started = True
+        for n in range(5):
+            rec._write({"frames": {}, "record": {"i": n}})
+
+        self.assertEqual(rec._dropped, 3)
+        self.assertEqual(rec._queue.qsize(), 2)
+        rec._started = False
+
+    def test_a_camera_with_no_frame_is_padded_from_its_last_frame(self):
+        # a short clip is worse than a duplicated one: the sidecar has a record
+        # for every tick, so a missing frame shifts every later record
+        with tempfile.TemporaryDirectory() as tmp:
+            rec = RollBack(addon_context(RollBack, {"data_dir": tmp}))
+            rec.stop()
+
+            good = np.full((48, 64, 3), 200, np.uint8)
+            rec._size = (64, 48)
+            rec._stem = "rollback_test"
+            rec._session_name = "session_test"
+            rec._session_dir = Path(tmp)
+            rec._cams = ["Left"]
+            rec._segment_opened_at = time.time()
+
+            written = []
+            writer = mock.Mock(write=written.append)
+            rec._writers = {"Left": writer}
+            rec._open_sidecar()
+
+            try:
+                rec._write_segment({"frames": {"Left": good}, "record": {"i": 1}})
+                rec._write_segment({"frames": {}, "record": {"i": 2}})
+                rec._write_segment({"frames": {"Left": None}, "record": {"i": 3}})
+            finally:
+                rec._close_segment()
+
+            self.assertEqual(len(written), 3)
+            self.assertEqual(int(written[1][0, 0, 0]), 200, "last frame not reused")
+            self.assertEqual(int(written[2][0, 0, 0]), 200, "padding not reused")
+
+    def test_sidecar_is_flushed_while_the_segment_is_still_open(self):
+        # the sidecar is only closed on a clean stop, so whatever is still in
+        # the write buffer is exactly what a power cut would lose
+        with tempfile.TemporaryDirectory() as tmp:
+            rec = RollBack(addon_context(RollBack, {"data_dir": tmp}))
+            rec.stop()
+
+            rec._stem = "rollback_test"
+            rec._session_name = "session_test"
+            rec._session_dir = Path(tmp)
+            rec._cams = ["Left"]
+            rec._segment_opened_at = time.time()
+            rec._open_sidecar()
+
+            for n in range(30):
+                rec._write_sidecar({"i": n})
+            self.assertIsNotNone(rec._sidecar, "sidecar closed early")
+            self.assertIn('"i": 29', rec._sidecar_path().read_text(encoding="utf-8"))
+            rec._close_sidecar()
+
+    def test_disk_filling_mid_session_pauses_recording(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rec, frame = self._started(tmp)
+            self.assertTrue(rec._started)
+
+            with mock.patch(
+                "shutil.disk_usage", return_value=mock.Mock(free=1024)
+            ):
+                for _ in range(150):
+                    rec.update({"raw_frames": {"Left": frame}})
+                self.assertTrue(rec._disk_paused, "mid-run disk guard never fired")
+
+                rec._queue.join()
+                queued = rec._queue.qsize()
+                rec.update({"raw_frames": {"Left": frame}})
+                self.assertEqual(rec._queue.qsize(), queued, "paused tick was kept")
+
+            # and it resumes on its own once the volume has room again
+            rec._queue.join()
+            for _ in range(150):
+                rec.update({"raw_frames": {"Left": frame}})
+            self.assertFalse(rec._disk_paused)
+            self.assertGreater(rec._frame_counter, 150)
+            rec.stop()
+
+    def test_a_bad_disk_warning_is_rate_limited(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rec = RollBack(addon_context(RollBack, {"data_dir": tmp}))
+            with mock.patch(
+                "shutil.disk_usage", return_value=mock.Mock(free=1024)
+            ), mock.patch.object(rec, "_disk_problem", return_value="full"):
+                with self.assertLogs(rec.logger, level="WARNING") as logs:
+                    for _ in range(200):
+                        rec.update(
+                            {"raw_frames": {"Left": np.zeros((8, 8, 3), np.uint8)}}
+                        )
+
+            self.assertEqual(
+                len(logs.output), 1, f"expected one warning, got {len(logs.output)}"
+            )
+            rec.stop()
+
+
+class RollBackPauseTests(unittest.TestCase):
+    def test_a_paused_loop_does_not_re_record_the_held_frame(self):
+        import iSpy.iSpy as ispy_mod
+
+        seen = {}
+
+        vision = ispy_mod.iSpy.__new__(ispy_mod.iSpy)
+        vision.logger = mock.Mock()
+        vision.config = mock.Mock()
+        vision.config.get.return_value = 0
+        vision.shutdown_event = mock.Mock()
+        # live, then paused, then exit
+        vision.shutdown_event.is_set.side_effect = [False, False, True]
+        vision.pause_event = mock.Mock()
+        vision.pause_event.is_set.side_effect = [False, True]
+        vision.cameras = [mock.Mock()]
+        vision.camera_handler = None
+        vision.web_app = None
+
+        def _capture(frame):
+            seen.update(frame)
+
+        vision._update_utilities = _capture
+        vision._update_web = _capture
+        vision._run_loop_body_solo = mock.Mock(
+            return_value={
+                "raw_frames": {"Left": np.zeros((8, 8, 3), np.uint8)},
+                "fps": 30.0,
+                "code_times": {},
+            }
+        )
+        vision._finish_replay_compare = mock.Mock()
+        vision._stop_all_plugins = mock.Mock()
+
+        vision.run_solo_mode()
+
+        self.assertTrue(seen, "the paused loop never published the frozen frame")
+        self.assertEqual(
+            seen["raw_frames"],
+            {},
+            "a paused loop must not hand the recorder the same frame again",
+        )
+        self.assertEqual(seen["fps"], 0)
 
 
 class NetworkTableHandlerTests(unittest.TestCase):

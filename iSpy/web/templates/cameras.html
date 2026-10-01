@@ -381,7 +381,7 @@ async function _syncUnit() {
 const COMMON_FIELDS = {
   device: { label: 'Device', type: 'device', required: true, help: 'A physical camera detected on this machine.' },
   source: { label: 'Source', type: 'text', required: true, help: 'Camera index (e.g. 0), a /dev/video path, or an RTSP / MJPEG URL.' },
-  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: ['opencv', 'tello', 'replay'], help: 'Select the camera source type (most likely OpenCV). Replay plays back a recorded session with no robot attached.' },
+  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: ['opencv', 'tello'], help: 'Select the camera source type (most likely OpenCV). Replay cameras are not created here - use `ispy-boot --replay <session folder>`.' },
   name: { label: 'Name', type: 'text', required: true, default: '', help: 'Short unique name used on the dashboard and in code (e.g. front_cam).' },
   pipeline: { label: 'Pipeline', type: 'pipeline', required: true },
   replay_cam: { label: 'Recorded Camera', type: 'text', default: '', help: 'Which camera to replay out of a session folder. Leave blank to take the first one found.' },
@@ -907,7 +907,17 @@ async function openCameraModal(mode, arg) {
       renderSourceSection(newType);
     };
     if (mode === 'edit' && camModal.data && camModal.data.camera_type) {
-      camTypeSel.value = camModal.data.camera_type;
+      const existing = camModal.data.camera_type;
+      if (existing === 'replay') {
+        // replay cameras are CLI-only (ispy-boot --replay), so the option is not
+        // in the add dropdown - but an existing one has to stay editable
+        // instead of silently becoming an opencv camera with no source
+        const opt = document.createElement('option');
+        opt.value = 'replay';
+        opt.textContent = 'replay (created by ispy-boot --replay)';
+        camTypeSel.appendChild(opt);
+      }
+      camTypeSel.value = existing;
     }
     camModal.camera_type = camTypeSel.value;
     renderSourceSection(camTypeSel.value);
@@ -1374,6 +1384,14 @@ async function submitCameraModal() {
     payload.tello_ip = readField('tello_ip');
     payload.tello_command_port = readField('tello_command_port');
     payload.tello_video_port = readField('tello_video_port');
+  } else if (camType === 'replay') {
+    // a replay camera has no source field to read - it is only ever edited, not
+    // created, so carry the existing session folder through untouched
+    payload.source = (camModal.data && camModal.data.source) || '';
+    payload.replay_cam = (camModal.data && camModal.data.replay_cam) || '';
+    payload.replay_speed = (camModal.data && camModal.data.replay_speed) != null
+      ? camModal.data.replay_speed : 1.0;
+    payload.loop = camModal.data && camModal.data.loop !== false;
   }
 
   const name = String(readField('name') || '').trim();

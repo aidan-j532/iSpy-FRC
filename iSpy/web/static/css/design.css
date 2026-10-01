@@ -256,6 +256,7 @@ pre {
 }
 .vision-ok { background: var(--ok-dim); color: var(--ok); }
 .vision-bad { background: var(--bad-dim); color: var(--bad); }
+.vision-warn { background: var(--warn-dim); color: var(--warn); }
 
 .stats-grid { margin-bottom: 20px; grid-template-columns: repeat(6, 1fr); }
 .stat-card { text-align: left; }

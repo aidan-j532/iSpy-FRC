@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import shutil
 import threading
 from pathlib import Path
@@ -18,6 +19,7 @@ from iSpy.core.rollback import (
     _iter_sessions,
     _sanitize_cam,
     _session_size,
+    read_sidecar,
 )
 from iSpy.web.Backend.WebModule import WebModule
 
@@ -126,16 +128,46 @@ def _encoded(path: Path, index: int):
     return payload
 
 
+def _trim_pose(pose) -> dict:
+    # jsonify emits a bare NaN token, which is not valid JSON - res.json() then
+    # throws in the browser and the whole segment loads with an empty timeline.
+    # the EKF pose path can produce NaN, so every number is coerced here
+    if not isinstance(pose, dict):
+        return {}
+
+    def _f(k):
+        try:
+            v = float(pose.get(k, 0.0) or 0.0)
+            return v if math.isfinite(v) else 0.0
+        except Exception:
+            return 0.0
+
+    return {"x": _f("x"), "y": _f("y"), "heading": _f("heading")}
+
+
 def _trim_detection(det: dict) -> dict:
     # only what the player draws - the full record carries keypoints and rays
     # that would bloat every scrub request
+    def _f(k, default=0.0):
+        try:
+            v = det.get(k, default)
+            v = float(v or default)
+            if not math.isfinite(v):
+                return default
+            return v
+        except Exception:
+            return default
+
+    if not isinstance(det, dict):
+        return None
+
     return {
         "name": str(det.get("name", "unknown")),
-        "confidence": round(float(det.get("confidence", 0.0) or 0.0), 3),
-        "x": float(det.get("x", 0.0) or 0.0),
-        "y": float(det.get("y", 0.0) or 0.0),
-        "z": float(det.get("z", 0.0) or 0.0),
-        "yaw": float(det.get("yaw", 0.0) or 0.0),
+        "confidence": round(_f("confidence"), 3),
+        "x": _f("x"),
+        "y": _f("y"),
+        "z": _f("z"),
+        "yaw": _f("yaw"),
         "vis_type": str(det.get("vis_type", "generic")),
     }
 
@@ -147,6 +179,23 @@ class RollbackModule(WebModule):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
         self._last_retention = None
+        # session.json is written once when a session opens and never changes
+        # after, so one read per session per process is enough
+        self._session_meta_cache = {}
+
+    def _session_meta(self, session) -> dict:
+        key = session["name"]
+        if key in self._session_meta_cache:
+            return self._session_meta_cache[key]
+        try:
+            raw = json.loads(
+                (session["path"] / _SESSION_FILE).read_text(encoding="utf-8")
+            )
+            meta = raw if isinstance(raw, dict) else {}
+        except (OSError, ValueError):
+            meta = {}
+        self._session_meta_cache[key] = meta
+        return meta
 
     # lookups
 
@@ -204,11 +253,9 @@ class RollbackModule(WebModule):
         for path in seg["files"]:
             if path.suffix.lower() != ".json":
                 continue
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                return {}
-            return data if isinstance(data, dict) else {}
+            # crash tolerant: a sidecar cut off mid-write still lists, and
+            # still plays back everything it managed to write
+            return read_sidecar(path)
         return {}
 
     def _segment_payload(self, seg) -> dict:
@@ -225,6 +272,10 @@ class RollbackModule(WebModule):
             "started": sidecar.get("started"),
             "fps": sidecar.get("fps"),
             "has_sidecar": bool(records),
+            # the open segment has no avi index yet and a cached capture never
+            # sees the frames still being appended, so the player must not offer
+            # it as scrubbable
+            "recording": seg["stem"] == self._open_stem(),
             "size_mb": _mb(sum(_file_size(p) for p in seg["files"])),
             "clips": [
                 {"cam": cam, "file": p.name}
@@ -233,6 +284,14 @@ class RollbackModule(WebModule):
                 if p is not None
             ],
         }
+
+    def _open_stem(self):
+        # the segment the live recorder is writing to, if there is one. only the
+        # recorder knows which file is still open
+        recorder = self._recorder()
+        if recorder is None or not getattr(recorder, "_started", False):
+            return None
+        return getattr(recorder, "_stem", None)
 
     # routes
 
@@ -447,12 +506,10 @@ class RollbackModule(WebModule):
     def _session_row(self, session) -> dict:
         path = session["path"]
         started = session.get("started")
-        meta = {}
-        try:
-            raw = json.loads((path / _SESSION_FILE).read_text(encoding="utf-8"))
-            meta = raw if isinstance(raw, dict) else {}
-        except (OSError, ValueError):
-            meta = {}
+        # the cameras, version and unit all live in session.json - reading them
+        # from there is what kept _session_row from having to parse every
+        # sidecar in the session just to label the row
+        meta = self._session_meta(session)
         segments = _iter_segments(path)
         return {
             "name": session["name"],
@@ -464,7 +521,10 @@ class RollbackModule(WebModule):
             "unit": meta.get("unit", "frc"),
             "cameras": sorted(meta.get("cameras", {}) or {}),
             "segments": len(segments),
-            "frames": sum(len(self._read_sidecar(seg).get("records") or []) for seg in segments),
+            "frames": sum(
+                len(self._read_sidecar(seg).get("records") or [])
+                for seg in segments
+            ),
             "size_mb": _mb(_session_size(session)),
         }
 
@@ -563,6 +623,7 @@ class RollbackModule(WebModule):
         _release_tree(session["path"])
         if not _delete_session(session):
             return jsonify(error="Could not delete the session"), 500
+        self._session_meta_cache.pop(session_name, None)
         self.logger.info("Deleted session %s from the web UI", session_name)
         return jsonify(success=True)
 
@@ -606,8 +667,14 @@ class RollbackModule(WebModule):
                     "i": rec.get("i"),
                     "t": rec.get("t"),
                     "n": int(rec.get("detection_count", 0) or 0),
-                    "d": [_trim_detection(d) for d in rec.get("detections") or []],
-                    "p": rec.get("robot_pose"),
+                    "d": [
+                        trimmed
+                        for trimmed in (
+                            _trim_detection(d) for d in rec.get("detections") or []
+                        )
+                        if trimmed is not None
+                    ],
+                    "p": _trim_pose(rec.get("robot_pose")),
                 }
             )
 
@@ -621,13 +688,7 @@ class RollbackModule(WebModule):
         )
 
     def _camera_meta(self, session) -> dict:
-        try:
-            raw = json.loads(
-                (session["path"] / _SESSION_FILE).read_text(encoding="utf-8")
-            )
-        except (OSError, ValueError):
-            return {}
-        cams = raw.get("cameras") if isinstance(raw, dict) else None
+        cams = self._session_meta(session).get("cameras")
         return cams if isinstance(cams, dict) else {}
 
     def _resolve_video(self, session_name, stem, cam):

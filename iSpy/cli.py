@@ -33,11 +33,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
-    boot.on_boot(
+    config = boot.on_boot(
         install_service=args.service,
         fresh=args.command == "setup",
         wait=args.wait,
+        replay=args.replay,
+        replay_speed=args.replay_speed,
+        replay_cam=args.replay_cam,
+        replay_loop=not args.replay_no_loop,
     )
+
+    if args.replay:
+        # the flags come from the shared add_boot_arguments(), so ignoring them
+        # here booted the LIVE camera stack for what the user asked to be a
+        # replay - the one outcome replay mode exists to prevent
+        from iSpy.core.game_loop import main as run_vision
+
+        run_vision(config=config)
+        return 0
 
     # mirror boot.py's main(): flush everything and hard-exit to dodge
     # RKNN/OpenCV native-extension segfaults during interpreter teardown on ARM

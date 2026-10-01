@@ -61,9 +61,9 @@
 <div class="card" style="margin-top:16px;">
   <div class="card-head"><h3>Controls</h3></div>
   <div class="rb-status">
-    <label class="switch" title="Turn the always-on recorder off. Takes effect on the next boot.">
+    <label class="controls-label" title="Turn the always-on recorder off. Takes effect on the next boot.">
       <input type="checkbox" id="rb-enabled" class="toggle-input" />
-      <span>Record</span>
+      Record
     </label>
     <span id="rb-enabled-note" class="text-dim text-sm"></span>
     <button class="btn btn-sm btn-secondary" id="rb-prune">Delete oldest unpinned</button>
@@ -320,10 +320,14 @@ async function rbSelectSession(name) {
   });
 
   const segSel = document.getElementById('rb-segment');
-  segSel.innerHTML = RB.segments.map(s =>
-    `<option value="${esc(s.stem)}">${esc(s.stem)} &middot; ${s.frames} frames &middot; ${fmtBytesMb(s.size_mb)}</option>`
-  ).join('');
-  RB.stem = RB.segments.length ? RB.segments[0].stem : null;
+  segSel.innerHTML = RB.segments.map(s => {
+    // the open segment has no avi index and a cached capture never sees the
+    // frames still being appended - scrubbing it shows garbage or nothing
+    const live = s.recording ? ' &middot; recording, not scrubbable' : '';
+    const dis = s.recording ? ' disabled' : '';
+    return `<option value="${esc(s.stem)}"${dis}>${esc(s.stem)} &middot; ${s.frames} frames &middot; ${fmtBytesMb(s.size_mb)}${live}</option>`;
+  }).join('');
+  RB.stem = (RB.segments.find(s => !s.recording) || RB.segments[0] || {}).stem || null;
   await rbLoadSegment();
 }
 
@@ -593,13 +597,18 @@ function rbDrawTopdown() {
   }
 
   const p = rec.p;
+  // the sidecar stores heading in radians (pose.rotation().radians()), so it
+  // has to be converted for display - printing it raw labelled "deg" showed
+  // 1.57 "degrees" for a 90 degree turn
+  const headingDeg = p && p.heading != null ? (p.heading * 180) / Math.PI : null;
   document.getElementById('rb-pose').textContent = p
-    ? 'pose x ' + p.x.toFixed(2) + '  y ' + p.y.toFixed(2) + '  h ' + (p.heading != null ? p.heading.toFixed(1) : '--') + 'deg'
+    ? 'pose x ' + p.x.toFixed(2) + '  y ' + p.y.toFixed(2) + '  h ' + (headingDeg != null ? headingDeg.toFixed(1) : '--') + 'deg'
     : 'no pose on this frame';
   document.getElementById('rb-topdown-unit').textContent = 'robot frame (' + RB.unit + ')';
 
   if (p && typeof p.x === 'number') {
-    const yaw = ((p.heading || 0) * Math.PI) / 180;
+    // heading is already radians here - it must not be scaled again
+    const yaw = p.heading || 0;
     const len = 22;
     ctx.beginPath();
     ctx.moveTo(X(p.x), Y(p.y));
@@ -719,7 +728,8 @@ async function rbLoadSettings() {
     if (spec.type === 'toggle') {
       return `<div class="form-row">
         <span class="form-label">${esc(spec.label)}</span>
-        <label class="switch"><input type="checkbox" class="toggle-input" data-key="${esc(key)}" ${spec.value ? 'checked' : ''} /><span class="text-dim">${esc(spec.hint)}</span></label>
+        <input type="checkbox" class="toggle-input" data-key="${esc(key)}" ${spec.value ? 'checked' : ''} />
+        <span class="text-dim text-sm">${esc(spec.hint)}</span>
       </div>`;
     }
     return `<div class="form-row">

@@ -229,7 +229,7 @@ class AddonMigrationTests(unittest.TestCase):
                 "enabled": True,
                 "data_dir": "VideoRecordings",
                 "fps": 30.0,
-                "max_queue": 300,
+                "max_queue": 60,
                 "downsample": 1,
                 "segment_minutes": 5,
                 "max_total_mb": 2048,

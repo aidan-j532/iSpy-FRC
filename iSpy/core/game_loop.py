@@ -49,11 +49,14 @@ from iSpy.config.iSpyConfig import iSpyConfig
 logger = logging.getLogger("iSpy.core.game_loop")
 
 
-def main():
-    config_path = Path.cwd() / "Config" / "config.json"
-    logger.info(f"Using config file: {config_path}")
+def main(config=None):
+    # a replay passes the config boot already built in memory; anything else
+    # loads its own from disk
+    if config is None:
+        config_path = Path.cwd() / "Config" / "config.json"
+        logger.info(f"Using config file: {config_path}")
 
-    config = iSpyConfig(str(config_path))
+        config = iSpyConfig(str(config_path))
     vision = iSpy(config)
     vision.run()
 

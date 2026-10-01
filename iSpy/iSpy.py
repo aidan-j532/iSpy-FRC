@@ -563,7 +563,6 @@ class iSpy:
         vision_s = time.perf_counter() - t_vis
         vision_s -= self._merge_frame_processor_times(code_times)
         code_times["vision"] = max(0.0, vision_s)
-        self._note_replay(detections)
 
         pose = self._get_pose(code_times)
 
@@ -582,6 +581,11 @@ class iSpy:
         code_times["trackers"] = max(
             0.0, time.perf_counter() - t_track - opted_trackers_s
         )
+
+        # after the trackers: the sidecar holds post-tracker detections, so
+        # comparing the pre-tracker set would report a difference on every
+        # frame of a run that had trackers enabled
+        self._note_replay(detections)
 
         if hasattr(camera, "get_code_times"):
             try:
@@ -654,7 +658,6 @@ class iSpy:
         vision_s = time.perf_counter() - t_vis
         vision_s -= self._merge_frame_processor_times(code_times)
         code_times["vision"] = max(0.0, vision_s)
-        self._note_replay(detections)
 
         pose = self._get_pose(code_times)
 
@@ -673,6 +676,9 @@ class iSpy:
         code_times["trackers"] = max(
             0.0, time.perf_counter() - t_track - opted_trackers_s
         )
+
+        # after the trackers - see _run_loop_body_solo
+        self._note_replay(detections)
 
         for cam in handler.cameras:
             if hasattr(cam, "get_code_times"):
@@ -729,7 +735,10 @@ class iSpy:
                 camera = self.cameras[0]
                 if self.pause_event.is_set():
                     if last_frame_data is not None:
-                        frozen = {**last_frame_data, "fps": 0}
+                        # raw_frames is cleared: the recorder consumes them on
+                        # every update() tick, and re-feeding the held frame
+                        # would write the same picture 20 times a second
+                        frozen = {**last_frame_data, "fps": 0, "raw_frames": {}}
                         self._update_utilities(frozen)
                         self._update_web(frozen)
                     time.sleep(0.05)
@@ -777,7 +786,7 @@ class iSpy:
             while not self.shutdown_event.is_set():
                 if self.pause_event.is_set():
                     if last_frame_data is not None:
-                        frozen = {**last_frame_data, "fps": 0}
+                        frozen = {**last_frame_data, "fps": 0, "raw_frames": {}}
                         self._update_utilities(frozen)
                         self._update_web(frozen)
                     time.sleep(0.05)

@@ -118,5 +118,93 @@ class TestVersionEndpoint(unittest.TestCase):
         self.assertEqual(r.get_json()["version"], __version__)
 
 
+class TestRollbackPage(unittest.TestCase):
+    HTML = read("rollback.html")
+
+    def test_toggles_are_not_wrapped_in_the_switch_class(self):
+        # .switch input { opacity: 0; width: 0 } outranks .toggle-input, so a
+        # toggle inside a .switch renders as nothing at all
+        self.assertNotIn('class="switch"', self.HTML)
+        self.assertNotIn("<label class=\"switch\">", self.HTML)
+        self.assertIn('id="rb-enabled" class="toggle-input"', self.HTML)
+
+    def test_a_toggle_setting_row_is_rendered(self):
+        self.assertIn('class="toggle-input" data-key=', self.HTML)
+
+    def test_heading_is_converted_from_radians_for_display(self):
+        # robot_pose.heading is radians; printing it raw labelled "deg" showed
+        # 1.57 degrees for a 90 degree turn
+        self.assertIn("(p.heading * 180) / Math.PI", self.HTML)
+        self.assertNotIn("(p.heading || 0) * Math.PI) / 180", self.HTML)
+
+    def test_the_open_segment_is_not_offered_for_scrubbing(self):
+        self.assertIn("s.recording", self.HTML)
+
+
+class TestRollbackCss(unittest.TestCase):
+    def test_warning_banner_is_styled(self):
+        css = (STATIC / "css" / "design.css").read_text(encoding="utf-8")
+        self.assertIn(".vision-warn", css)
+
+
+class TestReplayCameraIsCliOnly(unittest.TestCase):
+    HTML = read("cameras.html")
+
+    def test_replay_is_not_in_the_camera_type_dropdown(self):
+        # the modal has no source field for a replay camera, so adding one
+        # failed with "name and source required"
+        line = next(
+            ln for ln in self.HTML.splitlines() if "camera_type: {" in ln
+        )
+        self.assertNotIn("'replay'", line)
+
+    def test_an_existing_replay_camera_can_still_be_edited(self):
+        self.assertIn("opt.value = 'replay'", self.HTML)
+        self.assertIn("payload.source = (camModal.data && camModal.data.source)", self.HTML)
+
+
+class TestRollbackNaNGuard(unittest.TestCase):
+    # jsonify emits a bare NaN token, which is not valid JSON - res.json() then
+    # throws in the browser and the whole segment loads with an empty timeline
+
+    def test_detection_numbers_are_coerced_through_isfinite(self):
+        from iSpy.web.modules.rollback import _trim_detection
+
+        det = _trim_detection(
+            {"name": "goal", "confidence": float("nan"), "x": float("inf")}
+        )
+        self.assertEqual(det["confidence"], 0.0)
+        self.assertEqual(det["x"], 0.0)
+        self.assertEqual(det["name"], "goal")
+
+    def test_pose_numbers_are_coerced_through_isfinite(self):
+        from iSpy.web.modules.rollback import _trim_pose
+
+        pose = _trim_pose({"x": float("nan"), "y": 1.5, "heading": float("-inf")})
+        self.assertEqual(pose, {"x": 0.0, "y": 1.5, "heading": 0.0})
+        self.assertEqual(_trim_pose(None), {})
+
+    def test_a_trimmed_timeline_is_valid_json(self):
+        import json
+
+        from iSpy.web.modules.rollback import _trim_detection, _trim_pose
+
+        timeline = [
+            {
+                "i": 1,
+                "n": 1,
+                "d": [_trim_detection({"name": "goal", "x": float("nan")})],
+                "p": _trim_pose({"x": float("nan"), "y": 0.0, "heading": float("nan")}),
+            }
+        ]
+        # json.dumps with allow_nan=False is what res.json() effectively requires
+        self.assertNotIn("NaN", json.dumps(timeline, allow_nan=False))
+
+    def test_a_non_dict_detection_is_skipped_not_raised(self):
+        from iSpy.web.modules.rollback import _trim_detection
+
+        self.assertIsNone(_trim_detection("not a dict"))
+
+
 if __name__ == "__main__":
     unittest.main()
