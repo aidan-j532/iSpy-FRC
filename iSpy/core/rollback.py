@@ -359,8 +359,6 @@ class RollBack(UtilityBase):
 
         self._session_name = None
         self._session_dir = None
-        self._replay_mode = False
-
         try:
             os.makedirs(self._video_output_dir, exist_ok=True)
         except OSError as e:
@@ -375,22 +373,10 @@ class RollBack(UtilityBase):
         # one session per process start. opening it here rather than on the
         # first recorded frame means a run that never gets a live camera still
         # leaves the session.json that describes the attempt
-        if self._enabled and not self._is_replay_mode():
+        if self._enabled:
             self._open_session()
 
     # session bookkeeping
-
-    def _is_replay_mode(self) -> bool:
-        if self._replay_mode:
-            return True
-        try:
-            vision = self.context.get("vision_instance")
-            self._replay_mode = bool(
-                vision is not None and getattr(vision, "replay_mode", False)
-            )
-        except Exception:
-            self._replay_mode = False
-        return self._replay_mode
 
     def _camera_meta(self) -> dict:
         cams = {}
@@ -517,9 +503,7 @@ class RollBack(UtilityBase):
         if not raw_frames:
             return
 
-        if self._is_replay_mode():
-            # replaying a run must never record a new one
-            return
+
 
         self._frame_counter += 1
 
@@ -883,99 +867,5 @@ class RollBack(UtilityBase):
             )
 
 
-class ReplayCompare:
-    # diffs what a replayed run detected against what the sidecar recorded, so a
-    # pipeline or model change can be judged on old footage with no robot. the
-    # sidecar format lives in this module, so the comparison lives here too
-    def __init__(self, session_name: str, out_dir=None):
-        self.logger = logging.getLogger(__name__)
-        self.session_name = str(session_name or "unknown")
-        self._out_dir = Path(out_dir or Path.cwd() / "Outputs")
-        self._frames = []
-        self._per_name = {}
-        self._written = None
-        self._last_i = None
 
-    def add(self, record, detections) -> bool:
-        # record is the sidecar entry the replay camera is serving, detections
-        # is what the pipeline just returned for that same frame
-        if not isinstance(record, dict):
-            return False
-        # --replay-no-loop holds the final frame, so the vision loop keeps
-        # handing back the same record every tick. counting it once is what
-        # stops the frame totals from ballooning on a finished replay
-        index = record.get("i")
-        if index == self._last_i:
-            return False
-        self._last_i = index
-        recorded = [d for d in _serialize_detections(record.get("detections"))]
-        live = _serialize_detections(detections)
-        recorded_names = sorted({str(d.get("name", "unknown")) for d in recorded})
-        live_names = sorted({str(d.get("name", "unknown")) for d in live})
-        self._frames.append(
-            {
-                "i": record.get("i"),
-                "recorded": len(recorded),
-                "live": len(live),
-                "delta": len(live) - len(recorded),
-                "recorded_names": recorded_names,
-                "live_names": live_names,
-            }
-        )
-        for name in set(recorded_names) | set(live_names):
-            bucket = self._per_name.setdefault(
-                name, {"recorded": 0, "live": 0, "matched": 0}
-            )
-            in_rec = name in recorded_names
-            in_live = name in live_names
-            bucket["recorded"] += int(in_rec)
-            bucket["live"] += int(in_live)
-            bucket["matched"] += int(in_rec and in_live)
-        return True
-
-    def summary(self) -> dict:
-        frames = len(self._frames)
-        rec_total = sum(f["recorded"] for f in self._frames)
-        live_total = sum(f["live"] for f in self._frames)
-        differing = sum(1 for f in self._frames if f["delta"])
-        return {
-            "session": self.session_name,
-            "frames": frames,
-            "frames_differing": differing,
-            "recorded_total": rec_total,
-            "live_total": live_total,
-            "mean_recorded": round(rec_total / frames, 3) if frames else 0.0,
-            "mean_live": round(live_total / frames, 3) if frames else 0.0,
-            "mean_abs_delta": (
-                round(sum(abs(f["delta"]) for f in self._frames) / frames, 3)
-                if frames
-                else 0.0
-            ),
-            "per_name": self._per_name,
-        }
-
-    def finish(self):
-        # one json per replay, next to the other Outputs artifacts. nothing is
-        # written when the replay produced no comparable frames
-        if not self._frames or self._written is not None:
-            return self._written
-        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        target = self._out_dir / f"replay_{self.session_name}_{stamp}.json"
-        try:
-            self._out_dir.mkdir(parents=True, exist_ok=True)
-            target.write_text(
-                json.dumps(
-                    {
-                        "generated": time.time(),
-                        "summary": self.summary(),
-                        "frames": self._frames,
-                    },
-                    indent=2,
-                )
-            )
-        except OSError as e:
-            self.logger.error("Could not write replay comparison %s: %s", target, e)
-            return None
-        self._written = target
-        self.logger.info("Replay comparison written to %s", target)
         return target

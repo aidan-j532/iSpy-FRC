@@ -3,19 +3,16 @@ from copy import deepcopy
 from iSpy.config.iSpyConfig import iSpyCameraConfig
 from iSpy.vision.Cameras.base import CameraBase, CameraOpenTimeout
 from iSpy.vision.Cameras.OpenCVCamera import OpenCVCamera
-from iSpy.vision.Cameras.ReplayCamera import ReplayCamera
 from iSpy.vision.Cameras.TelloCamera import TelloCamera
 
 BUILTIN_CAMERAS = {
     OpenCVCamera.camera_type: OpenCVCamera,
     TelloCamera.camera_type: TelloCamera,
-    ReplayCamera.camera_type: ReplayCamera,
 }
 
 CAMERA_TYPE_LABELS = {
     "opencv": "OpenCV (USB / stream / index)",
     "tello": "DJI Tello / Tello Edu",
-    "replay": "Replay a recording (no robot)",
 }
 
 

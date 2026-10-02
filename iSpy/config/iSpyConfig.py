@@ -42,11 +42,6 @@ _CAMERA_CORE_KEYS = {
     "tello_ip",
     "tello_command_port",
     "tello_video_port",
-    # a replay camera reads these at the top level, so a normalize pass must
-    # not sweep them down into pipeline.settings where it will not find them
-    "replay_cam",
-    "replay_speed",
-    "loop",
 }
 
 # Camera-source config keys that are valid at the top level for every

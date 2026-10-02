@@ -350,12 +350,7 @@ class RollbackModule(WebModule):
             self._delete,
             methods=["POST"],
         )
-        flask_app.add_url_rule(
-            "/api/rollback/<session_name>/replay",
-            "api_rollback_replay",
-            self._replay_command,
-            methods=["GET"],
-        )
+
         flask_app.add_url_rule(
             "/api/rollback/<session_name>/segment/<stem>",
             "api_rollback_segment",
@@ -415,9 +410,6 @@ class RollbackModule(WebModule):
         return jsonify(
             enabled=bool(block.get("enabled", True)),
             recording=recording,
-            replay_mode=bool(
-                getattr(self.context.get("vision_instance"), "replay_mode", False)
-            ),
             data_dir=str(data_dir),
             session=session,
             counters=counters,
@@ -627,19 +619,7 @@ class RollbackModule(WebModule):
         self.logger.info("Deleted session %s from the web UI", session_name)
         return jsonify(success=True)
 
-    def _replay_command(self, session_name):
-        # replay has to be a separate process: it swaps the camera stack for a
-        # recording. starting one in here would hand the live robot a video
-        # feed, which is exactly what the replay guards exist to prevent
-        session = self._find_session(session_name)
-        if session is None:
-            return jsonify(error="Session not found"), 404
-        path = session["path"]
-        return jsonify(
-            success=True,
-            path=str(path),
-            command=f'ispy-boot --replay "{path}"',
-        )
+
 
     # playback
 
