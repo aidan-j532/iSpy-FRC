@@ -94,9 +94,40 @@ _UNIT_LABELS = {
     "frc": "in",
 }
 
+# how many output units one inch is worth, per unit. the same literal is
+# duplicated in every vision pipeline (see
+# iSpy/vision/pipelines/object_detection.py self.conversions) and in
+# iSpy/web/modules/viewer3d.py - a config value only becomes an output value
+# once both halves below have been applied
+_INCHES_TO_OUTPUT_UNIT = {
+    "meter": 0.0254,
+    "meters": 0.0254,
+    "inch": 1.0,
+    "inches": 1.0,
+    "foot": 1 / 12,
+    "feet": 1 / 12,
+    "centimeter": 2.54,
+    "centimeters": 2.54,
+    # FRC/WPILib convention: meters out (robot code), calibration in inches
+    "frc": 0.0254,
+}
+
 
 def unit_to_inches(value: float, unit: str) -> float:
     return value * _UNIT_TO_INCHES.get(unit.lower().strip(), 1.0)
+
+
+def unit_to_output(value: float, unit: str) -> float:
+    """A config value in the same unit detections are reported in.
+
+    Detections are the output unit, camera geometry is entered in the config
+    unit, and the two are the same for every unit except frc (inches in, metres
+    out). Anything subtracting one from the other - the rollback player's
+    projection, for one - has to go through here.
+    """
+    key = (unit or "frc").lower().strip()
+    inches = _UNIT_TO_INCHES.get(key, 1.0)
+    return value * inches * _INCHES_TO_OUTPUT_UNIT.get(key, _INCHES_TO_OUTPUT_UNIT["frc"])
 
 
 def unit_label(unit: str) -> str:

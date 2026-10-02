@@ -8,6 +8,7 @@ from pathlib import Path
 import cv2
 from flask import Response, jsonify, render_template, request, send_file
 
+from iSpy.config.iSpyConfig import unit_to_output
 from iSpy.core.rollback import (
     _LEGACY_SESSION,
     _PINNED_FILE,
@@ -20,6 +21,7 @@ from iSpy.core.rollback import (
     _sanitize_cam,
     _session_size,
     read_sidecar,
+    read_sidecar_header,
 )
 from iSpy.web.Backend.WebModule import WebModule
 
@@ -35,6 +37,13 @@ _FRAME_ORDER = []
 _CAPS_LOCK = threading.RLock()
 _MAX_CAPS = 4
 _MAX_FRAMES = 48
+
+# segment file -> (mtime_ns, size, record count). counting a segment's frames
+# means parsing its whole sidecar, and the Recordings list sums that over every
+# segment on the card, so the count is memoised against the file's identity and
+# only re-read when the file has actually changed
+_SEGMENT_FRAMES = {}
+_MAX_CACHED_SEGMENTS = 512
 
 _JPEG_QUALITY = 85
 
@@ -64,15 +73,59 @@ def _mb(num_bytes) -> float:
     return round(float(num_bytes or 0) / (1024 * 1024), 2)
 
 
+def _segment_sidecar(seg):
+    for path in seg["files"]:
+        if path.suffix.lower() == ".json":
+            return path
+    return None
+
+
+def _segment_frames(seg) -> int:
+    # the number of records in a segment's sidecar. this is the expensive part
+    # of listing a session, so it is cached against the file's identity - a
+    # closed segment's count can never change, and the open one is re-read only
+    # while its size or mtime moves
+    path = _segment_sidecar(seg)
+    if path is None:
+        return 0
+    try:
+        stat = path.stat()
+    except OSError:
+        return 0
+
+    key = str(path)
+    cached = _SEGMENT_FRAMES.get(key)
+    if cached is not None and (cached[0], cached[1]) == (stat.st_mtime_ns, stat.st_size):
+        return cached[2]
+
+    count = len(read_sidecar(path).get("records") or [])
+    if len(_SEGMENT_FRAMES) >= _MAX_CACHED_SEGMENTS:
+        # a deleted segment must not keep its entry (and its count) forever
+        for stale in [k for k in _SEGMENT_FRAMES if not Path(k).exists()]:
+            _SEGMENT_FRAMES.pop(stale, None)
+    _SEGMENT_FRAMES[key] = (stat.st_mtime_ns, stat.st_size, count)
+    return count
+
+
+def _segment_header(seg) -> dict:
+    # started/fps/cams without touching the records array
+    path = _segment_sidecar(seg)
+    return read_sidecar_header(path) if path is not None else {}
+
+
 def _capture_for(path: Path):
     with _CAPS_LOCK:
         cap = _CAPS.get(str(path))
         if cap is not None:
             return cap
         while len(_CAPS) >= _MAX_CAPS:
-            _, old = _CAPS.popitem()
+            # evict the OLDEST capture. popitem() with no argument is LIFO, so
+            # it threw away the clip that had just been opened and kept the
+            # stale one - the player then re-opened the same file on every
+            # scrub and thrashed the disk
+            oldest = next(iter(_CAPS))
             try:
-                old.release()
+                _CAPS.pop(oldest).release()
             except Exception:
                 pass
         cap = cv2.VideoCapture(str(path))
@@ -259,19 +312,18 @@ class RollbackModule(WebModule):
         return {}
 
     def _segment_payload(self, seg) -> dict:
-        sidecar = self._read_sidecar(seg)
-        records = sidecar.get("records")
-        records = records if isinstance(records, list) else []
+        header = _segment_header(seg)
+        frames = _segment_frames(seg)
         cams = seg["cams"] or [
             p.stem.split("_")[-1] for p in seg["files"] if p.suffix.lower() in _READ_EXTS
         ]
         return {
             "stem": seg["stem"],
             "cams": cams,
-            "frames": len(records),
-            "started": sidecar.get("started"),
-            "fps": sidecar.get("fps"),
-            "has_sidecar": bool(records),
+            "frames": frames,
+            "started": header.get("started"),
+            "fps": header.get("fps"),
+            "has_sidecar": bool(frames),
             # the open segment has no avi index yet and a cached capture never
             # sees the frames still being appended, so the player must not offer
             # it as scrubbable
@@ -513,10 +565,7 @@ class RollbackModule(WebModule):
             "unit": meta.get("unit", "frc"),
             "cameras": sorted(meta.get("cameras", {}) or {}),
             "segments": len(segments),
-            "frames": sum(
-                len(self._read_sidecar(seg).get("records") or [])
-                for seg in segments
-            ),
+            "frames": sum(_segment_frames(seg) for seg in segments),
             "size_mb": _mb(_session_size(session)),
         }
 
@@ -658,18 +707,43 @@ class RollbackModule(WebModule):
                 }
             )
 
-        row = self._session_row(session)
+        # the cameras and unit come from the cached session.json rather than a
+        # fresh _session_row(): this route is hit on every segment change, and
+        # _session_row() walks and sizes the whole session to produce numbers
+        # the player does not use here
+        meta = self._session_meta(session)
         return jsonify(
             segment=self._segment_payload(seg),
             timeline=timeline,
-            cameras=row["cameras"],
+            cameras=sorted(meta.get("cameras", {}) or {}),
             camera_meta=(self._camera_meta(session) or {}),
-            unit=row["unit"],
+            unit=meta.get("unit", "frc"),
         )
 
     def _camera_meta(self, session) -> dict:
-        cams = self._session_meta(session).get("cameras")
-        return cams if isinstance(cams, dict) else {}
+        # session.json stores the camera offsets as raw config values, but the
+        # detections in the sidecar are already in the config's OUTPUT unit
+        # (metres for frc, since FRC geometry is entered in inches). converting
+        # here - where the unit is known - means the player subtracts a camera
+        # offset in the same unit it projects with, instead of the template
+        # carrying a copy of the conversion table
+        meta = self._session_meta(session)
+        cams = meta.get("cameras")
+        if not isinstance(cams, dict):
+            return {}
+        unit = meta.get("unit", "frc")
+        out = {}
+        for name, cfg in cams.items():
+            if not isinstance(cfg, dict):
+                continue
+            entry = dict(cfg)
+            for key in ("x", "y", "height"):
+                try:
+                    entry[key] = unit_to_output(float(entry.get(key) or 0), unit)
+                except (TypeError, ValueError):
+                    entry[key] = 0.0
+            out[name] = entry
+        return out
 
     def _resolve_video(self, session_name, stem, cam):
         session = self._find_session(session_name)

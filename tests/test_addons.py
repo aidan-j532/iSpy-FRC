@@ -540,21 +540,59 @@ class RollBackSessionTests(unittest.TestCase):
                 self.assertEqual(rec._cams, ["Left", "Right"], "right never joined")
                 self.assertNotEqual(rec._stem, first_stem, "segment did not rotate")
                 self.assertEqual(sorted(rec._writers), ["Left", "Right"])
+                second_stem = rec._stem
 
+                # a camera going away is NOT a reason to rotate. _raw_frames
+                # drops any camera whose frame is over a second old, so a flaky
+                # USB port used to rotate out and back in on every blip and left
+                # a pile of one-second segments. the open file keeps being fed
+                # the camera's last frame instead
                 for _ in range(3):
                     rec.update({"raw_frames": {"Left": left}})
-                deadline = time.time() + 5
-                while sorted(rec._writers) != ["Left"] and time.time() < deadline:
-                    time.sleep(0.01)
-                self.assertEqual(rec._cams, ["Left"], "right never dropped")
+                time.sleep(0.2)
+                self.assertEqual(rec._stem, second_stem, "a drop rotated the segment")
+                self.assertEqual(sorted(rec._writers), ["Left", "Right"])
+                self.assertEqual(rec._cams, ["Left", "Right"])
+                self.assertIsNone(rec._cams_pending)
                 rec.stop()
 
-            # the opening segment is left-only, the later ones carry both
+            # the opening segment is left-only, the later one carries both
             files = list(Path(tmp).rglob("*.avi"))
             stems = {p.stem.rsplit("_", 1)[0] for p in files}
-            self.assertEqual(len(stems), 3, [p.name for p in files])
+            self.assertEqual(len(stems), 2, [p.name for p in files])
             first_files = [p for p in files if p.stem.rsplit("_", 1)[0] == first_stem]
             self.assertEqual([p.name for p in first_files], [f"{first_stem}_Left.avi"])
+            self.assertEqual(
+                sorted(p.name for p in files if p.stem.rsplit("_", 1)[0] == second_stem),
+                [f"{second_stem}_Left.avi", f"{second_stem}_Right.avi"],
+            )
+
+    def test_a_camera_that_comes_back_does_not_churn_segments(self):
+        # the segment a flaky camera is dropped from is kept open and padded, so
+        # it is still one segment when the camera returns - no rotate out,
+        # rotate back, rotate out again
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("time.sleep"):
+                rec = RollBack(
+                    addon_context(RollBack, {"data_dir": tmp, "segment_minutes": 30})
+                )
+                frame = np.zeros((48, 64, 3), dtype=np.uint8)
+                for _ in range(3):
+                    rec.update({"raw_frames": {"Left": frame}})
+                deadline = time.time() + 5
+                while not rec._writers and time.time() < deadline:
+                    time.sleep(0.01)
+                stem = rec._stem
+
+                for _ in range(6):
+                    rec.update({"raw_frames": {"Left": frame}})
+                    rec.update({"raw_frames": {}})
+                time.sleep(0.2)
+                self.assertEqual(rec._stem, stem)
+                rec.stop()
+
+            stems = {p.stem.rsplit("_", 1)[0] for p in Path(tmp).rglob("*.avi")}
+            self.assertEqual(len(stems), 1, "a camera blip split the recording")
 
     def test_sidecar_is_written_and_matches_the_video(self):
         from iSpy.core.rollback import _iter_segments

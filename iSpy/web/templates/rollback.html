@@ -332,6 +332,10 @@ async function rbSelectSession(name) {
 }
 
 async function rbLoadSegment() {
+  // pin/delete/refresh reload the session list, which lands here. remember
+  // where the player was, so refreshing the table does not rewind a run you
+  // are halfway through
+  const prevSession = RB.session, prevStem = RB.stem, prevIdx = RB.idx;
   RB.stem = document.getElementById('rb-segment').value || RB.stem;
   if (!RB.session || !RB.stem) return;
 
@@ -343,19 +347,22 @@ async function rbLoadSegment() {
 
   const cams = (data.segment.clips || []).map(c => c.cam);
   const camSel = document.getElementById('rb-cam');
+  const prevCam = RB.cam;
   camSel.innerHTML = cams.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
-  RB.cam = cams.length ? cams[0] : null;
+  RB.cam = cams.includes(prevCam) ? prevCam : (cams.length ? cams[0] : null);
 
   const last = Math.max(0, RB.timeline.length - 1);
   const scrub = document.getElementById('rb-scrub');
   scrub.max = String(last);
-  RB.idx = 0;
-  scrub.value = '0';
+  const sameClip = prevSession === RB.session && prevStem === RB.stem;
+  const start = sameClip ? Math.min(prevIdx, last) : 0;
+  RB.idx = start;
+  scrub.value = String(start);
 
   rbDrawStrip();
   rbDrawMarkers();
   rbDrawTopdownBounds();
-  rbShow(0);
+  rbShow(start);
   rbRefreshReplayCommand();
 }
 
@@ -434,7 +441,21 @@ function rbFrameUrl(i) {
 }
 
 // robot space back to pixels - the inverse of triangulation.camera_point_to_robot,
-// so a recorded detection lands where it actually was in the picture
+// so a recorded detection lands where it actually was in the picture.
+//
+// the sidecar holds POST-tracker detections: relative_to() has already rotated
+// them by the robot heading and translated them by the robot pose, so they are
+// in field coordinates. undo that first, or the projection only lines up when
+// no tracker is running and the robot is sitting at the origin.
+function rbToRobot(det, pose) {
+  if (!pose) return det;
+  const yaw = -(pose.heading || 0), c = Math.cos(yaw), s = Math.sin(yaw);
+  const dx = det.x - (pose.x || 0), dy = det.y - (pose.y || 0);
+  return { ...det, x: dx * c - dy * s, y: dx * s + dy * c };
+}
+
+// the camera offsets arrive already in the unit the detections are reported in
+// (metres for frc) - the API converts them, so nothing here scales anything
 function rbProject(det, w, h) {
   const meta = RB.meta[RB.cam];
   if (!meta) return null;
@@ -443,11 +464,14 @@ function rbProject(det, w, h) {
   if (!f && cal.fov) f = (w / 2) / Math.tan((cal.fov * Math.PI) / 360);
   if (!f) return null;
 
+  const rec = RB.timeline[RB.idx] || {};
+  const robot = rbToRobot(det, rec.p);
+
   const yaw = ((meta.yaw || 0) * Math.PI) / 180;
   const pitch = ((meta.pitch || 0) * Math.PI) / 180;
-  const xRot = det.x - (meta.x || 0);
-  const yRot = det.y - (meta.y || 0);
-  const down = -((det.z || 0) - (meta.height || 0));
+  const xRot = robot.x - (meta.x || 0);
+  const yRot = robot.y - (meta.y || 0);
+  const down = -((robot.z || 0) - (meta.height || 0));
 
   const cy = Math.cos(yaw), sy = Math.sin(yaw);
   const fx = cy * xRot - sy * yRot;
@@ -499,8 +523,19 @@ function rbDrawOverlay(imgW, imgH) {
   }
 
   document.getElementById('rb-overlay-legend').innerHTML = placed
-    ? '<span>' + placed + ' of ' + (rec.d || []).length + ' projected into frame</span>'
-    : '<span class="text-dim">Nothing projected - camera not calibrated for this run</span>';
+    ? '<span>' + placed + ' of ' + (rec.d || []).length + ' projected into frame</span>' + rbMultiCamNote()
+    : '<span class="text-dim">Nothing projected - camera not calibrated for this run</span>' + rbMultiCamNote();
+}
+
+// a multi-cam run records one merged detection list with no per-camera
+// attribution, so a target the other camera saw is projected onto this one's
+// picture too. say so, rather than let it read as a bad projection
+function rbMultiCamNote() {
+  const sel = document.getElementById('rb-cam');
+  const n = sel ? sel.options.length : 0;
+  return n > 1
+    ? ' <span class="text-dim">&middot; ' + n + ' cameras recorded &mdash; detections are not attributed per camera</span>'
+    : '';
 }
 
 function rbDrawRoster() {
@@ -604,7 +639,7 @@ function rbDrawTopdown() {
   document.getElementById('rb-pose').textContent = p
     ? 'pose x ' + p.x.toFixed(2) + '  y ' + p.y.toFixed(2) + '  h ' + (headingDeg != null ? headingDeg.toFixed(1) : '--') + 'deg'
     : 'no pose on this frame';
-  document.getElementById('rb-topdown-unit').textContent = 'robot frame (' + RB.unit + ')';
+  document.getElementById('rb-topdown-unit').textContent = 'field frame (' + RB.unit + ')';
 
   if (p && typeof p.x === 'number') {
     // heading is already radians here - it must not be scaled again
@@ -778,6 +813,8 @@ document.getElementById('rb-enabled').addEventListener('change', async e => {
 });
 
 document.getElementById('rb-prune').addEventListener('click', async () => {
+  // the session list (and with it the player) is reloaded below
+  rbStop();
   try {
     const d = await rbJson('/api/rollback/prune', { method: 'POST' });
     if (d.deleted.length) {
@@ -793,6 +830,7 @@ document.getElementById('rb-prune').addEventListener('click', async () => {
 });
 
 document.getElementById('rb-refresh').addEventListener('click', async () => {
+  rbStop();
   await Promise.all([rbLoadStatus(), rbLoadSessions()]);
   showToast('Refreshed', 'info');
 });
@@ -826,6 +864,9 @@ document.getElementById('rb-sessions').addEventListener('click', async e => {
       if (RB.session === name) RB.session = null;
       showToast('Deleted ' + name, 'success');
     }
+    // pin/unpin/delete all end in a session-list reload, and the reload can land
+    // on a different clip - the play timer must not keep running across it
+    rbStop();
     await Promise.all([rbLoadStatus(), rbLoadSessions()]);
   } catch (err) {
     showToast(err.message, 'error');
