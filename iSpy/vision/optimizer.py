@@ -528,13 +528,43 @@ def _parse_pip_target(pip_target: str) -> tuple[str, str]:
             return name, sep + ver
     return base, ""
 
+_ORT_VARIANTS = ("onnxruntime", "onnxruntime-gpu", "onnxruntime-directml")
 
+
+def _ensure_onnxruntime_variant() -> None:
+    from iSpy.config.AutoOpt import has_jetson, has_nvidia
+
+    if has_jetson():
+        return  # JetPack manages onnxruntime on Jetson
+    system = platform.system()
+    if has_nvidia() and system != "Darwin":
+        wanted = "onnxruntime-gpu"
+    elif system == "Windows":
+        wanted = "onnxruntime-directml"
+    else:
+        return
+    if _get_installed_version(wanted) is not None:
+        return
+
+    logger.warning("Replacing CPU onnxruntime with %s for this hardware.", wanted)
+    # variants overwrite each other's files, so remove tghem
+    for dist in _ORT_VARIANTS:
+        if _get_installed_version(dist) is not None:
+            subprocess.call(
+                [sys.executable, "-m", "pip", "uninstall", "-y", dist],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+            )
+    if not _pip_install(wanted, force_reinstall=True):
+        logger.error("Failed to install %s - falling back to CPU onnxruntime.", wanted)
+        _pip_install("onnxruntime")
 def install_special_dependencies(auto_install: bool = False):
     from iSpy.config.AutoOpt import has_jetson, recommend_format
 
     backend = recommend_format(ignore_dependencies=True)
     logger.info("Recommended backend: %s", backend)
-
+    if auto_install:
+        _ensure_onnxruntime_variant()
     deps = BACKEND_DEPENDENCIES.get(backend)
     if not deps:
         if backend == "rknn":

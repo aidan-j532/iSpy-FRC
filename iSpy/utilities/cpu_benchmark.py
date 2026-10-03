@@ -11,8 +11,6 @@ def pick_best_compressions_alg(cond: Literal["speed", "comp", "auto"] = "speed",
     DATA_SIZE = 512 * 1024  # 512 KB
     data = os.urandom(DATA_SIZE)
 
-    data = (b"iSpy-FRC vision data " * (DATA_SIZE // 20))[:DATA_SIZE] # Stack overflow says you need real data to compress
-
     # Test LZ4
     try:
         import lz4.frame
