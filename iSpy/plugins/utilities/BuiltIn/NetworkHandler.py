@@ -178,7 +178,7 @@ class NetworkTableHandler(UtilityBase):
             self.logger.error("Failed to get robot pose: %s", e)
             return Pose2d()
 
-    def update(self):
+    def update(self, frame_data: dict):
 
         self._log_connection_state()
         if not self.isConnected():
