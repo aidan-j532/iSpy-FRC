@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import tempfile
 import threading
 import time as _time
 import warnings
+from functools import lru_cache
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -364,7 +366,8 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
 
     deps: dict[str, list[tuple[str, str]]] = {
         "onnx": [onnx_dep],
-        "engine": [("tensorrt", "tensorrt==10.16.1.11")],
+        "engine": [("tensorrt", _tensorrt_candidates()[0])],
+        "qnn": [("onnxruntime_qnn", "onnxruntime-qnn")],
         "openvino": [("openvino", "openvino")],
         "coreml": [("coremltools", "coremltools")],
         "tflite": [("tflite_runtime", "tflite-runtime")],
@@ -381,8 +384,81 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
         deps["rknn"] = rknn_targets + [
             ("onnx", "onnx<1.17"),
             ("google.protobuf", "protobuf<4.0"),
+            ("numpy", "numpy<2"),
         ]
     return deps
+
+
+@lru_cache()
+def _cuda_major() -> int | None:
+    try:
+        out = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=5
+        ).stdout
+    except Exception:
+        return None
+    m = re.search(r"CUDA Version:\s*(\d+)\.", out)
+    return int(m.group(1)) if m else None
+
+
+@lru_cache()
+def _tensorrt_candidates() -> tuple[str, ...]:
+    major = _cuda_major()
+    cands = [f"tensorrt-cu{major}"] if major in (12, 13) else []
+    return tuple(cands + ["tensorrt"])
+
+
+def _ensure_cuda_torch() -> None:
+    from iSpy.config.AutoOpt import has_jetson, has_nvidia
+
+    if has_jetson() or not has_nvidia():
+        return
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return
+    except ImportError:
+        pass
+    tag = {13: "cu130", 12: "cu126"}.get(_cuda_major())
+    if not tag:
+        return
+    logger.warning(
+        "CPU-only torch with an NVIDIA GPU - installing CUDA torch (%s).", tag
+    )
+    _pip_install(
+        "torch",
+        force_reinstall=True,
+        extra_args=["--index-url", f"https://download.pytorch.org/whl/{tag}"],
+    )
+
+
+def _install_tensorrt() -> bool:
+    import importlib
+
+    from iSpy.config.AutoOpt import has_tensorrt
+
+    if has_tensorrt():
+        return True
+    nvidia_index = ["--extra-index-url", "https://pypi.nvidia.com"]
+    # prefer NVIDIA's own index: the tensorrt-cuXX wheels there carry the real
+    # libs, while the same name on PyPI can resolve to a thin meta-package.
+    attempts = [(pkg, nvidia_index) for pkg in _tensorrt_candidates()]
+    attempts += [(pkg, None) for pkg in _tensorrt_candidates()]
+    for pkg, extra in attempts:
+        if not _pip_install(pkg, extra_args=extra):
+            continue
+        importlib.invalidate_caches()
+        try:
+            importlib.import_module("tensorrt")
+        except Exception as exc:
+            logger.warning("Installed %s but import failed: %s", pkg, exc)
+            continue
+        has_tensorrt.cache_clear()  # so recommend_format() sees it this run
+        logger.info("TensorRT installed via %s.", pkg)
+        return True
+    logger.error("Could not install TensorRT - falling back to ONNX (GPU via onnxruntime-gpu).")
+    return False
 
 
 BACKEND_DEPENDENCIES = _backend_dependencies()
@@ -558,6 +634,8 @@ def _ensure_onnxruntime_variant() -> None:
     if not _pip_install(wanted, force_reinstall=True):
         logger.error("Failed to install %s - falling back to CPU onnxruntime.", wanted)
         _pip_install("onnxruntime")
+
+
 def install_special_dependencies(auto_install: bool = False):
     from iSpy.config.AutoOpt import has_jetson, recommend_format
 
@@ -565,6 +643,13 @@ def install_special_dependencies(auto_install: bool = False):
     logger.info("Recommended backend: %s", backend)
     if auto_install:
         _ensure_onnxruntime_variant()
+        _ensure_cuda_torch()
+        if backend == "engine" and not has_jetson():
+            if not _install_tensorrt():
+                # TensorRT unavailable - make sure the documented ONNX fallback works.
+                _pip_install("onnxruntime-gpu")
+            return
+
     deps = BACKEND_DEPENDENCIES.get(backend)
     if not deps:
         if backend == "rknn":
