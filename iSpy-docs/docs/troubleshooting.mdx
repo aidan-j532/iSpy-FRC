@@ -1,0 +1,120 @@
+---
+title: Troubleshooting and Operations
+author: iSpy FRC
+sidebar_position: 8
+---
+
+# Troubleshooting and Operations
+
+Most of the time, the project is pretty straightforward. When something breaks, it is usually one of a few common problems: model path issues, camera not detected, dependencies missing, or stale health state.
+
+## Where to look first
+
+The key places for diagnosis are:
+
+- `Outputs/log.txt`
+- `journalctl -u iSpy -f` on a systemd deployment
+- the local web UI health page
+- the camera configuration page
+- the model configuration page
+
+If the machine is running as a service, that log output is the first thing to check. If it is a local dev setup, `Outputs/log.txt` is often the easiest place to start.
+
+## The most common issues
+
+### 1. No cameras detected
+
+This usually means one of these is true:
+
+- the USB camera is not plugged in
+- the camera path is wrong
+- the wrong camera index is selected
+- the system does not have permission to access the device
+
+The boot process tries to clean up missing cameras automatically, but if you are on a laptop or custom setup, it is worth checking which device file or index is active.
+
+### 2. Wrong model path
+
+This is one of the most common errors. If the config points to a model that does not exist, the project will eventually fail during model validation or pipeline construction.
+
+Check that:
+
+- the file exists on disk
+- the path matches the config exactly
+- the metadata sidecar exists if the model expects one
+- the model is in the right `YoloModels/<format>/` folder
+
+### 3. Slow or degraded health
+
+A degraded health state usually means the system is not receiving fresh frames on time. This can happen when:
+
+- the camera source is hung
+- the model is too slow for the hardware
+- the machine is overloaded
+- the FPS cap is set too high for the system
+
+This is where the health threshold and the logs become useful. If the board is dropping frames, it will usually show up in the health page before the robot notices.
+
+### 4. First boot fails due to missing dependencies
+
+There are a few places where this can happen:
+
+- no internet for downloading default models
+- backend-specific dependencies are not present
+- a model was selected for a backend the machine does not support
+
+The boot flow tries to install the needed pieces automatically, but on a fresh board or a custom machine, there can still be edge cases. Re-running `ispy-boot -f` after fixing the environment is the usual recovery path.
+
+## Resetting the system
+
+When you want to start fresh, use:
+
+```bash
+ispy-boot -f
+```
+
+This deletes the generated state and rebuilds the default config and directories. This is the safe reset command when the project has drifted into a bad state.
+
+If you want the more aggressive full repo reinstall path, remove the repo and re-clone it, then run the install script again.
+
+## Restarting the service
+
+On a deployed board, service commands look like this:
+
+```bash
+systemctl restart iSpy
+systemctl status iSpy
+journalctl -u iSpy -f
+```
+
+The service is the normal way to keep the pipeline running on startup. If the project is not being run as a service, `ispy-run` is the relevant command.
+
+## Rollback and replay troubleshooting
+
+The project records sessions under `VideoRecordings`. If you are debugging a model or camera issue, replaying an old session is often useful.
+
+The code expects sessions to be replayed in a controlled way because replay does not publish live data to the robot. It is mainly a debugging and validation tool.
+
+If a replay behaves differently than the original capture, it usually means:
+
+- the model changed
+- the config changed
+- the camera setup changed
+- the pipeline parameters changed since the original run
+
+## Useful log commands
+
+On a board or Linux install:
+
+```bash
+journalctl -u iSpy -f
+cat Outputs/log.txt
+```
+
+On a dev machine, `Outputs/log.txt` is usually the simplest place to inspect startup and runtime errors.
+
+## Known practical limitation
+
+The project does a lot of heavy lifting for live vision, but the runtime still assumes the machine can actually talk to the camera, the model, and the network. If the machine is underpowered, disconnected from the field network, or configured with a bad model path, the project will not magically fix it.
+
+The good news is that the logs and the web UI usually make the problem obvious once you know where to look.

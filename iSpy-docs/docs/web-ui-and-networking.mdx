@@ -1,0 +1,101 @@
+---
+title: Web UI and Networking
+author: iSpy FRC
+sidebar_position: 7
+---
+
+# Web UI and Networking
+
+The web UI is one of the most important parts of the project. It is not just a dashboard; it is the main way most people configure cameras, models, and live settings.
+
+## Opening the UI
+
+When the project is running, open a browser to:
+
+```text
+http://<board-or-machine-ip>:5000
+```
+
+The app binds to `0.0.0.0` by default, so it is reachable on the local network. The code also starts a UDP beacon on port `37429` so tools can announce and discover the vision box.
+
+## What the UI is for
+
+The UI includes modules for things like:
+
+- dashboard
+- camera configuration
+- model management
+- dataset handling
+- logs and metrics
+- health checks
+- rollback and replay
+- settings
+- setup wizard
+- plugin status
+
+This is the place to do the usual live configuration work without editing JSON by hand every time.
+
+## Core routes and API endpoints
+
+The Flask app registers multiple modules and exposes a few core routes. The important ones are:
+
+- `/` -> main dashboard UI
+- `/health` -> health page or JSON health status
+- `/api/version` -> version information
+- `/api/cameras` -> list cameras
+- `/api/camera/<name>/feed` -> camera stream
+- `/api/camera/<name>/settings` -> per-camera settings endpoints
+
+The health route is especially useful because it gives a clean, simple check for whether the system is alive and healthy.
+
+## Health and status
+
+The project reports health at a few levels:
+
+- the web UI health page
+- the `/health` endpoint
+- the background configuration for the system
+- the robot-facing NetworkTables output
+
+If a camera stops delivering frames or something important stalls, the health module can report a degraded state. The threshold is controlled by `health_stale_threshold`.
+
+This matters because a robot or a maintainer can tell whether the vision system is actually live instead of just assuming it is.
+
+## NetworkTables output
+
+The project publishes vision data over NetworkTables, which is the normal FRC robot communication path.
+
+The code publishes standard topics like:
+
+- `VisionData/vision_data`
+- `VisionData/fps`
+- `VisionData/num_detections`
+- `VisionData/camera_lag`
+
+The `vision_data` value is usually a JSON string with detected objects and their field-space coordinates. This is intentionally compact and meant to be easy for robot code to parse.
+
+This is a big reason why the project is useful for teams: the robot does not need to pull raw images or do complicated field math. It just receives the processed data it can use.
+
+## FRC NetworkTables details
+
+Most projects rely on the robot entering the correct NetworkTables server IP or network config. The code supports a config-driven utility plugin for the network table handler, and the underlying structure is intended to work with the standard WPILib ecosystem.
+
+A typical FRC deployment uses:
+
+- the vision computer on the robot network
+- the robot code on the same team network
+- NetworkTables publishing from the vision system to the robot
+
+This is how one machine can make decisions about object position without the robot needing to do the full vision pipeline itself.
+
+## Local network discovery
+
+The project broadcasts a small UDP packet with hostname, IP, and web port. This is meant to help tools find the box on the field network.
+
+This is useful when you have several machines or a board that is not obvious from the DHCP table. It is not a replacement for a proper static IP, but it makes practical discovery easier.
+
+## Web UI and robot code handoff
+
+One important design choice in the project is that the web UI is not only for humans. It also exposes the system configuration and health state that the pipeline needs. This keeps the same config model in use for both the live runtime and the robot-facing outputs.
+
+The result is that the system is easier to tune and easier to reason about: the dashboard is the human-facing view, while the NetworkTables output is the robot-facing interface.

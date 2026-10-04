@@ -1,0 +1,106 @@
+---
+title: First Launch and Basic Setup
+author: iSpy FRC
+sidebar_position: 3
+---
+
+# First Launch and Basic Setup
+
+This is the path that gets a fresh install to a working camera setup with the least friction.
+
+## 1. Install the project
+
+On a fresh Linux machine or board, the usual install is:
+
+```bash
+git clone https://github.com/aidan-j532/iSpy-FRC
+cd iSpy-FRC
+chmod +x install.sh
+./install.sh
+```
+
+If you are doing a fully deployed board install, the provisioning flow is the easier route. The first-boot service handles it after the board boots.
+
+## 2. Create the initial config and model folders
+
+Run the fresh boot once:
+
+```bash
+ispy-boot -f
+```
+
+This is an initialization step, not the normal runtime command. It creates the default project folders and downloads the default model files. If no camera is detected yet, it leaves a placeholder config in place and you can add the real one later.
+
+On the first run, expect the project to look for model downloads and backend support. If the machine is internet-connected, this is usually fine.
+
+## 3. Start the main vision loop
+
+After the initial configuration exists, start the normal loop:
+
+```bash
+ispy-run
+```
+
+This is the main runtime command. It loads the config, starts the camera pipelines, and launches the vision processing loop.
+
+## 4. Open the web UI
+
+By default, the UI runs on port 5000:
+
+```text
+http://<machine-ip>:5000
+```
+
+If you are on the same local network, this is usually the easiest way to see what is happening. The board can also broadcast a UDP announce packet on port 37429 so discovery tools can find it on the network.
+
+## 5. Configure the first camera
+
+The web UI is the easiest place to start. Most of the real work is done there:
+
+- add or select a camera
+- choose a camera source
+- choose the pipeline
+- add a model
+- tune model confidence and calibration
+- set the camera mount offsets and field data
+
+The config file also matters, but the UI is the main place to create and edit the per-camera entries.
+
+## 6. Check that the pipeline is alive
+
+The project exposes health information in a few ways:
+
+- the web UI health page
+- the `/health` route
+- the `/api/health` endpoint
+- the `Outputs/log.txt` log file
+
+If the system is healthy, the dashboard should show live frames and the health route should respond normally. If it is degraded, the log usually explains why.
+
+## Example of a basic local setup
+
+This is the simplest local dev setup if you just want a webcam and a model to run:
+
+```bash
+cd iSpy-FRC
+python -m venv .venv
+. .venv/bin/activate  # Linux/macOS
+# or .venv\Scripts\activate  # Windows
+pip install -e .
+ispy-boot -f
+ispy-run
+```
+
+Then open the browser at `http://localhost:5000` or the machine's LAN IP.
+
+## What to do if the board is already set up
+
+On a deployed system, the service is often started automatically. You can still do this manually:
+
+```bash
+journalctl -u iSpy -f
+systemctl restart iSpy
+systemctl stop iSpy
+```
+
+This is the same process the image and provisioner install. Most teams end up using the service and the web UI rather than manually invoking the runtime every time.

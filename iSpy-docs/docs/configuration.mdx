@@ -1,0 +1,245 @@
+---
+title: Configuration Reference
+author: iSpy FRC
+sidebar_position: 4
+---
+
+# Configuration Reference
+
+The project stores its runtime configuration in `Config/config.json` in a normal repo checkout, and in `/etc/iSpy/config.json` on a provisioned board. That file is where most real settings live, and it is the source of truth for cameras, model settings, plugins, and general runtime behavior.
+
+The config is not one giant single structure with random values. It is a nested dictionary with a few major blocks:
+
+- top-level runtime settings
+- `camera_configs`
+- `plugins`
+- `rollback`
+- `model_profiles`
+
+## Default config structure
+
+A minimal generated config looks roughly like this:
+
+```json
+{
+  "device": 0,
+  "unit": "frc",
+  "debug_mode": true,
+  "app_mode": true,
+  "health_stale_threshold": 1.0,
+  "camera_configs": {
+    "default_cam": {
+      "name": "default_cam",
+      "camera_type": "opencv",
+      "source": 0,
+      "subsystem": "field",
+      "calibration": {
+        "distance": 0.0,
+        "game_piece_size": 0.0,
+        "size": 0,
+        "fov": 0
+      },
+      "pipeline": {
+        "name": "object_detection",
+        "settings": {
+          "vision_model": {
+            "file_path": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
+            "source_pt": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
+            "min_conf": 0.5,
+            "optimize": "off",
+            "quantize": false
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "trackers": {},
+    "utilities": {},
+    "frame_processors": {}
+  },
+  "rollback": {
+    "enabled": true,
+    "data_dir": "VideoRecordings",
+    "fps": 30.0,
+    "max_queue": 60,
+    "downsample": 1,
+    "segment_minutes": 5,
+    "max_total_mb": 2048
+  }
+}
+```
+
+This is the config that the project creates on first boot. It is intentionally not empty. It contains the sane defaults that most installs can work from once a camera and model are filled in.
+
+## Important top-level settings
+
+These are the values people bump most often:
+
+### `unit`
+
+Controls the output unit used for geometry and detection coordinates.
+
+Supported values include:
+
+- `frc` - common FRC/WPILib convention; outputs in meters while calibration inputs remain in inches
+- `meter`
+- `inch`
+- `foot`
+- `centimeter`
+
+This is important because robot code usually expects field-relative coordinates in meters, while calibration values are often entered in inches.
+
+### `debug_mode`
+
+Turns on extra visualization overlays in the UI and in the stream. This is primarily useful during setup and calibration.
+
+### `app_mode`
+
+Controls whether the full web dashboard is active. It can be toggled in a normal session and also used in a game mode flow that temporarily disables the web UI for a run.
+
+### `health_stale_threshold`
+
+Number of seconds before the health module reports a degraded state when a frame has not arrived in time.
+
+### `max_fps`
+
+Optional hard cap on pipeline FPS. This can be useful when the hardware is overloaded or when a camera is running faster than the pipeline needs.
+
+## Camera config entries
+
+Each camera lives under `camera_configs` and has its own settings.
+
+Example:
+
+```json
+"camera_configs": {
+  "front_cam": {
+    "name": "front_cam",
+    "source": "/dev/video0",
+    "camera_type": "opencv",
+    "subsystem": "field",
+    "fps_cap": 30,
+    "yaw": 0,
+    "pitch": 0,
+    "height": 1.0,
+    "x": 0,
+    "y": 0,
+    "calibration": {
+      "distance": 24,
+      "game_piece_size": 3.5,
+      "size": 120,
+      "fov": 70
+    },
+    "pipeline": {
+      "name": "object_detection",
+      "settings": {
+        "vision_model": {
+          "file_path": "YoloModels/pytorch/my_model.pt",
+          "source_pt": "YoloModels/pytorch/my_model.pt",
+          "min_conf": 0.5,
+          "optimize": "auto"
+        }
+      }
+    }
+  }
+}
+```
+
+Important camera fields:
+
+- `source` - camera path, device index, video file, or URL
+- `camera_type` - camera backend type, often `opencv`
+- `subsystem` - usually `field` for robot field-relative vision
+- `yaw`, `pitch`, `height`, `x`, `y` - camera mount offsets
+- `calibration.distance` - distance used during calibration
+- `calibration.game_piece_size` - target real-world size in inches
+- `calibration.size` - pixel size at that reference distance
+- `calibration.fov` - camera FOV in degrees
+
+## `pipeline` and `vision_model`
+
+The pipeline block is important. For object detection, you will usually see:
+
+```json
+"pipeline": {
+  "name": "object_detection",
+  "settings": {
+    "vision_model": {
+      "file_path": "YoloModels/pytorch/model.pt",
+      "source_pt": "YoloModels/pytorch/model.pt",
+      "min_conf": 0.5,
+      "optimize": "auto",
+      "quantize": false
+    }
+  }
+}
+```
+
+The `vision_model` block is where the actual model is selected and tuned. The project expects a real model path and generated metadata sidecars next to the model when possible.
+
+## Add-ons and plugin entries
+
+Add-ons are enabled by their presence in the config. There is no separate `enabled` flag in the config. If the entry exists, it is enabled.
+
+Example:
+
+```json
+"plugins": {
+  "trackers": {
+    "FRC/object_tracker": {
+      "distance_threshold": 0.5,
+      "stale_threshold": 1.0
+    }
+  },
+  "utilities": {
+    "FRC/network_table_handler": {
+      "network_tables_ip": "10.0.0.2"
+    }
+  },
+  "frame_processors": {}
+}
+```
+
+This style is a little different from older configs, but it is the pattern the project uses now. Remove a plugin entry to disable it.
+
+## Rollback and recording
+
+Rollback is a core feature and is not an optional plugin. It is configured in the top-level `rollback` block.
+
+```json
+"rollback": {
+  "enabled": true,
+  "data_dir": "VideoRecordings",
+  "fps": 30.0,
+  "max_queue": 60,
+  "downsample": 1,
+  "segment_minutes": 5,
+  "max_total_mb": 2048
+}
+```
+
+This does a few things:
+
+- records a session for each run
+- writes `.avi` files per camera
+- stores JSON sidecar data with frame-level detections and robot pose
+- rotates sessions and keeps disk usage bounded
+- allows replay of old sessions
+
+## When to edit the config directly
+
+You can absolutely edit the JSON directly, but the web UI is usually easier for day-to-day operations. Direct file editing matters when:
+
+- you are editing a machine in a clean environment
+- you want to move a config between systems
+- you are debugging a malformed camera entry
+- you are creating a saved config for a new robot setup
+
+If you edit the file by hand, save it and restart the runtime so the new values are loaded.
+
+## Important gotcha
+
+The repo is opinionated about where model and config files live. The default model layouts and metadata files are expected to be in the `YoloModels/` tree. If you move or rename things without updating the config, the pipeline will not be able to find the model correctly.
+
+That is one of the most common setup issues. The config path and the model path must match on disk.

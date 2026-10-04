@@ -1,0 +1,139 @@
+---
+title: Development and Advanced Configuration
+author: iSpy FRC
+sidebar_position: 9
+---
+
+# Development and Advanced Configuration
+
+Once you have a basic setup working, there are a few things worth understanding if you want to tune or extend the project.
+
+## The plugin model
+
+The project uses a plugin architecture for trackers, utilities, and frame processors. Plugins are enabled by adding entries under `plugins`.
+
+Example:
+
+```json
+"plugins": {
+  "trackers": {
+    "FRC/object_tracker": {
+      "distance_threshold": 0.5,
+      "stale_threshold": 1.0
+    }
+  },
+  "utilities": {
+    "FRC/network_table_handler": {
+      "network_tables_ip": "10.0.0.2"
+    }
+  },
+  "frame_processors": {}
+}
+```
+
+The project loads matching plugin classes from the repo and wires them in automatically. There is no special app registration step in the config; the plugin name and its presence are what matter.
+
+## Model optimization and conversion
+
+The conversion pipeline is one of the more advanced parts of the project. It can convert a PyTorch model into formats like:
+
+- ONNX
+- OpenVINO
+- TFLite
+- CoreML
+- TensorRT engine
+- RKNN
+
+This is where hardware-specific acceleration really starts to matter. The project is built around the idea that you should be able to train a model once and then run it on the best backend available for the target hardware.
+
+The optimizer can be turned off or set to `auto` depending on what you want. In most real deployments, `auto` is the easiest choice if the target machine supports the formats.
+
+## Camera calibration in practice
+
+For field-space coordinates, camera calibration is not optional. The code expects a camera to know its position in the world and the actual size of the object being tracked.
+
+Good practice is:
+
+- mount the camera securely
+- measure the camera height and pose
+- capture a known target at a known distance
+- calculate a reference pixel size
+- tune the model threshold and calibration together
+
+This is often the difference between a vision pipeline that works in a lab and one that works reliably on the field.
+
+## Development workflow
+
+If you are developing locally rather than deploying to a board, the usual path is:
+
+```bash
+git clone https://github.com/aidan-j532/iSpy-FRC
+cd iSpy-FRC
+python -m venv .venv
+. .venv/bin/activate
+pip install -e .
+ispy-boot -f
+ispy-run
+```
+
+This gives you a normal Python environment and lets you change code without reinstalling the package each time.
+
+The dev extras include tools for training, conversion, and experimental work. That is useful when you are actively tuning a model or building a new pipeline.
+
+## Benchmarking
+
+The project includes benchmarking tooling for checking which backend or model setup is fastest on the current hardware.
+
+```bash
+ispy-bench
+```
+
+This is especially useful when comparing different model exports or when choosing between `onnxruntime`, `OpenVINO`, `TensorRT`, `TFLite`, or RKNN on a target board.
+
+## Updating and reinstalling
+
+If you want to update the project, pull the latest repo state and reinstall the package:
+
+```bash
+git pull
+pip install .
+```
+
+or, for a dev install:
+
+```bash
+pip install -e .
+```
+
+If the install is acting oddly, the usual reset path is:
+
+```bash
+ispy-boot -f
+```
+
+That command rebuilds the generated config and model directories and is often the easiest way to recover from a bad state.
+
+## Important limitations
+
+The project is practical and capable, but it still depends on real hardware and real configuration. A few limitations are worth keeping in mind:
+
+- the board must have working camera access
+- internet is needed for first boot model downloads
+- a good model and stable calibration are essential
+- backend support depends on machine architecture and installed dependencies
+- some advanced accelerator paths only work on specific hardware
+
+This is not a one-click “magic vision” system. It is a real pipeline that does best when the machine, model, and calibration are all right.
+
+## When to ask for more
+
+If you are setting up a real robot system, the next step is usually not more theory. It is a simple loop:
+
+1. get one camera working
+2. get one model working
+3. verify field-space output
+4. tune confidence and mount pose
+5. test under real lighting
+6. repeat for the second camera if needed
+
+That is the path most teams end up following in practice. The docs are here to make the first few steps easier, but the real tuning always happens with the actual robot and field.

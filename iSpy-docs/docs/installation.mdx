@@ -1,0 +1,144 @@
+---
+title: Installation and Setup
+author: iSpy FRC
+sidebar_position: 2
+---
+
+# Installation and Setup
+
+This project is easiest to install in two ways:
+
+1. on a real board using the baked-in image or provision script
+2. on a development machine using the Python package and normal repo checkout
+
+The project does not require a special IDE or a fancy dev environment. A normal Linux or Windows machine with Python 3.10+ and a camera attached is enough to run a local setup.
+
+## Supported platforms
+
+The project is intended to run on:
+
+- Orange Pi 5 / 5 Pro with RK3588 NPU
+- other aarch64 Linux boards such as Raspberry Pi and Jetson-class devices
+- x86_64 Linux machines
+- Apple Silicon macOS
+- Windows
+
+The boot code and optimizer try to choose the best backend available for the hardware it sees. There are official paths for deployed board installs and a dev install for laptop work.
+
+## Prerequisites
+
+For a normal setup, the basics are:
+
+- Python 3.10 or newer
+- git
+- a camera or USB webcam, or a video file for testing
+- network access for first boot model downloads
+- the repo checked out locally, or a provisioned board image
+
+On Linux, the install script will install a fair amount of the Python stack for you. On a board image, the systemd provisioning path does most of it automatically.
+
+## Fresh install from the repo
+
+On a Linux machine or board where you want a standard install:
+
+```bash
+git clone https://github.com/aidan-j532/iSpy-FRC
+cd iSpy-FRC
+chmod +x install.sh
+./install.sh
+```
+
+That script detects the machine architecture and decides whether to install the base package or the dev extras:
+
+- `aarch64` -> base install
+- `x86_64` -> dev install with additional tools
+- anything else -> base install
+
+The script then runs:
+
+```bash
+pip install .
+```
+
+or, on x86 dev builds:
+
+```bash
+pip install ".[dev]"
+```
+
+The `install.sh` script is intentionally simple. It is not doing anything magical; it is just getting the project and its Python dependencies into place.
+
+## Board image / provisioned install
+
+If you are using the prepared Orange Pi image, the first boot process handles most of this automatically. The image boots, waits for an internet connection, then runs the provisioner. After that, the repo is cloned to `/opt/iSpy`, dependencies are installed, the config is created, and the service is enabled.
+
+The actual provisioning script is here:
+
+- `Image/provision.sh`
+- `Image/first-boot.sh`
+
+This is the path to use when you want the least manual effort.
+
+## One-shot provisioner
+
+If you already have a Debian/Ubuntu board and want the exact same setup without flashing an image, you can run the provision script directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aidan-j532/iSpy-FRC/main/Image/provision.sh | bash
+```
+
+That script will:
+
+- install OS packages
+- clone or update the repo
+- install the project
+- create `/etc/iSpy/config.json` if it does not already exist
+- install a systemd unit named `iSpy`
+- start the service automatically
+
+## Python environment notes
+
+The project declares Python 3.10+ and installs the main runtime dependencies through `pyproject.toml`.
+
+The key runtime packages include:
+
+- numpy
+- OpenCV
+- PyTorch
+- onnxruntime
+- Flask
+- scikit-learn
+- robotpy / pyntcore
+- plotly
+- Pillow
+
+The dev extras add things like:
+
+- torchvision
+- TensorFlow
+- ONNX tooling
+- matplotlib
+- jupyter
+- TensorBoard
+- TensorRT
+
+This matters mainly for model conversion and dev work. For a regular robot install, the base install is enough.
+
+## First boot after install
+
+Once the project is installed, the first boot command is the one that creates the default project files and downloads starting models:
+
+```bash
+ispy-boot -f
+```
+
+That command does a few important things:
+
+- creates `Config/`, `YoloModels/`, `Outputs/`, and dataset folders
+- downloads default models
+- writes metadata sidecars for the models
+- creates a default `Config/config.json`
+- can auto-detect a first camera on a machine with a working webcam
+- tries to install missing backend dependencies for the first run
+
+This is the setup step most newcomers should run once before they ever start the live pipeline.

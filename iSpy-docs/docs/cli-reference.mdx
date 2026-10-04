@@ -1,0 +1,151 @@
+---
+title: CLI and Commands
+author: iSpy FRC
+sidebar_position: 5
+---
+
+# CLI and Commands
+
+The project exposes a few useful command-line entry points. Most users only need a small subset of these, but it helps to know what each command is doing before you start using the machine in the field.
+
+## Installed command entry points
+
+From `pyproject.toml`, the package installs these commands:
+
+```bash
+ispy
+ispy-run
+ispy-boot
+ispy-bench
+ispy-stats
+```
+
+They are the main user-facing commands for start-up, boot, validation, and benchmarking.
+
+## `ispy-boot`
+
+This is the setup and initialization command.
+
+```bash
+ispy-boot
+```
+
+It does the normal boot flow:
+
+- ensure project directories exist
+- download default models if needed
+- generate metadata sidecars
+- look for an existing `Config/config.json`
+- validate the system
+- clean up missing cameras
+- start the UDP announcer
+- optionally install the service
+
+To force a fresh rebuild of generated state, use:
+
+```bash
+ispy-boot -f
+```
+
+This is the command that wipes generated folders like:
+
+- `Config/`
+- `Outputs/`
+- `YoloModels/`
+- dataset directories
+
+and then re-creates the default setup. This is the right command if you want to start from a clean baseline.
+
+It also supports:
+
+```bash
+ispy-boot -s
+```
+
+to install the watchdog/systemd service, and:
+
+```bash
+ispy-boot -w
+```
+
+to wait for camera pipelines to become ready before continuing.
+
+## `ispy-run`
+
+This is the main runtime command:
+
+```bash
+ispy-run
+```
+
+It loads the config, initializes the active vision pipelines, starts the web app, and runs the main detection loop. This is the command you use on a normal setup once the config is in place.
+
+If you are working from a repo checkout and want the local development path, this is the one you will run most often.
+
+## `ispy`
+
+The `ispy` command is a thin wrapper around the boot sequence. It exposes a simple subcommand interface:
+
+```bash
+ispy setup
+ispy start
+```
+
+These are equivalent to the underlying boot flow:
+
+- `setup` is a fresh initialization path
+- `start` is a normal boot against the current config
+
+The project comment in the code notes that the boot flow is separate from the actual vision loop, and `ispy start` is mainly a wrapper around the boot setup path. The real runtime is still `ispy-run`.
+
+## `ispy-bench`
+
+This command runs benchmarking for inference backends and hardware performance. It is primarily for testing which backend is faster on the current machine.
+
+```bash
+ispy-bench
+```
+
+This is useful when you are deciding whether to prefer ONNX, OpenVINO, TensorRT, TFLite, RKNN, or CoreML for a given board.
+
+## `ispy-stats`
+
+This is a model comparison and stats utility. It is useful for comparing model variants or checking how a model behaves under different export paths.
+
+## System service commands
+
+If the project is installed as a service, the standard service commands are:
+
+```bash
+journalctl -u iSpy -f
+systemctl restart iSpy
+systemctl stop iSpy
+systemctl status iSpy
+```
+
+On a board deployed with the image or provisioner, the `iSpy` service is the normal way to run the system.
+
+## Typical command sequence
+
+A normal config flow is:
+
+```bash
+ispy-boot -f
+ispy-run
+```
+
+On a live robot board:
+
+```bash
+sudo systemctl enable iSpy
+sudo systemctl restart iSpy
+journalctl -u iSpy -f
+```
+
+That is the path most teams use once the machine is stable.
+
+## Important note about fresh boots
+
+`ispy-boot -f` is destructive to generated directories. It removes config and model state, which is useful when you want a clean reset, but it is not something you want to run casually if you have a machine already tuned and working.
+
+It is the correct command for starting from scratch, not the default command for a daily restart.

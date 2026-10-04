@@ -1,0 +1,138 @@
+---
+title: Cameras and Models
+author: iSpy FRC
+sidebar_position: 6
+---
+
+# Cameras and Models
+
+The project is only as good as the camera setup and the model it is using. A lot of the real work is done in the web UI, but it still helps to understand what is going on under the hood.
+
+## Camera sources
+
+A camera in the project is usually defined by a `source` value and a `camera_type`.
+
+Typical examples:
+
+```json
+"source": 0
+```
+
+for a built-in webcam, or:
+
+```json
+"source": "/dev/video0"
+```
+
+for a USB camera on Linux. Some setups also use file paths or network streams.
+
+The config supports multiple camera types, but the common case is `opencv`, which is the default that ships with the project.
+
+## Camera setup workflow
+
+A normal camera setup goes like this:
+
+1. add the camera in the web UI or config
+2. make sure the device actually exists
+3. choose the correct pipeline
+4. connect the model
+5. tune confidence thresholds and calibration values
+6. verify detections in the live stream
+
+A common mistake is to set up a camera path in theory but forget that the system needs a real video device behind it. If the camera source is not correct, the pipeline will never produce useful frames.
+
+## Pipeline choice
+
+The project supports several pipeline names, but the common default is `object_detection`.
+
+That is the path most teams will use when they want bounding boxes and field-relative positions from a model. The code is structured around having `pipeline.name` plus a `pipeline.settings` block for pipeline-specific data.
+
+When a camera uses a model-backed pipeline, the `vision_model` block must be present and should point to a real model file. If it is missing, the project will warn or fail during setup.
+
+## Model storage
+
+Models are stored under a `YoloModels` tree. The default layout looks roughly like this:
+
+```text
+YoloModels/
+  pytorch/
+  onnx/
+  tflite/
+  rknn/
+  openvino/
+  coreml/
+  engine/
+```
+
+The project also writes metadata sidecars next to a model when it can. Those sidecars help the runtime know things like:
+
+- model task
+- class names
+- input size
+- output format
+- expected metadata for conversion
+
+This matters because the code is not just guessing based on file extension; it reads metadata where possible.
+
+## Default model behavior
+
+On first boot, `ispy-boot -f` creates the model folders and downloads the default models. That is why a fresh install often needs internet at least once.
+
+The exact default model used is project-specific and can change over time, but the key point is that a default path is created for you so the first camera setup has something to work with.
+
+## Model optimization and backend selection
+
+The project supports multiple runtime formats and tries to optimize automatically. In the config, `vision_model.optimize` is the setting most people see. Values include things like:
+
+- `off`
+- `auto`
+- `onnx`
+- `rknn`
+- `openvino`
+- `tflite`
+- `engine`
+- `coreml`
+
+This is where hardware acceleration is chosen. On an Orange Pi, it may prefer RKNN. On a laptop or x86 machine, it may prefer ONNX or OpenVINO. On some hardware, it falls back to a CPU-friendly path.
+
+The optimizer is there to save you from manually converting models and choosing awkward formats. It is a convenience feature, but still one worth understanding.
+
+## Quantization
+
+The config also supports `quantize`, which is used to make models smaller and faster for some target formats. This is not always necessary for a dev machine, but it is often useful on deployment hardware with tighter compute or memory limits.
+
+## Choosing a good confidence threshold
+
+The `min_conf` value is one of the most important settings in the model configuration.
+
+A typical value is around `0.5`, but the correct value depends on:
+
+- the camera quality
+- the lighting of the field
+- model quality
+- whether there are visually noisy background objects
+
+If you see too many false positives, raise the threshold. If the model misses too much, lower it. Most teams tune this during live testing.
+
+## Calibration and size values
+
+The detection model is not enough by itself. To convert pixels into field coordinates, the pipeline needs calibration data:
+
+- `distance` - known distance from camera to target
+- `game_piece_size` - real-world width or height of the target
+- `size` - pixel size at that reference distance
+- `fov` - camera field of view
+
+The config logic is built around the idea that a calibrated camera can convert a 2D detection into a real-world position on the field.
+
+## The simplest working setup
+
+For a first camera, aim for:
+
+- a single real USB webcam or board camera
+- a simple object-detection model
+- a `min_conf` value around `0.4` to `0.7`
+- known camera height and mounting pose
+- at least one calibration point
+
+This gives you a solid base before trying more advanced pipelines or special detectors.
