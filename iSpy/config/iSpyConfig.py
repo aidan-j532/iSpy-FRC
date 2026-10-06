@@ -59,6 +59,8 @@ _VISION_MODEL_SETTINGS_KEYS = (
     "quantization_dataset",
     "optimize",
     "target_format",
+    "batch_size",
+    "tpu_dtype",
 )
 
 _LEGACY_SETTING_ALIASES = {

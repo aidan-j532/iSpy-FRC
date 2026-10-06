@@ -209,6 +209,8 @@ def has_tpu_hardware() -> bool:
 
 @lru_cache()
 def has_tpu() -> bool:
+    if not has_tpu_hardware():
+        return False
     try:
         import torch_xla
         import torch_xla.core.xla_model as xm

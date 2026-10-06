@@ -4,20 +4,22 @@ import hashlib
 import io
 import json
 import logging
+import multiprocessing
 import sys
 import time
 import warnings
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 
 from iSpy.config.AutoOpt import has_nvidia, has_rockchip_npu, has_tensorrt, has_tpu
+from iSpy.validations.bench_to_matplotlib import collect_system_info, render_report
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.optimizer import _convert_model_subprocess
 
 _REPO_CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
-if (
-    (_REPO_CHECKOUT_ROOT / "iSpy" / "__init__.py").exists()
-    and str(_REPO_CHECKOUT_ROOT) not in sys.path
-):
+if (_REPO_CHECKOUT_ROOT / "iSpy" / "__init__.py").exists() and str(
+    _REPO_CHECKOUT_ROOT
+) not in sys.path:
     sys.path.insert(0, str(_REPO_CHECKOUT_ROOT))
 _PROJECT_ROOT = Path.cwd()
 
@@ -54,6 +56,7 @@ def _file_fingerprint(path: Path) -> tuple[int, str]:
         head = f.read(4096)
     return (size, hashlib.sha256(head).hexdigest())
 
+
 def _install_plan_dependencies(active: dict) -> None:
     from iSpy.vision.optimizer import BACKEND_DEPENDENCIES, _is_installed, _pip_install
 
@@ -70,6 +73,7 @@ def _install_plan_dependencies(active: dict) -> None:
             print(f"Installing {target} for backend '{fmt}'...")
             if not _pip_install(target, extra_args=extra_args):
                 print(f"  failed to install {target} - '{fmt}' will likely fail below")
+
 
 def find_pt_files() -> list[Path]:
     raw: list[Path] = []
@@ -172,8 +176,7 @@ def _download_default_bench_model() -> Path | None:
         with requests.get(_DEFAULT_BENCH_MODEL_URL, stream=True, timeout=60) as resp:
             resp.raise_for_status()
             with open(tmp, "wb") as fh:
-                for chunk in resp.iter_content(chunk_size=1 << 16):
-                    fh.write(chunk)
+                fh.writelines(resp.iter_content(chunk_size=1 << 16))
         tmp.replace(target)
     except Exception as exc:
         print(f"Automatic download failed: {exc}")
@@ -290,7 +293,10 @@ def _recommended_backend_plan() -> dict[str, tuple]:
 
 
 def _ensure_calibration_dataset(fmt) -> Path:
-    from iSpy.dataset.dataset import calib_count_for_format, prepare_quantization_dataset
+    from iSpy.dataset.dataset import (
+        calib_count_for_format,
+        prepare_quantization_dataset,
+    )
     from iSpy.vision.optimizer import default_quantization_dataset_dir
 
     ds = default_quantization_dataset_dir()
@@ -319,7 +325,7 @@ def get_or_convert(pt_path, fmt, input_size=(640, 640)):
     return result
 
 
-def make_base_config(pt_path, model_path, device) -> dict:
+def make_base_config(pt_path, model_path, device, batch_size=1) -> dict:
     return {
         "file_path": str(model_path),
         "source_pt": str(pt_path),
@@ -327,6 +333,7 @@ def make_base_config(pt_path, model_path, device) -> dict:
         "input_size": [640, 640],
         "min_conf": 0.5,
         "device": device,
+        "batch_size": batch_size,
     }
 
 
@@ -369,18 +376,92 @@ def _bench_source_image() -> Path:
     return out
 
 
-def benchmark(model_config, core_mask, duration=5.0):
+def _benchmark_frames() -> list:
+    import cv2
+
+    suffixes = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+    roots = [_PROJECT_ROOT / "QuantizeDataset"]
+    paths = sorted(
+        path
+        for root in roots
+        if root.exists()
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in suffixes
+    )
+    frames = [cv2.imread(str(path)) for path in paths[:32]]
+    frames = [frame for frame in frames if frame is not None]
+    if frames:
+        return frames
+    fallback = cv2.imread(str(_bench_source_image()))
+    if fallback is None:
+        raise RuntimeError("could not read benchmark input image")
+    return [fallback]
+
+
+def _percentile(values: list[float], percent: int) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = round((len(ordered) - 1) * percent / 100)
+    return ordered[index]
+
+
+def _sync_camera(camera) -> None:
+    if getattr(camera.model, "model_type", None) == "tpu":
+        camera.model._tpu_sync()
+
+
+def _drain_pipeline(camera) -> None:
+    if not camera._use_pipeline:
+        _sync_camera(camera)
+        return
+    camera._benchmark_pause = True
+    deadline = time.perf_counter() + 5.0
+    last_count = camera.inference_count
+    stable_since = time.perf_counter()
+    while time.perf_counter() < deadline:
+        camera.run()
+        count = camera.inference_count
+        queues_empty = all(
+            target.empty()
+            for target in (
+                camera._preproc_q,
+                camera._tpu_device_q,
+                camera._tpu_result_q,
+            )
+        )
+        if count != last_count:
+            last_count = count
+            stable_since = time.perf_counter()
+        elif queues_empty and time.perf_counter() - stable_since >= 0.05:
+            break
+    _sync_camera(camera)
+
+
+def _require_benchmark_model(camera) -> None:
+    if camera.model is None:
+        raise RuntimeError("model failed to load")
+
+
+def _require_benchmark_count(count: int) -> None:
+    if count < 1:
+        raise RuntimeError("no inference completed during benchmark")
+
+
+def _benchmark_stream(
+    model_config: dict,
+    core_mask,
+    duration: float,
+    batch_size: int,
+    mode: str,
+    frames: list,
+) -> dict:
     from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
     from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
 
     config = iSpyConfig()
     cam_entry = {
         "name": "bench",
-        # static image source (is_image=True) -> the pipeline's preprocess
-        # worker keeps feeding frames, so real inference gets timed. An
-        # invalid device source never connects, the preproc queue stays
-        # empty, and every run() just burns the 0.1s queue timeout -> the
-        # benchmark reads exactly 10.0 FPS for every backend.
         "source": str(_bench_source_image()),
         "fps_cap": 1000,
         "yaw": 0,
@@ -405,38 +486,418 @@ def benchmark(model_config, core_mask, duration=5.0):
     cam_cfg = iSpyCameraConfig(cam_entry)
 
     with _quiet():
-        camera = ObjectDetectionPipeline(cam_cfg, config, core_mask=core_mask)
+        camera = ObjectDetectionPipeline(
+            cam_cfg,
+            config,
+            core_mask=core_mask,
+            use_tpu_pipeline=(mode == "pipelined"),
+            benchmark_frames=frames,
+        )
 
-    for _ in range(5):
-        camera.run()
+    try:
+        _require_benchmark_model(camera)
 
-    count = 0
-    start = time.perf_counter()
-    while time.perf_counter() - start < duration:
-        camera.run()
-        count += 1
+        model = camera.model
+        provider = getattr(model, "provider", None) or getattr(
+            model, "model_type", str(getattr(model, "device", "unknown"))
+        )
+        frame_index = 0
 
-    elapsed = time.perf_counter() - start
-    camera.destroy()
+        def next_batch():
+            nonlocal frame_index
+            batch = [frames[(frame_index + i) % len(frames)] for i in range(batch_size)]
+            frame_index = (frame_index + batch_size) % len(frames)
+            return batch
 
-    fps = count / elapsed
-    inference_ms = elapsed / count * 1000
-    return fps, inference_ms, count, elapsed
+        if mode == "serial":
+            warmup_times = []
+            stable = False
+            for _ in range(30):
+                batch = next_batch()
+                started = time.perf_counter()
+                outputs = model.predict(
+                    batch, orig_shape=[frame.shape for frame in batch]
+                )
+                elapsed = time.perf_counter() - started
+                if not isinstance(outputs, list):
+                    outputs = [outputs]
+                if not outputs:
+                    raise RuntimeError("model returned no inference results")
+                warmup_times.append(elapsed)
+                if len(warmup_times) >= 5:
+                    recent = warmup_times[-5:]
+                    mean = sum(recent) / len(recent)
+                    if mean and (max(recent) - min(recent)) / mean <= 0.15:
+                        stable = True
+                        break
+            if not stable:
+                raise RuntimeError("serial warmup did not stabilize")
+            _sync_camera(camera)
+        else:
+            warmup_deadline = time.perf_counter() + 60
+            warmup_count = camera.inference_count
+            stable = False
+            while time.perf_counter() < warmup_deadline:
+                camera.run()
+                completed = camera.inference_count - warmup_count
+                if completed >= 5:
+                    with camera._metrics_lock:
+                        recent = [
+                            sample["latency"]
+                            for sample in list(camera._timing_samples)[-5:]
+                        ]
+                    mean = sum(recent) / len(recent) if recent else 0.0
+                    if len(recent) == 5 and mean and (
+                        max(recent) - min(recent)
+                    ) / mean <= 0.15:
+                        stable = True
+                        break
+                if completed >= 30:
+                    break
+            if not stable:
+                raise RuntimeError("pipeline warmup did not stabilize")
+            _sync_camera(camera)
+
+        start_count = camera.inference_count
+        start_detections = camera.detections_seen
+        with camera._metrics_lock:
+            sample_start = camera._timing_samples_seen
+        latencies = []
+        start = time.perf_counter()
+        if mode == "serial":
+            while time.perf_counter() - start < duration:
+                batch = next_batch()
+                batch_start = time.perf_counter()
+                outputs = model.predict(
+                    batch, orig_shape=[frame.shape for frame in batch]
+                )
+                batch_ms = (time.perf_counter() - batch_start) * 1000
+                if not isinstance(outputs, list):
+                    outputs = [outputs]
+                if len(outputs) != len(batch):
+                    raise RuntimeError(
+                        f"model returned {len(outputs)} results for {len(batch)} frames"
+                    )
+                stages = getattr(model, "last_tpu_stage_ms", None) or {
+                    "preprocess": 0.0,
+                    "device": batch_ms / len(outputs),
+                    "postprocess": 0.0,
+                }
+                frame_latency_ms = batch_ms / len(outputs)
+                for result in outputs:
+                    camera._record_inference(result, batch_start, stages)
+                    latencies.append(frame_latency_ms)
+        else:
+            while time.perf_counter() - start < duration:
+                camera.run()
+            _drain_pipeline(camera)
+
+        _sync_camera(camera)
+        elapsed = time.perf_counter() - start
+        count = camera.inference_count - start_count
+        _require_benchmark_count(count)
+
+        metrics = camera.benchmark_metrics(sample_start)
+        samples = metrics.get("samples", [])
+        if mode == "pipelined":
+            latencies = [sample["latency"] for sample in samples]
+        inference_ms = sum(latencies) / len(latencies) if latencies else 0.0
+        if inference_ms < 0.5:
+            raise RuntimeError(
+                f"implausible inference time ({inference_ms:.3f} ms/frame)"
+            )
+        stage_ms = metrics.get("stage_ms") or {
+            "preprocess": 0.0,
+            "device": inference_ms,
+            "postprocess": 0.0,
+        }
+        return {
+            "ok": True,
+            "fps": count / elapsed,
+            "inference_ms": inference_ms,
+            "frames": count,
+            "elapsed": elapsed,
+            "detections": camera.detections_seen - start_detections,
+            "latencies": latencies,
+            "stage_ms": stage_ms,
+            "provider": provider,
+        }
+    finally:
+        camera.destroy()
+
+
+def benchmark(
+    model_config,
+    core_mask,
+    duration=5.0,
+    *,
+    batch_size=1,
+    mode="serial",
+    streams=1,
+    frames=None,
+):
+    model_config = dict(model_config)
+    model_config["batch_size"] = batch_size
+    frames = frames or _benchmark_frames()
+    if streams < 1:
+        raise ValueError("streams must be at least 1")
+
+    if streams == 1:
+        runs = [
+            _benchmark_stream(
+                model_config, core_mask, duration, batch_size, mode, frames
+            )
+        ]
+    else:
+        with ThreadPoolExecutor(max_workers=streams) as executor:
+            futures = [
+                executor.submit(
+                    _benchmark_stream,
+                    model_config,
+                    core_mask,
+                    duration,
+                    batch_size,
+                    mode,
+                    frames,
+                )
+                for _ in range(streams)
+            ]
+            runs = [future.result() for future in futures]
+
+    return _combine_benchmark_runs(runs)
+
+
+def _combine_benchmark_runs(runs: list[dict]) -> dict:
+    count = sum(run["frames"] for run in runs)
+    elapsed = max(run["elapsed"] for run in runs)
+    latencies = [latency for run in runs for latency in run.get("latencies", [])]
+    stage_count = sum(run["frames"] for run in runs)
+    stage_ms = {
+        stage: sum(run["stage_ms"].get(stage, 0.0) * run["frames"] for run in runs)
+        / max(stage_count, 1)
+        for stage in ("preprocess", "device", "postprocess")
+    }
+    inference_ms = sum(latencies) / len(latencies) if latencies else 0.0
+    if not count or inference_ms < 0.5:
+        raise RuntimeError("benchmark produced no valid inference measurements")
+    return {
+        "ok": True,
+        "fps": count / elapsed,
+        "inference_ms": inference_ms,
+        "frames": count,
+        "elapsed": elapsed,
+        "detections": sum(run["detections"] for run in runs),
+        "latencies": latencies,
+        "latency_ms": {
+            "p50": _percentile(latencies, 50),
+            "p95": _percentile(latencies, 95),
+            "p99": _percentile(latencies, 99),
+        },
+        "stage_ms": stage_ms,
+        "bottleneck": max(stage_ms, key=stage_ms.get),
+        "provider": ", ".join(dict.fromkeys(run["provider"] for run in runs)),
+        "stream_fps": [
+            fps for run in runs for fps in run.get("stream_fps", [run["fps"]])
+        ],
+    }
+
+
+def _local_tpu_core_count() -> int:
+    try:
+        import torch_xla.runtime as xr
+
+        count = getattr(xr, "local_device_count", None)
+        if callable(count):
+            return int(count())
+    except Exception:
+        pass
+    try:
+        import torch_xla.core.xla_model as xm
+
+        count = getattr(xm, "xla_device_count", None)
+        return int(count()) if callable(count) else 1
+    except Exception:
+        return 0
+
+
+def _tpu_core_worker(index, task, result_queue) -> None:
+    import torch_xla.core.xla_model as xm
+
+    xm.xla_device()
+    result = benchmark(
+        task["config"],
+        task["core_mask"],
+        task["duration"],
+        batch_size=task["batch_size"],
+        mode=task["mode"],
+        streams=task["streams"],
+    )
+    result_queue.put(result)
+
+
+def _benchmark_tpu_cores(task: dict) -> dict | None:
+    try:
+        import torch_xla.distributed.xla_multiprocessing as xmp
+    except Exception as exc:
+        print(f"TPU core mode skipped: torch_xla multiprocessing unavailable ({exc})")
+        return None
+
+    count = task.get("tpu_cores", 0)
+    if count <= 1:
+        print("TPU core mode skipped: only one local TPU core was detected")
+        return None
+    result_queue = multiprocessing.get_context("spawn").Queue()
+    xmp.spawn(
+        _tpu_core_worker,
+        args=(task, result_queue),
+        nprocs=count,
+        start_method="spawn",
+    )
+    runs = [result_queue.get() for _ in range(count)]
+    result = _combine_benchmark_runs(runs)
+    result["tpu_cores"] = count
+    return result
 
 
 def _fmt_result(r: dict) -> str:
-    if r.get("fps"):
+    if r.get("ok") and r.get("fps"):
+        config = (
+            f"b{r.get('batch_size', 1)} {r.get('mode', 'serial')} "
+            f"x{r.get('streams', 1)}"
+        )
         return (
-            f"{r['backend']:20s} {r['fps']:6.1f} FPS {r.get('inference_ms', 0):6.1f} ms"
+            f"{r['backend']:20s} {config:20s} {r['fps']:6.1f} FPS "
+            f"{r.get('inference_ms', 0):6.1f} ms"
         )
     return f"{r['backend']:20s} ERROR: {r.get('error', 'unknown')}"
 
 
-def main():
+def _run_benchmark_task(task: dict) -> dict:
+    result = {
+        "model": task["model"],
+        "backend": task["backend"],
+        "format": task["format"],
+        "device": str(task["device"]),
+        "core_mask": task["core_mask"],
+        "batch_size": task.get("batch_size", 1),
+        "mode": task.get("mode", "serial"),
+        "streams": task.get("streams", 1),
+        "latency_ms": {"p50": None, "p95": None, "p99": None},
+        "stage_ms": {},
+        "provider": "unavailable",
+        "detections": 0,
+        "ok": False,
+    }
+    try:
+        measured = None
+        if task.get("tpu_cores", 0) > 1 and task["format"] == "tpu":
+            measured = _benchmark_tpu_cores(task)
+        if measured is None:
+            measured = benchmark(
+                task["config"],
+                task["core_mask"],
+                task["duration"],
+                batch_size=result["batch_size"],
+                mode=result["mode"],
+                streams=result["streams"],
+            )
+        if isinstance(measured, tuple):
+            fps, inference_ms, count, elapsed = measured
+            measured = {
+                "ok": bool(count),
+                "fps": fps,
+                "inference_ms": inference_ms,
+                "frames": count,
+                "elapsed": elapsed,
+            }
+        result.update(measured)
+        result.pop("latencies", None)
+        if not result.get("provider"):
+            result["provider"] = str(task["device"])
+        result["ok"] = bool(
+            result.get("ok")
+            and result.get("frames", 0) > 0
+            and result.get("inference_ms", 0) >= 0.5
+        )
+        if not result["ok"]:
+            result["fps"] = None
+            result["error"] = result.get("error") or "invalid benchmark measurements"
+    except Exception as e:
+        result.update(
+            fps=None,
+            inference_ms=None,
+            frames=None,
+            elapsed=None,
+            ok=False,
+            error=str(e),
+        )
+    return result
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def _parse_batch_sizes(value: str) -> tuple[int, ...]:
+    try:
+        sizes = tuple(dict.fromkeys(_positive_int(part.strip()) for part in value.split(",")))
+    except argparse.ArgumentTypeError as exc:
+        raise argparse.ArgumentTypeError("use comma-separated positive integers") from exc
+    if not sizes:
+        raise argparse.ArgumentTypeError("provide at least one batch size")
+    return sizes
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Benchmark inference backends")
     parser.add_argument("--duration", type=float, default=5.0, help="seconds per run")
     parser.add_argument("--output", default=None, help="output json path")
     parser.add_argument("--model", default=None, help="benchmark a specific .pt file")
+    parser.add_argument(
+        "--batch-sizes",
+        type=_parse_batch_sizes,
+        default=(1,),
+        metavar="N[,N...]",
+        help="comma-separated batch sizes to test (default: 1)",
+    )
+    parser.add_argument(
+        "--pipelined",
+        action="store_true",
+        help="run serial and pipelined measurements side by side",
+    )
+    parser.add_argument(
+        "--serial",
+        action="store_true",
+        help="run only the serial baseline (the default)",
+    )
+    parser.add_argument(
+        "--streams",
+        type=_positive_int,
+        default=1,
+        metavar="N",
+        help="concurrent camera pipelines on the same device (default: 1)",
+    )
+    parser.add_argument(
+        "--tpu-cores",
+        action="store_true",
+        help="try one torch_xla worker per local TPU core",
+    )
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "run up to N inference benchmarks concurrently (default: 1; "
+            "results may compete for accelerator resources)"
+        ),
+    )
     parser.add_argument(
         "--all-backends",
         action="store_true",
@@ -450,7 +911,18 @@ def main():
         "active backend plan (onnxruntime-gpu, tensorrt, torch_xla, ...) "
         "before benchmarking.",
     )
-    args = parser.parse_args()
+    parser.add_argument("--no-plot", action="store_true", help="skip the PNG report")
+    parser.add_argument("--plot-output", default=None, help="PNG path (default: next to the outputed JSON)")
+    return parser
+
+
+def main(argv=None):
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.parallel < 1:
+        parser.error("--parallel must be at least 1 bro like what you doing?")
+    if args.pipelined and args.serial:
+        parser.error("--pipelined and --serial cannot be used together")
 
     try:
         import torch  # noqa: F401
@@ -466,6 +938,15 @@ def main():
 
     plan = detect_test_plan() if args.all_backends else _recommended_backend_plan()
     active = {k: v for k, v in plan.items() if v is not None}
+    tpu_core_count = 0
+    if args.tpu_cores:
+        tpu_core_count = _local_tpu_core_count()
+        if tpu_core_count == 0:
+            print("TPU core mode skipped: torch_xla runtime is unavailable")
+        elif tpu_core_count == 1:
+            print("TPU core mode skipped: only one local TPU core was detected")
+        else:
+            print(f"TPU core mode: launching {tpu_core_count} local workers")
     if args.install_deps:
         _install_plan_dependencies(active)
     if not active:
@@ -494,12 +975,11 @@ def main():
     print(f"Testing {len(active)} backend(s): {', '.join(active)}")
     print()
 
-    best: dict[str, dict] = {}
-    all_results: list[dict] = []
+    tasks = []
+    modes = ["serial", "pipelined"] if args.pipelined else ["serial"]
 
     for pt_path in pt_files:
         name = pt_path.stem
-        print(f"- {name}")
 
         for fmt, device, masks in active.values():
             model_path = get_or_convert(pt_path, fmt)
@@ -515,48 +995,63 @@ def main():
                 device = _cuda_devices()[0][0] if has_nvidia() else "cpu"
                 fmt = fallback_fmt
                 masks = [
-                    (mask, "Auto/ONNX-CUDA (fallback)" if has_nvidia() else "Auto/ONNX-CPU (fallback)")
+                    (
+                        mask,
+                        "Auto/ONNX-CUDA (fallback)"
+                        if has_nvidia()
+                        else "Auto/ONNX-CPU (fallback)",
+                    )
                     for mask, _ in masks
                 ]
 
-            cfg = fill_missing_config(make_base_config(pt_path, model_path, device))
-
             for core_mask, label in masks:
-                try:
-                    fps, inference_ms, count, elapsed = benchmark(
-                        cfg, core_mask, args.duration
+                for batch_size in args.batch_sizes:
+                    cfg = fill_missing_config(
+                        make_base_config(pt_path, model_path, device, batch_size)
                     )
-                    r = {
-                        "model": name,
-                        "backend": label,
-                        "format": fmt,
-                        "device": str(device),
-                        "core_mask": core_mask,
-                        "fps": round(fps, 1),
-                        "inference_ms": round(inference_ms, 1),
-                        "frames": count,
-                        "elapsed": round(elapsed, 3),
-                    }
-                    print(f"    {_fmt_result(r)}")
-                except Exception as e:
-                    print(f"    {label:20s} ERROR: {e}")
-                    r = {
-                        "model": name,
-                        "backend": label,
-                        "format": fmt,
-                        "device": str(device),
-                        "core_mask": core_mask,
-                        "fps": None,
-                        "inference_ms": None,
-                        "frames": None,
-                        "elapsed": None,
-                        "error": str(e),
-                    }
-                all_results.append(r)
-                if best.get(name) is None or (r["fps"] or 0) > (
-                    best[name].get("fps") or 0
-                ):
-                    best[name] = r
+                    for mode in modes:
+                        tasks.append(
+                            {
+                                "model": name,
+                                "backend": label,
+                                "format": fmt,
+                                "device": device,
+                                "core_mask": core_mask,
+                                "config": cfg,
+                                "duration": args.duration,
+                                "batch_size": batch_size,
+                                "mode": mode,
+                                "streams": args.streams,
+                                "tpu_cores": tpu_core_count if fmt == "tpu" else 0,
+                            }
+                        )
+
+    if args.parallel > 1 and len(tasks) > 1 and not tpu_core_count:
+        _bench_source_image()
+        with ProcessPoolExecutor(
+            max_workers=min(args.parallel, len(tasks)),
+            mp_context=multiprocessing.get_context("spawn"),
+        ) as executor:
+            all_results = list(executor.map(_run_benchmark_task, tasks))
+    else:
+        all_results = [_run_benchmark_task(task) for task in tasks]
+
+    best: dict[str, dict] = {}
+    current_model = None
+    for r in all_results:
+        if r["model"] != current_model:
+            if current_model is not None:
+                print()
+            current_model = r["model"]
+            print(f"- {current_model}")
+        print(f"    {_fmt_result(r)}")
+        if not r.get("ok"):
+            continue
+        if best.get(r["model"]) is None or (r["fps"] or 0) > (
+            best[r["model"]].get("fps") or 0
+        ):
+            best[r["model"]] = r
+    if current_model is not None:
         print()
 
     print("Best backend per model:")
@@ -564,17 +1059,30 @@ def main():
         print(f"  {name:40s} {_fmt_result(r)}")
 
     output_path = (
-        Path(args.output) if args.output else _PROJECT_ROOT / "Outputs" / "benchmark_results.json"
+        Path(args.output)
+        if args.output
+        else _PROJECT_ROOT / "Outputs" / "benchmark_results.json"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
     payload = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "system": collect_system_info(),
         "best": best,
         "all": all_results,
     }
     with open(output_path, "w") as f:
         json.dump(payload, f, indent=2)
     print(f"\nResults saved to {output_path}")
+
+    if not args.no_plot:
+        png = render_report(
+            payload,
+            Path(args.plot_output) if args.plot_output else output_path.with_suffix(".png"),
+            title=f"iSpy benchmark - {', '.join(best) or 'no results'}",
+        )
+        if png:
+            print(f"Chart saved to {png}")
     return 0
 
 

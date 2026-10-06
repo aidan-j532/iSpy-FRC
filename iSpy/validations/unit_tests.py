@@ -170,7 +170,13 @@ ov_mod.Core = _FakeOpenVINOCore
 sys.modules["openvino"] = ov_mod
 
 from iSpy.config.AutoOpt import SUPPORTED_FORMATS
-from iSpy.vision.genericYolo import Box, GenericYolo, ModelFileError, Results
+from iSpy.vision.genericYolo import (
+    Box,
+    GenericYolo,
+    ModelFileError,
+    Results,
+    normalize_model_config,
+)
 from iSpy.vision.metadata import (
     derive_format_metadata,
     metadata_path_for,
@@ -516,6 +522,142 @@ class TestCompiledFormatGenericYolo(unittest.TestCase):
             with patch.dict(sys.modules, {"tensorrt": None}):
                 GenericYolo(self._complete_cfg(eng))
 
+    def test_engine_plan_header_is_skipped_from_file(self):
+        from iSpy.vision.engine_utils import read_engine_plan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model.engine"
+            header = b'{"producer": "ultralytics"}'
+            plan = b"serialized-plan"
+            path.write_bytes(len(header).to_bytes(4, "little") + header + plan)
+            self.assertEqual(read_engine_plan(path), plan)
+
+    def test_engine_plan_unrecognized_header_falls_back_to_raw(self):
+        from iSpy.vision.engine_utils import read_engine_plan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "raw.engine"
+            raw = b"raw-plan-bytes" * 4
+            path.write_bytes(raw)
+            self.assertEqual(read_engine_plan(path), raw)
+
+    def test_tpu_batch_padding_repeats_last_frame(self):
+        frames = [np.full((2, 2, 3), value, dtype=np.uint8) for value in (1, 2, 3)]
+
+        batch = GenericYolo._pad_tpu_batch(frames, 4)
+
+        self.assertEqual(batch.shape, (4, 2, 2, 3))
+        self.assertEqual(batch[:, 0, 0, 0].tolist(), [1, 2, 3, 3])
+        with self.assertRaises(ValueError):
+            GenericYolo._pad_tpu_batch(frames, 2)
+
+    def test_tpu_batch_and_dtype_config_defaults(self):
+        config = normalize_model_config(self._complete_cfg("unused.onnx"))
+        self.assertEqual(config["batch_size"], 1)
+        self.assertEqual(config["tpu_dtype"], "bf16")
+
+        config = self._complete_cfg("unused.onnx")
+        config.update(batch_size=4, tpu_dtype="fp32")
+        normalized = normalize_model_config(config)
+        self.assertEqual(normalized["batch_size"], 4)
+        self.assertEqual(normalized["tpu_dtype"], "fp32")
+
+        config["tpu_dtype"] = "float16"
+        with self.assertRaisesRegex(ValueError, "tpu_dtype"):
+            normalize_model_config(config)
+
+    def test_tpu_predict_preserves_order_across_batches(self):
+        wrapper = GenericYolo.__new__(GenericYolo)
+        wrapper.model_type = "tpu"
+        wrapper.batch_size = 2
+        wrapper._preprocess_tpu_frame = lambda frame: frame
+        batch_lengths = []
+
+        def forward(batch):
+            batch_lengths.append(len(batch))
+            return np.asarray([frame[0, 0, 0] for frame in batch])
+
+        wrapper.forward_tpu_batch = forward
+        wrapper.postprocess_tpu_output = lambda output, shape: (
+            int(output), shape[0]
+        )
+        frames = [np.full((2, 2, 3), value, dtype=np.uint8) for value in (10, 20, 30)]
+        shapes = [(10, 11, 3), (20, 21, 3), (30, 31, 3)]
+
+        results = wrapper.predict(frames, orig_shape=shapes)
+
+        self.assertEqual(batch_lengths, [2, 1])
+        self.assertEqual(results, [(10, 10), (20, 20), (30, 30)])
+
+    def test_tpu_output_uses_software_nms(self):
+        wrapper = GenericYolo.__new__(GenericYolo)
+        wrapper.num_classes = 1
+        wrapper.output = {
+            "format": "raw",
+            "layout": "features_first",
+            "box_format": "cxcywh",
+            "score_mode": "objectness",
+            "apply_software_nms": False,
+            "nms_iou": 0.45,
+            "scores_are_logits": False,
+        }
+        wrapper._configure_tpu_output()
+        wrapper.model_type = "tpu"
+        wrapper.task = "detect"
+        wrapper.input_size = (640, 640)
+        wrapper.min_conf = 0.25
+        wrapper._output_verified = False
+        wrapper._feat_width = 0
+        duplicate_boxes = np.array(
+            [[320, 320, 100, 100, 0.95], [322, 320, 100, 100, 0.85]],
+            dtype=np.float32,
+        ).T
+
+        result = wrapper.postprocess([duplicate_boxes], (640, 640, 3))
+
+        self.assertTrue(wrapper.output["apply_software_nms"])
+        self.assertEqual(wrapper.output["score_mode"], "objectness")
+        self.assertEqual(len(result.boxes), 1)
+
+    def test_cpu_onnx_uses_only_cpu_provider(self):
+        session_options = types.SimpleNamespace()
+        used = {}
+
+        class FakeSession:
+            def get_inputs(self):
+                return [types.SimpleNamespace(name="images")]
+
+            def get_outputs(self):
+                return [types.SimpleNamespace(name="output0")]
+
+            def get_providers(self):
+                return ["CPUExecutionProvider"]
+
+        ort = types.ModuleType("onnxruntime")
+        ort.set_default_logger_severity = lambda level: None
+        ort.get_available_providers = lambda: [
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        ort.SessionOptions = lambda: session_options
+        ort.GraphOptimizationLevel = types.SimpleNamespace(ORT_ENABLE_ALL=1)
+
+        def create_session(path, sess_options, providers):
+            used["providers"] = providers
+            return FakeSession()
+
+        ort.InferenceSession = create_session
+        wrapper = GenericYolo.__new__(GenericYolo)
+        wrapper.device = "cpu"
+        wrapper.logger = MagicMock()
+
+        with patch.dict(sys.modules, {"onnxruntime": ort, "onnxruntime_qnn": None}):
+            wrapper._load_onnx("cpu-model.onnx")
+
+        self.assertEqual(used["providers"], ["CPUExecutionProvider"])
+        self.assertEqual(wrapper.provider, "CPUExecutionProvider")
+
     def test_openvino_dir_constructs_and_predicts_results(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -540,6 +682,61 @@ class TestCompiledFormatGenericYolo(unittest.TestCase):
 
         w = GenericYolo(self._complete_cfg(xml_path))
         self.assertEqual(w.model_type, "openvino")
+
+
+class TestTpuQueueFreshness(unittest.TestCase):
+    def test_drop_oldest_keeps_newest_frames_in_order(self):
+        import queue
+
+        from iSpy.vision.pipelines.object_detection import _put_latest
+
+        frames = queue.Queue(maxsize=2)
+        for sequence in (1, 2, 3):
+            _put_latest(frames, sequence)
+
+        self.assertEqual([frames.get_nowait(), frames.get_nowait()], [2, 3])
+
+
+class TestBenchmarkValidity(unittest.TestCase):
+    def test_missing_model_is_a_benchmark_error(self):
+        from types import SimpleNamespace
+
+        from iSpy.validations.benchmarking import _require_benchmark_model
+
+        with self.assertRaisesRegex(RuntimeError, "model failed to load"):
+            _require_benchmark_model(SimpleNamespace(model=None))
+
+    def test_zero_completed_inferences_is_a_benchmark_error(self):
+        from iSpy.validations.benchmarking import _require_benchmark_count
+
+        with self.assertRaisesRegex(RuntimeError, "no inference completed"):
+            _require_benchmark_count(0)
+
+    def test_tpu_core_probe_skips_when_torch_xla_is_missing(self):
+        from iSpy.validations.benchmarking import _local_tpu_core_count
+
+        with patch.dict(sys.modules, {"torch_xla": None}):
+            self.assertEqual(_local_tpu_core_count(), 0)
+
+    def test_cpu_system_info_does_not_import_torch_xla(self):
+        import builtins
+
+        from iSpy.validations.bench_to_matplotlib import collect_system_info
+
+        real_import = builtins.__import__
+
+        def import_without_xla(name, *args, **kwargs):
+            if name == "torch_xla" or name.startswith("torch_xla."):
+                raise AssertionError("CPU benchmark imported torch_xla")
+            return real_import(name, *args, **kwargs)
+
+        with (
+            patch("iSpy.config.AutoOpt.has_tpu_hardware", return_value=False),
+            patch("builtins.__import__", side_effect=import_without_xla),
+        ):
+            info = collect_system_info()
+
+        self.assertNotIn("torch_xla", info)
 
 
 class TestModelMetadata(unittest.TestCase):

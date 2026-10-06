@@ -59,7 +59,8 @@ dev = [
     "snakeviz",
     "jupyter",
     "tensorboard",
-    "tensorrt>=10.0.0"
+    "tensorrt>=10.0.0",
+    "matplotlib>=3.8.0"
 ]
 
 optimizer = [

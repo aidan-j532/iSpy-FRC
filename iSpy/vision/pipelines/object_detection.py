@@ -4,6 +4,7 @@ import math
 import queue
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -34,9 +35,27 @@ _VM_PIPELINE_SETTING_KEYS = (
     "input_size",
     "quantization_dataset",
     "optimize",
+    "batch_size",
+    "tpu_dtype",
 )
 # legacy aliases, consulted when the canonical key is unset
 _VM_PIPELINE_SETTING_LEGACY = {"quantize": "quantized", "optimize": "auto_opt"}
+
+
+def _put_latest(target: queue.Queue, item) -> None:
+    try:
+        target.put_nowait(item)
+        return
+    except queue.Full:
+        pass
+    try:
+        target.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        target.put_nowait(item)
+    except queue.Full:
+        pass
 
 
 def _merge_vm_pipeline_settings(vm: dict, camera_config: iSpyCameraConfig) -> dict:
@@ -162,6 +181,8 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         camera_config: iSpyCameraConfig,
         config: iSpyConfig,
         core_mask=None,
+        use_tpu_pipeline: bool = True,
+        benchmark_frames: list[np.ndarray] | None = None,
     ):
         self.logger = logging.getLogger(__name__)
 
@@ -169,6 +190,17 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         self._ispy_config = config
         self._cam_name = camera_config.get("name", "?")
         self._preproc_thread: threading.Thread | None = None
+        self._tpu_device_thread: threading.Thread | None = None
+        self._tpu_post_thread: threading.Thread | None = None
+        self._enable_tpu_pipeline = bool(use_tpu_pipeline)
+        self._benchmark_frames = benchmark_frames
+        self._benchmark_frame_index = 0
+        self._benchmark_pause = False
+        self._tpu_stop = threading.Event()
+        self._metrics_lock = threading.Lock()
+        self._timing_samples = deque(maxlen=4096)
+        self._timing_samples_seen = 0
+        self._next_frame_sequence = 0
 
         try:
             self.known_calibration_distance = camera_config["calibration"]["distance"]
@@ -331,12 +363,22 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         except Exception:
             pass
 
-        self._preproc_q: queue.Queue = queue.Queue(maxsize=1)
-        self._use_pipeline = self.model is not None and self.model.model_type in (
-            "rknn",
-            "onnx",
-            "tflite",
+        self._tpu_pipeline = bool(
+            self._enable_tpu_pipeline
+            and self.model is not None
+            and self.model.model_type == "tpu"
         )
+        self._preproc_q: queue.Queue = queue.Queue(
+            maxsize=2 if self._tpu_pipeline else 1
+        )
+        self._tpu_device_q: queue.Queue = queue.Queue(maxsize=2)
+        self._tpu_result_q: queue.Queue = queue.Queue(maxsize=2)
+        self.inference_count = 0
+        self.detections_seen = 0
+        self._use_pipeline = bool(
+            self.model is not None
+            and self.model.model_type in ("rknn", "onnx", "tflite")
+        ) or self._tpu_pipeline
 
         self._last_result: Results | None = None
         self._last_frame: np.ndarray | None = None
@@ -351,6 +393,8 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 name=f"PreProc-{self.source}",
             )
             self._preproc_thread.start()
+        if self._tpu_pipeline:
+            self._start_tpu_workers()
 
         # optimization requested + no active artifact yet -> kick off the
         # build on a bg thread so the app keeps running
@@ -683,10 +727,25 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             self.core_mask,
             iSpy_config=self._ispy_config,
         )
+        if getattr(self, "_tpu_pipeline", False):
+            self._stop_tpu_workers()
         self.model = new_model
         self.yolo_model_file = artifact_path
         self.quantize = quantize
-        self._use_pipeline = new_model.model_type in ("rknn", "onnx", "tflite")
+        self._tpu_pipeline = bool(
+            getattr(self, "_enable_tpu_pipeline", True)
+            and getattr(new_model, "model_type", None) == "tpu"
+        )
+        model_type = getattr(new_model, "model_type", None)
+        self._use_pipeline = model_type in (
+            "rknn",
+            "onnx",
+            "tflite",
+        ) or self._tpu_pipeline
+        if self._tpu_pipeline:
+            self._preproc_q = queue.Queue(maxsize=2)
+            self._tpu_device_q = queue.Queue(maxsize=2)
+            self._tpu_result_q = queue.Queue(maxsize=2)
         if self._use_pipeline and (
             self._preproc_thread is None or not self._preproc_thread.is_alive()
         ):
@@ -696,6 +755,8 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 name=f"PreProc-{self.source}",
             )
             self._preproc_thread.start()
+        if self._tpu_pipeline:
+            self._start_tpu_workers()
 
         try:
             from iSpy.vision.metadata import read_metadata
@@ -767,11 +828,22 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         dst[:] = 114
         dst[top : top + new_h, left : left + new_w] = resized
 
+    def _next_input_frame(self):
+        frames = getattr(self, "_benchmark_frames", None)
+        if frames:
+            index = getattr(self, "_benchmark_frame_index", 0)
+            self._benchmark_frame_index = (index + 1) % len(frames)
+            return frames[index].copy()
+        return self.get_frame()
+
     def _preprocess_worker(self):
         last_ts = None
         while not self.stopped:
+            if self._benchmark_pause:
+                time.sleep(0.001)
+                continue
             if self.is_image:
-                frame = self.get_frame()
+                frame = self._next_input_frame()
                 ts = 0
 
                 time.sleep(1 / 100)  # Simulate a 100 fps camera
@@ -786,8 +858,160 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
             last_ts = ts
             orig_shape = frame.shape
-            preprocessed = self.model._preprocess_frame(frame)
-            self._preproc_q.put((preprocessed, frame, orig_shape))
+            frame_started = time.perf_counter()
+            start = time.perf_counter()
+            if self._tpu_pipeline:
+                preprocessed = self.model._preprocess_tpu_frame(frame)
+            else:
+                preprocessed = self.model._preprocess_frame(frame)
+            item = {
+                "sequence": self._next_frame_sequence,
+                "preprocessed": preprocessed,
+                "frame": frame.copy(),
+                "orig_shape": orig_shape,
+                "queued_at": frame_started,
+                "preprocess_ms": (time.perf_counter() - start) * 1000,
+            }
+            self._next_frame_sequence += 1
+            if self._tpu_pipeline:
+                _put_latest(self._preproc_q, item)
+            else:
+                self._preproc_q.put((preprocessed, frame, orig_shape))
+
+    def _start_tpu_workers(self) -> None:
+        if self._tpu_device_thread and self._tpu_device_thread.is_alive():
+            return
+        self._tpu_stop.clear()
+        self._tpu_device_thread = threading.Thread(
+            target=self._tpu_device_worker,
+            daemon=True,
+            name=f"TPUDevice-{self.source}",
+        )
+        self._tpu_post_thread = threading.Thread(
+            target=self._tpu_postprocess_worker,
+            daemon=True,
+            name=f"TPUPost-{self.source}",
+        )
+        self._tpu_device_thread.start()
+        self._tpu_post_thread.start()
+
+    def _stop_tpu_workers(self) -> None:
+        self._tpu_stop.set()
+        for thread in (self._tpu_device_thread, self._tpu_post_thread):
+            if thread and thread.is_alive():
+                thread.join(timeout=5)
+        self._tpu_device_thread = None
+        self._tpu_post_thread = None
+
+    def _tpu_device_worker(self) -> None:
+        while not self.stopped and not self._tpu_stop.is_set():
+            try:
+                first = self._preproc_q.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if not isinstance(first, dict):
+                continue
+
+            model = self.model
+            batch_size = max(1, int(getattr(model, "batch_size", 1)))
+            items = [first]
+            target_fps = 100 if self.is_image else self.config.get("fps_cap", 30)
+            batch_wait = min(0.25, (batch_size - 1) / max(float(target_fps), 1.0))
+            deadline = time.perf_counter() + batch_wait
+            while len(items) < batch_size:
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    break
+                try:
+                    items.append(self._preproc_q.get(timeout=remaining))
+                except queue.Empty:
+                    break
+
+            try:
+                device_start = time.perf_counter()
+                outputs = model.forward_tpu_batch(
+                    [item["preprocessed"] for item in items]
+                )
+                if len(outputs) != len(items):
+                    raise RuntimeError(
+                        f"TPU returned {len(outputs)} outputs for {len(items)} frames"
+                    )
+                device_ms = (time.perf_counter() - device_start) * 1000 / len(items)
+                with self._metrics_lock:
+                    self.inference_count += len(items)
+                _put_latest(self._tpu_device_q, (items, outputs, device_ms))
+            except Exception:
+                self.logger.exception("Camera '%s': TPU inference failed", self._cam_name)
+
+    def _tpu_postprocess_worker(self) -> None:
+        while not self.stopped and not self._tpu_stop.is_set():
+            try:
+                items, outputs, device_ms = self._tpu_device_q.get(timeout=0.05)
+            except queue.Empty:
+                continue
+
+            model = self.model
+            for item, output in zip(items, outputs):
+                post_start = time.perf_counter()
+                try:
+                    result = model.postprocess_tpu_output(output, item["orig_shape"])
+                except Exception:
+                    self.logger.exception(
+                        "Camera '%s': TPU postprocessing failed", self._cam_name
+                    )
+                    continue
+                postprocess_ms = (time.perf_counter() - post_start) * 1000
+                stage_ms = {
+                    "preprocess": item["preprocess_ms"],
+                    "device": device_ms,
+                    "postprocess": postprocess_ms,
+                }
+                self._record_inference(
+                    result, item["queued_at"], stage_ms, count_inference=False
+                )
+                _put_latest(
+                    self._tpu_result_q,
+                    (
+                        item["sequence"],
+                        result,
+                        item["frame"],
+                        item["orig_shape"],
+                    ),
+                )
+
+    def _record_inference(
+        self,
+        result: Results,
+        started: float,
+        stage_ms: dict,
+        count_inference: bool = True,
+    ) -> None:
+        sample = dict(stage_ms)
+        sample["latency"] = (time.perf_counter() - started) * 1000
+        with self._metrics_lock:
+            if count_inference:
+                self.inference_count += 1
+            self.detections_seen += len(result.boxes)
+            self._timing_samples.append(sample)
+            self._timing_samples_seen += 1
+
+    def benchmark_metrics(self, since_count: int = 0) -> dict:
+        with self._metrics_lock:
+            samples = list(self._timing_samples)
+            sample_start = max(0, self._timing_samples_seen - len(samples))
+            samples = samples[max(0, since_count - sample_start) :]
+            detections = self.detections_seen
+        if not samples:
+            return {"samples": [], "detections": detections}
+        stages = ("preprocess", "device", "postprocess")
+        return {
+            "samples": samples,
+            "detections": detections,
+            "stage_ms": {
+                stage: sum(sample.get(stage, 0.0) for sample in samples) / len(samples)
+                for stage in stages
+            },
+        }
 
     def _focal_length_px_fov(self, img_w: int) -> float:
         # FOV-derived intrinsic - doesnt rely on a game piece's known size.
@@ -931,7 +1155,18 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             frame = self.get_frame()
             return None, frame
 
-        if self._use_pipeline:
+        if self._tpu_pipeline:
+            try:
+                _sequence, results, annotated_frame, _orig_shape = (
+                    self._tpu_result_q.get(
+                        timeout=None if self.frame_sync else self._pipeline_timeout
+                    )
+                )
+            except queue.Empty:
+                return self._last_result, self._last_frame
+            self._last_result = results
+            self._last_frame = annotated_frame
+        elif self._use_pipeline:
             try:
                 preprocessed, orig_frame, orig_shape = self._preproc_q.get(
                     timeout=None if self.frame_sync else self._pipeline_timeout
@@ -939,20 +1174,41 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             except queue.Empty:
                 return self._last_result, self._last_frame
 
+            inference_start = time.perf_counter()
             results = self.model.predict_preprocessed(preprocessed, orig_shape)
             annotated_frame = orig_frame.copy()
             self._last_result = results
             self._last_frame = annotated_frame
+            stage_ms = getattr(self.model, "last_tpu_stage_ms", None) or {
+                "preprocess": 0.0,
+                "device": (time.perf_counter() - inference_start) * 1000,
+                "postprocess": 0.0,
+            }
+            self._record_inference(
+                results,
+                inference_start,
+                stage_ms,
+            )
         else:
             frame = self.get_frame()
             if frame is None:
                 self.logger.warning("No frame available.")
                 return None, None
             clean_frame = frame.copy()  # keep clean copy before prediction
+            inference_start = time.perf_counter()
             results = self.model.predict(frame, orig_shape=frame.shape)
             annotated_frame = clean_frame  # use untouched frame
             self._last_result = results
             self._last_frame = annotated_frame
+            self._record_inference(
+                results,
+                inference_start,
+                {
+                    "preprocess": 0.0,
+                    "device": (time.perf_counter() - inference_start) * 1000,
+                    "postprocess": 0.0,
+                },
+            )
 
         if annotated_frame is not None:
             annotated_frame = results.plot(annotated_frame.copy())
@@ -1107,7 +1363,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         )
 
     def run(self):
-        frame = self.get_frame()
+        frame = self._next_input_frame()
         if frame is None:
             return [], None
 
@@ -1122,7 +1378,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         if data is None or annotated is None:
             return [], frame
 
-        img_h, img_w = frame.shape[:2]
+        img_h, img_w = data.orig_shape[:2]
         objects: list[Object] = []
         kp_iter = iter(data.keypoints) if data.keypoints else None
         for box in data.boxes:
@@ -1178,6 +1434,14 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
     def destroy(self):
         super().destroy()
+        self._tpu_stop.set()
+        for thread in (
+            self._preproc_thread,
+            self._tpu_device_thread,
+            self._tpu_post_thread,
+        ):
+            if thread and thread.is_alive():
+                thread.join(timeout=5)
 
     def release(self):
         self.destroy()

@@ -1034,7 +1034,9 @@ def _engine_loads(path: Path) -> bool:
     try:
         import tensorrt as trt
 
-        data = path.read_bytes()
+        from iSpy.vision.engine_utils import read_engine_plan
+
+        data = read_engine_plan(path)
         runtime = trt.Runtime(trt.Logger(trt.Logger.ERROR))
         engine = runtime.deserialize_cuda_engine(data)
         return engine is not None
