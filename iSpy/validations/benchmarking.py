@@ -36,7 +36,10 @@ def _repo_root() -> Path | None:
 
 _REPO_ROOT = _repo_root()
 
-logging.basicConfig(level=logging.WARNING, format="%(message)s")
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
@@ -547,9 +550,11 @@ def _benchmark_stream(
                             for sample in list(camera._timing_samples)[-5:]
                         ]
                     mean = sum(recent) / len(recent) if recent else 0.0
-                    if len(recent) == 5 and mean and (
-                        max(recent) - min(recent)
-                    ) / mean <= 0.15:
+                    if (
+                        len(recent) == 5
+                        and mean
+                        and (max(recent) - min(recent)) / mean <= 0.15
+                    ):
                         stable = True
                         break
                 if completed >= 30:
@@ -846,9 +851,13 @@ def _positive_int(value: str) -> int:
 
 def _parse_batch_sizes(value: str) -> tuple[int, ...]:
     try:
-        sizes = tuple(dict.fromkeys(_positive_int(part.strip()) for part in value.split(",")))
+        sizes = tuple(
+            dict.fromkeys(_positive_int(part.strip()) for part in value.split(","))
+        )
     except argparse.ArgumentTypeError as exc:
-        raise argparse.ArgumentTypeError("use comma-separated positive integers") from exc
+        raise argparse.ArgumentTypeError(
+            "use comma-separated positive integers"
+        ) from exc
     if not sizes:
         raise argparse.ArgumentTypeError("provide at least one batch size")
     return sizes
@@ -912,7 +921,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "before benchmarking.",
     )
     parser.add_argument("--no-plot", action="store_true", help="skip the PNG report")
-    parser.add_argument("--plot-output", default=None, help="PNG path (default: next to the outputed JSON)")
+    parser.add_argument(
+        "--plot-output",
+        default=None,
+        help="PNG path (default: next to the outputed JSON)",
+    )
     return parser
 
 
@@ -1078,7 +1091,9 @@ def main(argv=None):
     if not args.no_plot:
         png = render_report(
             payload,
-            Path(args.plot_output) if args.plot_output else output_path.with_suffix(".png"),
+            Path(args.plot_output)
+            if args.plot_output
+            else output_path.with_suffix(".png"),
             title=f"iSpy benchmark - {', '.join(best) or 'no results'}",
         )
         if png:

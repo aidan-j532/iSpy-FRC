@@ -23,6 +23,10 @@ from iSpy.vision.genericYolo import Box, GenericYolo
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
 
 
 @contextlib.contextmanager
