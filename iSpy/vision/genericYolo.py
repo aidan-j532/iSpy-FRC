@@ -12,16 +12,12 @@ import time
 import warnings
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
-from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.engine_utils import read_engine_plan
-
-if TYPE_CHECKING:
-    import torch
+from iSpy.vision.ModelInspector import fill_missing_config
 
 
 def torch_load(path, trusted: bool = True):
@@ -108,8 +104,9 @@ def _torch_global_path(module: str) -> str:
 
 
 def _resolve_safe_global(module: str, name: str):
+    from torch._utils import IMPORT_MAPPING, NAME_MAPPING
+
     from iSpy.vision.yolo_pt import register_shim
-    from torch._utils import NAME_MAPPING, IMPORT_MAPPING
 
     module = IMPORT_MAPPING.get(module, module)
     if (module, name) in NAME_MAPPING:
@@ -325,6 +322,7 @@ class _GPUInferencePool:
     def _worker(self, device):
         # Load model INSIDE the worker thread so TensorRT creates a context on this GPU
         import torch
+
         from .yolo_pt import load_yolo_pt
 
         torch.cuda.set_device(device)
@@ -694,7 +692,7 @@ class GenericYolo:
         elif self.model_file.endswith(".onnx"):
             self._require_input_block()
             self.model_type = "onnx"
-            self._onnx_pool: "_ONNXInferencePool | None" = None
+            self._onnx_pool: _ONNXInferencePool | None = None
             self._load_onnx(self.model_file)
 
             num_gpus = cfg.get("num_gpus", 1)
@@ -903,7 +901,10 @@ class GenericYolo:
                     pass
                 available = ort.get_available_providers()
                 candidates = [
-                    ("QNNExecutionProvider", {"backend_type": "QNN", "device_id": device_id}),
+                    (
+                        "QNNExecutionProvider",
+                        {"backend_type": "QNN", "device_id": device_id},
+                    ),
                     ("TensorrtExecutionProvider", {"device_id": device_id}),
                     ("CUDAExecutionProvider", {"device_id": device_id}),
                     ("ROCMExecutionProvider", {"device_id": device_id}),
@@ -940,7 +941,7 @@ class GenericYolo:
             self.model.get_providers(),
             sess_options.intra_op_num_threads,
         )
-        
+
         actual_providers = self.model.get_providers()
         self.provider = actual_providers[0] if actual_providers else "unknown"
         if "CUDAExecutionProvider" not in actual_providers:
@@ -1024,9 +1025,7 @@ class GenericYolo:
         if getattr(self, "_hailo_infer", None) is None:
             raise RuntimeError("Hailo infer pipeline not initialized")
         try:
-            raw_outputs = self._hailo_infer.infer(
-                {self._hailo_inp_name: preprocessed}
-            )
+            raw_outputs = self._hailo_infer.infer({self._hailo_inp_name: preprocessed})
         except Exception as e:
             self.logger.error("Hailo inference failed: %s", e)
             return Results([], orig_shape)
@@ -1051,9 +1050,7 @@ class GenericYolo:
             # (num_classes, max_dets, 5) - anything else means the sidecar's
             # output format contract and the .hef disagree.
             last = tensor.shape[-1] if tensor.ndim else 0
-            actual_fmt = (
-                "hardware_nms" if (tensor.ndim >= 2 and last == 5) else "raw"
-            )
+            actual_fmt = "hardware_nms" if (tensor.ndim >= 2 and last == 5) else "raw"
             if actual_fmt != self.output["format"]:
                 raise ValueError(
                     f"Hailo model output shape {tensor.shape} indicates "
@@ -1102,7 +1099,7 @@ class GenericYolo:
 
         try:
             runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
-            engine: "trt.ICudaEngine" = runtime.deserialize_cuda_engine(
+            engine: trt.ICudaEngine = runtime.deserialize_cuda_engine(
                 read_engine_plan(Path(model_file))
             )
             if engine is None:
@@ -1221,9 +1218,7 @@ class GenericYolo:
         self.input = inp
         h, w = int(ov_shape[-2]), int(ov_shape[-1])
         if (h, w) != self.input_size:
-            self.logger.info(
-                "OpenVINO IR input is %dx%d - updating input_size", w, h
-            )
+            self.logger.info("OpenVINO IR input is %dx%d - updating input_size", w, h)
             self.input_size = (w, h)
         self.logger.info(
             "OpenVINO input aligned: layout=%s dtype=%s shape=%s",
@@ -1276,7 +1271,7 @@ class GenericYolo:
         for idx in range(engine.num_io_tensors):
             name = engine.get_tensor_name(idx)
             if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                context.set_tensor_shape(name, inp.shape)
+                context.set_input_shape(name, inp.shape)
         bindings = []
         output = None
         for idx in range(engine.num_io_tensors):
@@ -1358,7 +1353,10 @@ class GenericYolo:
         shapes = (
             list(orig_shape)
             if isinstance(orig_shape, list)
-            else [orig_shape if orig_shape is not None else frame.shape for frame in frames]
+            else [
+                orig_shape if orig_shape is not None else frame.shape
+                for frame in frames
+            ]
         )
         if len(shapes) != len(frames):
             raise ValueError("orig_shape count must match the number of frames")
@@ -1380,15 +1378,16 @@ class GenericYolo:
                 postprocess_start = time.perf_counter()
                 results.extend(
                     self.postprocess_tpu_output(output, shape)
-                    for output, shape in zip(outputs, shapes[start : start + len(chunk)])
+                    for output, shape in zip(
+                        outputs, shapes[start : start + len(chunk)]
+                    )
                 )
                 stage_totals["postprocess"] += (
                     time.perf_counter() - postprocess_start
                 ) * 1000
                 timed_frames += len(chunk)
             self.last_tpu_stage_ms = {
-                key: value / max(timed_frames, 1)
-                for key, value in stage_totals.items()
+                key: value / max(timed_frames, 1) for key, value in stage_totals.items()
             }
             return results if is_list else results[0]
 
@@ -1527,7 +1526,6 @@ class GenericYolo:
         return self.postprocess([output], orig_shape)
 
     def _load_tpu(self, model_file: str):
-        import torch
         from .yolo_pt import load_yolo_pt
 
         raw_model = load_yolo_pt(model_file, task=self.task).model
@@ -1742,10 +1740,15 @@ class GenericYolo:
             for det in valid:
                 # normalized [y1, x1, y2, x2] -> pixel xyxy in the letterboxed
                 # input, then map back to the original frame
-                y1, x1, y2, x2 = (float(det[0]), float(det[1]),
-                                  float(det[2]), float(det[3]))
-                xyxy = np.array([x1 * target_w, y1 * target_h,
-                                 x2 * target_w, y2 * target_h])
+                y1, x1, y2, x2 = (
+                    float(det[0]),
+                    float(det[1]),
+                    float(det[2]),
+                    float(det[3]),
+                )
+                xyxy = np.array(
+                    [x1 * target_w, y1 * target_h, x2 * target_w, y2 * target_h]
+                )
                 xyxy = self._scale_coords(xyxy, orig_shape, is_kpts=False)
                 boxes.append(Box(xyxy.tolist(), float(det[4]), int(cls_id)))
         return Results(boxes, orig_shape)

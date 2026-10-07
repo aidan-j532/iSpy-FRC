@@ -7,14 +7,14 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
+from iSpy.vision._safe_imports import ensure_torch_imported, import_rknnlite
+from iSpy.vision.Object import Object
 from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.vision.pipelines.optimizable import (
     OptimizableModelPipeline,
     _profile_hardware_warning,
 )
-from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
-from iSpy.vision.Object import Object
-from iSpy.vision._safe_imports import ensure_torch_imported, import_rknnlite
 
 _DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 _DEPTH_INPUT_SIZE = 518
@@ -404,8 +404,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         from iSpy.vision.QuantizedModel import ensure_onnx_model
 
         def build():
-            import torch.nn as nn
-
+            from torch import nn
             from transformers import AutoModelForDepthEstimation
 
             class _DepthModule(nn.Module):
@@ -556,7 +555,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _load_tensorrt(self, force: bool = False):
         try:
-            import tensorrt as trt  # noqa: F401
+            import tensorrt as trt
         except ImportError:
             self.logger.warning(
                 "TensorRT not installed - 'engine' backend unavailable, falling back to onnx"
@@ -607,7 +606,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _load_coreml(self, force: bool = False):
         try:
-            import coremltools as ct  # noqa: F401
+            import coremltools as ct
         except ImportError:
             self.logger.warning(
                 "coremltools not installed - 'coreml' backend unavailable, falling back to onnx"
@@ -645,7 +644,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _load_tflite(self, force: bool = False):
         try:
-            import onnx2tf  # noqa: F401
+            import onnx2tf
         except ImportError:
             self.logger.warning(
                 "onnx2tf not installed - 'tflite' backend unavailable, falling back to onnx"
@@ -712,7 +711,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             # that one-time module-init warning is not actionable, so hide it.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", DeprecationWarning)
-                from rknn.api import RKNN  # noqa: F401
+                from rknn.api import RKNN
         except ImportError:
             self.logger.warning(
                 "rknn-toolkit2 not installed - 'rknn' backend unavailable, falling back to onnx"
@@ -790,7 +789,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _load_tpu(self, force: bool = False):
         try:
-            import torch_xla.core.xla_model as xm  # noqa: F401
+            import torch_xla.core.xla_model as xm
         except ImportError:
             self.logger.warning(
                 "torch_xla not installed - 'tpu' backend unavailable, falling back to onnx"
@@ -798,10 +797,8 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             return self._load_onnx(force)
 
         try:
-            import torch
-            from transformers import AutoModelForDepthEstimation
-
             import torch_xla.core.xla_model as xm
+            from transformers import AutoModelForDepthEstimation
 
             device = xm.xla_device()
             self._model = (
@@ -920,7 +917,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _infer_depth_engine(self, frame: np.ndarray) -> np.ndarray:
         import numpy as np
-
         import tensorrt as trt
 
         pixel_values = self._preprocess_depth(frame)
@@ -929,7 +925,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         for idx in range(engine.num_io_tensors):
             name = engine.get_tensor_name(idx)
             if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                context.set_tensor_shape(name, pixel_values.shape)
+                context.set_input_shape(name, pixel_values.shape)
         bindings = []
         output = None
         for idx in range(engine.num_io_tensors):
@@ -970,7 +966,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _infer_depth_tpu(self, frame: np.ndarray) -> np.ndarray:
         import torch
-
         import torch_xla.core.xla_model as xm
 
         pixel_values = torch.from_numpy(self._preprocess_depth(frame))

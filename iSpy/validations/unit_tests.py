@@ -85,7 +85,7 @@ class _FakeEngineContext:
         self._shapes = dict(shapes)
         self._output_name = output_name
 
-    def set_tensor_shape(self, name, shape):
+    def set_input_shape(self, name, shape):
         self._shapes[name] = tuple(shape)
 
     def get_tensor_shape(self, name):
@@ -237,10 +237,7 @@ def _pipeline_recommended_format(**overrides):
     import iSpy.config.AutoOpt as ao
 
     module_path = (
-        Path(__file__).resolve().parents[1]
-        / "vision"
-        / "pipelines"
-        / "optimizable.py"
+        Path(__file__).resolve().parents[1] / "vision" / "pipelines" / "optimizable.py"
     )
     spec = importlib.util.spec_from_file_location("_optimizable", module_path)
     module = importlib.util.module_from_spec(spec)
@@ -272,9 +269,7 @@ class TestAutoOpt(unittest.TestCase):
     def test_rockchip_preserves_priority_over_hailo(self):
         # A board with both a Rockchip and a Hailo NPU stays on rknn - Rockchip
         # is the primary supported target.
-        self.assertEqual(
-            _recommend(has_rockchip_npu=True, has_hailo_npu=True), "rknn"
-        )
+        self.assertEqual(_recommend(has_rockchip_npu=True, has_hailo_npu=True), "rknn")
 
     def test_hailo_npu_uses_hailo_format(self):
         self.assertEqual(_recommend(has_hailo_npu=True), "hailo")
@@ -285,9 +280,7 @@ class TestAutoOpt(unittest.TestCase):
     def test_hailo_preserves_priority_over_qualcomm(self):
         # Order between the NPU vendors only matters on multi-NPU boards; hailo
         # is checked before qnn so it wins when both are present.
-        self.assertEqual(
-            _recommend(has_hailo_npu=True, has_qualcomm_npu=True), "hailo"
-        )
+        self.assertEqual(_recommend(has_hailo_npu=True, has_qualcomm_npu=True), "hailo")
 
     def test_edge_tpu_uses_tflite(self):
         self.assertEqual(_recommend(has_edge_tpu=True), "tflite")
@@ -305,16 +298,12 @@ class TestAutoOpt(unittest.TestCase):
         # torch_xla missing but the hardware is there - installer has to be told
         # tpu so it can pull torch_xla in, same escape hatch tensorrt gets.
         self.assertEqual(
-            _recommend(
-                has_tpu=False, has_tpu_hardware=True, ignore_dependencies=True
-            ),
+            _recommend(has_tpu=False, has_tpu_hardware=True, ignore_dependencies=True),
             "tpu",
         )
 
     def test_tpu_hardware_without_torch_xla_ignored_by_default(self):
-        self.assertEqual(
-            _recommend(has_tpu=False, has_tpu_hardware=True), "onnx"
-        )
+        self.assertEqual(_recommend(has_tpu=False, has_tpu_hardware=True), "onnx")
 
     def test_intel_gpu_uses_openvino(self):
         self.assertEqual(_recommend(has_intel_gpu=True), "openvino")
@@ -343,9 +332,7 @@ class TestAutoOpt(unittest.TestCase):
         # target, so it must never pick coreml when the runtime can't load the
         # artifact that pick would produce. All other probes are stubbed off so
         # the answer doesn't depend on the box the tests run on.
-        self.assertEqual(
-            _pipeline_recommended_format(has_apple_silicon=True), "onnx"
-        )
+        self.assertEqual(_pipeline_recommended_format(has_apple_silicon=True), "onnx")
 
     def test_runtime_unsupported_skips_engine_on_nvidia(self):
         self.assertEqual(
@@ -578,9 +565,7 @@ class TestCompiledFormatGenericYolo(unittest.TestCase):
             return np.asarray([frame[0, 0, 0] for frame in batch])
 
         wrapper.forward_tpu_batch = forward
-        wrapper.postprocess_tpu_output = lambda output, shape: (
-            int(output), shape[0]
-        )
+        wrapper.postprocess_tpu_output = lambda output, shape: (int(output), shape[0])
         frames = [np.full((2, 2, 3), value, dtype=np.uint8) for value in (10, 20, 30)]
         shapes = [(10, 11, 3), (20, 21, 3), (30, 31, 3)]
 
