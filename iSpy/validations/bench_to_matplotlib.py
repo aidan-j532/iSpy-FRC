@@ -1,18 +1,18 @@
 import logging
+import math
 import os
 import platform
-import time
-from collections import defaultdict
+import textwrap
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# match the web dashboard so the chart feels like part of iSpy (this part of the file WAS AI generated)
+# Match the web dashboard so the chart feels like part of iSpy.
 _BG, _PANEL, _TEXT, _DIM = "#0d1117", "#161b22", "#e6edf3", "#9198a1"
 _ACCENT, _OK, _BAD, _WARN = "#2f81f7", "#3fb950", "#f85149", "#d29922"
-_STAGE_COLORS = {"preprocess": "#2f81f7", "device": "#3fb950", "postprocess": "#f4a261"}
 
 _SUSPECT_MS = 0.5
+
 
 def collect_system_info() -> dict:
     info = {
@@ -55,128 +55,82 @@ def _is_suspect(r) -> bool:
     return ms is not None and ms < _SUSPECT_MS
 
 
+def _number(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _display_ms(value) -> str:
+    number = _number(value)
+    return f"{number:.1f}" if number is not None else "-"
+
+
 def _label(r, multi_model: bool) -> str:
-    parts = [str(r.get("backend", "?"))]
+    parts = []
+    if multi_model:
+        parts.append(str(r.get("model", "?")))
+    backend = str(r.get("backend", "?"))
+    model_format = r.get("format")
+    device = r.get("device")
+    label = backend
+    if model_format and str(model_format).lower() not in backend.lower():
+        label += f" ({model_format})"
+    if device not in (None, ""):
+        label += f" · {device}"
+    parts.append(label)
+    config = []
     if r.get("batch_size") not in (None, 1):
-        parts.append(f"b{r['batch_size']}")
+        config.append(f"batch {r['batch_size']}")
     if r.get("mode"):
-        parts.append(str(r["mode"]))
+        config.append(str(r["mode"]))
     if r.get("streams") not in (None, 1):
-        parts.append(f"x{r['streams']} streams")
-    label = " ".join(parts)
-    return f"{r['model']}\n{label}" if multi_model else label
+        config.append(f"{r['streams']} streams")
+    if config:
+        parts.append(" · ".join(config))
+    return textwrap.fill("\n".join(parts), width=32, break_long_words=True)
 
 
-def _style(ax, title):
+def _latency_text(r) -> str:
+    values = [r.get("inference_ms")]
+    percentiles = r.get("latency_ms")
+    values.extend(
+        percentiles.get(key) if isinstance(percentiles, dict) else None
+        for key in ("p50", "p95", "p99")
+    )
+    return " / ".join(_display_ms(value) for value in values)
+
+
+def _stage_text(r) -> str:
+    stages = r.get("stage_ms")
+    return " / ".join(
+        _display_ms(stages.get(stage)) if isinstance(stages, dict) else "-"
+        for stage in ("preprocess", "device", "postprocess")
+    )
+
+
+def _detail_text(r) -> str:
+    if _is_error(r):
+        return "ERROR: " + str(r.get("error") or "no valid result")
+    details = [str(r.get("provider") or r.get("device") or "provider unknown")]
+    if r.get("detections") is not None:
+        details.append(f"{r['detections']} detections")
+    if r.get("bottleneck"):
+        details.append(f"bottleneck: {r['bottleneck']}")
+    if _is_suspect(r):
+        details.append("suspect latency")
+    return " · ".join(details)
+
+
+def _style(ax):
     ax.set_facecolor(_PANEL)
-    ax.set_title(title, color=_TEXT, fontsize=11, fontweight="bold", loc="left")
     ax.tick_params(colors=_DIM, labelsize=8)
+    ax.grid(axis="x", color="#30363d", linewidth=0.6, alpha=0.8)
+    ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_color("#30363d")
-    ax.grid(axis="x", color="#30363d", linewidth=0.5, alpha=0.6)
-    ax.set_axisbelow(True)
-
-
-def _panel_throughput(ax, rows, multi_model):
-    good = sorted((r for r in rows if not _is_error(r)), key=lambda r: r["fps"])
-    bad = [r for r in rows if _is_error(r)]
-    ordered = bad + good  # best ends up on top
-    labels = [_label(r, multi_model) for r in ordered]
-    vals = [0 if _is_error(r) else r["fps"] for r in ordered]
-
-    real = [r for r in good if not _is_suspect(r)]
-    best = max(real, key=lambda r: r["fps"]) if real else None
-    # baseline for the speedup annotation: a CPU run if there is one, else the slowest valid run
-    cpu = [r for r in real if "cpu" in str(r.get("backend", "")).lower()]
-    base = min(cpu or real, key=lambda r: r["fps"]) if real else None
-
-    colors = []
-    for r in ordered:
-        if _is_error(r):
-            colors.append(_BAD)
-        elif _is_suspect(r):
-            colors.append("#6e7681")
-        elif r is best:
-            colors.append(_OK)
-        else:
-            colors.append(_ACCENT)
-
-    bars = ax.barh(range(len(ordered)), vals, color=colors, height=0.62)
-    for bar, r in zip(bars, ordered):
-        if _is_suspect(r) and not _is_error(r):
-            bar.set_hatch("//")
-    ax.set_yticks(range(len(ordered)))
-    ax.set_yticklabels(labels, color=_TEXT, fontsize=9)
-
-    top = max(vals) if vals and max(vals) > 0 else 1
-    for i, r in enumerate(ordered):
-        if _is_error(r):
-            msg = str(r.get("error") or "no result")[:70]
-            ax.text(top * 0.01, i, f"ERROR: {msg}", va="center", color=_BAD, fontsize=8)
-            continue
-        txt = f"{r['fps']:.1f} FPS  |  {r.get('inference_ms', 0):.1f} ms"
-        if _is_suspect(r):
-            txt += "  SUSPECT (model likely not running)"
-        elif base is not None and r is not base:
-            txt += f"  |  {r['fps'] / base['fps']:.1f}x vs {base['backend']}"
-        ax.text(r["fps"] + top * 0.01, i, txt, va="center", color=_TEXT, fontsize=8)
-    ax.set_xlim(0, top * 1.55)
-    ax.set_xlabel("frames per second (higher is better)", color=_DIM, fontsize=8)
-    _style(ax, "Throughput")
-
-
-def _panel_latency(ax, rows, multi_model):
-    rows = [r for r in rows if not _is_error(r) and not _is_suspect(r)]
-    with_pct = [r for r in rows if isinstance(r.get("latency_ms"), dict)]
-    if with_pct:
-        rows = sorted(with_pct, key=lambda r: r["latency_ms"].get("p50", 0), reverse=True)
-        h = 0.26
-        for j, (key, color) in enumerate((("p50", _OK), ("p95", _WARN), ("p99", _BAD))):
-            ax.barh([i + (1 - j) * h for i in range(len(rows))],
-                    [r["latency_ms"].get(key, 0) for r in rows],
-                    height=h, color=color, label=key)
-        ax.legend(facecolor=_PANEL, edgecolor="#30363d", labelcolor=_TEXT, fontsize=8)
-        ax.set_xlabel("per-frame latency, ms (lower is better)", color=_DIM, fontsize=8)
-    else:
-        rows = sorted(rows, key=lambda r: r["inference_ms"], reverse=True)
-        ax.barh(range(len(rows)), [r["inference_ms"] for r in rows], color=_ACCENT, height=0.6)
-        ax.set_xlabel("mean ms per frame (lower is better)", color=_DIM, fontsize=8)
-    ax.set_yticks(range(len(rows)))
-    ax.set_yticklabels([_label(r, multi_model) for r in rows], color=_TEXT, fontsize=8)
-    _style(ax, "Latency")
-
-
-def _panel_stages(ax, rows, multi_model):
-    rows = [r for r in rows if isinstance(r.get("stage_ms"), dict) and not _is_error(r)]
-    left = [0.0] * len(rows)
-    for stage, color in _STAGE_COLORS.items():
-        vals = [r["stage_ms"].get(stage, 0.0) for r in rows]
-        ax.barh(range(len(rows)), vals, left=left, color=color, label=stage, height=0.6)
-        left = [a + b for a, b in zip(left, vals)]
-    for i, r in enumerate(rows):
-        slowest = max(r["stage_ms"], key=r["stage_ms"].get)
-        ax.text(left[i], i, f"  bottleneck: {slowest}", va="center", color=_TEXT, fontsize=8)
-    ax.set_yticks(range(len(rows)))
-    ax.set_yticklabels([_label(r, multi_model) for r in rows], color=_TEXT, fontsize=8)
-    ax.legend(facecolor=_PANEL, edgecolor="#30363d", labelcolor=_TEXT, fontsize=8)
-    ax.set_xlabel("ms per frame, by stage", color=_DIM, fontsize=8)
-    _style(ax, "Where the time goes")
-
-
-def _panel_batch(ax, rows):
-    groups = defaultdict(list)
-    for r in rows:
-        if not _is_error(r) and not _is_suspect(r) and r.get("batch_size"):
-            groups[r["backend"]].append((r["batch_size"], r["fps"]))
-    for backend, pts in groups.items():
-        pts.sort()
-        ax.plot(*zip(*pts), marker="o", label=backend)
-    ax.set_xscale("log", base=2)
-    ax.set_xlabel("batch size", color=_DIM, fontsize=8)
-    ax.set_ylabel("FPS", color=_DIM, fontsize=8)
-    ax.legend(facecolor=_PANEL, edgecolor="#30363d", labelcolor=_TEXT, fontsize=8)
-    _style(ax, "Batch scaling")
-    ax.grid(axis="y", color="#30363d", linewidth=0.5, alpha=0.6)
 
 
 def render_report(payload: dict, out_path, title: str = "iSpy benchmark"):
@@ -185,56 +139,178 @@ def render_report(payload: dict, out_path, title: str = "iSpy benchmark"):
 
         matplotlib.use("Agg")  # headless boards and Colab have no display
         import matplotlib.pyplot as plt
-        from matplotlib.gridspec import GridSpec
     except ImportError:
-        logger.warning("matplotlib not installed - skipping chart (pip install matplotlib)")
+        logger.warning(
+            "matplotlib not installed - skipping chart (pip install matplotlib)"
+        )
         return None
 
     rows = payload.get("all") or []
     if not rows:
         return None
     multi_model = len({r["model"] for r in rows}) > 1
-
-    lower = ["latency"]
-    if any(isinstance(r.get("stage_ms"), dict) for r in rows):
-        lower.append("stages")
-    if len({r.get("batch_size") for r in rows if r.get("batch_size")}) > 1:
-        lower.append("batch")
-
-    height = 2.2 + 0.42 * len(rows) + 3.6
-    fig = plt.figure(figsize=(15, max(height, 8)), facecolor=_BG)
-    gs = GridSpec(3, len(lower), figure=fig, height_ratios=[0.5, 0.42 * len(rows) + 1.5, 3.4],
-                  hspace=0.45, wspace=0.35, left=0.12, right=0.97, top=0.96, bottom=0.06)
-
-    # header: what was tested, on what
-    ax_head = fig.add_subplot(gs[0, :])
-    ax_head.axis("off")
     sysinfo = payload.get("system") or {}
-    best = (payload.get("best") or {})
-    ax_head.text(0, 0.85, title, color=_TEXT, fontsize=18, fontweight="bold", va="top")
-    line = " | ".join(
-        str(x) for x in (
-            sysinfo.get("gpu") or ("TPU (torch_xla " + sysinfo["torch_xla"] + ")" if "torch_xla" in sysinfo else None),
-            f"{sysinfo.get('cpu_count')} CPU threads" if sysinfo.get("cpu_count") else None,
-            f"torch {sysinfo['torch']}" if "torch" in sysinfo else None,
-            f"python {sysinfo.get('python')}",
-            payload.get("timestamp"),
-        ) if x
+    labels = [_label(r, multi_model) for r in rows]
+    details = [_detail_text(r) for r in rows]
+    wrapped_details = [
+        textwrap.fill(text, width=38, break_long_words=True) for text in details
+    ]
+    row_heights = [
+        max(1.0, max(label.count("\n") + 1, detail.count("\n") + 1) * 0.62)
+        for label, detail in zip(labels, wrapped_details)
+    ]
+    y_positions = []
+    cursor = 0.0
+    for row_height in row_heights:
+        y_positions.append(cursor + row_height / 2)
+        cursor += row_height
+
+    max_fps = max((_number(r.get("fps")) or 0.0 for r in rows), default=0.0)
+    x_limit = max(max_fps / 0.39, 1.0)
+    figure_height = max(4.8, 2.75 + cursor * 0.48)
+    fig, ax = plt.subplots(figsize=(19, figure_height), facecolor=_BG)
+    fig.subplots_adjust(left=0.255, right=0.99, top=0.81, bottom=0.12)
+    ax.set_facecolor(_PANEL)
+    ax.set_xlim(0, x_limit)
+    ax.set_ylim(cursor + 0.45, -0.55)
+    _style(ax)
+
+    valid_fps = [
+        _number(r.get("fps"))
+        for r in rows
+        if not _is_error(r) and not _is_suspect(r) and _number(r.get("fps")) is not None
+    ]
+    best_fps = max(valid_fps, default=None)
+    colors = []
+    for r in rows:
+        fps = _number(r.get("fps"))
+        if _is_error(r) or fps is None:
+            colors.append(_BAD)
+        elif _is_suspect(r):
+            colors.append("#6e7681")
+        elif fps == best_fps:
+            colors.append(_OK)
+        else:
+            colors.append(_ACCENT)
+
+    fps_values = [max(0.0, _number(r.get("fps")) or 0.0) for r in rows]
+    bars = ax.barh(y_positions, fps_values, color=colors, height=0.58, zorder=3)
+    for bar, r, y, color in zip(bars, rows, y_positions, colors):
+        if _is_suspect(r) and not _is_error(r):
+            bar.set_hatch("//")
+        fps = _number(r.get("fps"))
+        if not _is_error(r) and fps is not None:
+            ax.text(
+                fps + max_fps * 0.012,
+                y,
+                f"{fps:.1f}",
+                va="center",
+                ha="left",
+                color=_TEXT if color != _OK else _OK,
+                fontsize=8,
+                fontweight="bold",
+            )
+
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(labels, color=_TEXT, fontsize=8.5, ha="right")
+    ax.tick_params(axis="y", length=0, pad=10)
+    tick_max = max(max_fps, 1.0)
+    ticks = [tick_max * fraction for fraction in (0, 0.25, 0.5, 0.75, 1.0)]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([f"{value:.0f}" for value in ticks], color=_DIM, fontsize=8)
+    ax.set_xlabel(
+        "Inference throughput (FPS; longer bars are faster)", color=_DIM, fontsize=9
     )
-    ax_head.text(0, 0.25, line, color=_DIM, fontsize=9, va="top")
 
-    _panel_throughput(fig.add_subplot(gs[1, :]), rows, multi_model)
-    for col, kind in enumerate(lower):
-        ax = fig.add_subplot(gs[2, col])
-        {"latency": lambda: _panel_latency(ax, rows, multi_model),
-         "stages": lambda: _panel_stages(ax, rows, multi_model),
-         "batch": lambda: _panel_batch(ax, rows)}[kind]()
+    latency_x, stage_x, details_x = 0.43, 0.655, 0.81
+    headers = (
+        (latency_x, "MEAN / P50 / P95 / P99 MS"),
+        (stage_x, "PRE / DEVICE / POST MS"),
+        (details_x, "PROVIDER / DETECTIONS / RESULT"),
+    )
+    for x, header in headers:
+        ax.text(
+            x,
+            1.015,
+            header,
+            transform=ax.transAxes,
+            color=_DIM,
+            fontsize=7.5,
+            fontweight="bold",
+            va="bottom",
+            clip_on=False,
+        )
 
-    fig.text(0.97, 0.01,
-             "hatched gray = suspect (<0.5 ms, model probably not running) | red = failed to run",
-             color=_DIM, fontsize=7, ha="right")
+    for r, y, color, detail in zip(rows, y_positions, colors, wrapped_details):
+        ax.text(
+            latency_x,
+            y,
+            _latency_text(r),
+            transform=ax.get_yaxis_transform(),
+            va="center",
+            color=_TEXT if not _is_error(r) else _DIM,
+            fontsize=7.7,
+            family="monospace",
+        )
+        ax.text(
+            stage_x,
+            y,
+            _stage_text(r),
+            transform=ax.get_yaxis_transform(),
+            va="center",
+            color=_TEXT if not _is_error(r) else _DIM,
+            fontsize=7.5,
+            family="monospace",
+        )
+        ax.text(
+            details_x,
+            y,
+            detail,
+            transform=ax.get_yaxis_transform(),
+            va="center",
+            color=_BAD if _is_error(r) else (_WARN if _is_suspect(r) else _TEXT),
+            fontsize=7.5,
+            linespacing=1.15,
+        )
+
+    for y in y_positions:
+        ax.axhline(y, color="#30363d", linewidth=0.45, alpha=0.45, zorder=0)
+
+    models = list(dict.fromkeys(str(r.get("model", "?")) for r in rows))
+    system_parts = [
+        sysinfo.get("gpu"),
+        f"{sysinfo['cpu_count']} CPU threads" if sysinfo.get("cpu_count") else None,
+        f"torch {sysinfo['torch']}" if sysinfo.get("torch") else None,
+        f"ONNX Runtime: {', '.join(sysinfo['onnxruntime_providers'])}"
+        if sysinfo.get("onnxruntime_providers")
+        else None,
+        f"Python {sysinfo['python']}" if sysinfo.get("python") else None,
+        payload.get("timestamp"),
+    ]
+    system_line = "  |  ".join(str(part) for part in system_parts if part)
+    fig.suptitle(
+        title, x=0.255, y=0.97, ha="left", color=_TEXT, fontsize=17, fontweight="bold"
+    )
+    fig.text(
+        0.255,
+        0.925,
+        textwrap.fill(f"Models: {', '.join(models)}    |    {system_line}", width=180),
+        ha="left",
+        va="top",
+        color=_DIM,
+        fontsize=8,
+    )
+    fig.text(
+        0.255,
+        0.045,
+        "Green: fastest valid run   Blue: other valid runs   Gray hatched: suspect (<0.5 ms)   Red: failed",
+        ha="left",
+        color=_DIM,
+        fontsize=8,
+    )
+
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, facecolor=_BG)
+    fig.savefig(out_path, dpi=160, facecolor=_BG, bbox_inches="tight", pad_inches=0.2)
     plt.close(fig)
     return out_path
