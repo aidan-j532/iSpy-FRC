@@ -16,7 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from iSpy.vision.engine_utils import read_engine_plan
+from iSpy.vision.engine_utils import execute_engine, read_engine_plan
 from iSpy.vision.ModelInspector import fill_missing_config
 
 
@@ -1268,24 +1268,14 @@ class GenericYolo:
         inp = self._preprocess_frame(frame)
         engine = self.model
         context = engine.create_execution_context()
+        inputs = {}
         for idx in range(engine.num_io_tensors):
             name = engine.get_tensor_name(idx)
             if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
                 context.set_input_shape(name, inp.shape)
-        bindings = []
-        output = None
-        for idx in range(engine.num_io_tensors):
-            name = engine.get_tensor_name(idx)
-            shape = context.get_tensor_shape(name)
-            if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                inp_contig = np.ascontiguousarray(inp)
-                bindings.append(inp_contig.ctypes.data)
-            else:
-                out = np.empty(tuple(shape), dtype=np.float32)
-                bindings.append(out.ctypes.data)
-                output = out
-        context.execute_v2(bindings)
-        return self.postprocess([output], orig_shape)
+                inputs[name] = inp
+        outputs = execute_engine(engine, context, inputs, self.device)
+        return self.postprocess(outputs, orig_shape)
 
     def _run_openvino(self, frame: np.ndarray, orig_shape) -> Results:
         inp = self._preprocess_frame(frame)

@@ -94,7 +94,8 @@ class _FakeEngineContext:
     def execute_v2(self, bindings):
         # bindings layout is [input_ptr, output_ptr]; the output buffer was
         # pre-initialized to an empty (1, 0, F) tensor, so nothing to write.
-        pass
+        self.bindings = bindings
+        return True
 
 
 class _FakeEngine:
@@ -113,6 +114,9 @@ class _FakeEngine:
             if name == self._input_name
             else _FakeTensorIOMode.OUTPUT
         )
+
+    def get_tensor_dtype(self, name):
+        return np.float32
 
     def create_execution_context(self):
         shapes = {
@@ -133,7 +137,32 @@ class _FakeTensorRTRuntime:
 trt_mod.Runtime = _FakeTensorRTRuntime
 trt_mod.Logger = MagicMock()
 trt_mod.TensorIOMode = _FakeTensorIOMode
+trt_mod.nptype = lambda dtype: dtype
 sys.modules["tensorrt"] = trt_mod
+
+
+class _FakeTorchTensor:
+    def __init__(self, array):
+        self.array = array
+        self.dtype = array.dtype
+
+    def to(self, device):
+        return self
+
+    def data_ptr(self):
+        return id(self.array)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.array
+
+
+torch_mod.from_numpy = lambda array: _FakeTorchTensor(array)
+torch_mod.empty = lambda shape, dtype, device: _FakeTorchTensor(
+    np.empty(shape, dtype=dtype)
+)
 
 # Fake openvino (for .xml runtime tests)
 ov_mod = types.ModuleType("openvino")
@@ -488,10 +517,12 @@ class TestCompiledFormatGenericYolo(unittest.TestCase):
         with open(eng, "wb") as f:
             f.write(b"\x00" * 4096)
 
-        w = GenericYolo(self._complete_cfg(eng))
-        self.assertEqual(w.model_type, "engine")
-
-        res = w.predict(make_frame())
+        with patch.object(torch_mod.cuda, "is_available", return_value=True), patch.object(
+            torch_mod.cuda, "device_count", return_value=1
+        ):
+            w = GenericYolo(self._complete_cfg(eng))
+            self.assertEqual(w.model_type, "engine")
+            res = w.predict(make_frame())
         self.assertIsInstance(res, Results)
         self.assertEqual(res.boxes, [])
 

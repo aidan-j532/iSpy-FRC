@@ -10,6 +10,7 @@ from PIL import Image
 from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
 from iSpy.vision._safe_imports import ensure_torch_imported, import_rknnlite
 from iSpy.vision.Object import Object
+from iSpy.vision.engine_utils import execute_engine
 from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.vision.pipelines.optimizable import (
     OptimizableModelPipeline,
@@ -916,30 +917,21 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         return self._postprocess_depth(depth, frame)
 
     def _infer_depth_engine(self, frame: np.ndarray) -> np.ndarray:
-        import numpy as np
         import tensorrt as trt
 
         pixel_values = self._preprocess_depth(frame)
         engine = self._session
         context = engine.create_execution_context()
+        inputs = {}
         for idx in range(engine.num_io_tensors):
             name = engine.get_tensor_name(idx)
             if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
                 context.set_input_shape(name, pixel_values.shape)
-        bindings = []
-        output = None
-        for idx in range(engine.num_io_tensors):
-            name = engine.get_tensor_name(idx)
-            shape = context.get_tensor_shape(name)
-            if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                pixel_values_contig = np.ascontiguousarray(pixel_values)
-                bindings.append(pixel_values_contig.ctypes.data)
-            else:
-                out = np.empty(tuple(shape), dtype=np.float32)
-                bindings.append(out.ctypes.data)
-                output = out
-        context.execute_v2(bindings)
-        return self._postprocess_depth(output, frame)
+                inputs[name] = pixel_values
+        outputs = execute_engine(engine, context, inputs)
+        if not outputs:
+            raise RuntimeError("TensorRT depth model returned no outputs")
+        return self._postprocess_depth(outputs[0], frame)
 
     def _infer_depth_coreml(self, frame: np.ndarray) -> np.ndarray:
         pixel_values = self._preprocess_depth(frame)
