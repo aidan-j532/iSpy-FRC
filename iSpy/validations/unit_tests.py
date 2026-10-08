@@ -323,6 +323,32 @@ class TestAutoOpt(unittest.TestCase):
     def test_tpu_uses_tpu_format(self):
         self.assertEqual(_recommend(has_tpu=True), "tpu")
 
+    def test_tpu_runtime_detected_without_host_markers(self):
+        import iSpy.config.AutoOpt as ao
+
+        torch_xla = types.ModuleType("torch_xla")
+        torch_xla_core = types.ModuleType("torch_xla.core")
+        xla_model = types.ModuleType("torch_xla.core.xla_model")
+        xla_model.xla_device = MagicMock(return_value="xla:0")
+        xla_runtime = types.ModuleType("torch_xla.runtime")
+        xla_runtime.device_type = MagicMock(return_value="TPU")
+        modules = {
+            "torch_xla": torch_xla,
+            "torch_xla.core": torch_xla_core,
+            "torch_xla.core.xla_model": xla_model,
+            "torch_xla.runtime": xla_runtime,
+        }
+
+        with (
+            patch.dict(sys.modules, modules),
+            patch.object(ao, "has_tpu_hardware", return_value=False),
+        ):
+            ao.has_tpu.cache_clear()
+            try:
+                self.assertTrue(ao.has_tpu())
+            finally:
+                ao.has_tpu.cache_clear()
+
     def test_tpu_hardware_without_torch_xla_installs_tpu(self):
         # torch_xla missing but the hardware is there - installer has to be told
         # tpu so it can pull torch_xla in, same escape hatch tensorrt gets.

@@ -209,8 +209,6 @@ def has_tpu_hardware() -> bool:
 
 @lru_cache()
 def has_tpu() -> bool:
-    if not has_tpu_hardware():
-        return False
     try:
         import torch_xla
         import torch_xla.core.xla_model as xm
@@ -221,6 +219,15 @@ def has_tpu() -> bool:
         return False
 
     try:
+        try:
+            import torch_xla.runtime as xr
+
+            if xr.device_type() != "TPU":
+                return False
+        except (ImportError, AttributeError):
+            # Older torch_xla versions do not expose runtime.device_type().
+            if not has_tpu_hardware():
+                return False
         xm.xla_device()
         return True
     except Exception as e:
