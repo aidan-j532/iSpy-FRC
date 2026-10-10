@@ -211,6 +211,10 @@ def _make_python() -> str:
     return python
 
 
+def _systemd_is_running() -> bool:
+    return os.path.isdir("/run/systemd/system")
+
+
 def setup_first_boot_service(project_root: str | None = None) -> None:
     python = _make_python()
     workdir = project_root or os.getcwd()
@@ -243,10 +247,13 @@ WantedBy=multi-user.target
         print(f"Failed to write {FIRST_BOOT_SERVICE_NAME}.service: {proc.stderr}")
         sys.exit(1)
 
-    run(["sudo", "systemctl", "daemon-reload"])
     run(["sudo", "systemctl", "enable", FIRST_BOOT_SERVICE_NAME])
-    run(["sudo", "systemctl", "start", FIRST_BOOT_SERVICE_NAME])
-    print(f"Service '{FIRST_BOOT_SERVICE_NAME}' installed, enabled, and started.")
+    if _systemd_is_running():
+        run(["sudo", "systemctl", "daemon-reload"])
+        run(["sudo", "systemctl", "start", FIRST_BOOT_SERVICE_NAME])
+        print(f"Service '{FIRST_BOOT_SERVICE_NAME}' installed, enabled, and started.")
+    else:
+        print(f"Service '{FIRST_BOOT_SERVICE_NAME}' installed and enabled.")
 
 
 def _service_user() -> str:
@@ -279,7 +286,7 @@ After=network-online.target ispy-first-boot.service
 Requires=ispy-first-boot.service
 
 [Service]
-ExecStart={python} -m iSpy.boot.boot
+ExecStart={python} -m iSpy.cli start
 Restart=on-failure
 RestartSec=5
 User={user}
@@ -298,10 +305,13 @@ WantedBy=multi-user.target
         print(f"Failed to write service file: {proc.stderr}")
         sys.exit(1)
 
-    run(["sudo", "systemctl", "daemon-reload"])
     run(["sudo", "systemctl", "enable", SERVICE_NAME])
-    run(["sudo", "systemctl", "start", SERVICE_NAME])
-    print(f"Service '{SERVICE_NAME}' installed and started.")
+    if _systemd_is_running():
+        run(["sudo", "systemctl", "daemon-reload"])
+        run(["sudo", "systemctl", "start", SERVICE_NAME])
+        print(f"Service '{SERVICE_NAME}' installed and started.")
+    else:
+        print(f"Service '{SERVICE_NAME}' installed and enabled.")
     print(f"  Logs:    journalctl -u {SERVICE_NAME} -f")
     print(f"  Stop:    sudo systemctl stop {SERVICE_NAME}")
     print(f"  Disable: sudo systemctl disable {SERVICE_NAME}")

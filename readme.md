@@ -227,11 +227,12 @@ ispy-boot --replay "VideoRecordings/session_2026-01-01_18-30-00"
 ```
 
 `--replay-speed` (default `1.0`), `--replay-cam` (one recorded camera) and
-`--replay-no-loop` are also available. A replay publishes nothing to
-NetworkTables, and the page hands you the exact command rather than launching
-it, since swapping the camera stack out from under a live robot is not safe.
-When a replay ends, iSpy writes `Outputs/replay_<session>_<timestamp>.json`
-diffing what the pipeline found this time against what the sidecar recorded.
+`--replay-no-loop` are also available. Without `--replay-cam`, all recorded
+cameras are replayed through the currently configured vision pipeline; with
+it, only that camera is selected. `--replay-no-loop` exits when the clips end.
+A replay disables recording and NetworkTables publishing. The Rollback page
+shows the exact command rather than launching it, since swapping the camera
+stack out from under a live robot is not safe.
 
 Health reporting is **not** an add-on: it is the always-on core web module
 (`iSpy/web/modules/health.py`, `/health` + `/api/health`). Tune its stale-frame
@@ -448,6 +449,18 @@ Benchmark results are hardware- and model-dependent. The Orange Pi 5 Pro
 for the YOLO fuel detector. Treat these as indicative measurements, not
 guarantees; run `ispy-bench` with your own camera, model, and calibration data
 before relying on a number for competition planning.
+
+`ispy-bench` reports its normal throughput for the complete model-prediction
+call, including input preparation and result processing. Where supported, it
+also prints a `vision-only` measurement for PyTorch, ONNX, and TensorRT. It
+prepares inputs before timing and measures the backend/model forward call,
+excluding iSpy preprocessing and postprocessing. Use `vision-only` when
+comparing model execution speed; use the normal `predict` FPS to estimate the
+cost of running inference through iSpy. Device synchronization is included so
+accelerator timings account for completed work.
+
+Linux ARM64 installs constrain NumPy below 2 because the supported PyTorch and
+RKNN runtime wheels on those boards are built against the NumPy 1.x ABI.
 
 ---
 

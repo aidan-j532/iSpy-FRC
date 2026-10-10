@@ -375,7 +375,10 @@ class RollBack(UtilityBase):
     def __init__(self, context: dict):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
-        self._enabled = bool(self.config.get("enabled", True))
+        vision = self.context.get("vision_instance")
+        self._enabled = bool(self.config.get("enabled", True)) and not bool(
+            getattr(vision, "replay_mode", False)
+        )
         self._video_output_dir = self.config.get("data_dir", "VideoRecordings")
         self._fps = float(self.config.get("fps", 30.0))
         self._max_queue = int(self.config.get("max_queue", 60))

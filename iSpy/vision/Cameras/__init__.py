@@ -15,6 +15,7 @@ BUILTIN_CAMERAS = {
 CAMERA_TYPE_LABELS = {
     "opencv": "OpenCV (USB / stream / index)",
     "tello": "DJI Tello / Tello Edu",
+    "replay": "Rollback Replay",
 }
 
 

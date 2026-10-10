@@ -119,6 +119,13 @@ def _detail_text(r) -> str:
         details.append(f"{r['detections']} detections")
     if r.get("bottleneck"):
         details.append(f"bottleneck: {r['bottleneck']}")
+    if r.get("model_forward_fps"):
+        details.append(
+            f"vision-only: {r['model_forward_fps']:.1f} FPS "
+            f"({r['model_forward_ms']:.2f} ms/frame)"
+        )
+    elif r.get("model_forward_error"):
+        details.append(f"vision-only error: {r['model_forward_error']}")
     if _is_suspect(r):
         details.append("suspect latency")
     return " · ".join(details)
@@ -219,12 +226,14 @@ def render_report(payload: dict, out_path, title: str = "iSpy benchmark"):
     ax.set_xticks(ticks)
     ax.set_xticklabels([f"{value:.0f}" for value in ticks], color=_DIM, fontsize=8)
     ax.set_xlabel(
-        "Inference throughput (FPS; longer bars are faster)", color=_DIM, fontsize=9
+        "iSpy predict throughput (FPS; longer bars are faster)",
+        color=_DIM,
+        fontsize=9,
     )
 
     latency_x, stage_x, details_x = 0.43, 0.655, 0.81
     headers = (
-        (latency_x, "MEAN / P50 / P95 / P99 MS"),
+        (latency_x, "PREDICT MEAN / P50 / P95 / P99 MS"),
         (stage_x, "PRE / DEVICE / POST MS"),
         (details_x, "PROVIDER / DETECTIONS / RESULT"),
     )

@@ -728,7 +728,9 @@ async function rbRefreshReplayCommand() {
   const wrap = document.getElementById('rb-replay-cmd-wrap');
   if (!RB.session) { wrap.style.display = 'none'; return; }
   try {
-    const d = await rbJson('/api/rollback/' + encodeURIComponent(RB.session) + '/replay');
+    const replayUrl = '/api/rollback/' + encodeURIComponent(RB.session) +
+      '/replay' + (RB.cam ? '?cam=' + encodeURIComponent(RB.cam) : '');
+    const d = await rbJson(replayUrl);
     document.getElementById('rb-replay-cmd').textContent = d.command;
     const clip = document.getElementById('rb-dl-clip');
     if (RB.stem && RB.cam) {

@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from wpimath.geometry import Pose2d
+from wpimath.geometry import Pose2d, Rotation2d
 
 from iSpy.config.iSpyConfig import iSpyAddonConfig, iSpyConfig
 from iSpy.core.control_channel import ControlServer
@@ -119,6 +119,8 @@ class iSpy:
             if name == "rollback":
                 # stale entry from before rollback was core - the instance
                 # above is the only recorder, do not build a second one
+                continue
+            if self.replay_mode and name == "FRC/network_table_handler":
                 continue
             if name in utility_classes:
                 try:
@@ -325,8 +327,25 @@ class iSpy:
 
 
 
-    def _get_pose(self, code_times: dict | None = None) -> Pose2d:
+    @property
+    def replay_mode(self) -> bool:
+        return bool(self.cameras) and all(
+            callable(getattr(camera, "replay_pose", None)) for camera in self.cameras
+        )
 
+    def _get_pose(self, code_times: dict | None = None) -> Pose2d:
+        for camera in self.cameras:
+            replay_pose = getattr(camera, "replay_pose", None)
+            if callable(replay_pose):
+                pose = replay_pose()
+                if isinstance(pose, dict):
+                    return Pose2d(
+                        float(pose.get("x", 0) or 0),
+                        float(pose.get("y", 0) or 0),
+                        Rotation2d(float(pose.get("heading", 0) or 0)),
+                    )
+                if pose is not None:
+                    return pose
 
         for name, util in self.utilities.items():
             if hasattr(util, "get_robot_pose"):
@@ -490,13 +509,13 @@ class iSpy:
         opted_trackers_s = 0.0
         for name, tracker in self.trackers.items():
             # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so change
-            t0 = time.perf_counter()
+            t_one = time.perf_counter()
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
             if self._addon_breakdown_parts(tracker):
                 key = getattr(tracker, "plugin_name", name)
-                code_times[key] = time.perf_counter() - t0
+                code_times[key] = time.perf_counter() - t_one
                 opted_trackers_s += code_times[key]
         code_times["trackers"] = max(
             0.0, time.perf_counter() - t_track - opted_trackers_s
@@ -582,13 +601,13 @@ class iSpy:
         opted_trackers_s = 0.0
         for name, tracker in self.trackers.items():
             # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so change
-            t0 = time.perf_counter()
+            t_one = time.perf_counter()
             detections = tracker.update(
                 detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
             )
             if self._addon_breakdown_parts(tracker):
                 key = getattr(tracker, "plugin_name", name)
-                code_times[key] = time.perf_counter() - t0
+                code_times[key] = time.perf_counter() - t_one
                 opted_trackers_s += code_times[key]
         code_times["trackers"] = max(
             0.0, time.perf_counter() - t_track - opted_trackers_s
@@ -649,6 +668,8 @@ class iSpy:
             self.run_solo_vision(camera)
             while not self.shutdown_event.is_set():
                 camera = self.cameras[0]
+                if self._replay_at_end():
+                    break
                 if self.pause_event.is_set():
                     if last_frame_data is not None:
                         # raw_frames is cleared: the recorder consumes them on
@@ -699,6 +720,8 @@ class iSpy:
 
             last_frame_data = None
             while not self.shutdown_event.is_set():
+                if self._replay_at_end():
+                    break
                 if self.pause_event.is_set():
                     if last_frame_data is not None:
                         frozen = {**last_frame_data, "fps": 0, "raw_frames": {}}
@@ -731,3 +754,15 @@ class iSpy:
             if self.web_app:
                 self.web_app.stop()
             handler.destroy()
+
+    def _replay_at_end(self) -> bool:
+        sources = [getattr(camera, "_delegate", camera) for camera in self.cameras]
+        if not sources or not all(
+            getattr(source, "camera_type", None) == "replay" for source in sources
+        ):
+            return False
+        finished = []
+        for source in sources:
+            status = getattr(source, "replay_finished", False)
+            finished.append(bool(status() if callable(status) else status))
+        return all(finished)

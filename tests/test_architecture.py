@@ -572,14 +572,20 @@ class BootTests(unittest.TestCase):
     def test_boot_completes_when_all_ready(self):
         from iSpy.boot.boot import _wait_for_pipeline_ready
 
+        destroyed = []
+
         class FakeReadyPipeline:
             def __init__(self, camera_config, config, core_mask=None):
-                pass
+                self.name = camera_config.get("name")
 
             def is_ready(self):
                 return True, "ready"
 
+            def destroy(self):
+                destroyed.append(self.name)
+
         _wait_for_pipeline_ready(self._fake_config(), {"fake": FakeReadyPipeline})
+        self.assertEqual(destroyed, ["cam_0"])
 
     def test_broken_camera_does_not_block_healthy_cameras(self):
         # a single camera whose pipeline fails to construct is skipped w/ a log;
@@ -1137,6 +1143,10 @@ class PipelineCalibrationGateTests(unittest.TestCase):
         cam._optimizing = False
         cam._optimization_requested = lambda: False
         cam.model = object()
+        cam.calibration_status = lambda: ("yellow", "uncalibrated")
+        self.assertTrue(cam._is_processable())
+
+        cam.calibration_status = lambda: ("red", "calibration invalid")
         self.assertFalse(cam._is_processable())
 
         cam.config = _FakeCamConfig(
@@ -1145,7 +1155,30 @@ class PipelineCalibrationGateTests(unittest.TestCase):
                 "dist_coeffs": [0, 0, 0, 0, 0],
             }
         )
+        cam.calibration_status = lambda: ("green", "ready")
         self.assertTrue(cam._is_processable())
+
+    def test_uncalibrated_detection_runs_while_calibration_is_approximate(self):
+        import numpy as np
+
+        class DetectionData:
+            orig_shape = (64, 64)
+            boxes = []
+            keypoints = None
+
+        cam = ObjectDetectionPipeline.__new__(ObjectDetectionPipeline)
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        cam._next_input_frame = lambda: frame
+        cam._gate_uncalibrated = lambda image: None
+        cam._optimizing = False
+        cam._optimization_requested = lambda: False
+        cam.model = object()
+        cam.calibration_status = lambda: ("yellow", "uncalibrated")
+        cam.get_yolo_data = lambda: (DetectionData(), frame)
+
+        objects, output_frame = cam.run()
+        self.assertEqual(objects, [])
+        self.assertIs(output_frame, frame)
 
     def test_pipeline_payload_exposes_requires_calibration(self):
         from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads

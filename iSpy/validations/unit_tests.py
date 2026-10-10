@@ -1037,7 +1037,7 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
 
 
 class TestEKFTracker(unittest.TestCase):
-    def _make_tracker(self):
+    def _make_tracker(self, distance_threshold=1.0):
         from iSpy.plugins.trackers.BuiltIn.EKFTracker import EKFTracker
 
         return EKFTracker(
@@ -1045,7 +1045,7 @@ class TestEKFTracker(unittest.TestCase):
                 "config": {
                     "process_noise": 0.5,
                     "measurement_noise": 0.1,
-                    "distance_threshold": 1.0,
+                    "distance_threshold": distance_threshold,
                     "stale_threshold": 2.0,
                 },
                 "global_config": None,
@@ -1053,10 +1053,22 @@ class TestEKFTracker(unittest.TestCase):
         )
 
     def test_ekf_smoothes_better_than_raw_measurements(self):
+        import importlib
+        from types import SimpleNamespace
+
         from iSpy.vision.Object import Object
 
         rng = np.random.default_rng(7)
-        tracker = self._make_tracker()
+        tracker = self._make_tracker(distance_threshold=3.0)
+        ekf_module = importlib.import_module(
+            "iSpy.plugins.trackers.BuiltIn.EKFTracker"
+        )
+        clock_value = 0.0
+
+        def advance_clock():
+            nonlocal clock_value
+            clock_value += 0.05
+            return clock_value
 
         # constant-velocity ground truth: start at origin, move +1.0 m/s in x
         velocity = np.array([1.0, 0.0, 0.0])
@@ -1067,17 +1079,26 @@ class TestEKFTracker(unittest.TestCase):
         # collect smoothed positions as they are produced
         smoothed_path = []
 
-        for i in range(n):
-            t_i = i * dt
-            true = velocity * t_i
-            true_positions.append(true)
-            noise = rng.normal(0.0, 0.5, size=3)  # fairly noisy measurements
-            raw = true + noise
-            raw_sq += float(np.linalg.norm(noise) ** 2)
+        with patch.object(
+            ekf_module,
+            "time",
+            SimpleNamespace(monotonic=advance_clock),
+        ):
+            for i in range(n):
+                t_i = i * dt
+                true = velocity * t_i
+                true_positions.append(true)
+                noise = rng.normal(0.0, 0.5, size=3)
+                raw = true + noise
+                raw_sq += float(np.linalg.norm(noise) ** 2)
 
-            obj = Object(x=float(raw[0]), y=float(raw[1]), z=float(raw[2]), name="ball")
-            tracker.update([obj], 0.0, 0.0, 0.0, 0.0)
-            smoothed_path.append(np.array(tracker.tracked_objects[0].get_position()))
+                obj = Object(
+                    x=float(raw[0]), y=float(raw[1]), z=float(raw[2]), name="ball"
+                )
+                tracker.update([obj], 0.0, 0.0, 0.0, 0.0)
+                smoothed_path.append(
+                    np.array(tracker.tracked_objects[0].get_position())
+                )
 
         true_arr = np.array(true_positions)
         sm_arr = np.array(smoothed_path)

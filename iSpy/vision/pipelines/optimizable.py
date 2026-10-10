@@ -294,7 +294,7 @@ class OptimizableModelPipeline:
         return None
 
     def _is_processable(self) -> bool:
-        if not self.calibration_ready():
+        if self.calibration_status()[0] == "red":
             return False
         if getattr(self, "_optimizing", False):
             return False

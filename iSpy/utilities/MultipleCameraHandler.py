@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import logging
 import threading
+from iSpy.config.iSpyConfig import _INCHES_TO_OUTPUT_UNIT
 
 
 class MultipleCameraHandler:
@@ -20,6 +21,12 @@ class MultipleCameraHandler:
         )
         self._match_gate = (
             config.get("triangulation_match_distance", 2.0) if config else 2.0
+        )
+        # Ray geometry and max_residual are in inches; detections and the
+        # match-distance gate are in the configured output unit.
+        unit = str((config or {}).get("unit", "frc")).lower().strip()
+        self._inches_to_output_unit = _INCHES_TO_OUTPUT_UNIT.get(
+            unit, _INCHES_TO_OUTPUT_UNIT["frc"]
         )
 
         self._objects: list[list[Object]] = [[] for _ in cameras]
@@ -109,9 +116,9 @@ class MultipleCameraHandler:
                 if best is not None:
                     residual, cam_b, idx_b, point = best
                     obj_a.x, obj_a.y, obj_a.z = (
-                        float(point[0]),
-                        float(point[1]),
-                        float(point[2]),
+                        float(point[0]) * self._inches_to_output_unit,
+                        float(point[1]) * self._inches_to_output_unit,
+                        float(point[2]) * self._inches_to_output_unit,
                     )
                     obj_a.depth_source = "triangulated"
                     used.add((cam_b, idx_b))

@@ -1252,11 +1252,14 @@ class GenericYolo:
         out["box_format"] = "xywh"
         if out.get("score_mode") not in ("objectness", "classwise"):
             out["score_mode"] = "classwise"
-        out["scores_are_logits"] = True
+        # Ultralytics detect heads emit sigmoid-activated class probabilities.
+        out["scores_are_logits"] = False
+        out["apply_software_nms"] = True
+        out["nms_iou"] = float(out.get("nms_iou") or 0.45)
         self.output = out
         self.logger.info(
             "OpenVINO output aligned: format=raw_detect layout=%s shape=%s "
-            "score_mode=%s scores_are_logits=True",
+            "score_mode=%s scores_are_logits=False software_nms=True",
             "features_first",
             tuple(ov_out_shape),
             out["score_mode"],

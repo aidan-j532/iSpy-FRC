@@ -145,8 +145,6 @@ def _build_vision_pipeline_payloads(admin=None):
     for name, cls in sorted(vision_classes.items()):
         if admin is not None:
             is_admin_pipeline = name in _ADMIN_ONLY_PIPELINES
-            if admin and not is_admin_pipeline:
-                continue
             if not admin and is_admin_pipeline:
                 continue
         try:

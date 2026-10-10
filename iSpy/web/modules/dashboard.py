@@ -248,6 +248,9 @@ class DashboardModule(WebModule):
                 "memory_used_mb": None,
                 "memory_total_mb": None,
                 "temperature": None,
+                "temperature_unit": (self.context.get("config") or {}).get(
+                    "temperature_unit", "celsius"
+                ),
                 "hardware": self._get_hardware(),
             }
 
@@ -297,6 +300,7 @@ class DashboardModule(WebModule):
             "memory_used_mb": mem_used,
             "memory_total_mb": mem_total,
             "temperature": display_temp,
+            "temperature_unit": temperature_unit,
             "temperature_warning": display_warning,
             "hardware": self._get_hardware(),
         }

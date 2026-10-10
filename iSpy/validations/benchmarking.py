@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+from functools import partial
 import hashlib
 import io
 import json
@@ -451,6 +452,144 @@ def _require_benchmark_count(count: int) -> None:
         raise RuntimeError("no inference completed during benchmark")
 
 
+def _benchmark_model_forward(model, frames: list, batch_size: int) -> dict | None:
+    """Time backend model execution without iSpy preprocessing or postprocessing."""
+    import numpy as np
+
+    model_type = getattr(model, "model_type", None)
+    if model_type not in ("yolo", "onnx", "engine", "tpu"):
+        return None
+
+    if model_type == "tpu":
+        import torch
+
+        prepared = [
+            model._preprocess_tpu_frame(frames[index % len(frames)])
+            for index in range(batch_size)
+        ]
+        tensor = torch.from_numpy(np.stack(prepared)).to(model._tpu_device)
+        tensor = tensor.permute(0, 3, 1, 2).to(dtype=torch.float32).div_(255.0)
+        if model.tpu_dtype == "bf16":
+            tensor = tensor.to(dtype=torch.bfloat16)
+        network = model.model
+
+        def infer():
+            with torch.inference_mode(), model._tpu_autocast(torch):
+                return network(tensor)
+
+        synchronize = model._tpu_sync
+    else:
+        prepared = np.concatenate(
+            [
+                np.array(
+                    model._preprocess_frame(frames[index % len(frames)]), copy=True
+                )
+                for index in range(batch_size)
+            ],
+            axis=0,
+        )
+        synchronize = lambda: None
+
+        if model_type == "yolo":
+            import torch
+
+            device = model.device
+            if isinstance(device, int):
+                device = f"cuda:{device}"
+            tensor = torch.from_numpy(prepared)
+            if tensor.ndim == 4 and tensor.shape[-1] in (1, 3, 4):
+                tensor = tensor.permute(0, 3, 1, 2)
+            tensor = tensor.contiguous().to(device=device)
+            if tensor.dtype == torch.uint8:
+                tensor = tensor.to(dtype=torch.float32).div_(255.0)
+            network = model.model.model
+
+            def infer():
+                with torch.inference_mode():
+                    return network(tensor)
+
+            if str(device).startswith("cuda"):
+                synchronize = partial(torch.cuda.synchronize, device)
+        elif model_type == "onnx":
+            providers = model.model.get_providers()
+            if "CUDAExecutionProvider" in providers:
+                import torch
+
+                device = model.device if isinstance(model.device, int) else 0
+                tensor = torch.from_numpy(prepared).to(f"cuda:{device}")
+                binding = model.model.io_binding()
+                binding.bind_input(
+                    model._onnx_inp_name,
+                    device_type="cuda",
+                    device_id=device,
+                    element_type=prepared.dtype,
+                    shape=prepared.shape,
+                    buffer_ptr=tensor.data_ptr(),
+                )
+                for name in model._onnx_out_names:
+                    binding.bind_output(name, device_type="cuda", device_id=device)
+                infer = partial(model.model.run_with_iobinding, binding)
+                synchronize = partial(torch.cuda.synchronize, device)
+            else:
+                infer = lambda: model.model.run(
+                    model._onnx_out_names, {model._onnx_inp_name: prepared}
+                )
+        else:
+            import tensorrt as trt
+            import torch
+
+            engine = model.model
+            context = engine.create_execution_context()
+            device = f"cuda:{model.device}"
+            buffers = []
+            bindings = []
+            with torch.cuda.device(model.device):
+                for index in range(engine.num_io_tensors):
+                    name = engine.get_tensor_name(index)
+                    dtype = np.dtype(trt.nptype(engine.get_tensor_dtype(name)))
+                    if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                        context.set_input_shape(name, prepared.shape)
+                        buffer = torch.from_numpy(
+                            np.ascontiguousarray(prepared, dtype=dtype)
+                        ).to(device=device)
+                    else:
+                        shape = tuple(context.get_tensor_shape(name))
+                        if any(size < 0 for size in shape):
+                            raise RuntimeError(
+                                f"TensorRT output {name!r} has unresolved shape "
+                                f"{shape}"
+                            )
+                        torch_dtype = torch.from_numpy(np.empty((), dtype=dtype)).dtype
+                        buffer = torch.empty(shape, dtype=torch_dtype, device=device)
+                    buffers.append(buffer)
+                    bindings.append(buffer.data_ptr())
+
+            def infer():
+                if not context.execute_v2(bindings):
+                    raise RuntimeError("TensorRT execute_v2 returned false")
+
+            synchronize = partial(torch.cuda.synchronize, device)
+
+    for _ in range(3):
+        infer()
+    synchronize()
+
+    durations_ms = []
+    for _ in range(15):
+        synchronize()
+        started = time.perf_counter()
+        infer()
+        synchronize()
+        durations_ms.append((time.perf_counter() - started) * 1000)
+
+    batch_ms = sum(durations_ms) / len(durations_ms)
+    frame_ms = batch_ms / batch_size
+    return {
+        "model_forward_ms": frame_ms,
+        "model_forward_fps": 1000.0 / frame_ms,
+    }
+
+
 def _benchmark_stream(
     model_config: dict,
     core_mask,
@@ -513,54 +652,29 @@ def _benchmark_stream(
             return batch
 
         if mode == "serial":
-            warmup_times = []
-            stable = False
-            for _ in range(30):
+            for _ in range(5):
                 batch = next_batch()
-                started = time.perf_counter()
                 outputs = model.predict(
                     batch, orig_shape=[frame.shape for frame in batch]
                 )
-                elapsed = time.perf_counter() - started
                 if not isinstance(outputs, list):
                     outputs = [outputs]
-                if not outputs:
-                    raise RuntimeError("model returned no inference results")
-                warmup_times.append(elapsed)
-                if len(warmup_times) >= 5:
-                    recent = warmup_times[-5:]
-                    mean = sum(recent) / len(recent)
-                    if mean and (max(recent) - min(recent)) / mean <= 0.15:
-                        stable = True
-                        break
-            if not stable:
-                raise RuntimeError("serial warmup did not stabilize")
+                if len(outputs) != len(batch):
+                    raise RuntimeError(
+                        f"model returned {len(outputs)} warmup results for "
+                        f"{len(batch)} frames"
+                    )
             _sync_camera(camera)
         else:
             warmup_deadline = time.perf_counter() + 60
             warmup_count = camera.inference_count
-            stable = False
             while time.perf_counter() < warmup_deadline:
                 camera.run()
                 completed = camera.inference_count - warmup_count
                 if completed >= 5:
-                    with camera._metrics_lock:
-                        recent = [
-                            sample["latency"]
-                            for sample in list(camera._timing_samples)[-5:]
-                        ]
-                    mean = sum(recent) / len(recent) if recent else 0.0
-                    if (
-                        len(recent) == 5
-                        and mean
-                        and (max(recent) - min(recent)) / mean <= 0.15
-                    ):
-                        stable = True
-                        break
-                if completed >= 30:
                     break
-            if not stable:
-                raise RuntimeError("pipeline warmup did not stabilize")
+            if camera.inference_count == warmup_count:
+                raise RuntimeError("no inference completed during pipeline warmup")
             _sync_camera(camera)
 
         start_count = camera.inference_count
@@ -616,9 +730,12 @@ def _benchmark_stream(
             "device": inference_ms,
             "postprocess": 0.0,
         }
-        return {
+        predict_fps = count / elapsed
+        result = {
             "ok": True,
-            "fps": count / elapsed,
+            "fps": predict_fps,
+            "predict_fps": predict_fps,
+            "predict_ms": inference_ms,
             "inference_ms": inference_ms,
             "frames": count,
             "elapsed": elapsed,
@@ -627,6 +744,15 @@ def _benchmark_stream(
             "stage_ms": stage_ms,
             "provider": provider,
         }
+        try:
+            model_forward = _benchmark_model_forward(model, frames, batch_size)
+        except Exception as exc:
+            logger.warning("Model-forward-only benchmark failed: %s", exc)
+            result["model_forward_error"] = str(exc)
+        else:
+            if model_forward is not None:
+                result.update(model_forward)
+        return result
     finally:
         camera.destroy()
 
@@ -685,9 +811,12 @@ def _combine_benchmark_runs(runs: list[dict]) -> dict:
     inference_ms = sum(latencies) / len(latencies) if latencies else 0.0
     if not count or inference_ms < 0.5:
         raise RuntimeError("benchmark produced no valid inference measurements")
-    return {
+    predict_fps = count / elapsed
+    result = {
         "ok": True,
-        "fps": count / elapsed,
+        "fps": predict_fps,
+        "predict_fps": predict_fps,
+        "predict_ms": inference_ms,
         "inference_ms": inference_ms,
         "frames": count,
         "elapsed": elapsed,
@@ -705,6 +834,20 @@ def _combine_benchmark_runs(runs: list[dict]) -> dict:
             fps for run in runs for fps in run.get("stream_fps", [run["fps"]])
         ],
     }
+    forward_runs = [run for run in runs if run.get("model_forward_fps")]
+    if forward_runs:
+        result["model_forward_fps"] = sum(
+            run["model_forward_fps"] for run in forward_runs
+        )
+        result["model_forward_ms"] = sum(
+            run["model_forward_ms"] for run in forward_runs
+        ) / len(forward_runs)
+    forward_errors = [
+        run["model_forward_error"] for run in runs if run.get("model_forward_error")
+    ]
+    if forward_errors:
+        result["model_forward_error"] = "; ".join(dict.fromkeys(forward_errors))
+    return result
 
 
 def _local_tpu_core_count() -> int:
@@ -770,9 +913,19 @@ def _fmt_result(r: dict) -> str:
             f"b{r.get('batch_size', 1)} {r.get('mode', 'serial')} "
             f"x{r.get('streams', 1)}"
         )
+        model_forward = ""
+        if r.get("model_forward_fps"):
+            model_forward = (
+                f" | vision-only {r['model_forward_fps']:.1f} FPS "
+                f"{r['model_forward_ms']:.2f} ms/frame"
+            )
+        elif r.get("model_forward_error"):
+            model_forward = f" | vision-only ERROR: {r['model_forward_error']}"
         return (
-            f"{r['backend']:20s} {config:20s} {r['fps']:6.1f} FPS "
-            f"{r.get('inference_ms', 0):6.1f} ms"
+            f"{r['backend']:20s} {config:20s} "
+            f"predict {r.get('predict_fps', r['fps']):6.1f} FPS "
+            f"{r.get('predict_ms', r.get('inference_ms', 0)):6.1f} ms/frame"
+            f"{model_forward}"
         )
     return f"{r['backend']:20s} ERROR: {r.get('error', 'unknown')}"
 
@@ -811,6 +964,8 @@ def _run_benchmark_task(task: dict) -> dict:
             measured = {
                 "ok": bool(count),
                 "fps": fps,
+                "predict_fps": fps,
+                "predict_ms": inference_ms,
                 "inference_ms": inference_ms,
                 "frames": count,
                 "elapsed": elapsed,

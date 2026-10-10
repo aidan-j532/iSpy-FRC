@@ -190,10 +190,12 @@ class VisionPipelineSchemaTests(unittest.TestCase):
         user_names = {
             p["name"] for p in _build_vision_pipeline_payloads(admin=False)
         }
-        # admin ON: exactly the experimental pipelines
-        self.assertEqual(admin_names, {"qr_code", "optical_flow"})
-        # admin OFF (normal users): those hidden, the rest kept
-        self.assertFalse(admin_names & user_names)
+        # admin ON: all normal pipelines plus the experimental pipelines
+        self.assertEqual(admin_names, all_names)
+        # admin OFF (normal users): experimental pipelines are hidden
+        self.assertTrue(user_names <= admin_names)
+        self.assertEqual(admin_names - user_names, {"qr_code", "optical_flow"})
+        self.assertTrue({"qr_code", "optical_flow"} <= admin_names)
         self.assertIn("object_detection", user_names)
         self.assertIn("april_tag", user_names)
         self.assertIn("depth_anything", user_names)

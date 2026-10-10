@@ -1,6 +1,8 @@
 import json
 import logging
+import os
 import math
+import shlex
 import shutil
 import threading
 from pathlib import Path
@@ -421,6 +423,12 @@ class RollbackModule(WebModule):
             self._clip,
             methods=["GET"],
         )
+        flask_app.add_url_rule(
+            "/api/rollback/<session_name>/replay",
+            "api_rollback_replay",
+            self._replay_command,
+            methods=["GET"],
+        )
 
     # status and settings
 
@@ -432,6 +440,10 @@ class RollbackModule(WebModule):
 
         recorder = self._recorder()
         config = self.context.get("config")
+        vision = self.context.get("vision_instance")
+        replay_mode = os.environ.get("ISPY_REPLAY_MODE") == "1" or bool(
+            getattr(vision, "replay_mode", False)
+        )
         block = config.get("rollback", {}) if config is not None else {}
         block = block if isinstance(block, dict) else {}
         max_total = float(block.get("max_total_mb", 2048) or 2048) * 1024 * 1024
@@ -461,6 +473,7 @@ class RollbackModule(WebModule):
 
         return jsonify(
             enabled=bool(block.get("enabled", True)),
+            replay_mode=replay_mode,
             recording=recording,
             data_dir=str(data_dir),
             session=session,
@@ -477,6 +490,26 @@ class RollbackModule(WebModule):
             if getattr(recorder, "_queue", None) is not None
             else 0,
         )
+
+    def _replay_command(self, session_name):
+        session = self._find_session(session_name)
+        if session is None:
+            return jsonify(error="Session not found"), 404
+        segments = _iter_segments(session["path"])
+        cameras = []
+        for segment in segments:
+            for camera in self._segment_cams(segment):
+                if camera not in cameras:
+                    cameras.append(camera)
+        camera = request.args.get("cam", "").strip()
+        if camera and camera not in cameras:
+            return jsonify(error="Camera not found in session"), 404
+        if not camera and cameras:
+            camera = cameras[0]
+        args = ["ispy-boot", "--replay", str(session["path"])]
+        if camera:
+            args.extend(["--replay-cam", camera])
+        return jsonify(command=" ".join(shlex.quote(arg) for arg in args))
 
     def _settings_get(self):
         config = self.context.get("config")

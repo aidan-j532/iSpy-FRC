@@ -34,10 +34,19 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
     config = boot.on_boot(
-        install_service=args.service,
+        install_service=args.service and not args.replay,
         fresh=args.command == "setup",
-        wait=args.wait,
+        wait=args.wait and not args.replay,
     )
+
+    if args.replay:
+        boot._configure_replay(
+            config,
+            args.replay,
+            args.replay_cam,
+            args.replay_speed,
+            loop=not args.replay_no_loop,
+        )
 
     # boot only prepares the install - config, models, cameras, service. the
     # vision loop is a separate step, and exiting here is why "ispy start"
