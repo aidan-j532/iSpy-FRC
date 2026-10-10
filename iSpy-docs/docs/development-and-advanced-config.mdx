@@ -6,7 +6,9 @@ sidebar_position: 9
 
 # Development and Advanced Configuration
 
-Once you have a basic setup working, there are a few things worth understanding if you want to tune or extend the project.
+This page is for people who already have a camera running and want to change how iSpy is configured or extended.
+
+The Python runtime lives at the repository root. The documentation website is the separate `iSpy-Docs/` Node project. Keep those working directories distinct when installing, running tests, or starting the docs server.
 
 ## The plugin model
 
@@ -33,9 +35,61 @@ Example:
 
 The project loads matching plugin classes from the repo and wires them in automatically. There is no special app registration step in the config; the plugin name and its presence are what matter.
 
+The plugin loader searches the corresponding `iSpy/plugins/` subdirectory for Python files and looks for subclasses of the expected base class. The value of `plugin_name` must match the key used in the config. Namespaced names such as `example/example_tracker` make it clear which plugin family an entry belongs to.
+
+### Which extension point should I use?
+
+| Base class | Called with | Use it for |
+| --- | --- | --- |
+| `TrackerBase` | Detections and the current robot pose; return detections | Group, smooth, filter, or otherwise adjust detections across loop updates. |
+| `UtilityBase` | Shared `frame_data`; may publish an `addon_data` value | Network output, logging, or other per-loop work that consumes the common result. |
+| `FrameProcessorBase` | A camera frame; return the frame to pass on | Image transforms or overlays that belong in the frame path. |
+
+These methods run as part of the vision loop. Keep them quick and avoid blocking network or disk work in a per-frame callback; a slow extension can lower the rate of the whole loop. Use the matching base class and callback rather than doing model inference from a utility.
+
+### Minimal tracker example
+
+The included example tracker shows the actual shape:
+
+```python
+from iSpy.plugins.bases import TrackerBase
+
+
+class ExampleTracker(TrackerBase):
+    plugin_name = "team/example_tracker"
+
+    @classmethod
+    def config_schema(cls) -> dict:
+        return {
+            "count_start": {
+                "type": "number",
+                "label": "Start Count",
+                "default": 0,
+            },
+        }
+
+    def __init__(self, context: dict):
+        super().__init__(context)
+        self.count = int(self.config.get("count_start", 0))
+
+    def update(self, detections, robot_x, robot_y, robot_yaw, robot_z=0.0):
+        self.count += 1
+        return detections
+```
+
+Put the class in the tracker plugin tree and use its exact `plugin_name` in `plugins.trackers`. Its `config_schema()` supplies the settings editor defaults; the runtime also merges those defaults when settings are omitted. The example does no useful tracking yet—it is a small place to start, not an algorithm to copy into a match robot.
+
+For a utility, call `self.publish_output(frame_data, value)` to put a value under the utility's declared output key. Other utilities, the dashboard, or the NetworkTables publish list can then read `addon_data.<output_key>`. For a frame processor, return the processed image from `process(frame)`. See `iSpy/plugins/example_utility.py` and `iSpy/plugins/frame_processors/example_frame_processor.py` for the skeletons in this checkout.
+
+### Adding a pipeline
+
+Pipelines are not loaded through the add-on config. The built-in classes are imported and registered in `iSpy/vision/pipelines/__init__.py`. A new pipeline needs to follow the `VisionPipeline` interface and be added to that registry before the camera editor can offer it. Implement its `config_schema()` for settings shown in the UI, and be explicit about calibration requirements and output meaning.
+
+Before wiring it into a robot setup, test it with a known image or camera source, verify its readiness/error status, and check the output units and detection serialization. Add or update tests alongside the pipeline changes. The root test suite runs with `pytest -q`; the CI workflow runs that suite on Linux with Python 3.12.
+
 ## Model optimization and conversion
 
-The conversion pipeline is one of the more advanced parts of the project. It can convert a PyTorch model into formats like:
+Model-backed pipelines can build optimized artifacts for supported formats including:
 
 - ONNX
 - OpenVINO
@@ -43,52 +97,63 @@ The conversion pipeline is one of the more advanced parts of the project. It can
 - CoreML
 - TensorRT engine
 - RKNN
+- TPU
+- Hailo
+- Qualcomm QNN
 
-This is where hardware-specific acceleration really starts to matter. The project is built around the idea that you should be able to train a model once and then run it on the best backend available for the target hardware.
-
-The optimizer can be turned off or set to `auto` depending on what you want. In most real deployments, `auto` is the easiest choice if the target machine supports the formats.
+Optimization depends on the pipeline, installed runtime packages, and target hardware. `optimize` controls whether conversion runs; `target_format` chooses the output format or asks iSpy to select one. Optimization is off by default in the generated object-detection config. See [Vision Pipelines and Backends](./vision-pipelines) for supported targets and auto-selection behavior.
 
 ## Camera calibration in practice
 
-For field-space coordinates, camera calibration is not optional. The code expects a camera to know its position in the world and the actual size of the object being tracked.
-
-Good practice is:
-
-- mount the camera securely
-- measure the camera height and pose
-- capture a known target at a known distance
-- calculate a reference pixel size
-- tune the model threshold and calibration together
-
-This is often the difference between a vision pipeline that works in a lab and one that works reliably on the field.
+Calibration requirements depend on the pipeline. AprilTag pose estimation uses ChArUco intrinsics, while other pipelines may not expose or require the wizard. Camera mounting offsets are separate from lens calibration. Follow [Camera Calibration](./calibration) for the supported steps and measurement units.
 
 ## Development workflow
 
-If you are developing locally rather than deploying to a board, the usual path is:
+For a local checkout, create a virtual environment and install the package in editable mode from the repository root:
 
 ```bash
 git clone https://github.com/aidan-j532/iSpy-FRC
 cd iSpy-FRC
 python -m venv .venv
 . .venv/bin/activate
-pip install -e .
+python -m pip install -e .
 ispy-boot -f
 ispy-run
 ```
 
-This gives you a normal Python environment and lets you change code without reinstalling the package each time.
+`ispy-boot -f` is only for a new checkout or an intentional reset; it deletes the generated config, models, logs, and active dataset directory. For an existing setup, skip that command and start with `ispy-run`. Editable mode lets you change Python code without reinstalling the package.
 
 The dev extras include tools for training, conversion, and experimental work. That is useful when you are actively tuning a model or building a new pipeline.
 
+On Windows PowerShell, activation and start-up use Windows paths:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+ispy-run
+```
+
+If script activation is restricted, call `.\.venv\Scripts\python.exe` and the matching `ispy-boot.exe`/`ispy-run.exe` directly, as shown in [Installation and Setup](./installation). For code changes, editable install means imports use the checkout. Restart the running process to reload changed Python modules.
+
+Run a focused test while iterating, then run the full suite before sending a change:
+
+```bash
+pytest tests/test_pipeline_schemas.py -q
+pytest -q
+```
+
+The first command is only an example selector; pick the test that covers the code you changed. A passing unit test does not replace a check on the target board for camera drivers or hardware-specific inference.
+
 ## Benchmarking
 
-The project includes benchmarking tooling for checking which backend or model setup is fastest on the current hardware.
+Use `ispy-bench` to compare backend speed on the current hardware and `ispy-stats` to compare an optimized model against its base model on images. Their options and examples are in [CLI and Commands](./cli-reference).
 
 ```bash
 ispy-bench
 ```
 
-This is especially useful when comparing different model exports or when choosing between `onnxruntime`, `OpenVINO`, `TensorRT`, `TFLite`, or RKNN on a target board.
+Keep the model, input size, image set, and runtime settings the same when comparing results. A speed increase alone is not enough; check that the converted model still detects the right targets.
 
 ## Updating and reinstalling
 
@@ -96,44 +161,51 @@ If you want to update the project, pull the latest repo state and reinstall the 
 
 ```bash
 git pull
-pip install .
+python -m pip install .
 ```
 
 or, for a dev install:
 
 ```bash
-pip install -e .
+python -m pip install -e .
 ```
 
-If the install is acting oddly, the usual reset path is:
+If the dependency set changed, reinstall in the same virtual environment that runs the `ispy` commands. Avoid running `pip` from a different system interpreter; it can update one environment while the terminal keeps using another.
 
-```bash
-ispy-boot -f
+## Working on the documentation site
+
+The Docusaurus site is a separate Node project in `iSpy-Docs/`. Run npm commands from that directory, not from the Python repository root (there is no root `package.json`):
+
+```powershell
+cd iSpy-Docs
+npm ci
+npm start
 ```
 
-That command rebuilds the generated config and model directories and is often the easiest way to recover from a bad state.
+The development site is served at `http://localhost:3000/`. To check a production build without starting a server, run `npm run build` from `iSpy-Docs/`. The deployed GitHub Pages site uses the `/iSpy-FRC/` base path; local development uses `/`.
+
+Pages are MDX files in `iSpy-Docs/docs/`; add new pages to `sidebars.js` so readers can find them. Internal doc links should use Docusaurus doc links such as `./calibration` or a `Link` component on the homepage, rather than hard-coding the GitHub Pages prefix. Images used by the site belong in `iSpy-Docs/static/` and are served from the site root (for example, `static/img/example.png` becomes `/img/example.png`).
+
+Before a docs change is done, check the changed MDX in the local site and run:
+
+```powershell
+npm run build
+```
+
+The build uses the local `node_modules` in this folder. If a native dependency fails to load, check that the installed dependencies match this machine and the lockfile before editing site content to work around a package error.
+
+The site currently inherits starter blog and Docusaurus tutorial pages that are not part of the iSpy sidebar. New project instructions should go in the named iSpy docs pages; avoid linking users into the generic tutorial pages by accident.
+
+## Recovery without resetting
+
+If an install is acting oddly, check `Outputs/log.txt` and fix the reported issue before resetting generated state. `ispy-boot -f` deletes the config, models, logs, and active dataset directory; it is not a package-repair command. Back up anything you need before deliberately creating a fresh setup. See [Troubleshooting](./troubleshooting) for non-destructive checks.
 
 ## Important limitations
 
-The project is practical and capable, but it still depends on real hardware and real configuration. A few limitations are worth keeping in mind:
+Before taking a change to the field, check that:
 
-- the board must have working camera access
-- internet is needed for first boot model downloads
-- a good model and stable calibration are essential
-- backend support depends on machine architecture and installed dependencies
-- some advanced accelerator paths only work on specific hardware
-
-This is not a one-click “magic vision” system. It is a real pipeline that does best when the machine, model, and calibration are all right.
-
-## When to ask for more
-
-If you are setting up a real robot system, the next step is usually not more theory. It is a simple loop:
-
-1. get one camera working
-2. get one model working
-3. verify field-space output
-4. tune confidence and mount pose
-5. test under real lighting
-6. repeat for the second camera if needed
-
-That is the path most teams end up following in practice. The docs are here to make the first few steps easier, but the real tuning always happens with the actual robot and field.
+- the camera is delivering frames from its final mount position
+- the selected model detects the intended targets under field lighting
+- calibration and camera offsets match the physical robot
+- NetworkTables connects to the robot, if robot output is enabled
+- the chosen backend is supported by the board and installed runtime

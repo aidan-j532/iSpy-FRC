@@ -17,6 +17,7 @@
 const sidebars = {
   tutorialSidebar: [
     'intro',
+    'architecture',
     {
       type: 'category',
       label: 'Getting Started',
@@ -32,6 +33,8 @@ const sidebars = {
       label: 'Vision Setup',
       items: [
         'cameras-and-models',
+        'vision-pipelines',
+        'calibration',
         'web-ui-and-networking',
       ],
     },
@@ -39,6 +42,7 @@ const sidebars = {
       type: 'category',
       label: 'Operations',
       items: [
+        'datasets-and-recordings',
         'troubleshooting',
         'development-and-advanced-config',
       ],

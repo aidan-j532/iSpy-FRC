@@ -8,99 +8,94 @@ sidebar_position: 3
 
 This is the path that gets a fresh install to a working camera setup with the least friction.
 
+The goal of this first pass is just to prove the whole camera path works. Resist the urge to tune thresholds, convert models, and enable every plugin before you have a stable image and one sensible result.
+
 ## 1. Install the project
 
-On a fresh Linux machine or board, the usual install is:
-
-```bash
-git clone https://github.com/aidan-j532/iSpy-FRC
-cd iSpy-FRC
-chmod +x install.sh
-./install.sh
-```
-
-If you are doing a fully deployed board install, the provisioning flow is the easier route. The first-boot service handles it after the board boots.
+Install the Python package using the steps in [Installation and Setup](./installation). For a first run, the virtual-environment install is a good fit on a development machine. The board provisioner is intended for Debian/Ubuntu deployments that should start as a service.
 
 ## 2. Create the initial config and model folders
 
-Run the fresh boot once:
+From the repository root, initialize a brand-new checkout:
 
 ```bash
 ispy-boot -f
 ```
 
-This is an initialization step, not the normal runtime command. It creates the default project folders and downloads the default model files. If no camera is detected yet, it leaves a placeholder config in place and you can add the real one later.
+This is an initialization step, not the normal runtime command. It creates the default project folders, downloads model files, and writes the initial config. It is destructive: if you already have an iSpy setup in this directory, `-f` deletes its config, models, logs, and active dataset before recreating defaults. Do not repeat it casually; the [CLI reference](./cli-reference) lists what it removes.
 
-On the first run, expect the project to look for model downloads and backend support. If the machine is internet-connected, this is usually fine.
+First boot needs internet access to download the default models. If no camera is detected, the initial camera entry may still need to be configured in the web UI.
 
 ## 3. Start the main vision loop
 
-After the initial configuration exists, start the normal loop:
+After boot succeeds, start the camera pipelines and web UI:
 
 ```bash
 ispy-run
 ```
 
-This is the main runtime command. It loads the config, starts the camera pipelines, and launches the vision processing loop.
+This loads `Config/config.json` from the current directory. Leave this process running while you use the dashboard. Stop it with `Ctrl+C` when it was started in your terminal; the service commands below apply to systemd deployments.
 
 ## 4. Open the web UI
 
-By default, the UI runs on port 5000:
+The web app listens on port 5000 and is reachable on the local network. On the same computer, open:
 
 ```text
-http://<machine-ip>:5000
+http://localhost:5000
 ```
 
-If you are on the same local network, this is usually the easiest way to see what is happening. The board can also broadcast a UDP announce packet on port 37429 so discovery tools can find it on the network.
+From another device on the same network, replace `localhost` with the iSpy machine's IP address, for example `http://10.0.0.25:5000`. The board also sends a UDP discovery announcement on port `37429`; this helps discovery tools find it but is not needed to open the dashboard.
 
 ## 5. Configure the first camera
 
-The web UI is the easiest place to start. Most of the real work is done there:
+Open the **Cameras** page. If boot detected a camera, it should appear there. Otherwise choose **Add Camera**, give it a name, and select its source. A source can be a device index (often `0` for the first webcam), a device path such as `/dev/video0` on Linux, or a supported stream/file source.
 
-- add or select a camera
-- choose a camera source
-- choose the pipeline
-- add a model
-- tune model confidence and calibration
-- set the camera mount offsets and field data
+For an object-detection camera, select the `object_detection` pipeline and a model. Start with the default model and its default confidence threshold; first confirm that frames arrive and boxes appear before tuning settings. The [Cameras and Models](./cameras-and-models) page explains sources, model files, and backend formats.
 
-The config file also matters, but the UI is the main place to create and edit the per-camera entries.
+Use the camera card's **Calibrate** button for lens or object-size calibration. Measure the camera's mounting height, offsets, and angles separately in the camera settings. The [Camera Calibration](./calibration) guide walks through both jobs. If you change a camera's pipeline or model in the UI, restart vision when the page says the new settings need it.
 
 ## 6. Check that the pipeline is alive
 
-The project exposes health information in a few ways:
+Check the health page or these endpoints:
 
-- the web UI health page
-- the `/health` route
-- the `/api/health` endpoint
-- the `Outputs/log.txt` log file
+- `http://localhost:5000/health` for a quick health response
+- `http://localhost:5000/health-page` for the dashboard view
+- `http://localhost:5000/api/health` for detailed JSON status
+- `Outputs/log.txt` for startup and runtime messages
 
-If the system is healthy, the dashboard should show live frames and the health route should respond normally. If it is degraded, the log usually explains why.
+The Cameras page should show an active frame for a working source. A green health state only tells you the runtime is responding; confirm detections and robot output separately.
+
+For a detector, check the boxes and class names on a known target before worrying about robot coordinates. Then put the target at a known location and compare the reported position with what the robot code sees. Those are separate checks: calibration cannot make a false detection correct, and a correct box does not guarantee correct geometry.
 
 ## Example of a basic local setup
 
-This is the simplest local dev setup if you just want a webcam and a model to run:
+After installing and activating the virtual environment as described in [Installation and Setup](./installation), run these commands from the repository root on a new checkout:
 
 ```bash
-cd iSpy-FRC
-python -m venv .venv
-. .venv/bin/activate  # Linux/macOS
-# or .venv\Scripts\activate  # Windows
-pip install -e .
 ispy-boot -f
 ispy-run
 ```
 
-Then open the browser at `http://localhost:5000` or the machine's LAN IP.
+The first command is a one-time fresh setup and deletes existing generated state; do not rerun it to restart iSpy. Open `http://localhost:5000` on that computer or use its LAN IP from another device.
 
 ## What to do if the board is already set up
 
-On a deployed system, the service is often started automatically. You can still do this manually:
+On a Linux deployment, the service may already be running. Check or restart it with:
 
 ```bash
-journalctl -u iSpy -f
-systemctl restart iSpy
-systemctl stop iSpy
+sudo journalctl -u iSpy -f
+sudo systemctl restart iSpy
+sudo systemctl stop iSpy
 ```
 
-This is the same process the image and provisioner install. Most teams end up using the service and the web UI rather than manually invoking the runtime every time.
+These commands apply to a systemd deployment, not a Windows development environment. See [CLI and Commands](./cli-reference) for the service status command and additional details.
+
+## A few setup habits that save time
+
+- **Change one thing at a time.** Confirm the live image, then the pipeline result, then calibration, then robot output. If several of these change together, it is hard to tell which change helped.
+- **Write down the physical setup.** Record which camera is which, its lens/resolution, and its mounting offsets. Camera profiles and USB device names can move between ports or reboots.
+- **Restart when asked.** Pipeline/model changes are assembled at runtime startup; saving the config does not necessarily rebuild a camera that is already running.
+- **Leave `ispy-boot -f` alone after first setup.** It removes generated state. For routine restarts, use `ispy-run` or the systemd service.
+- **Do the final check on the robot network.** A laptop on home Wi-Fi can show detections while the roboRIO address is unreachable.
+
+Once the first camera works, the next useful pages are [Camera and Model Setup](./cameras-and-models), [Camera Calibration](./calibration), and [Web UI and Networking](./web-ui-and-networking). If something does not line up, follow the steps in [Troubleshooting](./troubleshooting) from image to detections to output.

@@ -6,11 +6,13 @@ sidebar_position: 8
 
 # Troubleshooting and Operations
 
-Most of the time, the project is pretty straightforward. When something breaks, it is usually one of a few common problems: model path issues, camera not detected, dependencies missing, or stale health state.
+Start with the first error in the runtime log, then check the matching camera, model, or network setting below. The last message is not always the cause; earlier startup errors often explain why a later step failed.
+
+It helps to split a vision problem into four questions: can iSpy start, can the camera deliver a frame, does the pipeline produce the right result, and can the robot read that result? Start at the first failing step. Forcing a fresh install before you know where it fails can erase the evidence and your config.
 
 ## Where to look first
 
-The key places for diagnosis are:
+Check these places first:
 
 - `Outputs/log.txt`
 - `journalctl -u iSpy -f` on a systemd deployment
@@ -18,7 +20,7 @@ The key places for diagnosis are:
 - the camera configuration page
 - the model configuration page
 
-If the machine is running as a service, that log output is the first thing to check. If it is a local dev setup, `Outputs/log.txt` is often the easiest place to start.
+For a terminal run, read `Outputs/log.txt` in the directory where you started iSpy. For a systemd service, start with `sudo journalctl -u iSpy -f`; the service may have a different working directory from your interactive shell.
 
 ## The most common issues
 
@@ -31,7 +33,7 @@ This usually means one of these is true:
 - the wrong camera index is selected
 - the system does not have permission to access the device
 
-The boot process tries to clean up missing cameras automatically, but if you are on a laptop or custom setup, it is worth checking which device file or index is active.
+The boot process removes configured local devices that it cannot find. Check that the camera is plugged in before booting, then use **Cameras** in the web UI to confirm the selected source. On Linux, a USB camera commonly appears as `/dev/video0`; on Windows, try the available camera index from the source picker. Network streams and video files use their own paths and do not need a local camera device.
 
 ### 2. Wrong model path
 
@@ -53,38 +55,60 @@ A degraded health state usually means the system is not receiving fresh frames o
 - the machine is overloaded
 - the FPS cap is set too high for the system
 
-This is where the health threshold and the logs become useful. If the board is dropping frames, it will usually show up in the health page before the robot notices.
+Open the health page and compare the reported frame age and FPS with the runtime log. Lower `max_fps` or use a smaller model if the machine cannot keep up. The stale-frame threshold only changes when health becomes degraded; it does not make the camera or model faster.
 
 ### 4. First boot fails due to missing dependencies
 
-There are a few places where this can happen:
+First boot downloads the default models and may install backend-specific packages. Check the terminal output and `Outputs/log.txt` for the first error. Confirm that the machine has internet access, enough free disk space, and a backend supported by its operating system and hardware. The pipeline may still run on a CPU backend if an optional accelerator cannot be installed.
 
-- no internet for downloading default models
-- backend-specific dependencies are not present
-- a model was selected for a backend the machine does not support
+### 5. The dashboard opens, but the camera image is stale or missing
 
-The boot flow tries to install the needed pieces automatically, but on a fresh board or a custom machine, there can still be edge cases. Re-running `ispy-boot -f` after fixing the environment is the usual recovery path.
+The web app can start before a camera is ready, so an open dashboard is not proof that frames are arriving. Check the camera card's status and the `/api/health` response, then confirm the source exists on the machine. For a local camera, unplug/replug it, check OS permissions, and try the camera's current device path or index. For a URL or file source, confirm that exact source can be opened by the selected camera type.
+
+On a board, also check that another process is not holding the camera device. If you changed the source or camera type, restart iSpy so the runtime reconstructs the pipeline.
+
+### 6. The image is good, but the detector misses targets or sees the wrong thing
+
+Confirm that the right model is selected and that its metadata matches the model. Check the class name and confidence on a clear, still target. Lowering `min_conf` can reveal weak detections, but it also admits more false positives; raising it can hide valid targets. Fix focus, exposure, resolution, or model selection before trying to compensate with a very low threshold.
+
+If you are using a converted model, compare it with the original `.pt` file using the same image. That tells you whether the problem is model quality or the optimized backend. The [model guide](./cameras-and-models) covers that comparison.
+
+### 7. Boxes look right, but the position is wrong
+
+Check the geometry separately from the detection:
+
+1. Confirm `unit` and the units expected by robot code. In `frc` mode, camera/calibration distances are entered in inches and position outputs are meters.
+2. Re-measure the camera's `height`, `x`, and `y` from the same robot reference point your team uses.
+3. Check `yaw` and `pitch` signs; a reversed mount angle can look like a calibration failure.
+4. Confirm that lens intrinsics or known-object FOV were calibrated at the current resolution and focus.
+5. Compare a target at more than one known distance and position.
+
+Do not change the camera's physical offsets to hide a bad detection or a wrong unit. The [calibration guide](./calibration) distinguishes camera mount values from image calibration.
+
+### 8. NetworkTables is disconnected or the robot sees nothing
+
+Check the built-in utility status and the first NetworkTables warning in `Outputs/log.txt`. Confirm that `network_tables_ip` is the roboRIO/server address and that the vision computer is on the robot network. Then check that the robot code uses the `VisionData` table, the same topic names, and the right value type. The default `vision_data` is a JSON string; a struct-array reader needs the `struct[]` publish type.
+
+If the dashboard can connect but the roboRIO cannot, the issue is probably in the client/server address or network path, not the camera feed. See [Web UI and Networking](./web-ui-and-networking).
+
+### 9. The optimized model does not load or is not faster
+
+Confirm that the base `.pt` model works first. Then check the model status and logs for the selected format, installed runtime, and device. An accelerator file is not portable between all boards, and a conversion that succeeds on a desktop does not guarantee that the target board can load it. Compare timing under the same input size and frame conditions; conversion can be a regression as well as an improvement.
 
 ## Resetting the system
 
-When you want to start fresh, use:
+Do not use `ispy-boot -f` as a general repair or restart command. It deletes `Config/`, `YoloModels/`, `Outputs/`, and the active dataset directory, including files you may have added there. First save a copy of `Config/config.json`, then fix the specific error shown in the log and restart with `ispy-run` (or restart the systemd service).
 
-```bash
-ispy-boot -f
-```
-
-This deletes the generated state and rebuilds the default config and directories. This is the safe reset command when the project has drifted into a bad state.
-
-If you want the more aggressive full repo reinstall path, remove the repo and re-clone it, then run the install script again.
+Use `ispy-boot -f` only when you deliberately want to discard and recreate that generated state. Back up any custom models, datasets, configuration, and logs first. If the package code needs updating but the generated state should stay, update/reinstall the Python package in its environment without deleting those directories.
 
 ## Restarting the service
 
-On a deployed board, service commands look like this:
+On a deployed Linux board, use `sudo` with the service commands:
 
 ```bash
-systemctl restart iSpy
-systemctl status iSpy
-journalctl -u iSpy -f
+sudo systemctl restart iSpy
+sudo systemctl status iSpy
+sudo journalctl -u iSpy -f
 ```
 
 The service is the normal way to keep the pipeline running on startup. If the project is not being run as a service, `ispy-run` is the relevant command.
@@ -102,19 +126,25 @@ If a replay behaves differently than the original capture, it usually means:
 - the camera setup changed
 - the pipeline parameters changed since the original run
 
+The recorded video is taken from raw camera frames, while the JSON sidecar stores the runtime detections and pose. Replaying it is useful for comparing what the camera saw with what the pipeline reported; it does not restart the old runtime configuration or publish detections to the robot.
+
 ## Useful log commands
 
-On a board or Linux install:
+For a provisioned Linux board:
 
 ```bash
-journalctl -u iSpy -f
-cat Outputs/log.txt
+sudo journalctl -u iSpy -f
+tail -f /opt/iSpy/Outputs/log.txt
 ```
 
-On a dev machine, `Outputs/log.txt` is usually the simplest place to inspect startup and runtime errors.
+For a local PowerShell run, use:
 
-## Known practical limitation
+```powershell
+Get-Content .\Outputs\log.txt -Tail 100 -Wait
+```
 
-The project does a lot of heavy lifting for live vision, but the runtime still assumes the machine can actually talk to the camera, the model, and the network. If the machine is underpowered, disconnected from the field network, or configured with a bad model path, the project will not magically fix it.
+Press `Ctrl+C` to stop following either log.
 
-The good news is that the logs and the web UI usually make the problem obvious once you know where to look.
+## When asking for help
+
+If the problem persists, include the first relevant error from `Outputs/log.txt`, the selected pipeline and model format, and the camera source when asking for help. Remove team numbers, IP addresses, or other private network details before sharing logs publicly.

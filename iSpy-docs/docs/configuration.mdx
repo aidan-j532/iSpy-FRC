@@ -6,7 +6,9 @@ sidebar_position: 4
 
 # Configuration Reference
 
-The project stores its runtime configuration in `Config/config.json` in a normal repo checkout, and in `/etc/iSpy/config.json` on a provisioned board. That file is where most real settings live, and it is the source of truth for cameras, model settings, plugins, and general runtime behavior.
+The runtime loads `Config/config.json` relative to its current working directory. In a repository checkout, run iSpy from the repository root and edit `<repo>/Config/config.json`. The provisioned service's working directory is `/opt/iSpy`, so the current runtime reads `/opt/iSpy/Config/config.json`.
+
+The provision script also writes `/etc/iSpy/config.json` and sets an `iSpy_CONFIG` environment variable, but the current boot/runtime code does not read that variable. For the version in this repository, edit the file under `/opt/iSpy/Config/` used by the service, not the unused copy under `/etc/iSpy/`.
 
 The config is not one giant single structure with random values. It is a nested dictionary with a few major blocks:
 
@@ -72,9 +74,11 @@ A minimal generated config looks roughly like this:
 
 This is the config that the project creates on first boot. It is intentionally not empty. It contains the sane defaults that most installs can work from once a camera and model are filled in.
 
+The example is deliberately shortened to the parts most people need to recognize. Boot may add camera IDs and model metadata, and the web UI can save more pipeline-specific settings. Use the running UI or the generated config as the source of truth for a particular install; do not replace the whole file with a small example just to change one value.
+
 ## Important top-level settings
 
-These are the values people bump most often:
+These are the values most likely to affect a normal setup:
 
 ### `unit`
 
@@ -104,7 +108,30 @@ Number of seconds before the health module reports a degraded state when a frame
 
 ### `max_fps`
 
-Optional hard cap on pipeline FPS. This can be useful when the hardware is overloaded or when a camera is running faster than the pipeline needs.
+Optional hard cap on pipeline FPS. A value of `0` leaves the cap disabled; set a positive value when the machine is overloaded or a camera is producing more frames than the robot needs.
+
+### Logging and pipeline choices
+
+- `log_level` controls the minimum severity written to the log. The default is `INFO`.
+- `log_file` is the runtime log path; by default it is `Outputs/log.txt`, relative to the current working directory.
+- `admin` exposes experimental pipeline choices such as QR code and optical flow in the pipeline selector. Leave it off unless you need those options.
+- `model_profiles` stores reusable model-backed pipeline settings saved by the web UI. It is managed automatically and usually does not need hand editing.
+
+Here is the short version of the root-level settings that affect day-to-day use:
+
+| Setting | Default | Practical meaning |
+| --- | --- | --- |
+| `unit` | `frc` | Camera geometry and calibration inputs use inches; position outputs use meters. |
+| `debug_mode` | `true` | Enables additional visual debugging information. |
+| `app_mode` | `true` | Starts the local dashboard with the vision runtime. |
+| `health_stale_threshold` | `1.0` | Seconds without fresh loop/frame activity before health is marked degraded. |
+| `max_fps` | `0` | No global loop cap when `0`; a positive value caps the runtime loop. |
+| `metrics` | `true` | Enables runtime metrics collection. |
+| `admin` | `false` | Shows the experimental QR-code and optical-flow choices in the pipeline selector. |
+| `log_level` | `INFO` | Minimum severity for the runtime log. |
+| `log_file` | `Outputs/log.txt` | Log path, resolved from the working directory. |
+
+The default values can move as the project changes. The generated file and web editor are authoritative for the version you have installed.
 
 ## Camera config entries
 
@@ -151,11 +178,50 @@ Important camera fields:
 - `source` - camera path, device index, video file, or URL
 - `camera_type` - camera backend type, often `opencv`
 - `subsystem` - usually `field` for robot field-relative vision
-- `yaw`, `pitch`, `height`, `x`, `y` - camera mount offsets
+- `yaw`, `pitch`, `height`, `x`, `y` - camera mount angles and offsets. Angles are in degrees; distances use the top-level `unit` setting.
+- `fps_cap` - optional per-camera frame-rate cap
+- `grayscale` - whether the camera frames are converted to grayscale
 - `calibration.distance` - distance used during calibration
 - `calibration.game_piece_size` - target real-world size in inches
 - `calibration.size` - pixel size at that reference distance
 - `calibration.fov` - camera FOV in degrees
+
+Keep the camera's identity/source fields on the camera entry and pipeline options under `pipeline.settings`. This makes it possible to switch pipelines without carrying unrelated settings from the old one. The web editor handles that separation and removes settings that do not belong to the selected pipeline.
+
+For example, a second camera is another entry with its own `source`, `pipeline`, and mount. It does not need its own global `unit` or `plugins` block:
+
+```json
+"camera_configs": {
+  "front_cam": {
+    "name": "front_cam",
+    "source": 0,
+    "camera_type": "opencv",
+    "pipeline": {
+      "name": "object_detection",
+      "settings": {
+        "vision_model": {
+          "file_path": "YoloModels/pytorch/fuel.pt",
+          "source_pt": "YoloModels/pytorch/fuel.pt",
+          "min_conf": 0.5
+        }
+      }
+    }
+  },
+  "rear_cam": {
+    "name": "rear_cam",
+    "source": 1,
+    "camera_type": "opencv",
+    "pipeline": {
+      "name": "april_tag",
+      "settings": {}
+    }
+  }
+}
+```
+
+This is just the `camera_configs` value, not a complete config file. Use camera sources that exist on the actual machine; index `1` is only an example and is not guaranteed to be the rear camera.
+
+With the default `unit: "frc"`, mount distances are entered in inches and detections are output in meters. The known-object calibration wizard also asks for object size and distance in inches. Keep these units consistent when editing the JSON by hand.
 
 ## `pipeline` and `vision_model`
 
@@ -177,6 +243,20 @@ The pipeline block is important. For object detection, you will usually see:
 ```
 
 The `vision_model` block is where the actual model is selected and tuned. The project expects a real model path and generated metadata sidecars next to the model when possible.
+
+The common `vision_model` values are:
+
+| Value | Meaning |
+| --- | --- |
+| `file_path` | The model artifact the pipeline should load. Initially this is usually the `.pt` source model; after optimization it may point to the selected artifact. |
+| `source_pt` | The original PyTorch model used as the source for optimization and model selection. |
+| `min_conf` | Detection confidence threshold; increase it to reject more weak detections, or lower it if valid targets are being missed. |
+| `optimize` | `off`, `auto`, or a conversion path such as `onnx`. The result depends on pipeline support and installed runtime packages. |
+| `target_format` | Requested output when optimization is enabled; `auto` lets iSpy choose from the options available on that system. |
+| `quantize` | Requests quantization for conversion paths that support it. Check the output against the original model. |
+| `quantization_dataset` | Optional image folder used by backends that need calibration samples. |
+
+Do not assume that editing `file_path` to an accelerator extension installs or enables that accelerator. The file, model metadata, runtime package, and target device all need to agree. Start with the `.pt` model and a known input before testing an optimized copy.
 
 ## Add-ons and plugin entries
 
@@ -229,14 +309,28 @@ This does a few things:
 
 ## When to edit the config directly
 
-You can absolutely edit the JSON directly, but the web UI is usually easier for day-to-day operations. Direct file editing matters when:
+The web UI is the safer choice for routine camera and model changes because it validates fields and saves the right nested structure. Direct JSON editing is useful when:
 
 - you are editing a machine in a clean environment
 - you want to move a config between systems
 - you are debugging a malformed camera entry
 - you are creating a saved config for a new robot setup
 
-If you edit the file by hand, save it and restart the runtime so the new values are loaded.
+If you edit the file by hand, keep a backup and preserve valid JSON syntax. Stop and restart the runtime so it reloads the values. The web app may save changes immediately, but camera pipeline/model settings can still require a vision restart to take effect.
+
+Make a copy before a bigger edit:
+
+```bash
+cp Config/config.json Config/config.json.bak
+```
+
+On PowerShell:
+
+```powershell
+Copy-Item .\Config\config.json .\Config\config.json.bak
+```
+
+When troubleshooting a config edit, reduce the change to one setting and restart. If the process is already running, it may still be using the config it loaded at startup.
 
 ## Important gotcha
 

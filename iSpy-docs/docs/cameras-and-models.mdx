@@ -28,18 +28,24 @@ for a USB camera on Linux. Some setups also use file paths or network streams.
 
 The config supports multiple camera types, but the common case is `opencv`, which is the default that ships with the project.
 
+The source is interpreted by the selected camera backend. A number such as `0` is a local camera index; `/dev/video0` is a Linux device path; a URL or image/video path is not a local USB camera and should not be diagnosed by looking only for `/dev/video*`. Device numbering can change when USB cameras are unplugged or moved to another port, so check the source list on the machine you will actually deploy.
+
+An FRC setup often has a USB camera on a coprocessor and a separate driver-station camera. The latter is not automatically a vision source: add only the camera that this iSpy process is meant to read. If adding a second camera, test it by itself first, then check both feeds and the combined loop rate.
+
 ## Camera setup workflow
 
-A normal camera setup goes like this:
+For a first camera, use this order:
 
-1. add the camera in the web UI or config
-2. make sure the device actually exists
-3. choose the correct pipeline
-4. connect the model
-5. tune confidence thresholds and calibration values
-6. verify detections in the live stream
+1. Open **Cameras** in the web UI and add or select the camera.
+2. Choose a source that exists on this machine, then confirm that the live frame appears.
+3. Choose the pipeline. For a detector, start with `object_detection`.
+4. Select a model and confirm that detections appear before changing thresholds.
+5. Set the camera's physical mounting values and calibrate the lens or known-object scale if the pipeline needs it.
+6. Restart vision after changes that the UI says need a restart, then verify the result in the live view.
 
 A common mistake is to set up a camera path in theory but forget that the system needs a real video device behind it. If the camera source is not correct, the pipeline will never produce useful frames.
+
+Before tuning a model, check the image itself. The lens should be focused, exposure should not wash out the target, and the camera should be mounted firmly. A detector cannot recover detail that the camera never captured. Change brightness/exposure with care as well: an image that looks nicer on a stationary workbench may blur when the robot is moving.
 
 ## Pipeline choice
 
@@ -48,6 +54,8 @@ The project supports several pipeline names, but the common default is `object_d
 That is the path most teams will use when they want bounding boxes and field-relative positions from a model. The code is structured around having `pipeline.name` plus a `pipeline.settings` block for pipeline-specific data.
 
 When a camera uses a model-backed pipeline, the `vision_model` block must be present and should point to a real model file. If it is missing, the project will warn or fail during setup.
+
+The runtime also uses model metadata, usually stored in a sidecar next to the original model. It describes things such as task, labels, and input dimensions. Keep the sidecar with the model when copying files between machines. A model file that exists but has the wrong task or missing labels can be just as confusing as a missing file.
 
 ## Model storage
 
@@ -80,26 +88,19 @@ On first boot, `ispy-boot -f` creates the model folders and downloads the defaul
 
 The exact default model used is project-specific and can change over time, but the key point is that a default path is created for you so the first camera setup has something to work with.
 
+The Models page is mainly for managing PyTorch `.pt` source models. Uploading/selecting a source model is separate from converting it: iSpy may generate an optimized artifact later, and the camera can continue using the source while that work happens. Do not delete a model that is marked active, and do not copy an optimized file into the `pytorch` folder just because its filename looks similar.
+
 ## Model optimization and backend selection
 
-The project supports multiple runtime formats and tries to optimize automatically. In the config, `vision_model.optimize` is the setting most people see. Values include things like:
+The model settings have two related fields. `optimize` controls whether conversion runs (`off`, `auto`, or `onnx`); `target_format` chooses the format to build when conversion is enabled (`auto` lets iSpy choose from the formats supported by that pipeline and machine). The runtime can fall back to the original model or a CPU-capable path if an accelerator is unavailable, but it may run more slowly.
 
-- `off`
-- `auto`
-- `onnx`
-- `rknn`
-- `openvino`
-- `tflite`
-- `engine`
-- `coreml`
-
-This is where hardware acceleration is chosen. On an Orange Pi, it may prefer RKNN. On a laptop or x86 machine, it may prefer ONNX or OpenVINO. On some hardware, it falls back to a CPU-friendly path.
-
-The optimizer is there to save you from manually converting models and choosing awkward formats. It is a convenience feature, but still one worth understanding.
+For example, a Rockchip board may use RKNN, an NVIDIA system may use TensorRT if its runtime is installed, and a machine without a supported accelerator can use ONNX on the CPU. See [Vision Pipelines and Backends](./vision-pipelines) for the supported targets and what each pipeline needs.
 
 ## Quantization
 
-The config also supports `quantize`, which is used to make models smaller and faster for some target formats. This is not always necessary for a dev machine, but it is often useful on deployment hardware with tighter compute or memory limits.
+The config also supports `quantize`, which requests an INT8 artifact for formats that support it. Quantization can reduce model size or inference time, but it can also reduce detection accuracy. If you provide a `quantization_dataset`, use images representative of the camera, lighting, and targets where the robot will run; compare the optimized result against the original before deployment.
+
+For a fair comparison, keep the camera, input size, and threshold fixed and use the same set of images. First check whether the same objects are found; then look at latency. If the result changes, tune or reject the converted artifact rather than assuming the speed gain is worth it. See [Datasets and Session Recordings](./datasets-and-recordings) for the dashboard's image collection and the separate session recorder.
 
 ## Choosing a good confidence threshold
 
@@ -116,14 +117,9 @@ If you see too many false positives, raise the threshold. If the model misses to
 
 ## Calibration and size values
 
-The detection model is not enough by itself. To convert pixels into field coordinates, the pipeline needs calibration data:
+There are two different kinds of values here. The camera's mounting fields (`height`, `x`, `y`, `yaw`, and `pitch`) describe where the camera sits on the robot. The `calibration` object stores image measurements such as known-object size and distance, field of view, or ChArUco intrinsics. They are not interchangeable: a correct lens calibration cannot compensate for an incorrect camera mount offset.
 
-- `distance` - known distance from camera to target
-- `game_piece_size` - real-world width or height of the target
-- `size` - pixel size at that reference distance
-- `fov` - camera field of view
-
-The config logic is built around the idea that a calibrated camera can convert a 2D detection into a real-world position on the field.
+Open **Calibrate** on a camera card for the ChArUco Intrinsics, Focal / FOV, or Pose Keypoints wizard sections supported by that pipeline and model. The wizard's **Reset calibration** action clears saved calibration values for that camera. See [Camera Calibration](./calibration) for board setup, measurements, and how to validate the result.
 
 ## The simplest working setup
 
@@ -136,3 +132,15 @@ For a first camera, aim for:
 - at least one calibration point
 
 This gives you a solid base before trying more advanced pipelines or special detectors.
+
+## When a result does not look right
+
+Use this order rather than changing several settings together:
+
+1. Open the live feed and confirm focus, exposure, and source.
+2. Make sure the intended pipeline and model are assigned to this camera.
+3. Check the detected class and confidence before changing `min_conf`.
+4. Check mount offsets and calibration only after the image-space detection makes sense.
+5. If the model is optimized, compare with its `.pt` source on the same frame.
+
+The [Configuration Reference](./configuration) shows where camera and model values live. If camera changes are saved but not visible in the running feed, restart iSpy; the current runtime does not rebuild an already-running pipeline in place.

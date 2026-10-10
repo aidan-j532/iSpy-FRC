@@ -1,43 +1,38 @@
-# Website
+# iSpy FRC documentation site
 
-This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
+This folder contains the Docusaurus site for iSpy. The Python runtime is in the parent repository; run these commands from `iSpy-Docs/`, not from the repository root.
 
-## Installation
+## Run locally
 
-```bash
-npm install
+Use Node.js 20 or newer, then install the exact dependencies from the lockfile and start the development server:
+
+```powershell
+npm ci
+npm start
 ```
 
-**Note**: feel free to use the package manager of your choice.
+Open `http://localhost:3000/`. Most page and style changes reload in the browser. Stop the server with `Ctrl+C`.
 
-## Local Development
+## Edit the docs
 
-```bash
-npm run start
-```
+- Project documentation pages live in `docs/` as Markdown or MDX.
+- The sidebar order and categories are in `sidebars.js`.
+- The home page is `src/pages/index.js`; its page-specific styles are in `src/pages/index.module.css`.
+- Shared site styling is in `src/css/custom.css`.
+- Files placed in `static/` are served from the site root. For example, `static/img/robot.png` is referenced as `img/robot.png` in Docusaurus config.
 
-This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
+Use relative doc links such as `./calibration` between pages. Docusaurus applies the correct local or deployed base path for internal links.
 
-## Build
+## Check a change
 
-```bash
+Build the site from this directory:
+
+```powershell
 npm run build
 ```
 
-This command generates static content into the `build` directory and can be served using any static contents hosting service.
+The output is written to `build/`. A successful production build also checks internal links because `onBrokenLinks` is set to `throw`.
 
 ## Deployment
 
-Using SSH:
-
-```bash
-USE_SSH=true npm run deploy
-```
-
-Not using SSH:
-
-```bash
-GIT_USER=<Your GitHub username> npm run deploy
-```
-
-If you are using GitHub Pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.
+The configured production site is hosted on GitHub Pages under `/iSpy-FRC/`. Local development uses `/`. Deployment is normally handled by the repository's GitHub workflow; do not run `npm run deploy` unless you are intentionally using the Docusaurus CLI deployment flow for this repository.

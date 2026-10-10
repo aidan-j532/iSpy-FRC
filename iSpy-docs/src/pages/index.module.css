@@ -4,10 +4,26 @@
  */
 
 .heroBanner {
-  padding: 4rem 0;
+  padding: 5rem 0 5.5rem;
   text-align: center;
   position: relative;
   overflow: hidden;
+}
+
+.eyebrow {
+  margin-bottom: 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.78;
+}
+
+.heroCopy {
+  max-width: 710px;
+  margin: 1.25rem auto 1.75rem;
+  font-size: 1.2rem;
+  line-height: 1.65;
 }
 
 @media screen and (max-width: 996px) {
@@ -18,6 +34,191 @@
 
 .buttons {
   display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
   align-items: center;
   justify-content: center;
+}
+
+:global(.button.button--outline.button--secondary).secondaryButton {
+  color: #243b5a;
+}
+
+:global(.button.button--outline.button--secondary).secondaryButton:hover {
+  color: #243b5a;
+}
+
+.introSection {
+  background: var(--ifm-background-surface-color);
+}
+
+.introCopy {
+  max-width: 760px;
+}
+
+.introCopy h2,
+.sectionHeading h2,
+.audienceBlock h2 {
+  margin-top: 0;
+}
+
+.calloutColumn {
+  display: flex;
+  align-items: center;
+}
+
+.callout {
+  width: 100%;
+  padding: 1.5rem;
+  border-left: 4px solid var(--ifm-color-primary);
+  border-radius: var(--ifm-global-radius);
+  background: var(--ifm-background-color);
+  box-shadow: var(--ifm-global-shadow-lw);
+}
+
+.callout h3 {
+  margin-top: 0;
+}
+
+.callout p {
+  margin-bottom: 0;
+}
+
+.flowSection {
+  padding: 4rem 0;
+}
+
+.sectionHeading {
+  max-width: 760px;
+  margin: 0 auto 2rem;
+  text-align: center;
+}
+
+.sectionHeading > p:last-child {
+  margin-bottom: 0;
+}
+
+.flowGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+.flowStep {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+}
+
+.flowNumber,
+.stepNumber {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  color: var(--ifm-color-primary-darkest);
+  background: var(--ifm-color-primary-lightest);
+  font-weight: 700;
+}
+
+.flowStep h3 {
+  margin: 0.2rem 0 0.4rem;
+  font-size: 1.1rem;
+}
+
+.flowStep p {
+  margin: 0;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.flowNote {
+  max-width: 800px;
+  margin: 2rem auto 0;
+  color: var(--ifm-color-emphasis-700);
+  text-align: center;
+}
+
+.stepsSection {
+  background: var(--ifm-background-surface-color);
+}
+
+.column {
+  margin-bottom: 1rem;
+}
+
+.card {
+  height: 100%;
+}
+
+.stepNumber {
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+.card h3 {
+  margin-top: 0;
+}
+
+.cardFooter {
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.audienceSection {
+  padding: 4rem 0;
+}
+
+.audienceBlock {
+  margin-bottom: 1.5rem;
+}
+
+.audienceBlock p {
+  max-width: 620px;
+}
+
+.moreSection {
+  background: var(--ifm-background-surface-color);
+}
+
+.linkGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.linkGrid a {
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: var(--ifm-global-radius);
+  background: var(--ifm-background-color);
+  transition: border-color 150ms ease, transform 150ms ease;
+}
+
+.linkGrid a:hover {
+  border-color: var(--ifm-color-primary);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+@media screen and (max-width: 996px) {
+  .flowGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .linkGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media screen and (max-width: 576px) {
+  .heroCopy {
+    font-size: 1.05rem;
+  }
+
+  .flowGrid,
+  .linkGrid {
+    grid-template-columns: 1fr;
+  }
 }

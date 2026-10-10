@@ -1,0 +1,75 @@
+---
+title: Vision Pipelines and Backends
+sidebar_position: 7
+---
+
+# Vision Pipelines and Backends
+
+A pipeline is the processing path assigned to a camera. Choose it in the camera's pipeline settings in the web UI. The available choices come from the pipeline registry in this version of iSpy:
+
+Choose based on the result you need, not just on the name of a model. A pipeline defines how images are processed and what sort of result comes back; a backend is the runtime that executes model operations on a particular device. AprilTag and QR pipelines, for example, do not need a YOLO object detector.
+
+| Pipeline | Use it for | What to know |
+| --- | --- | --- |
+| `object_detection` | Detecting objects with a model trained for your targets | Select a compatible model. This is the usual starting point for game-piece detection. A pose model can expose a PnP calibration section. |
+| `yolo_world` | Text-prompted, open-vocabulary object detection | Uses a prompt and one of the available model sizes (`s`, `m`, or `l`). Model weights download on first use. |
+| `april_tag` | Detecting AprilTags | This implementation detects the `tag36h11` family. Set the physical tag size; ChArUco intrinsics are available in the calibration wizard. |
+| `depth_anything` | Producing a monocular depth estimate from an image | Uses Depth Anything V2 Small. It is not an object detector and does not show the calibration wizard. The default inference interval is every five frames. |
+| `optical_flow` | Measuring apparent image motion between frames | This pipeline is marked beta. Farneback computes dense flow and is smoother but slower; LK tracks selected corners and is faster but noisier. FOV and camera pitch affect the motion estimate. |
+| `qr_code` | Reading QR codes | Uses OpenCV's QR detector. Set `qr_size` to the printed code's physical size in the configured unit; `decode_mode` can be `standard` or `fast`. |
+
+Use the pipeline's schema in the camera editor for its current settings. A setting shown in the editor belongs under that camera's `pipeline.settings` object in `Config/config.json`.
+
+The QR-code and optical-flow entries are considered experimental and are hidden from the usual selector unless the top-level `admin` option is enabled. Optical flow is marked beta in the current code, so test it under the camera motion and lighting you expect rather than treating its result as a field-ready measurement out of the box.
+
+AprilTag currently detects the `tag36h11` family. The tag size in settings must match the printed tag's physical size; a wrong size produces a systematic pose error even when every tag is detected. ChArUco camera intrinsics are available in the calibration wizard for pipelines that use them.
+
+## Picking a model-backed pipeline
+
+`object_detection`, `yolo_world`, and `depth_anything` use model weights. The default object-detection config points to a PyTorch model under `YoloModels/pytorch/`; first boot downloads the default model files. For a custom object detector, add the model through the Models page or place it in the matching `YoloModels/<format>/` directory, then select it in the camera's `vision_model` settings. Keep metadata sidecars with model files when they are available; they hold details such as labels and input size.
+
+YOLO-World is useful when you need to try text-described classes without training a project-specific detector. It still needs suitable prompts and careful field testing; “open vocabulary” does not mean every target will be detected reliably. Depth Anything returns a depth estimate, not labels or bounding boxes.
+
+For a field game piece that your trained model already recognizes, `object_detection` is generally the simplest path. Use YOLO-World to experiment with text prompts; use AprilTag when the target is a known fiducial; use QR for code decoding. Depth and optical flow answer different questions and are not drop-in replacements for object detection.
+
+## Optimization and target formats
+
+Model settings separate whether optimization runs from which format it should target:
+
+- `optimize`: `off` disables conversion; `auto` asks iSpy to optimize in the background; `onnx` selects the ONNX optimization path.
+- `target_format`: when optimization is enabled, `auto` selects a format based on detected hardware, or you can choose a supported explicit target for the pipeline.
+- `quantize`: optionally requests an INT8 quantized artifact. Quantization can change model accuracy; test the result with representative images before deploying it.
+
+Supported optimized formats across the model-backed pipeline code include ONNX, RKNN, TFLite, OpenVINO, TensorRT (`engine`), CoreML, TPU, Hailo, and Qualcomm QNN. Individual pipelines expose only the formats they support in the editor. An explicit target does not make the matching hardware or runtime package available.
+
+With `target_format: "auto"`, iSpy checks the machine and selects a suitable backend. For example, it prefers RKNN for a Rockchip NPU, Hailo for a Hailo device, QNN for a supported Qualcomm NPU, TensorRT for NVIDIA when its runtime is available, CoreML on Apple Silicon, OpenVINO on supported Intel hardware, and ONNX as a general fallback. Some ARM devices may select TFLite. The actual result depends on installed runtime dependencies; check the model status and log after optimization.
+
+Optimization is asynchronous. A model may run in its original format while a converted artifact is being prepared. On machines without a supported accelerator, CPU inference is expected and can be slower. Start with `optimize: "off"` or `target_format: "auto"` as appropriate for the selected pipeline; benchmark before assuming a converted model is faster.
+
+An explicit `target_format` is a request, not a package installer. If the target runtime is missing, the hardware is unsupported, or the pipeline does not offer that format, conversion or load can fail. Start with `auto` unless you have a reason to pin a backend, read the model status/log after conversion, and measure performance on the actual deployment board.
+
+### A practical backend test
+
+1. Get the source `.pt` model working first.
+2. Record its detection behavior and loop timing with a few representative images or a session.
+3. Enable one optimization target and allow the background conversion to finish.
+4. Check the active model status and logs; confirm the runtime is actually using the new artifact.
+5. Compare results and timing under the same conditions.
+
+Use [`ispy-bench`](./cli-reference) to compare available inference backends, and [`ispy-stats`](./cli-reference) to compare a base model with an optimized artifact. A single FPS number is not a complete comparison if the boxes or target classes changed.
+
+## Calibration by pipeline
+
+Calibration is pipeline-specific. The camera editor only shows sections that the selected pipeline/model uses:
+
+- Object detection can show ChArUco intrinsics and known-object Focal / FOV calibration. Pose models can also show Pose Keypoints (PnP).
+- AprilTag uses ChArUco intrinsics for pose estimation.
+- Optical flow can use ChArUco intrinsics or a known-object FOV measurement.
+- YOLO-World and Depth Anything do not expose the camera calibration wizard.
+- QR code has ChArUco support in its wizard, but does not require calibration to start.
+
+See [Camera Calibration](./calibration) for the physical setup and steps. Camera mount offsets are configured separately in the camera entry.
+
+## Output expectations
+
+Pipeline output should be checked at the pipeline before the robot. A detector result may include a class, confidence, and position fields; a depth estimate or optical-flow measurement has different meaning. The NetworkTables utility serializes the detections it receives, but robot code still needs to agree with the topic type and the fields it reads. Do not interpret every numeric coordinate as a field position without checking the selected pipeline and unit setting.

@@ -1,0 +1,71 @@
+---
+title: Datasets and Session Recordings
+description: Manage quantization images and review recorded camera sessions.
+sidebar_position: 9
+---
+
+# Datasets and Session Recordings
+
+iSpy has two different kinds of saved image data. **Datasets** hold still images you select for preparing model conversions. **Session recordings** capture a running vision session so you can review what the cameras and pipelines saw. They solve different problems and live in different places.
+
+## Quantization datasets
+
+The dashboard's **Datasets** page manages image collections under `QuantizeDataset/`. Create a named collection, then upload or drop `.jpg`, `.jpeg`, `.png`, or `.bmp` images into it. Images are stored in that dataset's folder, and iSpy keeps a `dataset.txt` list for the uploaded images.
+
+These are not automatically labeled object-detection training datasets. The page does not draw bounding boxes or create class labels. Its main use is supplying representative images to model conversion and quantization, where the optimizer uses them to calibrate a supported backend.
+
+When setting up an optimized model, point `quantization_dataset` at the dataset folder if the selected format needs calibration images. Use images that look like the robot's real camera feed: same camera, resolution, lighting, target distance, and background. A pile of images from a different camera or a bright lab is a poor stand-in for a dim field.
+
+Some conversion paths can create synthetic fallback images if the provided set is too small. Those can let a conversion proceed, but they are not a substitute for representative camera images when you care about output quality. Compare converted-model detections with the original model before using the result on the robot. The optimizer behavior depends on the target backend; see [Vision Pipelines and Backends](./vision-pipelines).
+
+### A simple workflow
+
+1. Get a stable camera feed and choose the pipeline/model first.
+2. Save a sample of images that cover the expected field conditions and target positions.
+3. Create a dataset in the dashboard and upload the images.
+4. Select that dataset for the model's quantization setting when needed.
+5. Run conversion, then compare the converted artifact with the original on the same representative images.
+
+Keep source images elsewhere if they are important to your team. A fresh boot with `ispy-boot -f` deletes the generated dataset folder along with other generated state.
+
+## Session recordings
+
+The core rollback recorder can save a session while iSpy runs. The default location is `VideoRecordings/`. A session contains camera video segments and JSON sidecars with per-frame timestamps, detections, and robot pose data. The video is recorded from the raw camera frames, before overlays are drawn; the sidecar helps line up the vision results with the footage during replay.
+
+Open **Rollback** in the web dashboard to inspect sessions and segments, scrub through a camera clip, pin a session you want to keep, or remove old data. Recordings are useful for questions like:
+
+- Did the camera lose frames when the robot turned?
+- Was the target visible before the model missed it?
+- Did a change improve detections, or did the lighting just change?
+- Did the measured position drift even though the detection box looked stable?
+
+Replay is for review and debugging. It does not publish that old session's detections as live robot output.
+
+### Recording settings
+
+The top-level `rollback` block in `Config/config.json` controls recording:
+
+| Setting | What it changes |
+| --- | --- |
+| `enabled` | Turns recording on or off. |
+| `data_dir` | Output folder; default is `VideoRecordings`. |
+| `fps` | Frame rate written to the video segments. |
+| `downsample` | Records every Nth runtime frame; `1` records every frame. |
+| `segment_minutes` | Starts a new segment after this many minutes. Shorter segments are easier to jump through but create more files. |
+| `max_queue` | Bounds frames waiting for the writer. Increasing it can absorb short write stalls, but uses more memory and does not make a slow disk faster. |
+| `max_total_mb` | Retention target for the recording folder. Old unpinned sessions can be removed when the limit is exceeded. |
+
+There is a separate, small free-space safety margin: the recorder can pause when the storage device is nearly full. Keep enough free space for normal operation even when the retention cap is configured.
+
+Pin important sessions before the storage limit is reached. Pinned sessions are kept during automatic pruning, so they can cause the folder to remain over its configured target. Copy any match-critical footage off the robot; the SD card is not a long-term archive.
+
+## Dataset vs. recording at a glance
+
+| | Dataset images | Session recording |
+| --- | --- | --- |
+| Stored under | `QuantizeDataset/<name>/` | `VideoRecordings/` by default |
+| Main purpose | Prepare supported model conversions | Replay real camera/runtime behavior |
+| Data shape | Uploaded still images | Video segments plus frame records |
+| Labels included? | No, not by the dataset manager | Detections are recorded, but this is not a labeled training export |
+
+For general disk and reset warnings, see [Installation and Setup](./installation) and [Troubleshooting](./troubleshooting).

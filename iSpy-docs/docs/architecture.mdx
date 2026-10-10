@@ -1,0 +1,78 @@
+---
+title: Runtime Overview
+description: How a camera frame moves through iSpy and reaches the dashboard or robot.
+sidebar_position: 2
+---
+
+# Runtime Overview
+
+iSpy is easier to set up when you think of it as a running loop, not as a collection of unrelated web pages. The config describes cameras and pipelines; the runtime builds them; each loop processes the newest frames and hands the result to the dashboard and any enabled utilities.
+
+## The short version
+
+```text
+camera source
+    ↓
+camera-specific pipeline
+    ↓
+detections or measurements
+    ↓
+trackers and utilities
+    ├── dashboard, live video, health, metrics
+    ├── session recording
+    └── NetworkTables, when enabled
+```
+
+The exact middle step depends on the pipeline. An object detector produces model detections; AprilTag looks for tags; QR code reads codes; depth and optical-flow pipelines produce different kinds of measurements. See [Vision Pipelines and Backends](./vision-pipelines) for what each one actually does.
+
+## Setup and runtime are different jobs
+
+The normal sequence on a new checkout is:
+
+```text
+ispy-boot -f   create a fresh config and prepare default models
+ispy-run       build cameras, start the dashboard, and run vision
+```
+
+Boot prepares the files the runtime expects. It does not replace the running vision loop. The `ispy start` command runs the normal boot checks and then starts vision; `ispy setup` is the fresh-setup route and should be treated as destructive. The [command reference](./cli-reference) describes the flags and their side effects.
+
+The runtime reads `Config/config.json` relative to the directory it was started from. That is why a service has an explicit working directory and why running a command from the wrong folder can make iSpy appear to have lost its settings.
+
+## What happens to a frame
+
+Each camera has its own source, pipeline name, and pipeline settings in `camera_configs`. iSpy creates the corresponding pipeline class at startup. A pipeline reads frames from its camera, performs its work, and returns detections or other frame results in the common runtime format.
+
+After vision runs, the loop can apply configured trackers, ask utilities to process the shared frame data, and update the web modules. The dashboard does not run a separate copy of the model: it shows information produced by the same runtime that is processing the camera.
+
+In a one-camera setup, the loop processes that camera directly. With multiple cameras, iSpy uses the multi-camera handler and produces one shared frame-data update for the enabled utilities and web modules. Multi-camera use is a good reason to check CPU/NPU load and camera timing rather than assuming each camera will keep its single-camera frame rate.
+
+## Three results that are easy to confuse
+
+When a target looks wrong, work through these layers separately:
+
+1. **Image:** Is the camera connected, focused, correctly exposed, and showing the target?
+2. **Vision result:** Is the selected pipeline producing the right detection or measurement? For a detector, check the model, label, and confidence threshold.
+3. **Geometry and delivery:** Does the position match the camera mount and calibration, and is the robot receiving the topic and type it expects?
+
+A green health page is helpful, but it does not verify model quality, field geometry, or robot-side topic handling. See [Troubleshooting](./troubleshooting) for a practical fault-isolation order.
+
+## Dashboard and robot output
+
+The web app is a local operations tool. It runs alongside vision and provides camera/model setup, live feeds, health, logs, metrics, session playback, and other runtime pages. By default it listens on port `5000` on all interfaces; only expose it on a network you trust.
+
+Robot output is a separate step. The built-in `FRC/network_table_handler` utility must be present under `plugins.utilities` in the config. When the roboRIO is reachable, it publishes the selected values under the `VisionData` table. Check the dashboard's plugin status and the robot's topic types rather than treating a working web page as proof that NetworkTables is connected. Details are in [Web UI and Networking](./web-ui-and-networking).
+
+## Files you will see
+
+Paths are relative to the runtime working directory unless you configure a different data directory:
+
+| Path | What it is for |
+| --- | --- |
+| `Config/config.json` | Camera, pipeline, model, plugin, and runtime settings |
+| `YoloModels/` | Original PyTorch model files, metadata, and generated backend artifacts |
+| `Outputs/log.txt` | Runtime log; most useful for startup and camera/model errors |
+| `Outputs/` | Other output such as saved metrics and benchmark reports |
+| `QuantizeDataset/` | Images used to prepare supported model conversions |
+| `VideoRecordings/` | Recorded sessions and replay data when rollback recording is enabled |
+
+The [configuration guide](./configuration) explains the main blocks. For images and recorded runs, see [Datasets and Session Recordings](./datasets-and-recordings).

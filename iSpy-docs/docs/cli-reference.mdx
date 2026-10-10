@@ -6,146 +6,151 @@ sidebar_position: 5
 
 # CLI and Commands
 
-The project exposes a few useful command-line entry points. Most users only need a small subset of these, but it helps to know what each command is doing before you start using the machine in the field.
+Run iSpy commands from the project directory that contains `Config/`. The runtime uses the current working directory to find its config, generated models, recordings, and logs. On a provisioned board, that directory is normally `/opt/iSpy`.
 
-## Installed command entry points
+If a command says there is no config even though you can see one in another folder, first check `pwd` (or `Get-Location` in PowerShell). iSpy does not automatically use the directory containing the installed Python package as the project data directory.
 
-From `pyproject.toml`, the package installs these commands:
+## Main commands
 
-```bash
-ispy
-ispy-run
-ispy-boot
-ispy-bench
-ispy-stats
-```
+| Command | What it does |
+| --- | --- |
+| `ispy-boot` | Checks the existing setup, creates missing folders, prepares default models and validates the system. It does not start the live vision loop. |
+| `ispy-run` | Loads `Config/config.json` from the current directory and starts the camera pipelines and web UI. |
+| `ispy` | Provides `setup` and `start` subcommands. Both run the boot flow and then start the live vision loop. |
+| `ispy-bench` | Benchmarks model/backend performance on the current machine. |
+| `ispy-stats` | Compares model outputs and reports detection/performance statistics. |
 
-They are the main user-facing commands for start-up, boot, validation, and benchmarking.
+The Python package installs these entry points; their definitions are in `pyproject.toml`.
 
-## `ispy-boot`
+## First setup
 
-This is the setup and initialization command.
-
-```bash
-ispy-boot
-```
-
-It does the normal boot flow:
-
-- ensure project directories exist
-- download default models if needed
-- generate metadata sidecars
-- look for an existing `Config/config.json`
-- validate the system
-- clean up missing cameras
-- start the UDP announcer
-- optionally install the service
-
-To force a fresh rebuild of generated state, use:
+On a new checkout, initialize the generated files and default models once:
 
 ```bash
 ispy-boot -f
 ```
 
-This is the command that wipes generated folders like:
-
-- `Config/`
-- `Outputs/`
-- `YoloModels/`
-- dataset directories
-
-and then re-creates the default setup. This is the right command if you want to start from a clean baseline.
-
-It also supports:
-
-```bash
-ispy-boot -s
-```
-
-to install the watchdog/systemd service, and:
-
-```bash
-ispy-boot -w
-```
-
-to wait for camera pipelines to become ready before continuing.
-
-## `ispy-run`
-
-This is the main runtime command:
+Then start the live system:
 
 ```bash
 ispy-run
 ```
 
-It loads the config, initializes the active vision pipelines, starts the web app, and runs the main detection loop. This is the command you use on a normal setup once the config is in place.
+`ispy-boot -f` (also written `ispy-boot --fresh`) is destructive. It deletes the current project's `Config/`, `YoloModels/`, `Outputs/`, and active dataset directory before recreating the defaults. That includes your edited configuration, downloaded or uploaded models, logs, and dataset files in those folders. Back them up before using this option; do not use it as a normal restart or troubleshooting step.
 
-If you are working from a repo checkout and want the local development path, this is the one you will run most often.
+For an existing setup, use `ispy-run` to start vision. Running `ispy-boot` without `-f` prepares and validates the existing setup, but exits without starting the camera loop.
 
-## `ispy`
+## `ispy-boot` options
 
-The `ispy` command is a thin wrapper around the boot sequence. It exposes a simple subcommand interface:
+```text
+ispy-boot [-f] [-s] [-w]
+```
+
+- `-f`, `--fresh`: delete generated state and create a new default setup. Destructive; see the warning above.
+- `-s`, `--service`: install and start the background service. This is intended for supported Linux service setups.
+- `-w`, `--wait`: wait for configured camera pipelines to become ready before boot completes. This can take a while if a camera or model is unavailable.
+
+`ispy-boot --help` prints the options available in the installed version.
+
+`--wait` can be useful in a service or scripted startup when you want boot to report readiness before continuing. It can also make startup wait a long time while a model is downloading or a pipeline cannot become ready. For interactive troubleshooting, leave it off at first so you can inspect the live status and log.
+
+`-s`, `--service` runs the service installer for the current platform. Treat this as a deployment action, not part of every development start; service installation may require elevated privileges and is intended for supported Linux setups.
+
+## `ispy` subcommands
 
 ```bash
 ispy setup
 ispy start
 ```
 
-These are equivalent to the underlying boot flow:
+`ispy setup` runs a fresh boot and then starts the vision loop. Because fresh boot removes generated state, only use it when you intend to rebuild the setup and have backed up anything you need. `ispy start` runs the normal boot checks against the existing config and then starts vision. Both accept the boot options `-s` and `-w`.
 
-- `setup` is a fresh initialization path
-- `start` is a normal boot against the current config
+For clearer separation, the lower-level commands are often easier to use: run `ispy-boot -f` once on a new install, then use `ispy-run` for normal operation.
 
-The project comment in the code notes that the boot flow is separate from the actual vision loop, and `ispy start` is mainly a wrapper around the boot setup path. The real runtime is still `ispy-run`.
+## Service commands on Linux
 
-## `ispy-bench`
-
-This command runs benchmarking for inference backends and hardware performance. It is primarily for testing which backend is faster on the current machine.
+If you installed iSpy as a systemd service, manage it with:
 
 ```bash
-ispy-bench
-```
-
-This is useful when you are deciding whether to prefer ONNX, OpenVINO, TensorRT, TFLite, RKNN, or CoreML for a given board.
-
-## `ispy-stats`
-
-This is a model comparison and stats utility. It is useful for comparing model variants or checking how a model behaves under different export paths.
-
-## System service commands
-
-If the project is installed as a service, the standard service commands are:
-
-```bash
-journalctl -u iSpy -f
-systemctl restart iSpy
-systemctl stop iSpy
-systemctl status iSpy
-```
-
-On a board deployed with the image or provisioner, the `iSpy` service is the normal way to run the system.
-
-## Typical command sequence
-
-A normal config flow is:
-
-```bash
-ispy-boot -f
-ispy-run
-```
-
-On a live robot board:
-
-```bash
-sudo systemctl enable iSpy
+sudo systemctl status iSpy
 sudo systemctl restart iSpy
-journalctl -u iSpy -f
+sudo systemctl stop iSpy
+sudo journalctl -u iSpy -f
 ```
 
-That is the path most teams use once the machine is stable.
+The provisioned image uses `/opt/iSpy` as its working directory, so the runtime reads `/opt/iSpy/Config/config.json`. The provision script also writes `/etc/iSpy/config.json`, but the current runtime does not load that copy. Check the service log with `journalctl` when it does not start; a service does not write output to the terminal where you ran another command.
 
-## Important note about fresh boots
+Use `status` before restarting a service that appears offline. A repeated restart will not fix a missing camera, invalid config, or broken model path; the journal usually gives a more useful first error. The watchdog can restart the runtime after a failure, so check the timestamps and repeated startup lines when reading logs.
 
-`ispy-boot -f` is destructive to generated directories. It removes config and model state, which is useful when you want a clean reset, but it is not something you want to run casually if you have a machine already tuned and working.
+## Stop and restart
 
-It is the correct command for starting from scratch, not the default command for a daily restart.
+For a foreground run, press `Ctrl+C` in the terminal that is running `ispy-run`. The runtime handles shutdown and stops its cameras and recording worker. For a system service, use `systemctl stop` or `systemctl restart` instead of trying to kill an arbitrary Python process.
+
+Avoid starting two copies of iSpy against the same camera and config. The second process may fail to open the device, compete for resources, or make it unclear which process owns the dashboard port.
+
+## Benchmarking and model comparison
+
+Run both tools from the project directory so their default config, images, and model paths resolve correctly.
+
+### `ispy-bench`
+
+This benchmarks inference backends using a `.pt` model. Defaults are five seconds per run and the backend iSpy recommends for the current machine.
+
+| Option | Meaning |
+| --- | --- |
+| `--duration SECONDS` | Seconds to run each backend; default `5`. |
+| `--output PATH` | Optional JSON report path. |
+| `--model PATH` | Benchmark this specific PyTorch `.pt` model. |
+| `--all-backends` | Probe every reachable backend rather than only the recommended one. |
+| `--install-deps` | Best-effort install missing runtime packages for the selected backend plan. This changes the active Python environment. |
+
+Example:
+
+```bash
+ispy-bench --model YoloModels/pytorch/my_model.pt --duration 10 --output Outputs/benchmark.json
+```
+
+### `ispy-stats`
+
+This compares a base `.pt` model with an optimized model using images from a test directory. Pass model paths explicitly when the active camera config does not point to the pair you want to compare.
+
+| Option | Meaning |
+| --- | --- |
+| `--config PATH` | Config to read model paths from; default `Config/config.json`. |
+| `--base PATH` | Base `.pt` model path; overrides the config. |
+| `--optimized PATH` | Converted model path; overrides the config. |
+| `--images-dir PATH` | Test images; default `QuantizeDataset/valid`. |
+| `--num-images N` | Number of randomly selected images; default `5`. |
+| `--seed N` | Optional random seed so image selection can be repeated. |
+| `--core-mask N` | RKNN NPU core mask; default `7`, ignored for other backends. |
+| `--iou-thresh VALUE` | IoU threshold for matching boxes; default `0.5`. |
+| `--speed-duration SECONDS` | Seconds per model in the speed test; default `5`. |
+| `--output PATH` | Report path; default `Outputs/optimized_model_report.json`. |
+
+Example:
+
+```bash
+ispy-stats --base YoloModels/pytorch/my_model.pt --optimized YoloModels/onnx/my_model.onnx --images-dir QuantizeDataset/valid --num-images 20
+```
+
+The report checks detection agreement as well as speed. Use representative images and compare with the same image set when evaluating changes; a faster artifact is not useful if it changes detections too much. Run `ispy-bench --help` or `ispy-stats --help` to confirm flags for the version installed on the robot.
+
+Benchmark on the target machine when possible. Results from a development PC do not predict NPU performance, camera capture rate, or thermal behavior on the coprocessor. Save the JSON report with the model/version details if you need to compare runs later.
+
+## Logs
+
+The normal runtime appends its log to `Outputs/log.txt` under the current project directory. When started by systemd, the service output is also available through `journalctl -u iSpy -f`.
+
+For a quick local tail:
+
+```bash
+tail -f Outputs/log.txt
+```
+
+PowerShell:
+
+```powershell
+Get-Content .\Outputs\log.txt -Tail 100 -Wait
+```
+
+Start with the first warning or error around the time the problem began. The last line is often just where the runtime noticed an earlier failure.

@@ -6,139 +6,130 @@ sidebar_position: 2
 
 # Installation and Setup
 
-This project is easiest to install in two ways:
+There are two common installs: a Python environment on a development computer, or a provisioned Linux board that starts iSpy as a service. For a first test, use the development install below; it is easier to inspect and stop than a background service.
 
-1. on a real board using the baked-in image or provision script
-2. on a development machine using the Python package and normal repo checkout
-
-The project does not require a special IDE or a fancy dev environment. A normal Linux or Windows machine with Python 3.10+ and a camera attached is enough to run a local setup.
+If you're not sure which route to choose, use the virtual-environment install first. It keeps iSpy's Python packages separate from the OS, and you can see startup messages directly in the terminal. Move to a systemd service only after the camera, model, and network path are working.
 
 ## Supported platforms
 
-The project is intended to run on:
+The repository includes deployment support for:
 
 - Orange Pi 5 / 5 Pro with RK3588 NPU
-- other aarch64 Linux boards such as Raspberry Pi and Jetson-class devices
+- other aarch64 Linux boards, subject to camera and inference backend availability
 - x86_64 Linux machines
-- Apple Silicon macOS
-- Windows
 
-The boot code and optimizer try to choose the best backend available for the hardware it sees. There are official paths for deployed board installs and a dev install for laptop work.
+Python package installation is also possible on Windows and macOS, but acceleration and camera support depend on the packages available for that operating system. The `install.sh` script and board provisioner are Linux shell scripts, not Windows installers. The recommended deployment target is an Orange Pi 5/5 Pro with RK3588 when you need the RKNN NPU backend. Other machines may use a different backend or CPU inference.
 
 ## Prerequisites
 
 For a normal setup, the basics are:
 
-- Python 3.10 or newer
+- Python 3.10 or newer (the project metadata currently requires `>=3.10`)
 - git
-- a camera or USB webcam, or a video file for testing
-- network access for first boot model downloads
+- a supported camera, USB webcam, or video source
+- network access during first boot to download the default models
 - the repo checked out locally, or a provisioned board image
 
-On Linux, the install script will install a fair amount of the Python stack for you. On a board image, the systemd provisioning path does most of it automatically.
+The Python install also installs the runtime dependencies declared in `pyproject.toml`, including PyTorch, OpenCV, ONNX Runtime, and RobotPy/NetworkTables. These packages are large, and supported accelerators have additional platform requirements.
+
+Before installing on a board, check that you have the right image for its architecture and enough storage for Python wheels and model files. A successful `pip install` only says the Python dependencies installed; it does not prove that the camera is accessible or that an accelerator runtime can use your model.
 
 ## Fresh install from the repo
 
-On a Linux machine or board where you want a standard install:
+Clone the repository, then create a virtual environment in the repository root. On Linux or macOS:
 
 ```bash
-git clone https://github.com/aidan-j532/iSpy-FRC
+git clone https://github.com/aidan-j532/iSpy-FRC.git
 cd iSpy-FRC
-chmod +x install.sh
-./install.sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
-That script detects the machine architecture and decides whether to install the base package or the dev extras:
+On Windows, use PowerShell:
 
-- `aarch64` -> base install
-- `x86_64` -> dev install with additional tools
-- anything else -> base install
-
-The script then runs:
-
-```bash
-pip install .
+```powershell
+git clone https://github.com/aidan-j532/iSpy-FRC.git
+cd iSpy-FRC
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
-or, on x86 dev builds:
+If PowerShell does not allow the activation script, run the environment's commands directly:
 
-```bash
-pip install ".[dev]"
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\ispy-boot.exe -f
+.\.venv\Scripts\ispy-run.exe
 ```
 
-The `install.sh` script is intentionally simple. It is not doing anything magical; it is just getting the project and its Python dependencies into place.
+Editable mode (`-e`) means code changes in this checkout are available without reinstalling. Keep the terminal in the repository root when running iSpy; the runtime finds `Config/`, models, recordings, and logs relative to the current directory.
+
+### Linux install script
+
+The root `install.sh` is an alternative for Linux, not a cross-platform installer. It installs into the Python selected by `pip` and uses `--break-system-packages`; it does not create a virtual environment. It installs the base package on ARM64 and the `dev` extra on x86_64. Prefer the virtual-environment steps above unless you specifically want that system-level behavior.
+
+### Which install path fits?
+
+| Situation | Start with |
+| --- | --- |
+| Trying iSpy on a laptop or desktop | The virtual environment above |
+| Developing the Python code | Editable install (`python -m pip install -e .`) |
+| Deploying on a supported robot board | The board image/provisioning process, after checking its current limitations |
+| Installing only to benchmark a backend | The normal package, then install an optional extra only if that benchmark needs it |
+
+Windows PowerShell's script-execution policy may block virtual-environment activation. You do not have to change the machine-wide policy just to run iSpy: use the venv's executable directly, as shown above.
 
 ## Board image / provisioned install
 
-If you are using the prepared Orange Pi image, the first boot process handles most of this automatically. The image boots, waits for an internet connection, then runs the provisioner. After that, the repo is cloned to `/opt/iSpy`, dependencies are installed, the config is created, and the service is enabled.
+The repository includes an Orange Pi image builder and a first-boot service. Keep the board connected to the network while provisioning runs. The intended service working directory is `/opt/iSpy`, where the runtime expects `Config/config.json`.
 
 The actual provisioning script is here:
 
 - `Image/provision.sh`
 - `Image/first-boot.sh`
 
-This is the path to use when you want the least manual effort.
+There is a provisioning issue in the current checkout: `Image/provision.sh` tries to copy `/opt/iSpy/Config/config.json` before running the boot command that creates it. A clean clone does not include that generated file, so first boot can stop before the service is installed. The script also creates `/etc/iSpy/config.json` and sets `iSpy_CONFIG`, but the current runtime does not read that variable. Treat the image/provision route as unverified until those paths are reconciled; see [Configuration Reference](./configuration).
 
 ## One-shot provisioner
 
-If you already have a Debian/Ubuntu board and want the exact same setup without flashing an image, you can run the provision script directly:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/aidan-j532/iSpy-FRC/main/Image/provision.sh | bash
-```
-
-That script will:
-
-- install OS packages
-- clone or update the repo
-- install the project
-- create `/etc/iSpy/config.json` if it does not already exist
-- install a systemd unit named `iSpy`
-- start the service automatically
+`Image/provision.sh` is the script used by the first-boot image service. Because of the config-path issue above, do not rely on it to provision a clean Debian/Ubuntu board from this checkout. Once the script is corrected, its service can be checked with `sudo systemctl status iSpy` and `sudo journalctl -u iSpy -f`.
 
 ## Python environment notes
 
-The project declares Python 3.10+ and installs the main runtime dependencies through `pyproject.toml`.
+The normal installation includes the runtime dependencies listed in `pyproject.toml`. Optional groups are available for additional work:
 
-The key runtime packages include:
+- `dev` includes tools for training and conversion, including TensorFlow, ONNX packages, Jupyter, and TensorRT.
+- `optimizer` includes Ultralytics and ONNX packages used by model conversion.
 
-- numpy
-- OpenCV
-- PyTorch
-- onnxruntime
-- Flask
-- scikit-learn
-- robotpy / pyntcore
-- plotly
-- Pillow
+Install an extra only when you need it, from the repository root. For example: `python -m pip install -e ".[optimizer]"`. Some optional packages only install or run on particular operating systems and devices; an extra cannot add hardware support by itself.
 
-The dev extras add things like:
-
-- torchvision
-- TensorFlow
-- ONNX tooling
-- matplotlib
-- jupyter
-- TensorBoard
-- TensorRT
-
-This matters mainly for model conversion and dev work. For a regular robot install, the base install is enough.
+Use `python -m pip` rather than a bare `pip` when possible. It makes it clear which interpreter receives the package, which avoids a common setup snag where the command is installed but the `ispy-*` entry points are not on the active environment's `PATH`.
 
 ## First boot after install
 
-Once the project is installed, the first boot command is the one that creates the default project files and downloads starting models:
+After installation, initialize a new checkout once from its root directory:
 
 ```bash
 ispy-boot -f
 ```
 
-That command does a few important things:
+This is a destructive fresh setup, not a daily startup command. It deletes `Config/`, `YoloModels/`, `Outputs/`, and the active dataset directory before recreating them. Back up your config, models, logs, and dataset files first if this is not a brand-new checkout. Boot downloads the default models, writes their metadata, creates `Config/config.json`, and may detect a connected camera. If no camera is found, you can add one later in the web UI. See [First Launch](./getting-started) for the next steps.
 
-- creates `Config/`, `YoloModels/`, `Outputs/`, and dataset folders
-- downloads default models
-- writes metadata sidecars for the models
-- creates a default `Config/config.json`
-- can auto-detect a first camera on a machine with a working webcam
-- tries to install missing backend dependencies for the first run
+When setup is done, keep the project working directory in mind. Config, model, log, dataset, and recording paths are usually resolved from that directory. A service configured to run from `/opt/iSpy` and a command started from some other checkout can therefore appear to have different settings even when both use the same installed Python package.
 
-This is the setup step most newcomers should run once before they ever start the live pipeline.
+## Before moving onto the robot
+
+Do one complete run on the target computer with its final camera and mount:
+
+- confirm the board sees the camera at the selected source;
+- check the image at the resolution and exposure you expect to use;
+- verify the chosen backend actually loads the model (not just that conversion completed);
+- measure the loop rate under the model you plan to deploy;
+- check disk space if recording is enabled; and
+- confirm the roboRIO address from the robot network before relying on NetworkTables.
+
+The [runtime overview](./architecture) explains which parts of that test are independent. If a clean board's image provisioner fails, consult the specific caveat above rather than repeatedly running a destructive fresh setup.
