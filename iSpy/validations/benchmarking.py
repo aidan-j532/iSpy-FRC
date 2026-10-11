@@ -75,6 +75,35 @@ def _download_real_calibration_dataset() -> Path | None:
     except Exception as exc:
         print(f"Calibration download failed: {exc}")
         return None
+    
+
+    license_path = dest / "LICENSE.txt"
+    license_text = (
+        "COCO128 = first 128 images of COCO train2017 (https://cocodataset.org/#termsofuse).\n"
+        "Annotations: CC BY 4.0. Images: Flickr photos under their individual licenses\n"
+        "(some NonCommercial/ShareAlike/NoDerivs); not owned by the COCO Consortium.\n"
+        "Downloaded on demand for int8 calibration/benchmarking only. NOT redistributed\n"
+        "with iSpy. Do not commit or republish this folder.\n"
+    )
+
+    existing_text = (
+        license_path.read_text(encoding="utf-8")
+        if license_path.exists()
+        else ""
+    )
+
+    missing_lines = [
+        line
+        for line in license_text.splitlines(keepends=True)
+        if line.strip() and line.strip() not in existing_text
+    ]
+
+    if missing_lines:
+        with license_path.open("a", encoding="utf-8") as f:
+            if existing_text and not existing_text.endswith("\n"):
+                f.write("\n")
+            f.writelines(missing_lines)
+
     return dest if _count_images(dest) >= _MIN_REAL_IMAGES else None
 
 
