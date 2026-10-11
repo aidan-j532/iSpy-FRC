@@ -1,6 +1,5 @@
 import argparse
 import contextlib
-from functools import partial
 import hashlib
 import io
 import json
@@ -10,6 +9,7 @@ import sys
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 
 from iSpy.config.AutoOpt import has_nvidia, has_rockchip_npu, has_tensorrt, has_tpu
@@ -34,6 +34,74 @@ def _repo_root() -> Path | None:
                 return d
     return None
 
+# This is a URL to a real calibration dataset, provided by the Ultralytics repository.
+_CALIB_ZIP_URL = (
+    "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128.zip"
+)
+_IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
+_INT8_ONLY_FORMATS = {"rknn", "tflite"}
+_MIN_REAL_IMAGES = 32
+_real_calib_cache: list = []  # [Path | None] once resolved
+_CALIB_OVERRIDE: list = [] # its a string if --calib-dataset was passed
+
+def _count_images(folder: Path) -> int:
+    if not folder.is_dir():
+        return 0
+    return sum(
+        1 for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in _IMG_EXTS
+    )
+
+
+def _download_real_calibration_dataset() -> Path | None:
+    dest = _PROJECT_ROOT / "QuantizeDataset" / "coco128"
+    if _count_images(dest) >= _MIN_REAL_IMAGES:
+        return dest
+    print("No real calibration images found - downloading COCO128 (~7 MB)...")
+    try:
+        import io
+        import zipfile
+
+        import requests
+
+        resp = requests.get(_CALIB_ZIP_URL, timeout=120)
+        resp.raise_for_status()
+        dest.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            for name in zf.namelist():
+                p = Path(name)
+                if p.suffix.lower() in _IMG_EXTS:
+                    # flatten + use the basename
+                    (dest / p.name).write_bytes(zf.read(name))
+    except Exception as exc:
+        print(f"Calibration download failed: {exc}")
+        return None
+    return dest if _count_images(dest) >= _MIN_REAL_IMAGES else None
+
+
+def _real_calibration_dataset(explicit: str | None = None) -> Path | None:
+    if explicit:
+        p = Path(explicit)
+        if not p.is_absolute():
+            p = _PROJECT_ROOT / p
+        if _count_images(p) == 0:
+            raise SystemExit(f"--calib-dataset has no images: {p}")
+        return p
+    if _real_calib_cache:
+        return _real_calib_cache[0]
+
+    result = None
+    root = _PROJECT_ROOT / "QuantizeDataset"
+    if root.is_dir():
+        for d in sorted(root.iterdir()):
+            # "default" is the synthetic-noise fallback wqhich isnt real caus eit causes quatnizaiton errors
+            if d.is_dir() and d.name not in ("default", "valid", "Trash"):
+                if _count_images(d) >= _MIN_REAL_IMAGES:
+                    result = d
+                    break
+    if result is None:
+        result = _download_real_calibration_dataset()
+    _real_calib_cache.append(result)
+    return result
 
 _REPO_ROOT = _repo_root()
 
@@ -254,8 +322,7 @@ def detect_test_plan() -> dict:
 
 # rknn/tflite are int8-only, engine/openvino get a real int8 build from the
 # calibration dataset. ispy-bench wants max fps, so never a float32 fallback
-_QUANTIZABLE_FORMATS = {"rknn", "tflite", "openvino", "engine"}
-
+_QUANTIZABLE_FORMATS = {"rknn", "tflite"}
 
 def _recommended_backend_plan() -> dict[str, tuple]:
     # the exact backend normal iSpy would pick for this machine (AutoOpt.recommend_format)
@@ -311,11 +378,20 @@ def _ensure_calibration_dataset(fmt) -> Path:
     return ds
 
 
-def get_or_convert(pt_path, fmt, input_size=(640, 640)):
+def get_or_convert(pt_path, fmt, input_size=(640, 640), calib_dataset=None):
     if fmt in ("tpu", "pt"):
         return pt_path
     quantize = fmt in _QUANTIZABLE_FORMATS
-    dataset_path = str(_ensure_calibration_dataset(fmt)) if quantize else None
+    dataset_path = None
+    if quantize:
+        real = _real_calibration_dataset(calib_dataset)
+        if real is not None:
+            dataset_path = str(real)
+        elif fmt in _INT8_ONLY_FORMATS:
+            dataset_path = str(_ensure_calibration_dataset(fmt))  # synthetic, last resort
+        else:
+            print(f"No real calibration data for '{fmt}' - building unquantized.")
+            quantize = False
     with _quiet():
         result = _convert_model_subprocess(
             str(pt_path),
@@ -328,7 +404,6 @@ def get_or_convert(pt_path, fmt, input_size=(640, 640)):
         return None
     return result
 
-
 def make_base_config(pt_path, model_path, device, batch_size=1) -> dict:
     return {
         "file_path": str(model_path),
@@ -340,9 +415,7 @@ def make_base_config(pt_path, model_path, device, batch_size=1) -> dict:
         "batch_size": batch_size,
     }
 
-
 _BENCH_IMAGE_PATH: Path | None = None
-
 
 def _bench_source_image() -> Path:
     # is_image=True sources make the preprocess worker feed the queue continuously,
@@ -384,7 +457,8 @@ def _benchmark_frames() -> list:
     import cv2
 
     suffixes = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
-    roots = [_PROJECT_ROOT / "QuantizeDataset"]
+    real = _real_calibration_dataset(_CALIB_OVERRIDE[0] if _CALIB_OVERRIDE else None)
+    roots = [real] if real is not None else [_PROJECT_ROOT / "QuantizeDataset"]
     paths = sorted(
         path
         for root in roots
@@ -453,7 +527,6 @@ def _require_benchmark_count(count: int) -> None:
 
 
 def _benchmark_model_forward(model, frames: list, batch_size: int) -> dict | None:
-    """Time backend model execution without iSpy preprocessing or postprocessing."""
     import numpy as np
 
     model_type = getattr(model, "model_type", None)
@@ -1081,12 +1154,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="PNG path (default: next to the outputed JSON)",
     )
+    parser.add_argument(
+        "--calib-dataset",
+        default=None,
+        help="folder of real images for int8 calibration + benchmark input "
+        "(default: a real dataset under QuantizeDataset/, else COCO128 is downloaded)",
+    )
     return parser
 
 
 def main(argv=None):
     parser = _build_parser()
     args = parser.parse_args(argv)
+    
+    _CALIB_OVERRIDE[:] = [args.calib_dataset] if args.calib_dataset else []
+    
     if args.parallel < 1:
         parser.error("--parallel must be at least 1 bro like what you doing?")
     if args.pipelined and args.serial:
@@ -1150,7 +1232,7 @@ def main(argv=None):
         name = pt_path.stem
 
         for fmt, device, masks in active.values():
-            model_path = get_or_convert(pt_path, fmt)
+            model_path = get_or_convert(pt_path, fmt, calib_dataset=args.calib_dataset)
             fallback_fmt = None
             if model_path is None and not args.all_backends and fmt != "onnx":
                 # recommended backend couldn't build (e.g. tensorrt absent) -
