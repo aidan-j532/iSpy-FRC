@@ -379,13 +379,18 @@ def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
             )
         ],
     }
-    rknn_targets = _rknn_wheel_targets(report_missing=False)
-    if rknn_targets:
-        deps["rknn"] = rknn_targets + [
-            ("onnx", "onnx<1.17"),
-            ("google.protobuf", "protobuf<4.0"),
-            ("numpy", "numpy<2"),
-        ]
+    # Main runtime environment: only the lite2 inference wheel.
+    # The full rknn-toolkit2 + conversion deps (ultralytics, onnx, protobuf,
+    # numpy<2, setuptools<82) live in the isolated converter environment
+    # (iSpy.boot._rknn_converter_env), provisioned on demand - never here.
+    key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
+    lite_fn = _RKNN_LITE_FILENAMES.get(key)
+    if lite_fn:
+        local_lite = _RKNN_LITE_DIR / lite_fn
+        if local_lite.exists():
+            deps["rknn"] = [("rknnlite", str(local_lite))]
+        else:
+            logger.warning("Lite wheel not found in package: %s", local_lite)
     return deps
 
 
@@ -462,6 +467,21 @@ def _install_tensorrt() -> bool:
 
 
 BACKEND_DEPENDENCIES = _backend_dependencies()
+
+# Lazy handle to iSpy.boot._rknn_converter_env.  Kept as a module attribute so
+# callers/tests can inject/mock the provisioning layer without importing the
+# heavy module chain eagerly.
+_rknn_converter_env: object | None = None
+
+
+def _converter_env_module():
+    """Return the RKNN converter-environment manager (provisioned lazily)."""
+    global _rknn_converter_env
+    if _rknn_converter_env is None:
+        from iSpy.boot import _rknn_converter_env as _env
+
+        _rknn_converter_env = _env
+    return _rknn_converter_env
 
 
 def _in_virtualenv() -> bool:
@@ -1458,10 +1478,20 @@ def _convert_rknn(
         # the canonical names back so a later torch import can't blow up
         repair_standard_log_levels()
         warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
-    except ImportError:
+    except ImportError as exc:
+        # Preserve the real cause (numpy/scipy ABI mismatch, missing
+        # pkg_resources, ...) instead of misreporting it as a missing toolkit.
+        # Note: plain retries do NOT rebuild anything - the converter env is
+        # provisioned once and reused; if its dependency set is broken it must
+        # be rebuilt explicitly (delete the env dir / bump the depset version).
         raise ImportError(
-            "RKNN Toolkit not found. Install it to convert to RKNN format."
-        )
+            f"Failed to import RKNN Toolkit: {exc}. "
+            "The converter environment may have been built with an "
+            "incompatible dependency set (needs numpy<2, scipy<1.15, "
+            "protobuf<4, setuptools<82). Rebuild it by deleting the converter "
+            "environment directory (see iSpy.boot._rknn_converter_env) and "
+            "retrying once."
+        ) from exc
 
     count = calib_count_for_format("rknn")
     ds_path, _ = _resolve_calibration_dataset(dataset_path, count)
@@ -2070,14 +2100,105 @@ def convert_model(
     return model_file
 
 
-def _convert_model_subprocess(
+def _classify_worker_failure(
+    returncode: int | None,
+    error: str,
+    error_type: str | None = None,
+) -> str:
+    """Classify a failed conversion subprocess for accurate diagnostics.
+
+    Returns one of:
+
+    - ``"terminated"``: killed by a signal (negative return code) - e.g. the
+      OOM killer during int8 calibration.  *Not* a Python exception.
+    - ``"dependency"``: the worker could not import its conversion stack
+      (ImportError / ModuleNotFoundError, or the converter environment itself
+      is unavailable).  Retrying cannot help.
+    - ``"resource"``: an explicit out-of-memory exception from the worker.
+    - ``"conversion"``: any other conversion-side failure.
+    """
+    if returncode is not None and returncode < 0:
+        return "terminated"
+    lowered = (error or "").lower()
+    if error_type in ("ImportError", "ModuleNotFoundError") or any(
+        needle in lowered
+        for needle in (
+            "cannot import name",
+            "no module named",
+            "failed to import",
+            "pkg_resources",
+        )
+    ):
+        return "dependency"
+    if error_type == "MemoryError" or "memoryerror" in lowered or any(
+        needle in lowered
+        for needle in ("cannot allocate memory", "not enough memory", "enomem")
+    ):
+        return "resource"
+    return "conversion"
+
+
+def _cached_rknn_artifact(
+    pt_path: Path,
+    quantize: bool | None = None,
+    force: bool = False,
+) -> Path | None:
+    """Return a usable cached .rknn artifact without provisioning anything.
+
+    Mirrors ``convert_model()``'s cache logic: the artifact must exist and its
+    metadata sidecar (if present) must agree with the requested quantization.
+    ``force=True`` disables the cache.  Returns ``None`` when a real
+    conversion is required - never provisions the converter environment, so
+    reusing a cached artifact never triggers a build.
+    """
+    if force:
+        return None
+    if quantize is None:
+        quantize = _RKNN_QUANTIZE
+    rknn_path = _desired_output_path(pt_path, "rknn")
+    if not rknn_path.exists() or not rknn_path.is_file():
+        return None
+    try:
+        from iSpy.vision.metadata import metadata_path_for, read_metadata
+    except Exception:
+        metadata_path_for = read_metadata = None  # type: ignore[assignment]
+    if metadata_path_for is not None:
+        meta_path = metadata_path_for(rknn_path)
+        if meta_path.exists():
+            meta = read_metadata(rknn_path) or {}
+            stored_quantize = meta.get("quantize")
+            if stored_quantize is None:
+                q = meta.get("quantization")
+                stored_quantize = q != "none" if q is not None else None
+            if stored_quantize is not None and stored_quantize != quantize:
+                logger.info(
+                    "Cached rknn model %s has quantize=%s but config says %s. "
+                    "Re-converting.",
+                    rknn_path.name,
+                    stored_quantize,
+                    quantize,
+                )
+                return None
+    logger.info("Cached rknn model found: %s", rknn_path)
+    return rknn_path
+
+
+def _convert_model_subprocess_report(
     model_file,
     target_format,
     input_size,
     quantize=None,
     force=False,
     dataset_path=None,
-) -> Path:
+) -> tuple[Path, dict | None]:
+    """Subprocess conversion that also reports *why* a conversion failed.
+
+    Returns ``(Path, None)`` on success and ``(fallback_path, report)`` on
+    failure, where ``report`` is a JSON-serialisable dict with at least
+    ``status`` (terminated/dependency/resource/conversion) and ``error``.
+    Callers like the benchmarker use the report so a failed RKNN conversion is
+    recorded as a failure instead of silently becoming a .pt run.
+    """
     outputs_dir = _PROJECT_ROOT / "Outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2093,9 +2214,51 @@ def _convert_model_subprocess(
     if dataset_path:
         args["dataset_path"] = str(dataset_path)
 
+    # A cached, config-matching .rknn artifact is used directly - no worker, no
+    # converter-env provisioning (fresh benchmarks rarely need a rebuild).
+    if target_format == "rknn":
+        cached = _cached_rknn_artifact(Path(model_file), quantize, force=force)
+        if cached is not None:
+            return cached, None
+
+    # RKNN conversion runs in the isolated converter environment so the full
+    # toolkit2 + its incompatible numpy/scipy/setuptools pins never touch the
+    # main runtime environment.  The worker finds the iSpy source via
+    # PYTHONPATH (set below) regardless of install layout.
+    worker_python = sys.executable
+    worker_env = None
+    if target_format == "rknn":
+        try:
+            env_mod = _converter_env_module()
+            worker_python = str(env_mod.converter_python())
+            worker_env = os.environ.copy()
+            src = str(env_mod.ispy_source_root())
+            existing = worker_env.get("PYTHONPATH", "")
+            worker_env["PYTHONPATH"] = src + (
+                os.pathsep + existing if existing else ""
+            )
+        except Exception as exc:
+            # The converter environment could not be obtained (unsupported
+            # arch/ABI, disk full, no network, ...) - classify as a dependency
+            # failure and fall back to the source model.  A retry would fail
+            # identically.
+            report = {
+                "status": "dependency",
+                "error": f"converter environment unavailable: {exc}",
+                "category": "provision",
+            }
+            logger.error(
+                "RKNN conversion of %s cannot run - converter environment "
+                "unavailable: %s",
+                Path(model_file).name,
+                exc,
+            )
+            return Path(model_file), report
+
     last_code = None
 
-    def _run_once(quantize, log_failure=True) -> Path | None:
+    def _run_once(quantize, log_failure=True) -> tuple[Path | None, dict | None]:
+        nonlocal last_code
         args["quantize"] = quantize
 
         with tempfile.NamedTemporaryFile(
@@ -2107,12 +2270,12 @@ def _convert_model_subprocess(
         result_path = args_path + ".result.json"
         try:
             proc = subprocess.run(
-                [sys.executable, "-m", "iSpy.boot._convert_worker", args_path],
+                [worker_python, "-m", "iSpy.boot._convert_worker", args_path],
                 cwd=str(_PROJECT_ROOT),
                 capture_output=True,
                 text=True,
+                env=worker_env,
             )
-            nonlocal last_code
             last_code = proc.returncode
 
             # surface the worker's own logging - it just runs in a subprocess,
@@ -2123,18 +2286,62 @@ def _convert_model_subprocess(
                 print(proc.stderr, file=_REAL_STDERR, end="")
 
             if proc.returncode != 0 or not os.path.exists(result_path):
+                # Prefer the worker's structured error (preserves nested
+                # import causes like numpy/scipy ABI mismatches or a missing
+                # pkg_resources) over a generic exit-code message.
+                error_text, error_type = "", None
+                if os.path.exists(result_path):
+                    try:
+                        with open(result_path) as rf:
+                            err = json.load(rf)
+                        error_text = err.get("error", "")
+                        error_type = err.get("error_type")
+                    except (OSError, ValueError):
+                        error_text = ""
+                classification = _classify_worker_failure(
+                    proc.returncode, error_text, error_type
+                )
+                report = {
+                    "status": classification,
+                    "error": error_text
+                    or f"conversion worker exited with code {proc.returncode}",
+                    "exit_code": proc.returncode,
+                    "error_type": error_type,
+                }
+                last_report = report
                 if log_failure:
                     logger.error(
-                        "Conversion subprocess for %s -> %s failed (exit code %s).",
+                        "Conversion subprocess for %s -> %s failed: %s",
                         Path(model_file).name,
                         target_format,
-                        proc.returncode,
+                        report["error"],
                     )
-                return None
+                return None, report
 
             with open(result_path) as f:
                 result_data = json.load(f)
-            return Path(result_data["result"])
+            result_out = Path(result_data["result"])
+            if result_out == Path(model_file):
+                # The worker itself degraded to the source .pt - no optimized
+                # artifact was produced.
+                report = {
+                    "status": "conversion",
+                    "error": (
+                        f"conversion worker fell back to the source model "
+                        f"({result_out.name})"
+                    ),
+                    "exit_code": 0,
+                }
+                last_report = report
+                if log_failure:
+                    logger.error(
+                        "Conversion subprocess for %s -> %s failed: %s",
+                        Path(model_file).name,
+                        target_format,
+                        report["error"],
+                    )
+                return None, report
+            return result_out, None
         finally:
             for p in (args_path, result_path):
                 try:
@@ -2142,36 +2349,73 @@ def _convert_model_subprocess(
                 except OSError:
                     pass
 
-    # a killed/failed quantized build (rknn toolkit's int8 calibration is the
+    # A killed/failed quantized build (rknn toolkit's int8 calibration is the
     # usual OOM casualty - its worker dies with a signal exit code) degrades to
     # an unquantized build before conceding to the .pt on-CPU fallback, so the
     # NPU artifact still exists instead of silently running the model in torch.
-    # Only the single coherent message below is emitted for that path - the
-    # doomed quantized attempt itself logs nothing.
+    #
+    # Only retry without quantization when the failure is a signal kill
+    # (negative return code, e.g. SIGKILL from the OOM killer) or an explicit
+    # resource error.  A dependency failure (import error, provision failure)
+    # or a plain conversion exception would fail identically on retry, so it is
+    # not retried.
     if quantize:
-        result = _run_once(quantize, log_failure=False)
+        result, report = _run_once(quantize, log_failure=False)
         if result is not None:
-            return result
-        logger.warning(
-            "Quantized conversion of %s -> %s failed (exit code %s) - the "
-            "int8 calibration phase was likely killed by the OS. Retrying "
-            "without quantization so an artifact is still produced.",
-            Path(model_file).name,
-            target_format,
-            last_code,
-        )
-        result = _run_once(False, log_failure=False)
-        if result is not None:
-            logger.info("Unquantized retry succeeded: %s", result)
-            return result
+            return result, None
+        if report is not None and report["status"] in ("terminated", "resource"):
+            logger.warning(
+                "Quantized conversion of %s -> %s failed (%s) - the int8 "
+                "calibration phase was likely killed by the OS. Retrying "
+                "without quantization so an artifact is still produced.",
+                Path(model_file).name,
+                target_format,
+                report["status"],
+            )
+            result, report = _run_once(False, log_failure=False)
+            if result is not None:
+                logger.info("Unquantized retry succeeded: %s", result)
+                return result, None
+        else:
+            logger.error(
+                "Quantized conversion of %s -> %s failed (%s) - not retrying "
+                "without quantization.",
+                Path(model_file).name,
+                target_format,
+                report["status"] if report is not None else "unknown",
+            )
     else:
-        result = _run_once(quantize, log_failure=True)
+        result, report = _run_once(quantize, log_failure=True)
         if result is not None:
-            return result
+            return result, None
 
+    if report is None:
+        report = {
+            "status": "conversion",
+            "error": f"conversion to {target_format} produced no artifact",
+        }
     logger.error(
         "Conversion subprocess for %s -> %s failed. Falling back to .pt.",
         Path(model_file).name,
         target_format,
     )
-    return Path(model_file)
+    return Path(model_file), report
+
+
+def _convert_model_subprocess(
+    model_file,
+    target_format,
+    input_size,
+    quantize=None,
+    force=False,
+    dataset_path=None,
+) -> Path:
+    result, _ = _convert_model_subprocess_report(
+        model_file,
+        target_format,
+        input_size,
+        quantize=quantize,
+        force=force,
+        dataset_path=dataset_path,
+    )
+    return result
