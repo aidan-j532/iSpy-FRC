@@ -964,6 +964,7 @@ class RKNNWheelUrlTests(unittest.TestCase):
 
 class ConvertModelSubprocessTests(unittest.TestCase):
     def test_quantized_kill_retries_unquantized(self):
+        from iSpy.vision import optimizer as opt
         from iSpy.vision.optimizer import _convert_model_subprocess
 
         calls = []
@@ -985,12 +986,20 @@ class ConvertModelSubprocessTests(unittest.TestCase):
             "iSpy.vision.optimizer.subprocess.run",
             side_effect=fake_run,
         ):
-            out = _convert_model_subprocess(
-                "models/yolov8s.pt",
-                "rknn",
-                [640, 640],
-                quantize=True,
-            )
+            # RKNN routing calls converter_python() before spawning the
+            # worker - without patching it the real provisioning would run
+            # (and be intercepted by the subprocess mock above).
+            with mock.patch.object(opt, "_rknn_converter_env") as mock_env:
+                mock_env.converter_python.return_value = Path(
+                    "/fake/converter/bin/python"
+                )
+                mock_env.ispy_source_root.return_value = Path.cwd()
+                out = _convert_model_subprocess(
+                    "models/yolov8s.pt",
+                    "rknn",
+                    [640, 640],
+                    quantize=True,
+                )
 
         self.assertEqual(len(calls), 2)
         self.assertTrue(calls[0]["quantize"])

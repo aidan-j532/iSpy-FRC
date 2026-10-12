@@ -1,6 +1,5 @@
 import logging
 import threading
-import warnings
 from pathlib import Path
 
 import cv2
@@ -707,18 +706,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         return tf.lite.Interpreter(model_path=str(model_path))
 
     def _load_rknn(self, force: bool = False):
-        try:
-            # rknn.api pulls in pkg_resources, which is deprecated by setuptools;
-            # that one-time module-init warning is not actionable, so hide it.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                from rknn.api import RKNN
-        except ImportError:
-            self.logger.warning(
-                "rknn-toolkit2 not installed - 'rknn' backend unavailable, falling back to onnx"
-            )
-            return self._load_onnx(force)
-
         artifact, converted = self._export_onnx_source(force, quantize=False)
         if not converted or not artifact:
             self._session = None
@@ -730,26 +717,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         try:
             if not rknn_path.exists() or force:
                 self.logger.info("Building RKNN model from %s ...", artifact)
-                from rknn.api import RKNN
-
-                rknn = RKNN(verbose=False)
-                try:
-                    # match _preprocess_depth: (u8/255 - mean)/std, expressed in
-                    # 0..255 space for the NPU's input normalization
-                    rknn.config(
-                        target_platform="rk3588",
-                        mean_values=[[123.675, 116.28, 103.53]],
-                        std_values=[[58.395, 57.12, 57.375]],
-                    )
-                    rknn.load_onnx(
-                        model=artifact,
-                        input_size_list=[[1, 3, self._input_size, self._input_size]],
-                    )
-                    dataset = self._rknn_calibration_txt()
-                    rknn.build(do_quantization=self.quantize, dataset=dataset)
-                    rknn.export_rknn(str(rknn_path))
-                finally:
-                    rknn.release()
+                self._build_rknn_subprocess(artifact, rknn_path)
 
             rknn_lite = import_rknnlite()(verbose=False)
             if rknn_lite.load_rknn(str(rknn_path)) != 0:
@@ -767,6 +735,81 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             )
             self._session = None
             self._load_onnx(force)
+
+    def _build_rknn_subprocess(self, onnx_path: Path, rknn_path: Path) -> None:
+        """Build a .rknn artifact via the isolated converter environment.
+
+        The full rknn-toolkit2 stack (and its incompatible numpy<2/scipy/
+        setuptools<82 pins) is never imported into the main runtime
+        environment - the build runs as a subprocess under the converter
+        environment's Python instead, and inference still uses rknnlite.
+        """
+        import json
+        import os
+        import subprocess
+        import tempfile
+
+        from iSpy.boot import _rknn_converter_env
+
+        converter_py = str(_rknn_converter_env.converter_python())
+        args = {
+            "onnx": str(onnx_path),
+            "output": str(rknn_path),
+            "quantize": bool(self.quantize),
+            # match _preprocess_depth: (u8/255 - mean)/std, expressed in the
+            # 0..255 space the NPU's input normalization expects
+            "target_platform": "rk3588",
+            "mean": [123.675, 116.28, 103.53],
+            "std": [58.395, 57.12, 57.375],
+            "input_size_list": [[1, 3, self._input_size, self._input_size]],
+            "calibration": self._rknn_calibration_txt(),
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            args_path = Path(f.name)
+            json.dump(args, f)
+        result_path = Path(str(args_path) + ".result.json")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(_rknn_converter_env.ispy_source_root())
+        try:
+            self.logger.info("Running RKNN ONNX build subprocess: %s", args_path)
+            proc = subprocess.run(
+                [converter_py, "-m", "iSpy.boot._rknn_onnx_worker", str(args_path)],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            if proc.stdout:
+                self.logger.debug("RKNN build stdout:\n%s", proc.stdout.rstrip())
+            if proc.stderr:
+                self.logger.debug("RKNN build stderr:\n%s", proc.stderr.rstrip())
+
+            if proc.returncode != 0 or not result_path.exists():
+                detail = ""
+                if result_path.exists():
+                    try:
+                        detail = json.loads(result_path.read_text()).get("error", "")
+                    except (OSError, ValueError):
+                        detail = ""
+                raise RuntimeError(
+                    f"RKNN build subprocess failed (exit {proc.returncode}): "
+                    f"{detail or 'no result produced'}"
+                )
+            data = json.loads(result_path.read_text())
+            if "error" in data:
+                raise RuntimeError(f"RKNN build subprocess failed: {data['error']}")
+            produced = Path(data["result"])
+            if not produced.exists():
+                raise RuntimeError(
+                    f"RKNN build subprocess reported success but produced no "
+                    f"artifact at {produced}"
+                )
+        finally:
+            for p in (args_path, result_path):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
     def _rknn_calibration_txt(self) -> str | None:
         if not self._quantization_dataset:

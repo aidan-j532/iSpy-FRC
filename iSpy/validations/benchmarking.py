@@ -15,7 +15,7 @@ from pathlib import Path
 from iSpy.config.AutoOpt import has_nvidia, has_rockchip_npu, has_tensorrt, has_tpu
 from iSpy.validations.bench_to_matplotlib import collect_system_info, render_report
 from iSpy.vision.ModelInspector import fill_missing_config
-from iSpy.vision.optimizer import _convert_model_subprocess
+from iSpy.vision.optimizer import _convert_model_subprocess_report
 
 _REPO_CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
 if (_REPO_CHECKOUT_ROOT / "iSpy" / "__init__.py").exists() and str(
@@ -408,8 +408,16 @@ def _ensure_calibration_dataset(fmt) -> Path:
 
 
 def get_or_convert(pt_path, fmt, input_size=(640, 640), calib_dataset=None):
+    """Convert *pt_path* to *fmt* (or reuse a cached artifact).
+
+    Returns ``(artifact_path, report)``: ``(Path, None)`` on success; on
+    ``(None, report)`` the conversion failed and *report* explains why
+    (a JSON-serialisable dict with ``status`` and ``error``).  Callers use the
+    report so a failed RKNN conversion is recorded as a failure instead of
+    silently benchmarking the source .pt as if it were the converted backend.
+    """
     if fmt in ("tpu", "pt"):
-        return pt_path
+        return pt_path, None
     quantize = fmt in _QUANTIZABLE_FORMATS
     dataset_path = None
     if quantize:
@@ -422,16 +430,51 @@ def get_or_convert(pt_path, fmt, input_size=(640, 640), calib_dataset=None):
             print(f"No real calibration data for '{fmt}' - building unquantized.")
             quantize = False
     with _quiet():
-        result = _convert_model_subprocess(
+        result, report = _convert_model_subprocess_report(
             str(pt_path),
             fmt,
             input_size,
             quantize=quantize,
             dataset_path=dataset_path,
         )
-    if not result.exists() or result == pt_path:
-        return None
-    return result
+    if report is not None:
+        return None, report
+    if result is None or not result.exists() or result == pt_path:
+        return None, {
+            "status": "conversion",
+            "error": f"conversion to {fmt} produced no artifact",
+        }
+    return result, None
+
+
+def _conversion_failure_result(model_name, fmt, device, report) -> dict:
+    """Build an ok=False result entry so a failed conversion is visible.
+
+    Benchmarks must never *report* a backend as benchmarked when its
+    conversion failed - this entry has ``ok=False`` plus the real reason, so
+    ``_fmt_result`` shows an explicit error instead of a fabricated FPS.
+    """
+    return {
+        "model": model_name,
+        "backend": f"Auto/{fmt.upper()}",
+        "format": fmt,
+        "device": str(device),
+        "core_mask": None,
+        "batch_size": 1,
+        "mode": "serial",
+        "streams": 1,
+        "latency_ms": {"p50": None, "p95": None, "p99": None},
+        "stage_ms": {},
+        "provider": "unavailable",
+        "detections": 0,
+        "ok": False,
+        "fps": None,
+        "error": (
+            f"conversion failed ({report.get('status', '?')}): "
+            f"{report.get('error', 'unknown error')}"
+        ),
+        "conversion_report": report,
+    }
 
 def make_base_config(pt_path, model_path, device, batch_size=1) -> dict:
     return {
@@ -1256,19 +1299,36 @@ def main(argv=None):
 
     tasks = []
     modes = ["serial", "pipelined"] if args.pipelined else ["serial"]
+    conversion_failures = []
 
     for pt_path in pt_files:
         name = pt_path.stem
 
         for fmt, device, masks in active.values():
-            model_path = get_or_convert(pt_path, fmt, calib_dataset=args.calib_dataset)
+            model_path, conversion_report = get_or_convert(
+                pt_path, fmt, calib_dataset=args.calib_dataset
+            )
             fallback_fmt = None
             if model_path is None and not args.all_backends and fmt != "onnx":
                 # recommended backend couldn't build (e.g. tensorrt absent) -
                 # normal iSpy would fall back to onnx too, so still report a
                 # number instead of silently skipping the model
-                fallback_fmt, model_path = "onnx", get_or_convert(pt_path, "onnx")
+                fallback_fmt, model_path, conversion_report = (
+                    "onnx",
+                    *get_or_convert(pt_path, "onnx"),
+                )
             if model_path is None:
+                # Record the exact reason instead of silently dropping the
+                # model from the report (benchmarks must never imply a backend
+                # benchmarked when its conversion failed).
+                if conversion_report is None:
+                    conversion_report = {
+                        "status": "conversion",
+                        "error": f"no {fmt} artifact could be produced",
+                    }
+                conversion_failures.append(
+                    _conversion_failure_result(name, fmt, device, conversion_report)
+                )
                 continue
             if fallback_fmt:
                 device = _cuda_devices()[0][0] if has_nvidia() else "cpu"
@@ -1314,6 +1374,10 @@ def main(argv=None):
             all_results = list(executor.map(_run_benchmark_task, tasks))
     else:
         all_results = [_run_benchmark_task(task) for task in tasks]
+    # Failed conversions produce explicit ok=False entries so the report and
+    # JSON never imply a backend was benchmarked when only its .pt fallback
+    # ran.
+    all_results = all_results + conversion_failures
 
     best: dict[str, dict] = {}
     current_model = None
