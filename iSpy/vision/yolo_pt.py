@@ -946,7 +946,7 @@ def load_yolo_pt(path: str, task: str = "detect", verbose: bool = False) -> Yolo
         imgsz = imgsz[0]
 
     # Ensure the model's f/i metadata survives as attributes on each module.
-    model = model.float()  # some checkpoints ship half-precision weights
+    model.float()
     model.eval()
     return YoloPT(model, names, model_task, nc, imgsz=imgsz)
 

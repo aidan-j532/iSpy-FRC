@@ -944,20 +944,20 @@ class GenericYolo:
 
         actual_providers = self.model.get_providers()
         self.provider = actual_providers[0] if actual_providers else "unknown"
-        if "CUDAExecutionProvider" not in actual_providers:
-            try:
-                from iSpy.config.AutoOpt import has_nvidia
+        try:
+            from iSpy.config.AutoOpt import has_nvidia
 
-                if has_nvidia():
-                    self.logger.warning(
-                        "NVIDIA GPU detected but onnxruntime has no "
-                        "CUDAExecutionProvider (providers=%s) - inference is "
-                        "running on CPU. Install onnxruntime-gpu: "
-                        "pip uninstall -y onnxruntime && pip install onnxruntime-gpu",
-                        actual_providers,
-                    )
-            except Exception:
-                pass
+            if has_nvidia() and "CUDAExecutionProvider" not in actual_providers and "TensorrtExecutionProvider" not in actual_providers:
+                self.logger.warning(
+                    "NVIDIA GPU detected but onnxruntime has no CUDA/TensorRT provider (providers=%s) - inference is "
+                    "running on CPU.",
+                    actual_providers,
+                )
+            # if no GPU providers but hardware exists - mark potential fallback
+            if has_nvidia() and "CPUExecutionProvider" in actual_providers and len(actual_providers) == 1:
+                self._onnx_cpu_fallback = True
+        except Exception:
+            pass
 
     def _load_hailo(self, model_file: str):
         # HailoRT wrapper over the .hef. The python API is stable across
@@ -1090,8 +1090,8 @@ class GenericYolo:
 
     def _load_engine(self, model_file: str) -> None:
         # TensorRT .engine artifact, converted from an onnx source by
-        # optimizer.convert_model(). Deserialize once; each inference creates a
-        # fresh execution context (mirrors depth_anything._infer_depth_engine).
+        # optimizer.convert_model(). Deserialize once; create context and
+        # preallocate buffers once for performance.
         try:
             import tensorrt as trt
         except ImportError as exc:
@@ -1112,7 +1112,13 @@ class GenericYolo:
             ) from exc
 
         self.model = engine
-        self._engine_context = None
+        self._engine_context = engine.create_execution_context()
+        self._engine_stream = None
+        self._engine_buffers = {}  # name -> torch tensor
+        self._engine_bindings = []
+        self._engine_input_names = []
+        self._engine_output_names = []
+        self._engine_output_buffers = []
         self.logger.info(
             "Loaded TensorRT engine from %s (device %s)", model_file, self.device
         )
@@ -1267,17 +1273,71 @@ class GenericYolo:
 
     def _run_engine(self, frame: np.ndarray, orig_shape) -> Results:
         import tensorrt as trt
+        import torch
 
         inp = self._preprocess_frame(frame)
         engine = self.model
-        context = engine.create_execution_context()
-        inputs = {}
-        for idx in range(engine.num_io_tensors):
-            name = engine.get_tensor_name(idx)
-            if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                context.set_input_shape(name, inp.shape)
-                inputs[name] = inp
-        outputs = execute_engine(engine, context, inputs, self.device)
+        context = self._engine_context
+        device_index = int(self.device) if isinstance(self.device, int) else 0
+        if device_index < 0 or (torch.cuda.is_available() and device_index >= torch.cuda.device_count()):
+            device_index = 0 if torch.cuda.is_available() else -1
+
+        if self._engine_stream is None:
+            cuda_device = torch.device(f"cuda:{device_index}")
+            self._engine_stream = torch.cuda.Stream(device=cuda_device)
+            self._engine_buffers = {}
+            self._engine_input_names = []
+            self._engine_output_names = []
+            self._engine_output_buffers = []
+            self._engine_bindings = []
+            with torch.cuda.device(device_index):
+                for idx in range(engine.num_io_tensors):
+                    name = engine.get_tensor_name(idx)
+                    mode = engine.get_tensor_mode(name)
+                    if mode == trt.TensorIOMode.INPUT:
+                        self._engine_input_names.append(name)
+                    else:
+                        self._engine_output_names.append(name)
+
+        cuda_device = torch.device(f"cuda:{device_index}")
+        with torch.cuda.device(device_index), torch.cuda.stream(self._engine_stream):
+            for name in self._engine_input_names:
+                if name not in self._engine_buffers:
+                    dtype = np.dtype(trt.nptype(engine.get_tensor_dtype(name)))
+                    torch_dtype = torch.from_numpy(np.empty((), dtype=dtype)).dtype
+                    self._engine_buffers[name] = torch.empty(
+                        inp.shape,
+                        dtype=torch_dtype,
+                        device=cuda_device,
+                    )
+                self._engine_buffers[name].copy_(torch.from_numpy(inp).to(device=cuda_device))
+
+            for idx in range(engine.num_io_tensors):
+                name = engine.get_tensor_name(idx)
+                if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                    context.set_input_shape(name, inp.shape)
+                    continue
+                shape = tuple(context.get_tensor_shape(name))
+                if any(s < 0 for s in shape):
+                    raise RuntimeError(f"TensorRT output {name} has unresolved shape {shape}")
+                if name not in self._engine_buffers:
+                    dtype = np.dtype(trt.nptype(engine.get_tensor_dtype(name)))
+                    torch_dtype = torch.from_numpy(np.empty((), dtype=dtype)).dtype
+                    buf = torch.empty(shape, dtype=torch_dtype, device=cuda_device)
+                    self._engine_buffers[name] = buf
+                    self._engine_output_buffers.append(buf)
+
+            bindings = []
+            for idx in range(engine.num_io_tensors):
+                name = engine.get_tensor_name(idx)
+                bindings.append(self._engine_buffers[name].data_ptr())
+            self._engine_bindings = bindings
+
+            context.execute_async_v3(stream_handle=self._engine_stream.cuda_stream)
+
+        self._engine_stream.synchronize()
+
+        outputs = [buf.cpu().numpy() for buf in self._engine_output_buffers]
         return self.postprocess(outputs, orig_shape)
 
     def _run_openvino(self, frame: np.ndarray, orig_shape) -> Results:
@@ -1387,6 +1447,12 @@ class GenericYolo:
         if self.model_type == "yolo" and self._pool is not None and is_list:
             raw_results = self._pool.infer_batch(frames)
             return [self._convert_ultralytics_to_results(raw) for raw in raw_results]
+
+        if self.model_type == "engine" and is_list:
+            results_list = []
+            for frame, target_shape in zip(frames, shapes):
+                results_list.append(self._run_engine(frame, target_shape))
+            return results_list
 
         if self.model_type == "onnx" and self._onnx_pool is not None and is_list:
             preprocessed = [self._preprocess_frame(f) for f in frames]

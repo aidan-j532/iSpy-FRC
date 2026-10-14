@@ -56,6 +56,8 @@ def execute_engine(engine, context, inputs: dict[str, object], device=0) -> list
                     )
                 array = np.ascontiguousarray(inputs[name], dtype=dtype)
                 buffer = torch.from_numpy(array).to(device=cuda_device)
+                buffers.append(buffer)
+                bindings.append(buffer.data_ptr())
             else:
                 shape = tuple(context.get_tensor_shape(name))
                 if any(size < 0 for size in shape):
@@ -64,9 +66,9 @@ def execute_engine(engine, context, inputs: dict[str, object], device=0) -> list
                     )
                 torch_dtype = torch.from_numpy(np.empty((), dtype=dtype)).dtype
                 buffer = torch.empty(shape, dtype=torch_dtype, device=cuda_device)
+                buffers.append(buffer)
+                bindings.append(buffer.data_ptr())
                 output_buffers.append(buffer)
-            buffers.append(buffer)
-            bindings.append(buffer.data_ptr())
 
         if not context.execute_v2(bindings):
             raise RuntimeError("TensorRT execute_v2 returned false")

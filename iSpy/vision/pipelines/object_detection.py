@@ -377,7 +377,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         self.detections_seen = 0
         self._use_pipeline = bool(
             self.model is not None
-            and self.model.model_type in ("rknn", "onnx", "tflite")
+            and self.model.model_type in ("rknn", "onnx", "tflite", "engine")
         ) or self._tpu_pipeline
 
         self._last_result: Results | None = None
@@ -741,6 +741,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             "rknn",
             "onnx",
             "tflite",
+            "engine",
         ) or self._tpu_pipeline
         if self._tpu_pipeline:
             self._preproc_q = queue.Queue(maxsize=2)
