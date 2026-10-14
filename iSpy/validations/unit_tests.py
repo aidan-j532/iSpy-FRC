@@ -92,9 +92,11 @@ class _FakeEngineContext:
         return self._shapes.get(name)
 
     def execute_v2(self, bindings):
-        # bindings layout is [input_ptr, output_ptr]; the output buffer was
-        # pre-initialized to an empty (1, 0, F) tensor, so nothing to write.
         self.bindings = bindings
+        return True
+
+    def execute_async_v3(self, stream_handle=None):
+        self.bindings = None
         return True
 
 
@@ -157,6 +159,9 @@ class _FakeTorchTensor:
 
     def numpy(self):
         return self.array
+    
+    def copy_(self, other):
+        return self
 
 
 torch_mod.from_numpy = lambda array: _FakeTorchTensor(array)
