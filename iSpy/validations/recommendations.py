@@ -43,7 +43,8 @@ def get_structured_recommendations(config: dict) -> list[dict]:
             )
 
     # dbscan/tracking settings live in their add-ons now; add-on not enabled = no rec, since it aint running
-    if _addon_setting(config, "trackers", "path_planner", "epsilon", 0) == 0:
+    eps = _addon_setting(config, "trackers", "path_planner", "epsilon", None)
+    if eps is not None and eps == 0:
         add(
             "normal",
             "dbscan_eps",
@@ -64,12 +65,10 @@ def get_structured_recommendations(config: dict) -> list[dict]:
             "different objects may merge.",
         )
 
-    if (
-        _addon_setting(
-            config, "utilities", "FRC/network_table_handler", "network_tables_ip", ""
-        )
-        == ""
-    ):
+    ip = _addon_setting(
+        config, "utilities", "FRC/network_table_handler", "network_tables_ip", None
+    )
+    if ip is not None and ip == "":
         add(
             "critical",
             "nt_no_ip",

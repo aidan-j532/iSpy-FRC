@@ -17,11 +17,11 @@ BOARD="${1:?usage: build_image.sh [rpi|orangepi]}"
 WORK_DIR="$(mktemp -d)"
 OUT_NAME="ispy-${BOARD}-$(date +%Y%m%d)"
 
-trap 'sudo umount "$WORK_DIR"/rootfs/{dev,proc,sys} 2>/dev/null; sudo kpartx -d "$WORK_DIR"/base.img 2>/dev/null; rm -rf "$WORK_DIR"' EXIT
+trap 'sudo umount "$WORK_DIR"/rootfs/boot/firmware 2>/dev/null; sudo umount "$WORK_DIR"/rootfs/boot 2>/dev/null; sudo umount "$WORK_DIR"/rootfs/dev "$WORK_DIR"/rootfs/proc "$WORK_DIR"/rootfs/sys 2>/dev/null; sudo umount "$WORK_DIR"/rootfs 2>/dev/null; [[ -n "${LOOPDEV:-}" ]] && sudo losetup -d "$LOOPDEV" 2>/dev/null; sudo rm -rf "$WORK_DIR"' EXIT
 
 case "$BOARD" in
   rpi)
-    BASE_URL="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-latest/"
+    BASE_URL="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2024-11-19/2024-11-19-raspios-bookworm-arm64-lite.img.xz"
     ;;
   orangepi)
     BASE_URL="https://github.com/armbian/community/releases/latest/download/Armbian_community_orangepi5_bookworm_current.img.xz"
@@ -38,12 +38,35 @@ unxz "$WORK_DIR/base.img.xz"
 
 echo "==> Mounting image"
 LOOPDEV=$(sudo losetup --show -fP "$WORK_DIR/base.img")
-BOOT_PART="${LOOPDEV}p1"
-ROOT_PART="${LOOPDEV}p2"
+
+# Resolve the partitions the kernel actually exposed instead of assuming
+# p1/p2: Raspberry Pi OS ships a separate boot (p1) + root (p2), while Armbian
+# images are usually a single root partition with /boot inside it.
+PARTS=()
+for part in "${LOOPDEV}"p*; do
+  [[ -b "$part" ]] && PARTS+=("$part")
+done
+if [[ ${#PARTS[@]} -eq 0 ]]; then
+  echo "ERROR: no partitions found in $WORK_DIR/base.img"; exit 1
+fi
+ROOT_PART="${PARTS[${#PARTS[@]}-1]}"   # last partition is root
+BOOT_PART=""
+[[ ${#PARTS[@]} -ge 2 ]] && BOOT_PART="${PARTS[0]}"
 
 mkdir -p "$WORK_DIR/rootfs"
 sudo mount "$ROOT_PART" "$WORK_DIR/rootfs"
-sudo mount "$BOOT_PART" "$WORK_DIR/rootfs/boot" 2>/dev/null || true
+
+# mount a separate boot partition when the image has one (RPi). Bookworm moved
+# its mountpoint to /boot/firmware; older images use /boot.
+BOOT_MNT=""
+if [[ -n "$BOOT_PART" ]]; then
+  if [[ -d "$WORK_DIR/rootfs/boot/firmware" ]]; then
+    BOOT_MNT="$WORK_DIR/rootfs/boot/firmware"
+  elif [[ -d "$WORK_DIR/rootfs/boot" ]]; then
+    BOOT_MNT="$WORK_DIR/rootfs/boot"
+  fi
+fi
+[[ -n "$BOOT_MNT" ]] && sudo mount "$BOOT_PART" "$BOOT_MNT" 2>/dev/null || true
 
 echo "==> Enabling qemu-arm64 for chroot"
 sudo cp /usr/bin/qemu-aarch64-static "$WORK_DIR/rootfs/usr/bin/"
@@ -96,7 +119,9 @@ CHROOT_EOF
 echo "==> Cleaning up chroot mounts"
 sudo umount "$WORK_DIR/rootfs/dev" "$WORK_DIR/rootfs/proc" "$WORK_DIR/rootfs/sys"
 sudo rm "$WORK_DIR/rootfs/usr/bin/qemu-aarch64-static"
-sudo umount "$WORK_DIR/rootfs/boot" 2>/dev/null || true
+if [[ -n "${BOOT_MNT:-}" ]]; then
+  sudo umount "$BOOT_MNT" 2>/dev/null || true
+fi
 sudo umount "$WORK_DIR/rootfs"
 sudo losetup -d "$LOOPDEV"
 

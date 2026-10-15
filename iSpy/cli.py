@@ -49,16 +49,21 @@ def main(argv=None) -> int:
         )
 
     # boot only prepares the install - config, models, cameras, service. the
-    # vision loop is a separate step, and exiting here is why "ispy start"
+    # vision loop is a separate step, and running it here is why "ispy start"
     # (what the install scripts tell people to run) brought the web UI up and
     # then did nothing else. ispy-run is the same thing without the boot.
+    #
+    # only "start" runs the loop: "setup" is run by the installers and inside
+    # the image chroot, and they expect it to finish rather than block forever
+    # in the vision stack.
     #
     # imported here, not at module scope: importing game_loop configures
     # logging and pulls in the whole vision stack (torch and all), which
     # "ispy setup" has no use for
-    from iSpy.core.game_loop import main as game_loop_main
+    if args.command == "start":
+        from iSpy.core.game_loop import main as game_loop_main
 
-    game_loop_main(config)
+        game_loop_main(config)
 
     # mirror boot.py's main(): flush everything and hard-exit to dodge
     # RKNN/OpenCV native-extension segfaults during interpreter teardown on ARM

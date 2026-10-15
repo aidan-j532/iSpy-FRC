@@ -51,7 +51,7 @@ sudo dd if=orangepi.img of=/dev/sdX bs=4M status=progress
 The board will boot, connect to the internet, clone this repo, install all dependencies, and start the vision pipeline automatically. Watch progress over serial or SSH:
 
 ```bash
-journalctl -u first-boot -f
+journalctl -u ispy-first-boot -f
 ```
 
 Once complete, the pipeline runs as a systemd service on every boot:
@@ -64,7 +64,7 @@ systemctl stop iSpy     # stop
 
 ### 4. Configure
 
-Edit `/etc/iSpy/config.json` on the board, then restart the service. See [Configuration](#configuration) below.
+Edit `Config/config.json` on the board, then restart the service. See [Configuration](#configuration) below.
 
 ---
 
@@ -114,7 +114,7 @@ ispy-boot
 
 ## Configuration
 
-The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on deployed boards).
+The config file lives at `Config/config.json`.
 
 ```json
 {
@@ -149,7 +149,7 @@ The config file lives at `Config/config.json` (or `/etc/iSpy/config.json` on dep
         "enabled": true,
         "data_dir": "VideoRecordings",
         "fps": 30.0,
-        "max_queue": 300,
+        "max_queue": 60,
         "downsample": 1,
         "segment_minutes": 5,
         "max_total_mb": 2048
@@ -211,7 +211,7 @@ entry in the Add-ons page. Every run is recorded automatically.
 | `enabled` | `true` | Record each run. Turn off to stop writing video |
 | `data_dir` | `"VideoRecordings"` | Where sessions are written |
 | `fps` | `30.0` | Frame rate of the recording, independent of your cameras |
-| `max_queue` | `300` | Frames buffered before the newest are dropped under load |
+| `max_queue` | `60` | Frames buffered before the newest are dropped under load |
 | `downsample` | `1` | Write every Nth frame. `2` halves the size and the rate |
 | `segment_minutes` | `5` | Roll to a new video file this often, bounding file size |
 | `max_total_mb` | `2048` | Cap on everything under `data_dir`. Oldest unpinned sessions go first |
@@ -301,11 +301,11 @@ When the pipeline is running, open a browser and go to `http://<board-ip>:5000`.
 
 | Endpoint | What you get |
 |---|---|
-| `/` | Live annotated camera feed |
+| `/` | Dashboard |
 | `/health` | System health dashboard (browser) or JSON (API) |
 | `/api/cameras` | List of connected cameras |
-| `/api/camera/<name>/feed` | Stream for a specific camera |
-| `/api/camera/<name>/settings` | GET or POST camera settings |
+| `/video/<name>` | Live annotated stream for a specific camera |
+| `/api/cameras/config/<name>` | GET, PUT or DELETE a camera's settings |
 
 The health endpoint returns `200 OK` when everything is healthy, `503` when degraded. Useful for robot code that wants to know if vision is alive.
 

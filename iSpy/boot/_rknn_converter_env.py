@@ -555,11 +555,6 @@ def _provision(env_dir: Path) -> Path:
         # healthy one - remove it so the next attempt starts clean.
         shutil.rmtree(env_dir, ignore_errors=True)
         raise
-    except Exception:
-        # Never leave a half-built environment that could be mistaken for a
-        # healthy one - remove it so the next attempt starts clean.
-        shutil.rmtree(env_dir, ignore_errors=True)
-        raise
 
 
 # ---------------------------------------------------------------------------

@@ -31,12 +31,14 @@ class StartRunsTheVisionLoopTests(unittest.TestCase):
         _, calls, _ = self._run(["start"])
         self.assertEqual(calls, ["CONFIG"], "vision never ran")
 
-    def test_setup_runs_the_vision_loop_too(self):
-        # setup is documented as "fresh first-time install", which is boot.py's
-        # main() - that boots and then runs the loop
+    def test_setup_does_not_run_the_vision_loop(self):
+        # setup is the install path (install.sh and the image chroot both run
+        # `ispy setup` inline), so it has to finish installing instead of
+        # blocking forever in the vision stack. The `python -m iSpy.boot.boot -f`
+        # fallback those scripts use does not run the loop either.
         boot_step, calls, _ = self._run(["setup"])
         self.assertTrue(boot_step.call_args.kwargs["fresh"])
-        self.assertEqual(calls, ["CONFIG"], "vision never ran")
+        self.assertEqual(calls, [], "setup should not start vision")
 
     def test_the_boot_config_is_handed_to_the_loop(self):
         # passing it avoids the loop re-reading a config.json from the cwd,

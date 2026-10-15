@@ -234,22 +234,29 @@ class RollbackModule(WebModule):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
         self._last_retention = None
-        # session.json is written once when a session opens and never changes
-        # after, so one read per session per process is enough
+        # session.json is rewritten every time the recorder opens a segment
+        # (to capture calibration set mid-run), so a bare "read once per name"
+        # cache serves a stale calibration to the active session's overlay.
+        # Keyed on (name -> (mtime_ns, meta)) instead: unchanged files are
+        # still read only once.
         self._session_meta_cache = {}
 
     def _session_meta(self, session) -> dict:
         key = session["name"]
-        if key in self._session_meta_cache:
-            return self._session_meta_cache[key]
+        path = session["path"] / _SESSION_FILE
         try:
-            raw = json.loads(
-                (session["path"] / _SESSION_FILE).read_text(encoding="utf-8")
-            )
+            stamp = path.stat().st_mtime_ns
+        except OSError:
+            stamp = None
+        hit = self._session_meta_cache.get(key)
+        if hit and hit[0] == stamp:
+            return hit[1]
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
             meta = raw if isinstance(raw, dict) else {}
         except (OSError, ValueError):
             meta = {}
-        self._session_meta_cache[key] = meta
+        self._session_meta_cache[key] = (stamp, meta)
         return meta
 
     # lookups

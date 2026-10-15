@@ -49,6 +49,13 @@ class PathPlanner(TrackerBase):
 
         points = np.array([d.get_position() for d in detections])
 
+        # A frame with fewer detections than min_samples would make every point
+        # DBSCAN noise, so the tracker would report nothing at all when only one
+        # or two game pieces are visible. There is nothing to cluster at that
+        # size, so every detection is its own cluster instead.
+        if len(points) < self.min_samples:
+            return list(detections), []
+
         dbscan = CustomDBScan(points, eps=self.epsilon, samples=self.min_samples)
         labels = dbscan.get_dbscan()
 

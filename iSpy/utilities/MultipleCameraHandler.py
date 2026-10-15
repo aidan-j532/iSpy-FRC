@@ -44,7 +44,24 @@ class MultipleCameraHandler:
 
     def _camera_loop(self, i: int, camera: VisionPipeline):
         stop_event = self._stop_events[i]
+        last_timestamp = None
         while not self._stopped and not stop_event.is_set():
+            # Synchronous pipelines (AprilTag, QR, optical flow, yolo_world,
+            # depth) return the moment they have processed the current frame.
+            # Without waiting for the camera to publish a new one they reprocess
+            # the same frame and peg a core. Async pipelines that queue their
+            # own work (object_detection) block until a fresh frame is ready, so
+            # by the time they return the timestamp has moved and this gate is a
+            # no-op for them.
+            if getattr(camera, "is_image", False):
+                # static source - pace instead of hot-looping on the one frame
+                time.sleep(0.01)
+            else:
+                timestamp = getattr(camera, "frame_timestamp", None)
+                if timestamp is not None and timestamp == last_timestamp:
+                    time.sleep(0.005)
+                    continue
+                last_timestamp = timestamp
             try:
                 if camera.in_calibration_mode():
                     objects, frame = [], camera.get_raw_frame()

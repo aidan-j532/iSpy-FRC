@@ -117,6 +117,11 @@ class DatasetsModule(WebModule):
         except Exception:
             return jsonify(error="Invalid path"), 400
 
+        # the picker only ever needs the project folder; without this any
+        # client on port 5000 could walk the whole host filesystem tree
+        if not _is_safe_path(Path.cwd(), base):
+            return jsonify(error="Outside project folder"), 403
+
         if not base.is_dir():
             return jsonify(error="Folder not found"), 404
 
@@ -140,6 +145,10 @@ class DatasetsModule(WebModule):
 
     def _list_images(self, name):
         d = self._images_dir(name)
+        # `name` comes straight from the URL, so `..` would otherwise escape
+        # the dataset root and list an arbitrary folder
+        if not _is_safe_path(self.dataset_root, d):
+            return jsonify(error="Invalid path"), 400
         if not d.exists():
             return jsonify(images=[], count=0)
         files = sorted(

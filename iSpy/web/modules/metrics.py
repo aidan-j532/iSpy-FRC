@@ -3,6 +3,7 @@ import os
 import time
 from datetime import datetime
 from collections import deque
+from pathlib import Path
 from flask import jsonify, render_template
 from iSpy.web.Backend.WebModule import WebModule
 
@@ -26,6 +27,10 @@ class MetricsModule(WebModule):
         "web": ("Web", "#9b5de5"),
     }
     MAX_POINTS = 600  # ring buffer, keeps memory bounded on long runs
+    # the metrics page saves on every unload (sendBeacon), so without a cap
+    # a long-lived tab left open/closed repeatedly fills Outputs with
+    # metrics_*.json forever. Keep only the most recent snapshots.
+    MAX_SAVED_FILES = 20
 
     def __init__(self, context: dict):
         super().__init__(context)
@@ -113,6 +118,18 @@ class MetricsModule(WebModule):
         data = self._build_data()
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
+        self._prune_saved()
+
+    def _prune_saved(self):
+        try:
+            saved = sorted(Path("Outputs").glob("metrics_*.json"))
+        except OSError:
+            return
+        for stale in saved[: -self.MAX_SAVED_FILES]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
     def _build_data(self):
         data = {}
