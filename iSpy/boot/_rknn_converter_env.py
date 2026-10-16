@@ -40,8 +40,7 @@ logger = logging.getLogger(__name__)
 
 #: Bumped whenever the pinned conversion dependency set changes.  An existing
 #: converter environment built with an older depset version is rebuilt.
-DEPSET_VERSION = 4
-
+DEPSET_VERSION = 5
 #: RKNN Toolkit 2 version targeted by this project.
 RKNN_TOOLKIT_VERSION = "2.3.2"
 
@@ -85,7 +84,7 @@ _CONVERTER_REQUIREMENTS: list[str] = [
     "numpy>=1.26.0,<2",
     "scipy>=1.10.0,<1.15",
     "onnx>=1.16.0,<1.17",
-    "protobuf>=3.20.2,<4",
+    "protobuf>=4.21.6,<=4.25.4",
     # setuptools 82 removed pkg_resources; the toolkit still imports it.
     "setuptools>=64,<82",
     "torch>=2.0.0",
@@ -93,6 +92,7 @@ _CONVERTER_REQUIREMENTS: list[str] = [
     "onnxslim>=0.1.87",
     "opencv-python>=4.8.0,<4.12",
     "tqdm>=4.65.0,<5",
+    "ruamel.yaml>=0.17.4",
 ]
 
 #: Verification script run inside a freshly provisioned converter environment.
@@ -104,6 +104,8 @@ _VERIFY_SCRIPT = "\n".join(
         "import scipy",
         "import onnx",
         "import google.protobuf",
+        "assert (4, 21, 6) <= tuple(map(int, google.protobuf.__version__.split('.')[:3])) <= (4, 25, 4), google.protobuf.__version__",
+        "from ruamel.yaml import YAML",
         "import setuptools; assert int(setuptools.__version__.split('.')[0]) < 82",
         "import pkg_resources",
         "import torch",
