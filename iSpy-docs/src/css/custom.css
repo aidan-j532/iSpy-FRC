@@ -22,7 +22,23 @@
   --ifm-navbar-link-hover-color: var(--wbl-orange);
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
 }
+.navbar__brand {
+  display: flex;
+  align-items: center;
+}
 
+.navbar__logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.navbar__logo img {
+  display: block;
+  height: 2.5rem;
+  width: auto;
+  object-fit: contain;
+}
 .footer--dark {
   --ifm-footer-background-color: #111;
 }

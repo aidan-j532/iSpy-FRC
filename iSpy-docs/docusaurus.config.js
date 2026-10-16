@@ -63,7 +63,7 @@ const config = {
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
       // Replace with your project's social card
-      image: 'img/iSpyLogoTransparent.png',
+      image: 'img/iSpyLogoTransparentWhite.png',
       colorMode: {
         defaultMode: 'light',
         disableSwitch: true,
@@ -73,7 +73,7 @@ const config = {
         title: 'iSpy FRC',
         logo: {
           alt: 'iSpy FRC logo',
-          src: 'img/iSpyLogoTransparent.png',
+          src: 'img/iSpyLogoTransparentWhite.png',
         },
         items: [
           {
