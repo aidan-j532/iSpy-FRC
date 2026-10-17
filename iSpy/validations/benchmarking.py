@@ -12,7 +12,14 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
-from iSpy.config.AutoOpt import has_nvidia, has_rockchip_npu, has_tensorrt, has_tpu
+from iSpy.config.AutoOpt import (
+    has_arm,
+    has_edge_tpu,
+    has_nvidia,
+    has_rockchip_npu,
+    has_tensorrt,
+    has_tpu,
+)
 from iSpy.validations.bench_to_matplotlib import collect_system_info, render_report
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.optimizer import _convert_model_subprocess_report
@@ -329,7 +336,42 @@ def _cuda_devices() -> list[tuple[int, str]]:
     return [(0, "CUDA-0")]
 
 
+def _openvino_devices() -> list[str]:
+    # what openvino actually reports for this box. the plan gets built before
+    # --install-deps runs, so if the wheel isn't in yet just say "auto" and let
+    # GenericYolo re-resolve at load time instead of pinning a device we cant see
+    try:
+        from openvino import Core
+
+        devices = [str(d) for d in Core().available_devices]
+    except Exception:
+        return ["auto"]
+    # resolve_openvino_device() only honours a request that already looks like
+    # intel:gpu / intel:cpu - a bare "GPU" would get stomped to whatever it
+    # prefers, so map to that scheme if we want each device benched separately
+    return [f"intel:{d.lower()}" for d in devices] or ["auto"]
+
+
+def _has_openvino() -> bool:
+    # hardware says its there, or the wheel is already in. cant only check the
+    # import - auto-opt / --install-deps adds it *after* the plan is built,
+    # which is exactly the igpu laptop case
+    from iSpy.config.AutoOpt import has_intel_gpu, has_intel_vpu
+
+    if has_intel_gpu() or has_intel_vpu():
+        return True
+    try:
+        import openvino  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
 def detect_test_plan() -> dict:
+    # --all-backends: prospect every backend this box can run, not just the one
+    # backend auto-opt would pick. every gate is a hardware check, so a backend
+    # still counts when its runtime dep is only installed by --install-deps
     plan: dict[str, tuple] = {}
     if has_rockchip_npu():
         plan["rknn"] = ("rknn", 0, _npu_masks())
@@ -343,6 +385,19 @@ def detect_test_plan() -> dict:
         if has_tensorrt():
             dev, label = cuda_devs[0]
             plan[f"engine_{label.lower()}"] = ("engine", dev, [(None, "TensorRT")])
+    if _has_openvino():
+        # every device openvino reports, so an intel laptop gets real GPU numbers
+        # instead of silently testing nothing but torch/onnx on the cpu
+        for dev in _openvino_devices():
+            name = dev.split(":", 1)[-1]
+            plan[f"openvino_{name}"] = (
+                "openvino",
+                dev,
+                [(None, f"OpenVINO-{name.upper()}")],
+            )
+    if (has_arm() and not has_nvidia()) or has_edge_tpu():
+        # same tflite backend auto-opt picks on arm / edge-tpu boxes
+        plan["tflite"] = ("tflite", "cpu", [(None, "TFLite")])
     if not has_rockchip_npu():
         plan["pt_cpu"] = ("pt", "cpu", [(None, "CPU")])
         plan["onnx_cpu"] = ("onnx", "cpu", [(None, "ONNX-CPU")])
@@ -1210,8 +1265,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--all-backends",
         action="store_true",
-        help="prospect every reachable backend (pt/onnx per CUDA device, rknn "
-        "NPU core masks, etc.) instead of the single recommend_format() pick",
+        help="prospect every reachable backend (pt/onnx per CUDA device, "
+        "openvino per intel device, tflite on arm/edge, rknn NPU core "
+        "masks, etc.) instead of the single recommend_format() pick",
     )
     parser.add_argument(
         "--install-deps",

@@ -138,6 +138,20 @@ _LIGHT_VERIFY_INTERVAL = 24 * 60 * 60
 #: toolkit + torch + ultralytics install easily reaches ~4 GB.
 _MIN_FREE_BYTES = 2 * 1024 ** 3
 
+#: pip/OS wordings that mean the disk filled up mid-install.  linux, mac and
+#: windows all phrase it differently, and pip wraps the OSError text as-is.
+_SPACE_ERRORS = (
+    "no space left",
+    "errno 28",
+    "enospc",
+    "disk is full",
+    "disk full",
+    "not enough space",
+    "there is not enough space",
+    "insufficient disk space",
+    "0x80070070",  # windows ERROR_DISK_FULL
+)
+
 #: Per-step timeouts so a wedged network never hangs a conversion forever.
 _VENV_CREATE_TIMEOUT = 300
 _PIP_INSTALL_TIMEOUT = 1800
@@ -388,23 +402,74 @@ def _pip_failure_message(returncode: int, tail: str) -> str:
     return message
 
 
+def _looks_out_of_space(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(sig in lowered for sig in _SPACE_ERRORS)
+
+
+def _proc_text(proc) -> str:
+    # stdout+stderr as one lowercase-able string. stringified via f-string so a
+    # test double without real pipes still comes back as a plain str.
+    return f"{proc.stdout or ''}\n{proc.stderr or ''}"
+
+
+def _purge_pip_cache() -> bool:
+    """Blow away the pip download cache so a full disk has room to retry.
+
+    The cache is shared by the host and the converter env (it is per-user, not
+    per-interpreter), so purging with ``sys.executable`` frees the space pip
+    would otherwise re-download into.  Never raises - a failed purge just means
+    the caller reports the original out-of-space error.
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "cache", "purge"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except Exception as exc:
+        logger.warning("pip cache purge did not run: %s", exc)
+        return False
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
+        logger.warning("pip cache purge failed (exit %s): %s", proc.returncode, tail)
+        return False
+    logger.info("Purged the pip cache to free disk space.")
+    return True
+
+
 def _pip_install(py: Path, *requirements: str, no_deps: bool = False) -> None:
     cmd = [str(py), "-m", "pip", "install", "--disable-pip-version-check"]
     if no_deps:
         cmd.append("--no-deps")
     cmd.extend(requirements)
     logger.info("Installing into converter env: %s", " ".join(requirements))
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_PIP_INSTALL_TIMEOUT
+
+    def _run():
+        try:
+            return subprocess.run(
+                cmd, capture_output=True, text=True, timeout=_PIP_INSTALL_TIMEOUT
+            )
+        except subprocess.TimeoutExpired:
+            raise ConverterEnvError(
+                f"pip install timed out for the RKNN converter environment "
+                f"(>{_PIP_INSTALL_TIMEOUT}s). Check network/proxy settings and "
+                "retry; environments can also be pre-built on an identical host "
+                "and reused via the same cache path."
+            ) from None
+
+    proc = _run()
+    if proc.returncode != 0 and _looks_out_of_space(_proc_text(proc)):
+        # ran out of space part way through - pip's cache is the fattest easy
+        # win on a full box, so nuke it and give the install exactly one retry
+        logger.warning(
+            "pip ran out of disk space installing %s - purging the pip cache "
+            "and retrying once.",
+            " ".join(requirements),
         )
-    except subprocess.TimeoutExpired:
-        raise ConverterEnvError(
-            f"pip install timed out for the RKNN converter environment "
-            f"(>{_PIP_INSTALL_TIMEOUT}s). Check network/proxy settings and "
-            "retry; environments can also be pre-built on an identical host "
-            "and reused via the same cache path."
-        ) from None
+        if _purge_pip_cache():
+            proc = _run()
     if proc.returncode != 0:
         tail = "\n".join((proc.stderr or proc.stdout or "").strip().splitlines()[-30:])
         raise ConverterEnvError(_pip_failure_message(proc.returncode, tail))
@@ -484,25 +549,56 @@ def _toolkit_wheel_url() -> str:
     return f"{_RKNN_FULL_BASE}/{fn}"
 
 
-def _check_disk_space(env_dir: Path) -> None:
-    """Refuse to start a ~4 GB provisioning on a nearly-full disk."""
+def _free_bytes(env_dir: Path) -> tuple[int, Path] | None:
+    """Free bytes on the filesystem holding *env_dir* (None if unknowable)."""
     parent = env_dir.parent
     for base in (parent, *parent.parents):
         try:
-            usage = shutil.disk_usage(base)
-            break
+            return shutil.disk_usage(base).free, base
         except OSError:
             continue
-    else:
+    return None
+
+
+def _check_disk_space(env_dir: Path) -> None:
+    """Refuse to start a ~4 GB provisioning on a nearly-full disk.
+
+    Before giving up it purges the pip cache once - a machine that ran out of
+    space building the env is almost always sitting on gigabytes of cached
+    wheels, which is exactly what pip would re-download into anyway.
+    """
+    probed = _free_bytes(env_dir)
+    if probed is None:
         return
-    if usage.free < _MIN_FREE_BYTES:
-        raise ConverterEnvError(
-            f"Not enough free disk space to build the RKNN converter "
-            f"environment: {usage.free / 1024 ** 3:.1f} GiB free on {base}, "
-            f"need at least {_MIN_FREE_BYTES / 1024 ** 3:.1f} GiB. The full "
-            "toolkit + torch + ultralytics install is ~4 GB. Free space or "
-            "point ISPY_RKNN_CONVERTER_HOME at a different location."
-        )
+    free, base = probed
+    if free >= _MIN_FREE_BYTES:
+        return
+
+    logger.warning(
+        "Only %.1f GiB free on %s before the RKNN converter build - purging "
+        "the pip cache and re-checking.",
+        free / 1024 ** 3,
+        base,
+    )
+    if _purge_pip_cache():
+        probed = _free_bytes(env_dir)
+        if probed is not None and probed[0] >= _MIN_FREE_BYTES:
+            logger.info(
+                "Pip cache purge freed enough room (%.1f GiB now free) - "
+                "continuing the build.",
+                probed[0] / 1024 ** 3,
+            )
+            return
+        free = probed[0] if probed is not None else free
+
+    raise ConverterEnvError(
+        f"Not enough free disk space to build the RKNN converter "
+        f"environment: {free / 1024 ** 3:.1f} GiB free on {base}, "
+        f"need at least {_MIN_FREE_BYTES / 1024 ** 3:.1f} GiB. The pip cache "
+        "has already been purged. The full toolkit + torch + ultralytics "
+        "install is ~4 GB. Free space or point ISPY_RKNN_CONVERTER_HOME at a "
+        "different location."
+    )
 
 
 def _provision(env_dir: Path) -> Path:
@@ -534,7 +630,10 @@ def _provision(env_dir: Path) -> Path:
 
         # 1. The full toolkit wheel first (--no-deps: the pinned deps come
         #    next, from PyPI, at versions the runtime environment must not
-        #    receive).
+        #    receive).  this env gets the FULL toolkit2 and only the full
+        #    toolkit2 - the lite inference wheel belongs to the normal runtime
+        #    env (optimizer.BACKEND_DEPENDENCIES["rknn"]), installing both is
+        #    what balloons the disk
         _pip_install(py, _toolkit_wheel_url(), no_deps=True)
 
         # 2. The pinned conversion dependency set.

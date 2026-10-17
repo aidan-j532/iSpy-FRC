@@ -319,12 +319,12 @@ def _downscale_calib_images(
 
 
 def _rknn_wheel_targets(report_missing: bool = True) -> list[tuple[str, str]]:
+    # normal runtime env only ever gets the lite *inference* wheel. the full
+    # toolkit2 is conversion-only and lives in the isolated rknn converter env
+    # (iSpy.boot._rknn_converter_env) - never here, the pinned numpy/protobuf
+    # stack would break runtime imports and the download is huge.
     key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
     targets: list[tuple[str, str]] = []
-
-    full_fn = _RKNN_FULL_WHEELS.get(key)
-    if full_fn:
-        targets.append(("rknn", f"{_RKNN_FULL_BASE}/{full_fn}"))
 
     lite_fn = _RKNN_LITE_FILENAMES.get(key)
     if lite_fn:
@@ -591,6 +591,50 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
         logger.info("Optimized model %s: READY.", converted_path.name)
 
 
+def _purge_pip_cache() -> bool:
+    """Drop the pip download cache so a full disk gets room to retry.
+
+    The cache is per-user, not per-interpreter, so purging with the running
+    interpreter frees the space pip would otherwise re-download into.  Never
+    raises - a failed purge just means the caller reports the pip error.
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "cache", "purge"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except Exception as exc:
+        logger.warning("pip cache purge did not run: %s", exc)
+        return False
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
+        logger.warning("pip cache purge failed (exit %s): %s", proc.returncode, tail)
+        return False
+    logger.info("Purged the pip cache to free disk space.")
+    return True
+
+
+#: pip/OS wordings that mean the disk filled up mid-install.
+_SPACE_ERRORS = (
+    "no space left",
+    "errno 28",
+    "enospc",
+    "disk is full",
+    "disk full",
+    "not enough space",
+    "there is not enough space",
+    "insufficient disk space",
+    "0x80070070",  # windows ERROR_DISK_FULL
+)
+
+
+def _looks_out_of_space(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(sig in lowered for sig in _SPACE_ERRORS)
+
+
 def _pip_install(
     install_target: str,
     force_reinstall: bool = False,
@@ -606,12 +650,34 @@ def _pip_install(
     cmd.append(install_target)
     if not _in_virtualenv():
         cmd.append("--break-system-packages")
+
+    def _run():
+        # captured instead of streamed so we can spot an out-of-space failure and
+        # actually have a tail to log for every other kind of failure
+        return subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+
+    logger.info("Installing: %s", install_target)
     try:
-        logger.info("Installing: %s", install_target)
-        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        return True
-    except subprocess.CalledProcessError:
-        logger.warning("pip install failed for: %s", install_target)
+        proc = _run()
+        if proc.returncode != 0 and _looks_out_of_space(proc.stdout or ""):
+            # disk filled up - pip's cache is the biggest easy win, purge it and
+            # give the install exactly one retry before giving up
+            logger.warning(
+                "pip ran out of disk space installing %s - purging the pip "
+                "cache and retrying once.",
+                install_target,
+            )
+            if _purge_pip_cache():
+                proc = _run()
+        if proc.returncode == 0:
+            return True
+        tail = "\n".join((proc.stdout or "").strip().splitlines()[-20:])
+        logger.warning("pip install failed for: %s\n%s", install_target, tail)
+        return False
+    except Exception as exc:
+        logger.warning("pip install failed for: %s (%s)", install_target, exc)
         return False
 
 

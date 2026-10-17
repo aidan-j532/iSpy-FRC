@@ -618,6 +618,68 @@ class MainEnvSeparationTests(unittest.TestCase):
             result = opt._ensure_export_deps()
         self.assertTrue(result)
 
+    def test_rknn_wheel_targets_never_offers_full_toolkit(self):
+        """The normal-env wheel helper returns lite only, never the full toolkit."""
+        from iSpy.vision import optimizer as opt
+
+        with mock.patch.object(opt, "_IS_AARCH64", True), \
+             mock.patch.object(opt, "_PY_TAG", "cp312"), \
+             mock.patch.object(
+                 opt, "_RKNN_LITE_DIR", _REPO_ROOT / "iSpy" / "rknn_wheels"
+             ):
+            targets = opt._rknn_wheel_targets()
+
+        self.assertEqual(len(targets), 1)
+        mod, target = targets[0]
+        self.assertEqual(mod, "rknnlite")
+        self.assertIn("rknn_toolkit_lite2", target)
+        self.assertNotIn("rknn_toolkit2-", target)
+        self.assertNotIn("http", target)
+
+
+class ConverterEnvFullToolkitOnlyTests(unittest.TestCase):
+    """The converter env gets the full toolkit2 and never the lite wheel."""
+
+    def test_provision_installs_full_toolkit_not_lite(self):
+        import types
+
+        from iSpy.boot import _rknn_converter_env as env
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "cache"
+            env_dir = cache / "rknn-converter" / "abc"
+            py = env._is_py(env_dir)
+            full_url = (
+                "https://example.invalid/rknn_toolkit2-2.3.2-cp312-cp312-"
+                "manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+            )
+            free = types.SimpleNamespace(free=10**12, used=0, total=0)
+
+            def fake_run(cmd, **kwargs):
+                env_dir.mkdir(parents=True, exist_ok=True)
+                py.parent.mkdir(parents=True, exist_ok=True)
+                py.write_text("#!/bin/sh\n")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(env, "_cache_root", return_value=cache), \
+                 mock.patch.object(env.shutil, "disk_usage", return_value=free), \
+                 mock.patch.object(env, "_toolkit_wheel_url", return_value=full_url), \
+                 mock.patch.object(env.subprocess, "run", side_effect=fake_run), \
+                 mock.patch.object(env, "_pip_install") as mock_pip, \
+                 mock.patch.object(env, "_verify"):
+                env._provision(env_dir)
+
+            installed = [
+                arg
+                for call in mock_pip.call_args_list
+                for arg in call.args[1:]
+                if isinstance(arg, str)
+            ]
+            self.assertIn(full_url, installed)
+            for target in installed:
+                self.assertNotIn("rknn_toolkit_lite2", target)
+                self.assertNotIn("rknnlite", target)
+
 
 class CachedArtifactTests(unittest.TestCase):
     """A cached .rknn artifact is reused without provisioning anything."""
@@ -890,6 +952,7 @@ class ProvisionFullFlowTests(unittest.TestCase):
             self.assertTrue((env_dir / ".verified").exists())
 
     def test_provision_refuses_on_low_disk(self):
+        """A full disk still refuses the build - but only after a cache purge."""
         import types
 
         from iSpy.boot import _rknn_converter_env as env
@@ -900,12 +963,79 @@ class ProvisionFullFlowTests(unittest.TestCase):
 
             with mock.patch.object(env, "_cache_root", return_value=cache), \
                  mock.patch.object(env.shutil, "disk_usage", return_value=low), \
+                 mock.patch.object(env, "_purge_pip_cache", return_value=False) as mock_purge, \
                  mock.patch.object(env, "_pip_install") as mock_pip:
                 with self.assertRaises(Exception) as ctx:
                     env._provision(cache / "rknn-converter" / "abc")
 
             self.assertIn("disk space", str(ctx.exception).lower())
+            # the pip cache is the first thing we try to reclaim, the env is not
+            mock_purge.assert_called_once()
             mock_pip.assert_not_called()
+
+    def test_provision_low_disk_recovers_after_cache_purge(self):
+        """If purging the pip cache frees enough room, the build just continues."""
+        import types
+
+        from iSpy.boot import _rknn_converter_env as env
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "cache"
+            env_dir = cache / "rknn-converter" / "abc"
+            py = env._is_py(env_dir)
+
+            low = types.SimpleNamespace(free=10, used=0, total=0)
+            roomy = types.SimpleNamespace(free=10**12, used=0, total=0)
+
+            def fake_run(cmd, **kwargs):
+                env_dir.mkdir(parents=True, exist_ok=True)
+                py.parent.mkdir(parents=True, exist_ok=True)
+                py.write_text("#!/bin/sh\n")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(env, "_cache_root", return_value=cache), \
+                 mock.patch.object(env.shutil, "disk_usage", side_effect=[low, roomy]), \
+                 mock.patch.object(env, "_purge_pip_cache", return_value=True) as mock_purge, \
+                 mock.patch.object(env, "_toolkit_wheel_url", return_value=(
+                     "https://example.invalid/rknn_toolkit2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+                 )), \
+                 mock.patch.object(env.subprocess, "run", side_effect=fake_run), \
+                 mock.patch.object(env, "_pip_install"), \
+                 mock.patch.object(env, "_verify"):
+                result = env._provision(env_dir)
+
+            self.assertEqual(result, py)
+            mock_purge.assert_called_once()
+
+    def test_pip_install_retries_once_after_cache_purge_on_space_error(self):
+        """An out-of-space pip failure purges the cache and retries exactly once."""
+        from iSpy.boot import _rknn_converter_env as env
+
+        py = Path(sys.executable)
+        full = mock.Mock(returncode=1, stdout="ERROR: No space left on device", stderr="")
+        ok = mock.Mock(returncode=0, stdout="Successfully installed", stderr="")
+
+        with mock.patch.object(env, "_purge_pip_cache", return_value=True) as mock_purge, \
+             mock.patch.object(env.subprocess, "run", side_effect=[full, ok]) as mock_run:
+            env._pip_install(py, "some-package")  # must not raise
+
+        self.assertEqual(mock_run.call_count, 2)
+        mock_purge.assert_called_once()
+
+    def test_pip_install_does_not_purge_on_unrelated_failure(self):
+        """A normal pip error is not mistaken for a full disk."""
+        from iSpy.boot import _rknn_converter_env as env
+
+        py = Path(sys.executable)
+        bad = mock.Mock(returncode=1, stdout="ERROR: No matching distribution found", stderr="")
+
+        with mock.patch.object(env, "_purge_pip_cache") as mock_purge, \
+             mock.patch.object(env.subprocess, "run", side_effect=[bad]) as mock_run:
+            with self.assertRaises(env.ConverterEnvError):
+                env._pip_install(py, "some-package")
+
+        self.assertEqual(mock_run.call_count, 1)
+        mock_purge.assert_not_called()
 
 
 class LightVerifyTests(unittest.TestCase):
