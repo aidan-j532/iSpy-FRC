@@ -21,14 +21,10 @@ const config = {
 
   // Set the production url of your site here
   url: 'https://aidan-j532.github.io',
-  // Set the /<baseUrl>/ pathname under which your site is served
-  // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: process.env.NODE_ENV === 'development' ? '/' : '/iSpy-FRC/',
-
-  // GitHub pages deployment config.
-  // If you aren't using GitHub pages, you don't need these.
   organizationName: 'aidan-j532',
   projectName: 'iSpy-FRC',
+  trailingSlash: false,
 
   onBrokenLinks: 'throw',
 
