@@ -114,8 +114,33 @@ const config = {
               },
             ],
           },
+          {
+            title: 'Team 2207 - Bright Bears',
+            items: [
+              {
+                label: 'Team Website',
+                href: 'http://www.whitebearlakerobotics.com/',
+              },
+              {
+                label: 'Instagram',
+                href: 'https://www.instagram.com/wblroboticsfrc2207/',
+              },
+              {
+                label: 'Facebook',
+                href: 'https://www.facebook.com/wblrobotics/',
+              },
+              {
+                label: 'X (Twitter)',
+                href: 'https://twitter.com/team2207',
+              },
+              {
+                label: 'YouTube',
+                href: 'https://www.youtube.com/@FRC-Team2207',
+              },
+            ],
+          },
         ],
-        copyright: `Copyright © ${new Date().getFullYear()} iSpy FRC.`,
+        copyright: `Copyright © ${new Date().getFullYear()} iSpy FRC. Docs are largely AI-generated.`,
       },
       prism: {
         theme: prismThemes.github,

@@ -46,3 +46,18 @@
 .navbar__logo img {
   height: 2.5rem;
 }
+
+.footer__social-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.footer__social-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.footer__social-link:hover .footer__social-icon {
+  color: var(--wbl-orange);
+}

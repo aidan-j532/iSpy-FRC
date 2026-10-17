@@ -40,12 +40,32 @@
   justify-content: center;
 }
 
+/* Keep the secondary hero CTA readable against the orange hero background. */
 :global(.button.button--outline.button--secondary).secondaryButton {
-  color: #243b5a;
+  color: #fff;
+  background-color: transparent;
+  border-color: #fff;
+  transition:
+    color 180ms ease,
+    background-color 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
 }
 
 :global(.button.button--outline.button--secondary).secondaryButton:hover {
-  color: #243b5a;
+  color: #202124;
+  background-color: #fff;
+  border-color: #fff;
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+:global(.button.button--outline.button--secondary).secondaryButton:focus-visible {
+  color: #202124;
+  background-color: #fff;
+  border-color: #fff;
+  outline: 3px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 3px;
 }
 
 .introSection {

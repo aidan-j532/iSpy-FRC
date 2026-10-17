@@ -106,8 +106,8 @@ export default function Home() {
                 <p>
                   iSpy runs one or more camera pipelines on a coprocessor or
                   development machine. Depending on the pipeline, it can detect
-                  objects, read AprilTags or QR codes, estimate depth, or track
-                  image motion. For a model-backed detector, it can turn a
+                  objects, read AprilTags or QR codes, estimate depth, track
+                  image motion, and so much more! For a model-backed detector, it can turn a
                   detection into a measured position using the camera setup and
                   calibration data.
                 </p>
