@@ -136,7 +136,7 @@ _LIGHT_VERIFY_INTERVAL = 24 * 60 * 60
 
 #: Minimum free disk space required before provisioning starts.  The full
 #: toolkit + torch + ultralytics install easily reaches ~4 GB.
-_MIN_FREE_BYTES = 2 * 1024 ** 3
+_MIN_FREE_BYTES = 6 * 1024 ** 3
 
 #: pip/OS wordings that mean the disk filled up mid-install.  linux, mac and
 #: windows all phrase it differently, and pip wraps the OSError text as-is.
@@ -364,7 +364,6 @@ def _pip_failure_message(returncode: int, tail: str) -> str:
             "tls",
             "network is unreachable",
             "no route to host",
-            "[errno",
             "getaddrinfo",
         )
     ):
@@ -440,7 +439,7 @@ def _purge_pip_cache() -> bool:
 
 
 def _pip_install(py: Path, *requirements: str, no_deps: bool = False) -> None:
-    cmd = [str(py), "-m", "pip", "install", "--disable-pip-version-check"]
+    cmd = [str(py), "-m", "pip", "install", "--disable-pip-version-check", "--no-cache-dir"]
     if no_deps:
         cmd.append("--no-deps")
     cmd.extend(requirements)
@@ -604,14 +603,14 @@ def _check_disk_space(env_dir: Path) -> None:
 def _provision(env_dir: Path) -> Path:
     """Create and populate the converter environment at *env_dir*."""
     _cache_root().mkdir(parents=True, exist_ok=True)
-    _check_disk_space(env_dir)
-    # A previous failed provision may have left a partial environment behind -
-    # never let venv/pip grow a poisoned tree on top of it.
+    # Remove a partial build before checking free space; it may itself occupy
+    # several gigabytes and prevent the retry from passing the disk guard.
     if env_dir.exists():
         shutil.rmtree(env_dir, ignore_errors=True)
         logger.info(
             "Removed incomplete RKNN converter env before rebuild: %s", env_dir
         )
+    _check_disk_space(env_dir)
     try:
         logger.info("Creating RKNN converter virtual environment ...")
         proc = subprocess.run(
@@ -706,10 +705,16 @@ def converter_python() -> Path:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with _build_lock(lock_path):
         # Re-check under the lock - another process may have just built it.
+        current_hash = _identity_hash(identity)
         if _env_is_current(env_dir) and _light_verify(py, env_dir):
             return py
+
+        # Free obsolete Python/architecture/dependency-set environments BEFORE
+        # starting a large install. Otherwise a failed provision can leave old
+        # environments consuming space indefinitely.
+        _cleanup_orphans(current_hash)
         py = _provision(env_dir)
-        _cleanup_orphans(_identity_hash(identity))
+        _cleanup_orphans(current_hash)
         return py
 
 
