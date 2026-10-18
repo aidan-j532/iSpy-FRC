@@ -12,7 +12,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 const config = {
   title: 'iSpy FRC',
   tagline: 'Vision pipeline for FRC object detection, calibration, and robot telemetry',
-  favicon: 'img/favicon.svg',
+  favicon: 'img/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {
@@ -133,10 +133,14 @@ const config = {
                 label: 'YouTube',
                 href: 'https://www.youtube.com/@FRC-Team2207',
               },
+              {
+                label: 'Chief Delphi',
+                href: 'https://www.chiefdelphi.com/t/introducing-ispy-a-students-project-for-advanced-computer-vision/523910',
+              },
             ],
           },
         ],
-        copyright: `Copyright © ${new Date().getFullYear()} iSpy FRC. Docs are largely AI-generated.`,
+        copyright: `Copyright © ${new Date().getFullYear()} iSpy FRC. Docs are largely AI-generated, but fact checked. `,
       },
       prism: {
         theme: prismThemes.github,

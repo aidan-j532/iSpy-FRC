@@ -248,6 +248,29 @@ export default function Home() {
             </div>
           </div>
         </section>
+        <section className={clsx('padding-vert--xl', styles.aboutSection)}>
+          <div className="container">
+            <div className={styles.sectionHeading}>
+              <p className={styles.eyebrow}>About Me</p>
+              <Heading as="h2">Built by a student, shared with everyone</Heading>
+              {/* TODO: replace this placeholder bio with your own */}
+              <p>
+                Hi, I'm <strong>[your name]</strong>, a student on FRC Team 2207
+                the Bright Bears. I built iSpy because [why you built it]. This
+                project is [free/open source] and stays that way with help from
+                people who find it useful.
+              </p>
+            </div>
+            <div className={styles.aboutActions}>
+              {/* TODO: point this at your real donation or sponsorship page */}
+              <Link
+                className="button button--primary button--lg"
+                href="">
+                Support iSpy
+              </Link>
+            </div>
+          </div>
+        </section>
       </main>
     </Layout>
   );
