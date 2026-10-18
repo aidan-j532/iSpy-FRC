@@ -50,6 +50,85 @@ def _recommended_format_cached() -> str:
     return recommend_format(ignore_dependencies=True, runtime_supported=False)
 
 
+def offline_build_requirements(settings: dict) -> list:
+    """Critical internet needs of an optimize/quantize request.
+
+    Judged from the raw pipeline settings. A build whose dependencies (or
+    the RKNN converter environment) are missing locally can never finish
+    while offline - the pipeline would sit at "optimizing" forever instead
+    of falling back to the .pt - so the offline gate skips the camera with
+    this reason rather than letting it dangle.
+    """
+    optimize = settings.get("optimize", settings.get("auto_opt", False))
+    if isinstance(optimize, str) and optimize.strip().lower() in (
+        "off",
+        "false",
+        "0",
+        "no",
+        "none",
+        "",
+    ):
+        optimize = False
+    quantize = bool(settings.get("quantize", settings.get("quantized", False)))
+    if not optimize and not quantize:
+        return []
+
+    from iSpy.core import network_policy
+
+    target = str(settings.get("target_format") or "auto").strip().lower()
+    if target in SUPPORTED_TARGET_FORMATS:
+        resolved = target
+    else:
+        try:
+            resolved = _recommended_format_cached()
+        except Exception:
+            resolved = "onnx"
+
+    if resolved == "tpu":
+        # the TPU path runs the .pt directly via torch_xla - no export build
+        return []
+
+    if resolved == "rknn":
+        try:
+            from iSpy.boot._rknn_converter_env import converter_env_status
+
+            ready = bool(converter_env_status().get("current"))
+        except Exception:
+            ready = False
+        if ready:
+            return []
+        return [
+            network_policy.NetworkRequirement(
+                name="RKNN converter environment",
+                reason=(
+                    "optimize is on but the RKNN converter env is not "
+                    "provisioned yet - building it needs pip downloads"
+                ),
+                critical=True,
+            )
+        ]
+
+    try:
+        from iSpy.vision.optimizer import _missing_build_modules
+
+        missing = _missing_build_modules(resolved)
+    except Exception:
+        missing = []
+    if missing:
+        return [
+            network_policy.NetworkRequirement(
+                name="model build dependencies",
+                reason=(
+                    "optimize is on but %s is not installed locally - "
+                    "installing build dependencies needs pip"
+                    % ", ".join(missing)
+                ),
+                critical=True,
+            )
+        ]
+    return []
+
+
 class OptimizableModelPipeline:
     # extra config-schema keys surfaced by get_optimization_options()
     _OPT_OPTIONS_EXTRA: tuple[str, ...] = ()

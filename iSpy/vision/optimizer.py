@@ -640,6 +640,23 @@ def _pip_install(
     force_reinstall: bool = False,
     extra_args: list[str] | None = None,
 ) -> bool:
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        # a local wheel/path still installs fine offline (and is the documented
+        # way to get uninstalled backends onto an air-gapped board); anything
+        # pip would fetch goes away with one clear reason instead of pip
+        # retrying a dead index five times.
+        is_remote = install_target.startswith(("http://", "https://"))
+        is_local = not is_remote and Path(install_target).exists()
+        if not is_local:
+            logger.warning(
+                "Offline mode: skipping pip install of %s - pip needs the "
+                "internet.",
+                install_target,
+            )
+            return False
+
     cmd = [sys.executable, "-m", "pip", "install"]
     if install_target.startswith("http") or install_target.endswith(".whl"):
         cmd.append("--no-deps")
@@ -724,9 +741,18 @@ def _ensure_onnxruntime_variant() -> None:
 
 def install_special_dependencies(auto_install: bool = False):
     from iSpy.config.AutoOpt import has_jetson, recommend_format
+    from iSpy.core import network_policy
 
     backend = recommend_format(ignore_dependencies=True)
     logger.info("Recommended backend: %s", backend)
+    if auto_install and network_policy.is_offline():
+        logger.warning(
+            "Offline mode: skipping the dependency auto-install for backend "
+            "%r - pip needs the internet. The runtime keeps whatever is "
+            "already installed and falls back to the .pt.",
+            backend,
+        )
+        return
     if auto_install:
         _ensure_onnxruntime_variant()
         _ensure_cuda_torch()
@@ -839,10 +865,35 @@ _EXPORT_DEPS = (
 )
 
 
+def _missing_build_modules(backend: str | None = None) -> list[str]:
+    """Modules a model build would need that are not installed locally.
+
+    Used by the offline policy to decide whether an optimize/quantize
+    request could ever finish without pip.
+    """
+    missing = [mod for mod, _ in _EXPORT_DEPS if not _is_installed(mod)]
+    if backend:
+        for entry in BACKEND_DEPENDENCIES.get(backend, ()):
+            mod = entry[0]
+            if mod not in missing and not _is_installed(mod):
+                missing.append(mod)
+    return missing
+
+
 def _ensure_export_deps() -> bool:
     missing = [mod for mod, _ in _EXPORT_DEPS if not _is_installed(mod)]
     if not missing:
         return True
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        logger.warning(
+            "Offline mode: missing build-time export dependencies (%s) - "
+            "model export/optimization is unavailable until they are "
+            "installed; the .pt keeps running.",
+            ", ".join(missing),
+        )
+        return False
     logger.warning(
         "Missing build-time export dependencies (%s). Auto-installing "
         "ultralytics (AGPL-3.0) + onnx + onnxslim - these are only used to "

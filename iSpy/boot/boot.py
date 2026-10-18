@@ -191,6 +191,44 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
     config.save()
 
 
+def _arm_offline_mode_early() -> None:
+    """Peek offline_mode out of the on-disk config before anything downloads.
+
+    setup_files pulls the default models, and that happens before the full
+    iSpyConfig exists - so read just this one key straight from the file.
+    An unreadable config is ignored here; boot fails loudly on it later.
+    """
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        return
+    try:
+        config_path = search_for_config()
+        if not config_path:
+            return
+        with open(config_path, "r", encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and data.get("offline_mode"):
+            network_policy.set_offline(True, "config")
+    except Exception:
+        return
+
+
+def _apply_offline_mode(config: iSpyConfig) -> None:
+    """Arm the offline policy from the loaded config.
+
+    Game Mode (or an inherited ISPY_OFFLINE) may have turned it on already;
+    never downgrade that - first reason wins, and the "ON" line is logged
+    once.
+    """
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        return
+    if config.get("offline_mode", False):
+        network_policy.set_offline(True, "config")
+
+
 def _consume_game_mode_web_off(config: iSpyConfig) -> None:
     # This is the one time turn off web mode for gaem
     backup = config.get("game_mode_app_mode_backup")
@@ -208,6 +246,12 @@ def _consume_game_mode_web_off(config: iSpyConfig) -> None:
         return
 
     logger.warning("Game Mode: web UI disabled for this run only.")
+    # offline is forced for the game-mode run itself. in-memory only - a
+    # crash mid-run must never leave offline_mode stuck on in config.json,
+    # which is exactly why this never touches the config file.
+    from iSpy.core import network_policy
+
+    network_policy.set_offline(True, "game_mode")
     config.set("game_mode_app_mode_backup", config.get("app_mode", True))
     config.config["app_mode"] = False
     config.set("game_mode_web_off_next_run", False)
@@ -605,6 +649,10 @@ def on_boot(
     _configure_quiet_logging()
     logger.info("ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix)
 
+    # offline mode must be known before setup_files downloads default models
+    # (a full iSpyConfig does not exist yet at that point)
+    _arm_offline_mode_early()
+
     if fresh:
         logger.info("boot -f: forcefully fresh installation state")
         setup_files(fresh=True)
@@ -613,16 +661,27 @@ def on_boot(
         _bootstrap_default_camera(config)
 
         # fresh install with no prior deps installed - pull in whatever backend it needs (rknn wheel, onnxruntime-gpu, etc.) so first boot doesn't fail on a missing import mid-pipeline-construction
-        try:
-            from iSpy.vision.optimizer import install_special_dependencies
+        from iSpy.core import network_policy
 
-            logger.info("First-boot dependency install starting (auto_install=True)...")
-            install_special_dependencies(auto_install=True)
-        except Exception:
-            logger.exception(
-                "First-boot dependency install failed - continuing boot anyway; "
-                "the relevant pipeline will fall back or error clearly at runtime."
+        if network_policy.is_offline():
+            logger.warning(
+                "Offline mode: skipping the first-boot dependency install - "
+                "pip needs the internet; install the backend packages "
+                "manually and reboot."
             )
+        else:
+            try:
+                from iSpy.vision.optimizer import install_special_dependencies
+
+                logger.info(
+                    "First-boot dependency install starting (auto_install=True)..."
+                )
+                install_special_dependencies(auto_install=True)
+            except Exception:
+                logger.exception(
+                    "First-boot dependency install failed - continuing boot anyway; "
+                    "the relevant pipeline will fall back or error clearly at runtime."
+                )
     else:
         setup_files(fresh=False)
         config_path = search_for_config()
@@ -635,6 +694,7 @@ def on_boot(
         config = iSpyConfig(config_path, create=False)
 
     _consume_game_mode_web_off(config)
+    _apply_offline_mode(config)
 
     cleanup_missing_cameras(config)
     cleanup_broken_images(config)

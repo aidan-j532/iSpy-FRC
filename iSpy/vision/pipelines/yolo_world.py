@@ -63,6 +63,62 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
     def show_calibration(cls) -> bool:
         return False
 
+    @classmethod
+    def network_requirements(cls, settings: dict) -> list:
+        from iSpy.core import network_policy
+        from iSpy.vision.pipelines.optimizable import offline_build_requirements
+
+        reqs = []
+        size = str(settings.get("model_size") or "s").lower()
+        url = _WORLD_MODEL_URLS.get(size, _WORLD_MODEL_URLS["s"])
+        downloaded = _WORLD_MODEL_DIR / url.rsplit("/", 1)[-1]
+        asset = Path(__file__).resolve().parents[2] / "assets" / "yolo-world.pt"
+        weights = None
+        if asset.exists():
+            weights = asset
+        elif downloaded.exists() and downloaded.stat().st_size >= 1024:
+            weights = downloaded
+        if weights is None:
+            # nothing else matters until the base weights exist on disk
+            return [
+                network_policy.NetworkRequirement(
+                    name="YOLO World weights",
+                    reason=(
+                        f"{downloaded.name} is not on disk yet - it downloads "
+                        "from Ultralytics on first use"
+                    ),
+                    critical=True,
+                )
+            ]
+
+        # the prompt has to be baked into the weights locally before loading;
+        # that step runs in a subprocess that imports Ultralytics, so without
+        # it installed the bake can never happen offline
+        classes = cls._parse_classes(str(settings.get("prompt") or "A dog."))
+        classes_key = hashlib.sha1("|".join(classes).encode("utf-8")).hexdigest()[:8]
+        fixed = _WORLD_MODEL_DIR / "world" / f"{weights.stem}-{classes_key}.pt"
+        if not (fixed.exists() and fixed.stat().st_size >= 1024):
+            try:
+                from iSpy.vision.optimizer import _is_installed
+
+                ultralytics_local = _is_installed("ultralytics")
+            except Exception:
+                ultralytics_local = False
+            if not ultralytics_local:
+                reqs.append(
+                    network_policy.NetworkRequirement(
+                        name="YOLO World class reparameterization",
+                        reason=(
+                            "this prompt's weights are not baked yet and "
+                            "Ultralytics (used for the local bake) is not "
+                            "installed - installing it needs pip"
+                        ),
+                        critical=True,
+                    )
+                )
+        reqs.extend(offline_build_requirements(settings))
+        return reqs
+
     def is_ready(self) -> tuple[bool, str]:
         # pure status report - never triggers/blocks on optimization
         if not self._optimization_requested():
@@ -389,6 +445,17 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
 
         if target.exists() and target.stat().st_size >= 1024:
             return str(target)
+
+        if not self.network_allowed:
+            # no partial download attempt and no retry loop - the weights are
+            # fetched once on a networked boot, then cached
+            self.logger.warning(
+                "Offline mode: YOLO World weights %s are not on disk and "
+                "cannot be downloaded - this camera needs one networked run "
+                "to fetch them.",
+                filename,
+            )
+            return None
 
         self.logger.info(
             "Downloading YOLO World weights %s to %s ...", filename, target

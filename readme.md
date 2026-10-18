@@ -242,6 +242,66 @@ Advanced).
 All add-ons (enabled state, settings) are managed from the **Add-ons page** in
 the web UI.
 
+### Offline mode
+
+`offline_mode` (top-level config key, Settings → Advanced → Offline Mode)
+blocks traffic to the **public internet only**. Everything that talks to the
+robot keeps working: NetworkTables, the dashboard, loopback, mDNS and the
+Tello's `192.168.10.1`. Allowed destinations are loopback, RFC1918 (`10/8`,
+`172.16/12`, `192.168/16`), link-local (`169.254/16`) and the IPv6 private
+ranges (`::1`, `fc00::/7`, `fe80::/10`). Anything else is refused - DNS lookups
+included - and `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` are set so Hugging Face
+models load from their local cache instead of retrying over the network.
+
+**Game Mode** forces offline on for its one-shot run. That override lives in
+memory only - it is never written to `config.json`, so a crash mid-run can
+never leave offline mode stuck on. The service daemon and every subprocess
+(RKNN converter worker, yolo-world reparameterizer, pip) inherit it through
+`ISPY_OFFLINE=1`.
+
+What happens to add-ons while offline:
+
+- an add-on that **cannot do its job** offline (a critical requirement, e.g.
+  YOLO World weights that were never downloaded) is **skipped** with a warning
+  in the log, a yellow entry on Health and a `skipped: offline` badge on the
+  Add-ons page - boot and the run loop continue normally, nothing raises;
+- an add-on that only loses an optional feature keeps running and gets a
+  `partially offline` badge.
+
+An add-on declares its needs itself:
+
+```python
+from iSpy.plugins.bases import TrackerBase
+from iSpy.core.network_policy import NetworkRequirement
+
+
+class MyTracker(TrackerBase):
+    plugin_name = "me/my_tracker"
+
+    # shortcut: the whole add-on needs the internet
+    needs_internet = True
+
+    # or declare precisely (this wins over needs_internet) - only when a
+    # setting makes it need the net, key off the current settings:
+    @classmethod
+    def network_requirements(cls, settings):
+        reqs = []
+        if settings.get("web_sync"):
+            reqs.append(
+                NetworkRequirement(
+                    name="web sync", reason="posts to a server", critical=False
+                )
+            )
+        return reqs
+```
+
+At runtime `self.network_allowed` is False while offline,
+`self.require_network("feature")` raises `OfflineError`, and
+`self.try_online(feature, fn, fallback)` records one "feature disabled" note
+and returns `fallback` when the internet is missing or flaky. A config-schema
+field marked `"requires_network": True` is forced back to its default while
+offline so a stale "check for updates"-style toggle cannot keep reaching out.
+
 ### Camera calibration
 
 To get accurate distances, measure these values with your actual camera and game piece:

@@ -4,6 +4,7 @@ import time
 
 from flask import jsonify, render_template
 
+from iSpy.core import network_policy
 from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,23 @@ class HealthModule(WebModule):
                     "color": color,
                     "state": state,
                     "metrics": normalized,
+                }
+            )
+
+        # add-ons offline mode skipped were never constructed, so there is no
+        # instance to ask - surface them from the policy report instead.
+        # yellow, not red: skipping is the intended behavior while offline.
+        # pipelines are left out because their camera row already reports it.
+        for skip in network_policy.get_report().get("skipped", []):
+            if str(skip.get("kind")) == "pipeline":
+                continue
+            collected.append(
+                {
+                    "name": str(skip.get("name") or "?"),
+                    "type": f"offline {skip.get('kind') or 'add-on'}",
+                    "color": "yellow",
+                    "state": f"skipped: {skip.get('reason') or 'needs internet'}",
+                    "metrics": [],
                 }
             )
         return collected

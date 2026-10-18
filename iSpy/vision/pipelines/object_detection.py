@@ -176,6 +176,16 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 }
         return {"valid": True, "level": "ok", "message": "ready", "details": details}
 
+    @classmethod
+    def network_requirements(cls, settings: dict) -> list:
+        # model weights load from local disk, so the only thing that can need
+        # the internet is a requested optimize/quantize build whose deps are
+        # missing locally (it would pip-install them or provision the RKNN
+        # converter env).
+        from iSpy.vision.pipelines.optimizable import offline_build_requirements
+
+        return offline_build_requirements(settings)
+
     def __init__(
         self,
         camera_config: iSpyCameraConfig,

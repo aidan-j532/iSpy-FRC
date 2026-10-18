@@ -26,6 +26,29 @@ _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1,
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
 
+def _depth_weights_cached() -> bool:
+    """True when the V2 weights (or a pre-exported artifact) are on disk.
+
+    With the weights cached the pipeline runs fine offline (HF_HUB_OFFLINE
+    keeps from_pretrained on the local cache); without them it downloads on
+    first use, which offline mode blocks.
+    """
+    hub = _DEPTH_HF_CACHE_DIR / "models--depth-anything--Depth-Anything-V2-Small-hf"
+    try:
+        if hub.is_dir() and any(hub.rglob("*.safetensors")):
+            return True
+    except OSError:
+        pass
+    # a pre-exported artifact (onnx/openvino/...) runs without the HF weights
+    for parent in _YOLO_MODELS_DIR.glob("*"):
+        try:
+            if parent.is_dir() and any(parent.glob(f"{_DEPTH_ARTIFACT_STEM}*")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
     plugin_name = "depth_anything"
     # monocular depth maps need no calibration - disable the default ChArUco tab
@@ -60,6 +83,33 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
     @classmethod
     def show_calibration(cls) -> bool:
         return False
+
+    @classmethod
+    def network_requirements(cls, settings: dict) -> list:
+        from iSpy.core import network_policy
+        from iSpy.vision.pipelines.optimizable import offline_build_requirements
+
+        reqs = []
+        if not _depth_weights_cached():
+            reqs.append(
+                network_policy.NetworkRequirement(
+                    name="Depth Anything V2 weights",
+                    reason=(
+                        "weights are not in the local Hugging Face cache yet - "
+                        "they download from Hugging Face on first use"
+                    ),
+                    critical=True,
+                )
+            )
+        reqs.extend(offline_build_requirements(settings))
+        return reqs
+
+    def _ensure_weights_local(self) -> None:
+        """Guard the from_pretrained paths: while offline the weights must
+        already be cached (an exported artifact counts too)."""
+        if self.network_allowed or _depth_weights_cached():
+            return
+        self.require_network("downloading the Depth Anything V2 weights")
 
     def is_ready(self) -> tuple[bool, str]:
         # pure status report - never triggers/blocks on optimization
@@ -406,6 +456,8 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         def build():
             from torch import nn
             from transformers import AutoModelForDepthEstimation
+
+            self._ensure_weights_local()
 
             class _DepthModule(nn.Module):
                 def __init__(self, model):
@@ -844,6 +896,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             import torch_xla.core.xla_model as xm
             from transformers import AutoModelForDepthEstimation
 
+            self._ensure_weights_local()
             device = xm.xla_device()
             self._model = (
                 AutoModelForDepthEstimation.from_pretrained(
@@ -898,6 +951,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
             from transformers import pipeline
 
+            self._ensure_weights_local()
             self._model = pipeline(
                 "depth-estimation",
                 model=_DEPTH_MODEL_ID,

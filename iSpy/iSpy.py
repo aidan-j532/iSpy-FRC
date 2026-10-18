@@ -8,6 +8,7 @@ from pathlib import Path
 from wpimath.geometry import Pose2d, Rotation2d
 
 from iSpy.config.iSpyConfig import iSpyAddonConfig, iSpyConfig
+from iSpy.core import network_policy
 from iSpy.core.control_channel import ControlServer
 from iSpy.core.rollback import RollBack
 from iSpy.plugins._loader import load_plugins
@@ -22,7 +23,7 @@ from iSpy.validations.model_validator import (
     enforce_model_organization,
     validate_model_organization,
 )
-from iSpy.vision.pipelines.base import VisionPipeline
+from iSpy.vision.pipelines.base import OfflineUnavailablePipeline, VisionPipeline
 from iSpy.web.Backend.WebApp import create_app
 
 PROJECT_ROOT = Path(__file__).resolve()
@@ -95,6 +96,8 @@ class iSpy:
         self.trackers = {}  # No default trackers
         for name, settings in self._enabled_addons("trackers"):
             if name in tracker_classes:
+                if not self._gate_addon("tracker", name, tracker_classes[name], settings):
+                    continue
                 self.trackers[name] = tracker_classes[name](
                     self._addon_context(tracker_classes[name], settings)
                 )
@@ -123,6 +126,10 @@ class iSpy:
             if self.replay_mode and name == "FRC/network_table_handler":
                 continue
             if name in utility_classes:
+                if not self._gate_addon(
+                    "utility", name, utility_classes[name], settings
+                ):
+                    continue
                 try:
                     self.utilities[name] = utility_classes[name](
                         self._addon_context(utility_classes[name], settings)
@@ -149,6 +156,10 @@ class iSpy:
         self.frame_processors = {}
         for name, settings in self._enabled_addons("frame_processors"):
             if name in frame_processor_classes:
+                if not self._gate_addon(
+                    "frame_processor", name, frame_processor_classes[name], settings
+                ):
+                    continue
                 try:
                     self.frame_processors[name] = frame_processor_classes[name](
                         self._addon_context(frame_processor_classes[name], settings)
@@ -210,6 +221,51 @@ class iSpy:
                     "Unknown pipeline '%s' for camera '%s'", pipeline, cam_name
                 )
                 continue
+            if network_policy.is_offline():
+                try:
+                    settings = dict(cam_config.pipeline_settings() or {})
+                    reqs = list(cls.network_requirements(settings) or [])
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "network_requirements() failed for pipeline '%s' - "
+                        "assuming no internet needs.",
+                        pipeline,
+                    )
+                    reqs = []
+                critical = [r for r in reqs if r.critical]
+                if critical:
+                    reason = "; ".join(f"{r.name}: {r.reason}" for r in critical)
+                    network_policy.record_skip("pipeline", cam_name, reason)
+                    logging.getLogger(__name__).warning(
+                        "Offline mode: camera '%s' pipeline '%s' needs the "
+                        "internet - %s. Camera kept with an error status.",
+                        cam_name,
+                        pipeline,
+                        reason,
+                    )
+                    try:
+                        cameras.append(
+                            OfflineUnavailablePipeline(cam_config, config, reason)
+                        )
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "Camera '%s': offline placeholder failed to "
+                            "initialize - skipping it.",
+                            cam_name,
+                        )
+                    continue
+                optional = [r for r in reqs if not r.critical]
+                if optional:
+                    feature = ", ".join(r.name for r in optional)
+                    reason = "; ".join(r.reason for r in optional)
+                    network_policy.record_degraded("pipeline", cam_name, feature, reason)
+                    logging.getLogger(__name__).warning(
+                        "Offline mode: camera '%s' pipeline '%s' runs with "
+                        "reduced features - %s",
+                        cam_name,
+                        pipeline,
+                        reason,
+                    )
             try:
                 cameras.append(cls(cam_config, config))
             except Exception:
@@ -235,6 +291,47 @@ class iSpy:
                 continue
             out.append((name, settings if isinstance(settings, dict) else {}))
         return out
+
+    def _gate_addon(self, group: str, name: str, cls, settings: dict) -> bool:
+        """False when offline mode means this add-on must not be constructed.
+
+        The add-on itself declares its needs (network_requirements(), judged
+        against its current settings). A critical unmet need skips it with a
+        warning and a report entry; a non-critical one still loads but is
+        recorded as degraded. Never raises - boot always continues.
+        """
+        if not network_policy.is_offline():
+            return True
+        try:
+            reqs = list(cls.network_requirements(settings) or [])
+        except Exception:
+            self.logger.exception(
+                "network_requirements() failed for %s '%s' - assuming no "
+                "internet needs.",
+                group,
+                name,
+            )
+            return True
+        critical = [r for r in reqs if r.critical]
+        if critical:
+            reason = "; ".join(f"{r.name}: {r.reason}" for r in critical)
+            network_policy.record_skip(group, name, reason)
+            self.logger.warning(
+                "Offline mode: skipping %s '%s' - %s", group, name, reason
+            )
+            return False
+        optional = [r for r in reqs if not r.critical]
+        if optional:
+            feature = ", ".join(r.name for r in optional)
+            reason = "; ".join(r.reason for r in optional)
+            network_policy.record_degraded(group, name, feature, reason)
+            self.logger.warning(
+                "Offline mode: %s '%s' runs with reduced features - %s",
+                group,
+                name,
+                reason,
+            )
+        return True
 
     def _register_code_parts(self):
         metrics = self.web_app.modules.get("metrics") if self.web_app else None

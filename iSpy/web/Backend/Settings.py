@@ -1,7 +1,11 @@
 import copy
+import logging
+
 from flask import jsonify, render_template, request
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.validations.recommendations import get_structured_recommendations
+
+logger = logging.getLogger(__name__)
 
 _RESTART_REQUIRED_KEYS = {
     "unit",
@@ -13,6 +17,9 @@ _RESTART_REQUIRED_KEYS = {
     "camera_configs",
     "device",
     "num_gpus",
+    # add-ons are constructed at boot, so the offline gate only re-evaluates
+    # after a restart
+    "offline_mode",
 }
 
 
@@ -91,8 +98,20 @@ class SettingsModule(WebModule):
             if not isinstance(data, dict) or "camera_configs" not in data:
                 return jsonify(error="Not an iSpy config export (missing camera_configs)"), 400
             config = self.context["config"]
+            old_offline = bool(config.get("offline_mode", False))
             config._update_config(data)
             config.save()
+            # the imported file owns offline_mode (it is not ours to silently
+            # drop or flip) - but a machine-to-machine import that changes it
+            # must say so, or it reads as the internet "randomly" breaking
+            new_offline = bool(config.get("offline_mode", False))
+            if old_offline != new_offline:
+                logger.warning(
+                    "Imported config changed offline_mode: %s -> %s (effective "
+                    "after the next vision restart).",
+                    old_offline,
+                    new_offline,
+                )
             return jsonify(success=True, config=config.config)
         except ValueError as e:
             return jsonify(error=str(e)), 400

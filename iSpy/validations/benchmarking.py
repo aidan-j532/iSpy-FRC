@@ -63,6 +63,17 @@ def _download_real_calibration_dataset() -> Path | None:
     dest = _PROJECT_ROOT / "QuantizeDataset" / "coco128"
     if _count_images(dest) >= _MIN_REAL_IMAGES:
         return dest
+
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        print(
+            "Offline mode: no local COCO128 calibration images and the "
+            "download is blocked - int8 calibration falls back to synthetic "
+            "images."
+        )
+        return None
+
     print("No real calibration images found - downloading COCO128 (~7 MB)...")
     try:
         import io
@@ -268,6 +279,15 @@ def _download_default_bench_model() -> Path | None:
     target = target_dir / _DEFAULT_BENCH_MODEL_NAME
     if target.exists() and target.stat().st_size > 1024:
         return target
+
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        print(
+            "Offline mode: no .pt models found and the stock checkpoint "
+            "download is blocked - pass --model or add a model on disk."
+        )
+        return None
 
     searched = [_PROJECT_ROOT]
     if _REPO_ROOT and _REPO_ROOT != _PROJECT_ROOT:

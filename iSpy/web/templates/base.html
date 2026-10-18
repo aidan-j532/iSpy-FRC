@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0d1117" />
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
     <title>{% block title %}iSpy{% endblock %}</title>
     <link rel="stylesheet" href="/static/css/design.css" />
     <style>
@@ -130,9 +130,7 @@
 
             el.innerHTML = `
                 <div class="conn-overlay-content">
-                    <svg class="conn-overlay-icon" viewBox="0 0 64 64" aria-hidden="true">
-                        <!-- your favicon SVG -->
-                    </svg>
+                    <img class="conn-overlay-icon" src="/static/favicon.ico" alt="" />
 
                     <div class="conn-overlay-title">Connection Lost</div>
                     <div class="conn-overlay-subtitle">
@@ -352,7 +350,42 @@
           <span class="footer-version" id="ispy-version"></span>
         </div>
       </nav>
-      <main class="content">{% block content %}{% endblock %}</main>
+      <main class="content">
+        <div
+          id="offline-banner"
+          class="vision-banner vision-warn"
+          style="display: none"
+        >
+          <span id="offline-banner-text"></span>
+          <a href="/addons" style="margin-left: auto; color: inherit">add-ons</a>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            title="Hide for this session"
+            style="background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1"
+            onclick="dismissOfflineBanner('main')"
+          >
+            &times;
+          </button>
+        </div>
+        <div
+          id="offline-skip-banner"
+          class="vision-banner vision-bad"
+          style="display: none"
+        >
+          <span id="offline-skip-text"></span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            title="Hide for this session"
+            style="margin-left: auto; background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1"
+            onclick="dismissOfflineBanner('skip')"
+          >
+            &times;
+          </button>
+        </div>
+        {% block content %}{% endblock %}
+      </main>
     </div>
     <div class="toast-container" id="toast-container"></div>
     {% block scripts %}{% endblock %}
@@ -368,6 +401,70 @@
           if (el && j && j.version) el.textContent = "v" + j.version;
         })
         .catch(() => {});
+    </script>
+    <script>
+      // Offline mode banner: sticks around while offline, dismissible for the
+      // session (sessionStorage) per banner. game mode runs with the web UI
+      // off, so the log stays the source of truth there.
+      (function () {
+        const MAIN_KEY = "offline.banner.dismissed";
+        const SKIP_KEY = "offline.skip.dismissed";
+        const el = document.getElementById("offline-banner");
+        const skipEl = document.getElementById("offline-skip-banner");
+        if (!el || !skipEl) return;
+
+        function plural(n, word) {
+          return n + " " + word + (n === 1 ? "" : "s");
+        }
+
+        function render(j) {
+          if (!j || !j.offline) {
+            el.style.display = "none";
+            skipEl.style.display = "none";
+            return;
+          }
+          const reason = j.reason ? " (" + j.reason + ")" : "";
+          const skipped = j.skipped || [];
+          const degraded = j.degraded || [];
+          document.getElementById("offline-banner-text").textContent =
+            "Offline mode" +
+            reason +
+            ": " +
+            plural(skipped.length, "add-on") +
+            " skipped, " +
+            plural(degraded.length, "feature") +
+            " disabled";
+          el.style.display =
+            sessionStorage.getItem(MAIN_KEY) === "1" ? "none" : "";
+          if (skipped.length) {
+            document.getElementById("offline-skip-text").textContent =
+              "Skipped while offline: " +
+              skipped.map((s) => s.name || "?").join(", ") +
+              " - why?";
+            skipEl.style.display =
+              sessionStorage.getItem(SKIP_KEY) === "1" ? "none" : "";
+          } else {
+            skipEl.style.display = "none";
+          }
+        }
+
+        function poll() {
+          fetch("/api/network")
+            .then((r) => r.json())
+            .then(render)
+            .catch(() => {});
+        }
+
+        window.dismissOfflineBanner = function (which) {
+          sessionStorage.setItem(which === "skip" ? SKIP_KEY : MAIN_KEY, "1");
+          if (which === "skip") skipEl.style.display = "none";
+          else el.style.display = "none";
+        };
+
+        poll();
+        // the report grows while running (try_online degrades), so refresh it
+        setInterval(poll, 30000);
+      })();
     </script>
     <script>
       // showTimeWarning blocks the page behind a dark overlay until the

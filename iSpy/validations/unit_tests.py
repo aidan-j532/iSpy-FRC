@@ -1443,5 +1443,414 @@ class TestObjectResetRegression(unittest.TestCase):
         self.assertEqual(len(tracker.tracked_objects), 1)
 
 
+class TestOfflineNetworkPolicy(unittest.TestCase):
+    def tearDown(self):
+        from iSpy.core import network_policy
+
+        network_policy.set_offline(False)
+
+    def test_address_policy_truth_table(self):
+        from iSpy.core.network_policy import is_private_address
+
+        for host in (
+            "127.0.0.1",
+            "10.0.0.2",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.10.1",
+            "169.254.10.7",
+            "::1",
+            "fe80::1",
+            "fd12::1",
+            "::ffff:127.0.0.1",
+            "localhost",
+        ):
+            self.assertTrue(is_private_address(host), host)
+
+        for host in (
+            "8.8.8.8",
+            "172.15.0.1",  # just below the 172.16/12 block
+            "172.32.0.1",  # just above it
+            "192.169.0.1",
+            "2001:4860:4860::8888",
+            None,
+            "",
+        ):
+            self.assertFalse(is_private_address(host), host)
+
+    def test_unresolvable_hostname_counts_as_blocked(self):
+        from iSpy.core.network_policy import is_private_address
+
+        # while offline a name we cannot resolve might be anywhere - blocked
+        self.assertFalse(is_private_address("offline-policy-test.invalid"))
+
+    def test_socket_guard_blocks_public_and_clears(self):
+        import socket
+
+        from iSpy.core import network_policy
+
+        original_connect = network_policy._original_connect
+        try:
+            network_policy.set_offline(True, "unit-test")
+            self.assertTrue(network_policy.is_offline())
+            self.assertEqual(network_policy.offline_reason(), "unit-test")
+            self.assertIsNot(socket.socket.connect, original_connect)
+
+            with self.assertRaises(network_policy.OfflineError):
+                socket.getaddrinfo("8.8.8.8", 443)
+            with socket.socket() as probe:
+                with self.assertRaises(network_policy.OfflineError):
+                    probe.connect(("8.8.8.8", 443))
+
+            # loopback + LAN pass the guard. nothing listens on port 9, so a
+            # connection error is expected - an OfflineError is not.
+            for target in (("127.0.0.1", 9), ("10.0.0.2", 9)):
+                try:
+                    socket.create_connection(target, timeout=0.1)
+                except network_policy.OfflineError:
+                    self.fail(f"{target} must not be blocked while offline")
+                except OSError:
+                    pass
+        finally:
+            network_policy.set_offline(False)
+
+        self.assertFalse(network_policy.is_offline())
+        self.assertIs(socket.socket.connect, original_connect)
+        # and the original lookup works again
+        self.assertTrue(socket.getaddrinfo("127.0.0.1", 9))
+
+    def test_report_dedupes_and_clears_on_flip(self):
+        from iSpy.core import network_policy
+
+        network_policy.set_offline(True, "unit-test")
+        network_policy.record_skip("tracker", "probe", "needs internet")
+        network_policy.record_skip("tracker", "probe", "needs internet")
+        network_policy.record_degraded("pipeline", "cam", "feature", "reason")
+
+        report = network_policy.get_report()
+        self.assertTrue(report["offline"])
+        self.assertEqual(len(report["skipped"]), 1)
+        self.assertEqual(len(report["degraded"]), 1)
+        self.assertEqual(report["skipped"][0]["name"], "probe")
+
+        # flipping offline off must not leak the old run's report
+        network_policy.set_offline(False)
+        report = network_policy.get_report()
+        self.assertFalse(report["offline"])
+        self.assertEqual(report["skipped"], [])
+        self.assertEqual(report["degraded"], [])
+
+    def test_set_offline_is_idempotent_and_keeps_first_reason(self):
+        import logging
+
+        from iSpy.core import network_policy
+
+        network_policy.set_offline(True, "config")
+
+        records = []
+
+        class _Handler(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        handler = _Handler()
+        policy_logger = logging.getLogger("iSpy.core.network_policy")
+        policy_logger.addHandler(handler)
+        try:
+            # game mode arming on top of an already-offline boot must not
+            # re-log or change the reason (no double-warn)
+            network_policy.set_offline(True, "game_mode")
+        finally:
+            policy_logger.removeHandler(handler)
+
+        self.assertEqual(network_policy.offline_reason(), "config")
+        on_lines = [
+            r.getMessage()
+            for r in records
+            if r.getMessage().startswith("Offline mode ON")
+        ]
+        self.assertEqual(on_lines, [])
+
+
+class TestOfflineGate(unittest.TestCase):
+    def tearDown(self):
+        from iSpy.core import network_policy
+
+        network_policy.set_offline(False)
+
+    def _gate(self, cls, name="probe", group="tracker", logger=None):
+        import logging
+
+        from iSpy.iSpy import iSpy
+
+        inst = iSpy.__new__(iSpy)
+        inst.logger = logger or logging.getLogger("iSpy.validations.offline_test")
+        return iSpy._gate_addon(inst, group, name, cls, {})
+
+    def _requirement_class(self):
+        from iSpy.core.network_policy import NetworkRequirement
+        from iSpy.plugins.bases import AddonBase
+
+        class _Needy(AddonBase):
+            plugin_name = "test/needy"
+
+            @classmethod
+            def network_requirements(cls, settings):
+                return [
+                    NetworkRequirement("weights", "downloads weights", critical=True)
+                ]
+
+        return _Needy
+
+    def test_critical_requirement_is_skipped_not_raised(self):
+        import logging
+
+        from iSpy.core import network_policy
+
+        needy = self._requirement_class()
+        network_policy.set_offline(True, "unit-test")
+
+        gate_logger = logging.getLogger("iSpy.validations.offline_test")
+        with self.assertLogs(gate_logger, level="WARNING") as logs:
+            allowed = self._gate(needy, logger=gate_logger)
+
+        self.assertFalse(allowed, "a critical need must keep the add-on unconstructed")
+        self.assertTrue(
+            any("skipping tracker 'probe'" in line for line in logs.output),
+            logs.output,
+        )
+
+        report = network_policy.get_report()
+        self.assertEqual([s["name"] for s in report["skipped"]], ["probe"])
+        self.assertIn("downloads weights", report["skipped"][0]["reason"])
+
+        # online, the very same add-on loads as normal
+        network_policy.set_offline(False)
+        self.assertTrue(self._gate(needy))
+
+    def test_optional_requirement_degrades_but_keeps_the_addon(self):
+        from iSpy.core import network_policy
+        from iSpy.core.network_policy import NetworkRequirement
+        from iSpy.plugins.bases import AddonBase
+
+        class _Partial(AddonBase):
+            plugin_name = "test/partial"
+
+            @classmethod
+            def network_requirements(cls, settings):
+                return [
+                    NetworkRequirement("sync", "online sync only", critical=False)
+                ]
+
+        network_policy.set_offline(True, "unit-test")
+        self.assertTrue(self._gate(_Partial, name="partial", group="utility"))
+
+        report = network_policy.get_report()
+        self.assertEqual(report["skipped"], [])
+        self.assertEqual(len(report["degraded"]), 1)
+        self.assertEqual(report["degraded"][0]["feature"], "sync")
+
+    def test_broken_requirements_do_not_break_boot(self):
+        from iSpy.core import network_policy
+        from iSpy.plugins.bases import AddonBase
+
+        class _Broken(AddonBase):
+            plugin_name = "test/broken"
+
+            @classmethod
+            def network_requirements(cls, settings):
+                raise RuntimeError("boom")
+
+        network_policy.set_offline(True, "unit-test")
+        # raising here would take the whole boot down - it must not
+        self.assertTrue(self._gate(_Broken, name="broken"))
+
+    def test_needs_internet_shortcut(self):
+        from iSpy.core import network_policy
+        from iSpy.plugins.bases import AddonBase
+
+        class _Flagged(AddonBase):
+            plugin_name = "test/flagged"
+            needs_internet = True
+
+        reqs = _Flagged.network_requirements({})
+        self.assertEqual(len(reqs), 1)
+        self.assertTrue(reqs[0].critical)
+        self.assertEqual(AddonBase.network_requirements({}), [])
+
+        network_policy.set_offline(True, "unit-test")
+        self.assertFalse(self._gate(_Flagged, name="flagged"))
+
+    def test_conditional_requirement_reads_settings(self):
+        from iSpy.core.network_policy import NetworkRequirement
+        from iSpy.plugins.bases import AddonBase
+
+        class _Conditional(AddonBase):
+            plugin_name = "test/conditional"
+
+            @classmethod
+            def network_requirements(cls, settings):
+                if settings.get("remote_log"):
+                    return [
+                        NetworkRequirement("remote log", "posts to a server", True)
+                    ]
+                return []
+
+        self.assertEqual(_Conditional.network_requirements({}), [])
+        self.assertEqual(_Conditional.network_requirements({"remote_log": False}), [])
+        reqs = _Conditional.network_requirements({"remote_log": True})
+        self.assertEqual(len(reqs), 1)
+
+    def test_try_online_falls_back_offline_and_recovers(self):
+        from iSpy.core import network_policy
+        from iSpy.plugins.bases import AddonBase
+
+        class _Helper(AddonBase):
+            plugin_name = "test/helper"
+
+        helper = _Helper.__new__(_Helper)
+        network_policy.set_offline(True, "unit-test")
+
+        calls = []
+        self.assertEqual(
+            helper.try_online("lookup", lambda: calls.append(1), fallback="fb"),
+            "fb",
+        )
+        self.assertEqual(calls, [], "fn must not run while offline")
+        self.assertFalse(helper.network_allowed)
+        with self.assertRaises(network_policy.OfflineError):
+            helper.require_network("downloading a thing")
+
+        report = network_policy.get_report()
+        self.assertEqual(report["degraded"][0]["feature"], "lookup")
+
+        network_policy.set_offline(False)
+        self.assertTrue(helper.network_allowed)
+        self.assertEqual(helper.try_online("lookup", lambda: "ok"), "ok")
+
+    def test_depth_anything_requirement_is_cache_conditional(self):
+        from iSpy.vision.pipelines import depth_anything as da
+
+        with (
+            patch.object(da, "_depth_weights_cached", return_value=False),
+            patch(
+                "iSpy.vision.pipelines.optimizable.offline_build_requirements",
+                return_value=[],
+            ),
+        ):
+            reqs = da.DepthAnythingPipeline.network_requirements({})
+        self.assertTrue(any(r.critical for r in reqs), reqs)
+
+        with (
+            patch.object(da, "_depth_weights_cached", return_value=True),
+            patch(
+                "iSpy.vision.pipelines.optimizable.offline_build_requirements",
+                return_value=[],
+            ),
+        ):
+            reqs = da.DepthAnythingPipeline.network_requirements({})
+        self.assertEqual(reqs, [])
+
+    def test_yolo_world_requires_weights_on_disk(self):
+        from iSpy.vision.pipelines import yolo_world as yw
+
+        asset = Path(yw.__file__).resolve().parents[2] / "assets" / "yolo-world.pt"
+        if asset.exists():
+            self.skipTest("bundled yolo-world asset is present")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(yw, "_WORLD_MODEL_DIR", Path(tmp)):
+                reqs = yw.YoloWorldPipeline.network_requirements({"model_size": "s"})
+
+        self.assertTrue(any(r.critical for r in reqs), reqs)
+
+
+class TestOfflineWebSurface(unittest.TestCase):
+    def tearDown(self):
+        from iSpy.core import network_policy
+
+        network_policy.set_offline(False)
+
+    def test_network_endpoint_payload_shape(self):
+        from flask import Flask
+
+        from iSpy.core import network_policy
+        from iSpy.web.Backend.PluginStatus import PluginStatusModule
+
+        network_policy.set_offline(True, "unit-test")
+        network_policy.record_skip("tracker", "probe", "needs internet")
+        network_policy.record_degraded("pipeline", "cam", "feature", "why")
+
+        app = Flask(__name__)
+        PluginStatusModule({"config": None}).register_routes(app)
+        resp = app.test_client().get("/api/network")
+        self.assertEqual(resp.status_code, 200)
+
+        payload = resp.get_json()
+        self.assertTrue(payload["offline"])
+        self.assertEqual(payload["reason"], "unit-test")
+        self.assertEqual(payload["skipped"][0]["name"], "probe")
+        self.assertEqual(payload["degraded"][0]["feature"], "feature")
+
+    def test_offline_declaration_warning_scan(self):
+        from iSpy.web.Backend.PluginStatus import _offline_declaration_warning
+
+        sneaky = "import requests\n\n\nclass X:\n    pass\n"
+        self.assertIsNotNone(_offline_declaration_warning(sneaky))
+
+        flagged = "import aiohttp\n\n\nclass X:\n    needs_internet = True\n"
+        self.assertIsNone(_offline_declaration_warning(flagged))
+
+        declaring = (
+            "import urllib.request\n\n\nclass X:\n"
+            "    @classmethod\n"
+            "    def network_requirements(cls, settings):\n"
+            "        return []\n"
+        )
+        self.assertIsNone(_offline_declaration_warning(declaring))
+
+        clean = "import numpy as np\n\n\nclass X:\n    pass\n"
+        self.assertIsNone(_offline_declaration_warning(clean))
+
+        self.assertIsNone(_offline_declaration_warning("def broken(:\n"))
+
+
+class TestGameModeOfflineOverride(unittest.TestCase):
+    def tearDown(self):
+        from iSpy.core import network_policy
+
+        network_policy.set_offline(False)
+
+    def test_game_mode_forces_offline_without_persisting_it(self):
+        import json
+
+        from iSpy.boot import boot
+        from iSpy.config.iSpyConfig import iSpyConfig
+        from iSpy.core import network_policy
+
+        self.assertFalse(network_policy.is_offline())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            with _QuietLogging():
+                config = iSpyConfig(str(path), create=True)
+            config.set("game_mode_web_off_next_run", True)
+            config.save(quiet=True)
+
+            boot._consume_game_mode_web_off(config)
+
+            # the one-shot run is offline in this process...
+            self.assertTrue(network_policy.is_offline())
+            self.assertEqual(network_policy.offline_reason(), "game_mode")
+            # ...but nothing about it reaches config.json, so a crash can
+            # never leave offline_mode stuck on
+            self.assertFalse(bool(config.get("offline_mode", False)))
+            saved = json.loads(path.read_text(encoding="utf-8-sig"))
+            self.assertFalse(bool(saved.get("offline_mode", False)))
+            self.assertFalse(bool(saved.get("game_mode_web_off_next_run", True)))
+            self.assertFalse(bool(saved.get("app_mode", True)))
+            self.assertTrue(bool(saved.get("game_mode_app_mode_backup", False)))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

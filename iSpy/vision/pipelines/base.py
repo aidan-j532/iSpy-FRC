@@ -285,6 +285,45 @@ class VisionPipeline(Camera, VisionBase):
         return None
 
 
+class OfflineUnavailablePipeline(VisionPipeline):
+    """Stand-in camera for a pipeline whose critical internet need is unmet.
+
+    The camera still shows up in the UI (feed, health, status) so the user
+    reads "needs internet" instead of a camera silently vanishing or a trace
+    in the log; run() just returns the raw frame without any detection.
+    """
+
+    plugin_name = "offline"
+    calibration_sections = []
+
+    def __init__(self, camera_config, config, reason: str):
+        self._offline_reason = str(reason or "needs the internet")
+        self._ispy_config = config
+        super().__init__(
+            camera_config,
+            (640, 480),
+            bool(camera_config.get("grayscale", False)),
+        )
+
+    def is_ready(self) -> tuple[bool, str]:
+        return False, f"error: needs internet - {self._offline_reason}"
+
+    def get_status(self) -> str:
+        return f"error: needs internet - {self._offline_reason}"
+
+    def get_health(self) -> dict:
+        # skipping is intentional in offline mode, so warn - not error
+        return {
+            "color": "yellow",
+            "state": f"needs internet - {self._offline_reason}",
+            "metrics": [],
+        }
+
+    def run(self):
+        frame = self.get_frame()
+        return [], frame
+
+
 class BackgroundPreparedPipeline(VisionPipeline):
     def __init__(self, camera_config, input_size, grayscale):
         self._prep_thread: threading.Thread | None = None

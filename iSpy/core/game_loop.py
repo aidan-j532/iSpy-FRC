@@ -49,6 +49,24 @@ from iSpy.config.iSpyConfig import iSpyConfig
 logger = logging.getLogger("iSpy.core.game_loop")
 
 
+def _init_offline_mode(config) -> None:
+    # both launch paths (ispy start, and the service daemon running this
+    # module directly) end up here, so the policy has to be armed here - not
+    # only in boot.on_boot, which the daemon path never calls.
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        # boot already armed it for this process (Game Mode), or ISPY_OFFLINE
+        # came in from a parent - never downgrade either back to the config
+        return
+    try:
+        enabled = bool(config.get("offline_mode", False))
+    except Exception:
+        enabled = False
+    if enabled:
+        network_policy.set_offline(True, "config")
+
+
 def main(config=None):
     # a replay passes the config boot already built in memory; anything else
     # loads its own from disk
@@ -57,6 +75,7 @@ def main(config=None):
         logger.info(f"Using config file: {config_path}")
 
         config = iSpyConfig(str(config_path))
+    _init_offline_mode(config)
     vision = iSpy(config)
     vision.run()
 

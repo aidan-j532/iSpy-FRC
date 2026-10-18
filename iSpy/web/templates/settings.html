@@ -165,6 +165,26 @@ block content %}
     </div>
 
     <div class="form-row">
+      <span class="form-label">Offline Mode</span>
+
+      <select class="form-input" data-key="offline_mode" data-restart="true">
+        <option value="true">Enabled</option>
+
+        <option value="false">Disabled</option>
+      </select>
+
+      <span class="restart-badge" style="display: none">restart required</span>
+
+      <span class="text-dim text-sm"
+        >Blocks the public internet only. NetworkTables to the robot, the
+        dashboard port, loopback, mDNS and the Tello keep working. Add-ons that
+        need the internet are skipped with a warning; one that only loses an
+        optional feature keeps running. Game Mode forces this on for its
+        one-shot run (never saved to the config).</span
+      >
+    </div>
+
+    <div class="form-row">
       <span class="form-label">Admin Mode</span>
 
       <select class="form-input" data-key="admin">
@@ -223,7 +243,9 @@ block content %}
         class="text-dim"
         style="margin-left: 8px; font-size: 0.8rem"
       >
-        Web dashboard off for one boot, then back automatically.
+        Web dashboard off for one boot, then back automatically. Offline mode
+        is forced on for that boot too (in memory only - it can never get stuck
+        on in the config).
       </span>
     </div>
 
@@ -313,6 +335,16 @@ block content %}
 
     // Best-effort live license from PyPI, with a short timeout so an offline
     // box never blocks (the static value above is authoritative anyway).
+    // Offline mode: do not even fire the request - it could only fail.
+    try {
+      const nr = await fetch("/api/network");
+
+      const nj = await nr.json();
+
+      if (nj && nj.offline) return;
+    } catch (e) {
+      /* no offline endpoint - fall through and try the fetch */
+    }
     try {
       const ctrl = new AbortController();
 
@@ -370,7 +402,7 @@ block content %}
 
   let defaultsData = {};
 
-  const BOOL_KEYS = new Set(["frame_sync", "metrics", "debug_mode", "admin"]);
+  const BOOL_KEYS = new Set(["frame_sync", "metrics", "debug_mode", "admin", "offline_mode"]);
 
   function parseValue(el) {
     const val = el.value;

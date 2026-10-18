@@ -729,6 +729,19 @@ def converter_python() -> Path:
         # before attempting a potentially large converter installation, so a
         # repeated provisioning failure can never keep accumulating stale envs.
         _cleanup_orphans(_identity_hash(identity))
+        # offline mode: provisioning pip-installs the RKNN toolkit, which can
+        # never succeed without the internet - fail with an actionable reason
+        # instead of a pip retry/timeout traceback, and let the caller fall
+        # back to the .pt
+        from iSpy.core import network_policy
+
+        if network_policy.is_offline():
+            raise ConverterEnvError(
+                "the RKNN converter environment is not provisioned and "
+                "offline mode is on - provisioning it needs pip downloads. "
+                "Convert the model on a machine with internet (or copy a "
+                "provisioned env over), or turn offline mode off and reboot."
+            )
         py = _provision(env_dir)
         _cleanup_orphans(_identity_hash(identity))
         return py

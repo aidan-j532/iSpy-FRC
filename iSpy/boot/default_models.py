@@ -75,6 +75,8 @@ def _download_one(name: str, url: str, target: Path) -> bool:
 
 
 def download_default_models(fresh: bool = False) -> dict[str, Path]:
+    from iSpy.core import network_policy
+
     _DEFAULT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
     present: dict[str, Path] = {}
 
@@ -84,6 +86,18 @@ def download_default_models(fresh: bool = False) -> dict[str, Path]:
         if not fresh and target.exists() and target.stat().st_size >= _MIN_MODEL_BYTES:
             logger.info("Default model %s already present - skipping download", name)
             present[name] = target
+            continue
+
+        if network_policy.is_offline():
+            # only warn about models that are actually missing - a cached set
+            # boots silently, and the warning is one line per absent model,
+            # not a retry storm
+            logger.warning(
+                "Offline mode: default model %s is missing and cannot be "
+                "downloaded - the pipeline that uses it will report the "
+                "missing model.",
+                name,
+            )
             continue
 
         if not url:

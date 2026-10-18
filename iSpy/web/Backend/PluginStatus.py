@@ -9,6 +9,7 @@ from pathlib import Path
 from flask import jsonify, render_template, request
 
 import iSpy.plugins as _plugins_pkg
+from iSpy.core import network_policy
 from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import (
     FrameProcessorBase,
@@ -197,6 +198,103 @@ def _active_pipeline_names(config) -> set:
     return names
 
 
+def _network_info(cls, settings_list: list[dict]) -> dict:
+    """Evaluate an add-on's declared internet needs for the addons page.
+
+    Requirements are settings-aware (a cached model needs no internet), so
+    they are evaluated against the current settings - one entry per camera,
+    or the add-on's own settings. Missing reasons under offline mode show up
+    as "skipped"/"degraded" badges; otherwise the row just gets the plain
+    "needs internet" note.
+    """
+    critical: list[str] = []
+    optional: list[str] = []
+    for settings in settings_list or [{}]:
+        try:
+            reqs = list(cls.network_requirements(settings or {}) or [])
+        except Exception:
+            reqs = []
+        for req in reqs:
+            bucket = critical if req.critical else optional
+            if req.reason not in bucket:
+                bucket.append(req.reason)
+    offline = network_policy.is_offline()
+    return {
+        "needs_internet": bool(critical or optional),
+        "critical": critical,
+        "optional": optional,
+        # the loader skips critical add-ons while offline; optional needs
+        # only turn one feature off
+        "skipped": offline and bool(critical),
+        "degraded": offline and not critical and bool(optional),
+    }
+
+
+def _pipeline_settings_list(config, name: str) -> list[dict]:
+    out: list[dict] = []
+    try:
+        for cam in (getattr(config, "camera_configs", None) or {}).values():
+            if cam.pipeline_name() == name:
+                out.append(dict(cam.pipeline_settings() or {}))
+    except Exception:
+        out = []
+    return out or [{}]
+
+
+# libraries that only ever exist to talk to the internet - uploaded add-on
+# code importing one of these with no offline declaration gets a warning
+_NETWORK_IMPORT_ROOTS = ("requests", "urllib", "httpx", "aiohttp")
+
+
+def _offline_declaration_warning(code: str) -> str | None:
+    """Best-effort AST scan: networked add-on without an offline declaration.
+
+    A warning (never a rejection) - the source may be doing something clever,
+    and worst case the process-wide socket guard still stops it while
+    offline.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+
+    imports_network = False
+    for node in ast.walk(tree):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        for full in names:
+            root = full.split(".")[0]
+            if root in _NETWORK_IMPORT_ROOTS or full.startswith("http."):
+                imports_network = True
+
+    if not imports_network:
+        return None
+
+    declares = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "network_requirements":
+            declares = True
+            break
+        if isinstance(node, ast.Assign):
+            if any(
+                isinstance(target, ast.Name) and target.id == "needs_internet"
+                for target in node.targets
+            ):
+                declares = True
+                break
+
+    if declares:
+        return None
+    return (
+        "This add-on imports network libraries but declares no offline "
+        "behavior - set needs_internet = True or implement "
+        "network_requirements() so offline mode can gate it."
+    )
+
+
 class PluginStatusModule(WebModule):
     plugin_name = "plugin_status"
 
@@ -214,6 +312,9 @@ class PluginStatusModule(WebModule):
         )
         flask_app.add_url_rule(
             "/api/plugins/available", "api_plugins_available", self._available
+        )
+        flask_app.add_url_rule(
+            "/api/network", "api_network", self._network
         )
         flask_app.add_url_rule(
             "/api/plugins/toggle", "api_plugins_toggle", self._toggle, methods=["POST"]
@@ -281,6 +382,11 @@ class PluginStatusModule(WebModule):
     def _vision_pipelines(self):
         return jsonify(pipelines=_build_vision_pipeline_payloads())
 
+    def _network(self):
+        # base.html polls this for the offline banner; skipped/degraded grow
+        # as boot and the run loop record them
+        return jsonify(network_policy.get_report())
+
     def _available(self):
         config = self.context.get("config")
         active_pipelines = _active_pipeline_names(config)
@@ -304,6 +410,9 @@ class PluginStatusModule(WebModule):
                             "beta": bool(getattr(cls, "beta", False)),
                             "doc": (cls.__doc__ or "").strip()[:200],
                             "filename": f"{name}.py",
+                            "network": _network_info(
+                                cls, _pipeline_settings_list(config, name)
+                            ),
                         }
                     )
                 continue
@@ -350,6 +459,9 @@ class PluginStatusModule(WebModule):
                         "pipeline_warning": sorted(active_pipelines - set(supported))
                         if supported
                         else [],
+                        "network": _network_info(
+                            cls, [settings if isinstance(settings, dict) else {}]
+                        ),
                     }
                 )
         return jsonify(available=available)
@@ -687,6 +799,7 @@ class PluginStatusModule(WebModule):
         err = self._validate_addon_source(ptype, code, None)
         if err:
             return jsonify(error=err), 400
+        warning = _offline_declaration_warning(code)
 
         subdir = _TYPE_MAP[ptype][0]
         path = self._resolve_safe_path(subdir, filename)
@@ -707,6 +820,7 @@ class PluginStatusModule(WebModule):
             success=True,
             filename=path.name,
             note="Add-on saved. Restart vision to detect and enable it.",
+            warning=warning,
         )
 
     def _upload(self):
@@ -729,6 +843,7 @@ class PluginStatusModule(WebModule):
         err = self._validate_addon_source(ptype, code, None)
         if err:
             return jsonify(error=err), 400
+        warning = _offline_declaration_warning(code)
 
         subdir = _TYPE_MAP[ptype][0]
         path = self._resolve_safe_path(subdir, f.filename)
@@ -751,6 +866,7 @@ class PluginStatusModule(WebModule):
             success=True,
             filename=path.name,
             note="Add-on uploaded. Restart vision to detect and enable it.",
+            warning=warning,
         )
 
     def _delete(self, ptype, name):

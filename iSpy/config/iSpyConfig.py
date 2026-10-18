@@ -332,6 +332,12 @@ class iSpyConfig:
             # back so the web UI comes on again automatically.
             "game_mode_web_off_next_run": False,
             "game_mode_app_mode_backup": None,
+            # Blocks traffic to the public internet only - loopback, the robot
+            # LAN (NetworkTables, dashboard), mDNS and the Tello keep working.
+            # Game Mode forces this on for its one-shot run WITHOUT saving it
+            # here, and add-ons that only need the net for niceties keep
+            # running with those parts disabled.
+            "offline_mode": False,
             "max_fps": 0,
             # reset to False by every `boot -f` (fresh install) so the web UI
             # shows its first-run tutorial once until the user dismisses it.
