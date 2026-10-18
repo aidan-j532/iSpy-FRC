@@ -1113,12 +1113,15 @@ class GenericYolo:
 
         self.model = engine
         self._engine_context = engine.create_execution_context()
+        if self._engine_context is None:
+            raise ValueError(
+                f"TensorRT failed to create an execution context: {model_file}"
+            )
         self._engine_stream = None
         self._engine_buffers = {}  # name -> torch tensor
-        self._engine_bindings = []
-        self._engine_input_names = []
-        self._engine_output_names = []
-        self._engine_output_buffers = []
+        from iSpy.vision.engine_utils import engine_io_names
+
+        self._engine_input_names, self._engine_output_names = engine_io_names(engine)
         self.logger.info(
             "Loaded TensorRT engine from %s (device %s)", model_file, self.device
         )
@@ -1272,72 +1275,45 @@ class GenericYolo:
         )
 
     def _run_engine(self, frame: np.ndarray, orig_shape) -> Results:
-        import tensorrt as trt
         import torch
+
+        from iSpy.vision.engine_utils import (
+            bind_engine_io,
+            execute_bound_async_v3,
+        )
 
         inp = self._preprocess_frame(frame)
         engine = self.model
         context = self._engine_context
+        if context is None:
+            raise RuntimeError(
+                "TensorRT execution context missing - engine failed to load"
+            )
         device_index = int(self.device) if isinstance(self.device, int) else 0
-        if device_index < 0 or (torch.cuda.is_available() and device_index >= torch.cuda.device_count()):
+        if device_index < 0 or (
+            torch.cuda.is_available() and device_index >= torch.cuda.device_count()
+        ):
             device_index = 0 if torch.cuda.is_available() else -1
 
         if self._engine_stream is None:
             cuda_device = torch.device(f"cuda:{device_index}")
             self._engine_stream = torch.cuda.Stream(device=cuda_device)
-            self._engine_buffers = {}
-            self._engine_input_names = []
-            self._engine_output_names = []
-            self._engine_output_buffers = []
-            self._engine_bindings = []
-            with torch.cuda.device(device_index):
-                for idx in range(engine.num_io_tensors):
-                    name = engine.get_tensor_name(idx)
-                    mode = engine.get_tensor_mode(name)
-                    if mode == trt.TensorIOMode.INPUT:
-                        self._engine_input_names.append(name)
-                    else:
-                        self._engine_output_names.append(name)
+            self._engine_buffers = {}  # name -> torch tensor, reused across calls
 
-        cuda_device = torch.device(f"cuda:{device_index}")
+        # feed the same preprocessed frame to every declared input; real
+        # engines are single-input but multi-input plans shouldn't silently
+        # bind an empty name
+        inputs = {name: inp for name in self._engine_input_names}
+        output_names = bind_engine_io(
+            engine, context, inputs, self._engine_buffers, device=device_index
+        )
+
         with torch.cuda.device(device_index), torch.cuda.stream(self._engine_stream):
-            for name in self._engine_input_names:
-                if name not in self._engine_buffers:
-                    dtype = np.dtype(trt.nptype(engine.get_tensor_dtype(name)))
-                    torch_dtype = torch.from_numpy(np.empty((), dtype=dtype)).dtype
-                    self._engine_buffers[name] = torch.empty(
-                        inp.shape,
-                        dtype=torch_dtype,
-                        device=cuda_device,
-                    )
-                self._engine_buffers[name].copy_(torch.from_numpy(inp).to(device=cuda_device))
-
-            for idx in range(engine.num_io_tensors):
-                name = engine.get_tensor_name(idx)
-                if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                    context.set_input_shape(name, inp.shape)
-                    continue
-                shape = tuple(context.get_tensor_shape(name))
-                if any(s < 0 for s in shape):
-                    raise RuntimeError(f"TensorRT output {name} has unresolved shape {shape}")
-                if name not in self._engine_buffers:
-                    dtype = np.dtype(trt.nptype(engine.get_tensor_dtype(name)))
-                    torch_dtype = torch.from_numpy(np.empty((), dtype=dtype)).dtype
-                    buf = torch.empty(shape, dtype=torch_dtype, device=cuda_device)
-                    self._engine_buffers[name] = buf
-                    self._engine_output_buffers.append(buf)
-
-            bindings = []
-            for idx in range(engine.num_io_tensors):
-                name = engine.get_tensor_name(idx)
-                bindings.append(self._engine_buffers[name].data_ptr())
-            self._engine_bindings = bindings
-
-            context.execute_async_v3(stream_handle=self._engine_stream.cuda_stream)
+            execute_bound_async_v3(context, self._engine_stream.cuda_stream)
 
         self._engine_stream.synchronize()
 
-        outputs = [buf.cpu().numpy() for buf in self._engine_output_buffers]
+        outputs = [self._engine_buffers[name].cpu().numpy() for name in output_names]
         return self.postprocess(outputs, orig_shape)
 
     def _run_openvino(self, frame: np.ndarray, orig_shape) -> Results:
@@ -1530,15 +1506,33 @@ class GenericYolo:
             img_rgb = cv2.resize(img_rgb, (target_w, target_h))
         return np.ascontiguousarray(img_rgb, dtype=np.uint8)
 
-    def _tpu_sync(self) -> None:
+    def _tpu_sync(self, wait: bool = True, output=None) -> None:
+        # xla work is async - a timer that doesn't block measures dispatch
+        # overhead, not inference, so the benchmark path must actually wait
         import torch_xla
         import torch_xla.core.xla_model as xm
 
         sync = getattr(torch_xla, "sync", None)
         if callable(sync):
-            sync()
-        else:
-            xm.mark_step()
+            try:
+                sync(wait=wait)
+            except TypeError:
+                # old torch_xla.sync() has no wait kwarg; it still blocks
+                sync()
+            return
+
+        # torch_xla < 2.0 only has mark_step(), which does NOT guarantee the
+        # device finished - force completion via a real data read instead of
+        # pretending the dispatch time was the latency
+        xm.mark_step()
+        if output is not None:
+            output.cpu()
+        elif wait and not getattr(self, "_tpu_sync_warned", False):
+            self._tpu_sync_warned = True
+            self.logger.warning(
+                "torch_xla.sync() unavailable; mark_step() does not block, so "
+                "timings may reflect dispatch overhead rather than TPU latency"
+            )
 
     def _tpu_autocast(self, torch):
         if self.tpu_dtype == "bf16":
@@ -1575,7 +1569,9 @@ class GenericYolo:
             output = self.model(tensor)
         if isinstance(output, (list, tuple)):
             output = output[0]
-        self._tpu_sync()
+        # hand the output over so the legacy mark_step() path can force a real
+        # device wait (materializing the tensor) instead of just dispatching
+        self._tpu_sync(output=output)
         output = output.to(dtype=torch.float32).cpu().numpy()
         return output[:actual_size]
 

@@ -368,6 +368,22 @@ def _has_openvino() -> bool:
         return False
 
 
+def _ort_gpu_provider() -> str | None:
+    # onnxruntime silently falls back to CPU when the requested GPU EP isn't
+    # compiled in, so ask ORT what it can actually run before labelling a run
+    # "CUDA". Returns the EP name that would really execute, else None.
+    try:
+        import onnxruntime as ort
+
+        available = ort.get_available_providers()
+    except ImportError:
+        return None
+    for ep in ("CUDAExecutionProvider", "TensorrtExecutionProvider"):
+        if ep in available:
+            return ep
+    return None
+
+
 def detect_test_plan() -> dict:
     # --all-backends: prospect every backend this box can run, not just the one
     # backend auto-opt would pick. every gate is a hardware check, so a backend
@@ -379,9 +395,16 @@ def detect_test_plan() -> dict:
         plan["tpu"] = ("tpu", "tpu", [(None, "TPU")])
     if has_nvidia():
         cuda_devs = _cuda_devices()
+        ort_gpu = _ort_gpu_provider()
         for dev, label in cuda_devs:
             plan[f"pt_{label.lower()}"] = ("pt", dev, [(None, label)])
-            plan[f"onnx_{label.lower()}"] = ("onnx", dev, [(None, f"ONNX-{label}")])
+            if ort_gpu:
+                plan[f"onnx_{label.lower()}"] = ("onnx", dev, [(None, f"ONNX-{label}")])
+            else:
+                print(
+                    f"  [skip] ONNX-{label}: no GPU execution provider in this "
+                    "onnxruntime build - would run on CPU, not labelling it GPU"
+                )
         if has_tensorrt():
             dev, label = cuda_devs[0]
             plan[f"engine_{label.lower()}"] = ("engine", dev, [(None, "TensorRT")])
@@ -423,10 +446,15 @@ def _recommended_backend_plan() -> dict[str, tuple]:
         fmt = "onnx"
 
     if fmt == "onnx":
-        if has_nvidia():
+        if has_nvidia() and _ort_gpu_provider():
             dev = _cuda_devices()[0][0]
             label = "Auto/ONNX-CUDA"
         else:
+            if has_nvidia():
+                print(
+                    "  [note] NVIDIA GPU present but this onnxruntime has no GPU "
+                    "execution provider - auto backend will run ONNX on CPU"
+                )
             dev = "cpu"
             label = "Auto/ONNX-CPU"
     elif fmt == "engine":
@@ -735,40 +763,32 @@ def _benchmark_model_forward(model, frames: list, batch_size: int) -> dict | Non
                     model._onnx_out_names, {model._onnx_inp_name: prepared}
                 )
         else:
-            import tensorrt as trt
             import torch
+
+            from iSpy.vision.engine_utils import (
+                bind_engine_io,
+                execute_bound_async_v3,
+            )
 
             engine = model.model
             context = engine.create_execution_context()
-            device = f"cuda:{model.device}"
-            buffers = []
-            bindings = []
-            with torch.cuda.device(model.device):
-                for index in range(engine.num_io_tensors):
-                    name = engine.get_tensor_name(index)
-                    dtype = np.dtype(trt.nptype(engine.get_tensor_dtype(name)))
-                    if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                        context.set_input_shape(name, prepared.shape)
-                        buffer = torch.from_numpy(
-                            np.ascontiguousarray(prepared, dtype=dtype)
-                        ).to(device=device)
-                    else:
-                        shape = tuple(context.get_tensor_shape(name))
-                        if any(size < 0 for size in shape):
-                            raise RuntimeError(
-                                f"TensorRT output {name!r} has unresolved shape "
-                                f"{shape}"
-                            )
-                        torch_dtype = torch.from_numpy(np.empty((), dtype=dtype)).dtype
-                        buffer = torch.empty(shape, dtype=torch_dtype, device=device)
-                    buffers.append(buffer)
-                    bindings.append(buffer.data_ptr())
+            if context is None:
+                raise RuntimeError("TensorRT failed to create a benchmark context")
+            device = model.device if isinstance(model.device, int) else 0
+            stream = torch.cuda.Stream(device=torch.device(f"cuda:{device}"))
+            buffers: dict = {}
+            bind_engine_io(
+                engine,
+                context,
+                {model._engine_input_names[0]: prepared},
+                buffers,
+                device=device,
+            )
 
             def infer():
-                if not context.execute_v2(bindings):
-                    raise RuntimeError("TensorRT execute_v2 returned false")
+                execute_bound_async_v3(context, stream.cuda_stream)
 
-            synchronize = partial(torch.cuda.synchronize, device)
+            synchronize = stream.synchronize
 
     for _ in range(3):
         infer()
@@ -843,6 +863,22 @@ def _benchmark_stream(
         provider = getattr(model, "provider", None) or getattr(
             model, "model_type", str(getattr(model, "device", "unknown"))
         )
+        # never let a run labelled for the GPU quietly report CPU numbers: if
+        # the caller asked for a CUDA device but ORT fell back to CPU, fail
+        # loudly with the effective providers so the report is honest
+        if (
+            getattr(model, "model_type", None) == "onnx"
+            and isinstance(getattr(model, "device", None), int)
+        ):
+            effective = list(getattr(model.model, "get_providers", list)() or [])
+            if effective and not (
+                {"CUDAExecutionProvider", "TensorrtExecutionProvider"} & set(effective)
+            ):
+                raise RuntimeError(
+                    f"ONNX run labelled CUDA (device {model.device}) but "
+                    f"onnxruntime fell back to {effective}. Install an "
+                    "onnxruntime build with the CUDA EP or rerun as CPU."
+                )
         frame_index = 0
 
         def next_batch():
@@ -1387,13 +1423,15 @@ def main(argv=None):
                 )
                 continue
             if fallback_fmt:
-                device = _cuda_devices()[0][0] if has_nvidia() else "cpu"
+                # only claim CUDA when this onnxruntime can really run it
+                use_ort_gpu = bool(has_nvidia() and _ort_gpu_provider())
+                device = _cuda_devices()[0][0] if use_ort_gpu else "cpu"
                 fmt = fallback_fmt
                 masks = [
                     (
                         mask,
                         "Auto/ONNX-CUDA (fallback)"
-                        if has_nvidia()
+                        if use_ort_gpu
                         else "Auto/ONNX-CPU (fallback)",
                     )
                     for mask, _ in masks

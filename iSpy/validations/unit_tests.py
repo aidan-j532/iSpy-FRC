@@ -84,12 +84,18 @@ class _FakeEngineContext:
     def __init__(self, shapes, output_name):
         self._shapes = dict(shapes)
         self._output_name = output_name
+        self._addresses = {}
 
     def set_input_shape(self, name, shape):
         self._shapes[name] = tuple(shape)
+        return True
 
     def get_tensor_shape(self, name):
         return self._shapes.get(name)
+
+    def set_tensor_address(self, name, ptr):
+        self._addresses[name] = ptr
+        return True
 
     def execute_v2(self, bindings):
         self.bindings = bindings
@@ -147,6 +153,7 @@ class _FakeTorchTensor:
     def __init__(self, array):
         self.array = array
         self.dtype = array.dtype
+        self.shape = array.shape
 
     def to(self, device):
         return self

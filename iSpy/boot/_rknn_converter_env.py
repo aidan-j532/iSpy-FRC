@@ -135,8 +135,11 @@ _LIGHT_VERIFY_SCRIPT = "\n".join(
 _LIGHT_VERIFY_INTERVAL = 24 * 60 * 60
 
 #: Minimum free disk space required before provisioning starts.  The full
-#: toolkit + torch + ultralytics install easily reaches ~4 GB.
-_MIN_FREE_BYTES = 6 * 1024 ** 3
+#: converter environment (toolkit + torch + ultralytics + pinned deps)
+#: occupies several gigabytes, and pip needs extra temporary space for
+#: unpacking and building, so require substantially more than the install
+#: size itself.
+_MIN_FREE_BYTES = 8 * 1024 ** 3
 
 #: pip/OS wordings that mean the disk filled up mid-install.  linux, mac and
 #: windows all phrase it differently, and pip wraps the OSError text as-is.
@@ -439,7 +442,16 @@ def _purge_pip_cache() -> bool:
 
 
 def _pip_install(py: Path, *requirements: str, no_deps: bool = False) -> None:
-    cmd = [str(py), "-m", "pip", "install", "--disable-pip-version-check", "--no-cache-dir"]
+    # --no-cache-dir: the converter stack is several GB of wheels; caching them
+    # next to the env is exactly the disk-fill this path keeps tripping over.
+    cmd = [
+        str(py),
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--no-cache-dir",
+    ]
     if no_deps:
         cmd.append("--no-deps")
     cmd.extend(requirements)
@@ -560,11 +572,14 @@ def _free_bytes(env_dir: Path) -> tuple[int, Path] | None:
 
 
 def _check_disk_space(env_dir: Path) -> None:
-    """Refuse to start a ~4 GB provisioning on a nearly-full disk.
+    """Refuse to start a multi-GB provisioning on a nearly-full disk.
 
-    Before giving up it purges the pip cache once - a machine that ran out of
-    space building the env is almost always sitting on gigabytes of cached
-    wheels, which is exactly what pip would re-download into anyway.
+    The full converter environment occupies several gigabytes and pip needs
+    extra temporary space for unpacking, so :data:`_MIN_FREE_BYTES` is well
+    above the raw install size.  Before giving up it purges the pip cache
+    once - a machine that ran out of space building the env is almost always
+    sitting on gigabytes of cached wheels, which is exactly what pip would
+    re-download into anyway.
     """
     probed = _free_bytes(env_dir)
     if probed is None:
@@ -594,17 +609,20 @@ def _check_disk_space(env_dir: Path) -> None:
         f"Not enough free disk space to build the RKNN converter "
         f"environment: {free / 1024 ** 3:.1f} GiB free on {base}, "
         f"need at least {_MIN_FREE_BYTES / 1024 ** 3:.1f} GiB. The pip cache "
-        "has already been purged. The full toolkit + torch + ultralytics "
-        "install is ~4 GB. Free space or point ISPY_RKNN_CONVERTER_HOME at a "
-        "different location."
+        "has already been purged. The full converter environment (toolkit + "
+        "torch + ultralytics + pinned deps) occupies several gigabytes, plus "
+        "extra temporary space for pip's unpack/build step. Free space or "
+        "point ISPY_RKNN_CONVERTER_HOME at a different location."
     )
 
 
 def _provision(env_dir: Path) -> Path:
     """Create and populate the converter environment at *env_dir*."""
     _cache_root().mkdir(parents=True, exist_ok=True)
-    # Remove a partial build before checking free space; it may itself occupy
-    # several gigabytes and prevent the retry from passing the disk guard.
+    # Remove an incomplete environment before checking available space, so the
+    # disk-space check measures space available after the removal.  A previous
+    # failed provision may have left a partial environment behind - never let
+    # venv/pip grow a poisoned tree on top of it either.
     if env_dir.exists():
         shutil.rmtree(env_dir, ignore_errors=True)
         logger.info(
@@ -705,16 +723,14 @@ def converter_python() -> Path:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with _build_lock(lock_path):
         # Re-check under the lock - another process may have just built it.
-        current_hash = _identity_hash(identity)
         if _env_is_current(env_dir) and _light_verify(py, env_dir):
             return py
-
-        # Free obsolete Python/architecture/dependency-set environments BEFORE
-        # starting a large install. Otherwise a failed provision can leave old
-        # environments consuming space indefinitely.
-        _cleanup_orphans(current_hash)
+        # Free space consumed by old Python/architecture/dependency versions
+        # before attempting a potentially large converter installation, so a
+        # repeated provisioning failure can never keep accumulating stale envs.
+        _cleanup_orphans(_identity_hash(identity))
         py = _provision(env_dir)
-        _cleanup_orphans(current_hash)
+        _cleanup_orphans(_identity_hash(identity))
         return py
 
 
