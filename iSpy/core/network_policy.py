@@ -1,6 +1,3 @@
-# offline mode: blocks the public internet only - the robot LAN (NetworkTables,
-# dashboard, loopback, mDNS, Tello) keeps working. ISPY_OFFLINE=1 mirrors it to children
-
 import ipaddress
 import logging
 import os
@@ -28,10 +25,6 @@ class NetworkRequirement:
     name: str
     reason: str
     critical: bool = True
-
-
-# ---------------------------------------------------------------------------
-# state
 
 
 _lock = threading.RLock()
@@ -92,10 +85,6 @@ def offline_reason() -> str:
         return _reason
 
 
-# ---------------------------------------------------------------------------
-# report registry
-
-
 # an add-on was not loaded because offline mode blocks it
 def record_skip(kind: str, name: str, reason: str) -> None:
     _record_event("skipped", {"kind": kind, "name": name, "reason": reason})
@@ -135,12 +124,8 @@ def reset_report() -> None:
         _seen.clear()
 
 
-# ---------------------------------------------------------------------------
-# address policy
-
-
-#: everything offline mode may reach: loopback, RFC1918, link-local and the IPv6
-#: private ranges. fixed list - the spec is "the public internet is off"
+# everything offline mode may reach: loopback, RFC1918, link-local and the IPv6
+# private ranges. fixed list - the spec is "the public internet is off"
 _ALLOWED_NETWORKS = tuple(
     ipaddress.ip_network(net)
     for net in (
@@ -198,10 +183,8 @@ def is_private_address(host) -> bool:
     return all(_ip_is_local(ip) for ip in resolved)
 
 
-# ---------------------------------------------------------------------------
-# socket guard - catches third-party code (huggingface_hub, requests, urllib,
-# in-process pip) that would otherwise sail straight out of the LAN
-
+# catches third-party code (huggingface_hub, requests, urllib, in-process pip)
+# that would otherwise sail straight out of the LAN
 _guard_lock = threading.Lock()
 _guard_installed = False
 
@@ -264,9 +247,6 @@ def _remove_socket_guard() -> None:
         _guard_installed = False
         logger.debug("Offline socket guard removed.")
 
-
-# ---------------------------------------------------------------------------
-# error classification for try_online() callers
 
 _network_exceptions: tuple | None = None
 

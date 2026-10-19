@@ -616,7 +616,7 @@ def _purge_pip_cache() -> bool:
     return True
 
 
-#: pip/OS wordings that mean the disk filled up mid-install.
+# pip/OS wordings that mean the disk filled up mid-install.
 _SPACE_ERRORS = (
     "no space left",
     "errno 28",

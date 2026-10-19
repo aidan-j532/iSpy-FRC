@@ -9,8 +9,8 @@ from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
 
-#: the only color presets a health contributor may choose. Everything else
-#: falls back to green (or red when the legacy "ok": False flag is used).
+# the only color presets a health contributor may choose. anything else falls
+# back to green (or red when the legacy "ok": False flag is used)
 COLOR_PRESETS = ("green", "yellow", "red")
 
 

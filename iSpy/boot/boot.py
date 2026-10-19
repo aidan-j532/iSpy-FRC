@@ -641,8 +641,8 @@ def on_boot(
     _configure_quiet_logging()
     logger.info("ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix)
 
-    # recovery hatch for performance level 0: force the web UI on for this run
-    # without persisting anything, so the Settings slider stays reachable
+    # level 0 turns the web off, so force it on for this run only (not saved)
+    # while the settings slider has to stay reachable
     if force_web:
         os.environ["ISPY_FORCE_WEB"] = "1"
         logger.warning(

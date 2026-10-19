@@ -1,6 +1,3 @@
-# benches the performance profiles: real loop body against the bench still, fps +
-# per-part code_times per level. python -m iSpy.validations.bench_performance
-
 import argparse
 import copy
 import shutil
@@ -51,10 +48,10 @@ def _load_bench_config(config_path: Path, bench_image: Path):
     camera["source"] = str(bench_image)
     ensure_camera_entries_ready({name: camera})
 
-    # config.set() instead of direct dict writes: the camera wrappers are a
-    # cached view, and set() knows to rebuild them
+    # use config.set() not direct dict writes, the camera wrappers are a cached
+    # view and set() knows to rebuild them
     config.set("camera_configs", {name: camera})
-    # measurement purity: no fps cap, no web server, bench recordings aside
+    # keep it pure, no fps cap, no web server, bench recordings aside
     config.set("app_mode", False)
     config.set("max_fps", 0)
     rollback = dict(config.get("rollback") or {})
@@ -113,8 +110,8 @@ def _run_level(level: int, seconds: float, warmup_s: float, config_path: Path) -
         camera.destroy()
     except Exception:
         pass
-    # deliberately NOT web.stop(): MetricsModule saves a file on stop and the
-    # bench would fill Outputs with metrics_*.json snapshots
+    # no web.stop() on purpose, MetricsModule saves a file on stop and the bench
+    # would fill Outputs with metrics_*.json snapshots
     shutil.rmtree(
         str(_PROJECT_ROOT / "Outputs" / "bench_recordings"), ignore_errors=True
     )
@@ -132,8 +129,8 @@ def _run_level(level: int, seconds: float, warmup_s: float, config_path: Path) -
         "mean_ms": mean * 1000.0,
         "p95_ms": p95 * 1000.0,
         "ticks": ticks,
-        # loop time the per-part timers do not attribute: plot()/debug-frame
-        # drawing and the raw-frame copies are the two big ones
+        # loop time the per-part timers miss. plot()/debug-frame drawing and the
+        # raw-frame copies are the two big ones
         "other_ms": (mean * 1000.0) - sum(part_means.values()),
         "parts": part_means,
     }

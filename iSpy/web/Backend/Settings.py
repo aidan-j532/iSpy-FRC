@@ -86,8 +86,8 @@ class SettingsModule(WebModule):
         flask_app.add_url_rule(
             "/api/settings/import", "api_settings_import", self._import, methods=["POST"]
         )
-        # performance profile slider: get the running level + the whole table,
-        # set the configured level (restart applies it)
+        # get the running level and the whole table, set the configured level
+        # (a restart applies it)
         flask_app.add_url_rule(
             "/api/performance",
             "api_performance_get",

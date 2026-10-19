@@ -1,6 +1,3 @@
-# performance profiles: one table trading luxury features for FPS. backed by the
-# performance_level key (0 = Max FPS ... 4 = Full Features); detection is never trimmed
-
 from __future__ import annotations
 
 import logging
@@ -12,7 +9,8 @@ logger = logging.getLogger(__name__)
 
 MIN_LEVEL = 0
 MAX_LEVEL = 4
-#: what an install without a performance_level (or an invalid one) gets
+# what an install without a performance_level (or an invalid one) gets, which is
+# exactly today's full-feature behavior
 DEFAULT_LEVEL = 4
 
 
@@ -20,36 +18,35 @@ DEFAULT_LEVEL = 4
 class Profile:
     level: int
     label: str
-    #: web UI on/off for the run (level 0 turns it off)
+    # web UI on/off for the run (level 0 turns it off)
     web_enabled: bool
-    #: frontend setInterval scale factor
+    # frontend setInterval scale factor
     ui_poll_multiplier: float
-    #: pause frontend polling while the browser tab is hidden
+    # pause frontend polling while the browser tab is hidden
     pause_poll_hidden: bool
-    #: max rate WebApp fans out to the web modules, in Hz (0 = every tick)
+    # max rate WebApp fans out to the web modules, in Hz (0 = every tick)
     web_update_hz: float
-    #: skip building SSE payloads/frames while no client is connected
+    # skip building SSE payloads/frames while no client is connected
     skip_web_without_viewers: bool
-    #: metrics recording of the vision numbers (level 0: off entirely)
+    # metrics recording of the vision numbers (level 0 turns it off)
     metrics_enabled: bool
-    #: metrics sample rate in Hz (0 = every tick)
+    # metrics sample rate in Hz (0 = every tick)
     metrics_sample_hz: float
-    #: MJPEG preview encode rate / JPEG quality / downscale cap (None = capture
-    #: resolution)
+    # MJPEG preview encode rate / JPEG quality / downscale cap (None = capture res)
     mjpeg_fps: float
     mjpeg_quality: int
     mjpeg_max_width: int | None
-    #: cache seconds for the psutil / hardware-load / temperature reads
+    # cache seconds for the psutil / hardware-load / temperature reads
     system_metrics_cache_s: float
-    #: skip camera.plot()/debug frames unless a feed or the viewer is open
+    # skip camera.plot()/debug frames unless a feed or the viewer is open
     annotate_only_when_watched: bool
-    #: rollback recorder on/off (level 0: off)
+    # rollback recorder on/off (level 0 turns it off)
     rollback_recorder: bool
-    #: minimum rollback frame stride (1 = keep the configured stride)
+    # minimum rollback frame stride (1 = keep the configured stride)
     rollback_downsample_min: int
-    #: print the live "FPS:" line on the console
+    # print the live "FPS:" line on the console
     fps_console_print: bool
-    #: only build the 3D viewer's per-tick object snapshot while its page polls
+    # only build the 3D viewer's per-tick object snapshot while its page polls
     viewer3d_open_only: bool
 
 
@@ -158,8 +155,8 @@ PROFILES: dict[int, Profile] = {
     ),
 }
 
-#: per-level bullet list for the settings slider and the confirmation dialog,
-#: describing what each level changes relative to Full Features
+# per-level bullet list for the settings slider and the confirmation dialog,
+# describing what each level changes relative to Full Features
 LEVEL_NOTES: dict[int, tuple[str, ...]] = {
     4: (
         "Everything on - the full web UI, live previews, overlays and recording.",

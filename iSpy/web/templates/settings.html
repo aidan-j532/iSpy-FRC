@@ -377,7 +377,7 @@ block content %}
 
     // Best-effort live license from PyPI, with a short timeout so an offline
     // box never blocks (the static value above is authoritative anyway).
-    // Offline mode: do not even fire the request - it could only fail.
+    // while offline don't even fire the request, it could only fail
     try {
       const nr = await fetch("/api/network");
 
@@ -1015,10 +1015,8 @@ block content %}
     }
   }
 
-  // ---- Performance profile slider ------------------------------------------
-  // Deliberately NOT a [data-key] field: the 400ms auto-save would persist
-  // level 0 before any warning could be read. It talks to /api/performance
-  // instead, and Save Settings never touches performance_level.
+  // not a [data-key] field on purpose, the 400ms auto-save would persist
+  // level 0 before any warning could be read. talks to /api/performance instead
   const perfState = {
     level: 4, // running level (what the process is doing right now)
     configured: 4, // level saved into config.json (runs after restart)

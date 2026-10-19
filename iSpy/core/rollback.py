@@ -385,7 +385,7 @@ class RollBack(UtilityBase):
         )
         if not profile.rollback_recorder:
             self._enabled = False
-        #: remembered so the UI/health can say WHY recording is off
+        # remembered so the UI/health can say WHY recording is off
         self._disabled_by_profile = not profile.rollback_recorder
         self._video_output_dir = self.config.get("data_dir", "VideoRecordings")
         self._fps = float(self.config.get("fps", 30.0))

@@ -23,8 +23,8 @@ from iSpy.web.modules.health import HealthModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
 
-#: modules that must run on every vision tick regardless of the profile: health's
-#: staleness check is how /health knows the loop is alive, rollback does no work
+# modules that must run on every vision tick regardless of the performance
+# profile: health's staleness check is how /health knows the loop is alive
 _ALWAYS_UPDATE = {"health", "rollback"}
 
 
@@ -99,7 +99,7 @@ class iSpyWebApp:
         now = time.perf_counter()
         for name, mod in self.modules.items():
             # the profile caps how often the expensive modules rebuild their
-            # payloads; health and rollback stay tick-rate on purpose
+            # payloads, health and rollback stay tick-rate on purpose
             if interval and name not in _ALWAYS_UPDATE:
                 last = self._last_update.get(name)
                 if last is not None and (now - last) < interval:

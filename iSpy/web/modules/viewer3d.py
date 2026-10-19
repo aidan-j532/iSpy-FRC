@@ -23,7 +23,7 @@ _INCHES_TO_OUTPUT_UNIT = {
     "frc": 0.0254,
 }
 
-#: how long a recent poll keeps the viewer counted as open
+# how long a recent poll keeps the viewer counted as open
 _VIEWER_GRACE_S = 5.0
 
 

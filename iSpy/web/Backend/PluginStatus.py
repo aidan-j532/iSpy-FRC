@@ -217,8 +217,8 @@ def _network_info(cls, settings_list: list[dict]) -> dict:
         "needs_internet": bool(critical or optional),
         "critical": critical,
         "optional": optional,
-        # the loader skips critical add-ons while offline; optional needs
-        # only turn one feature off
+        # the loader skips critical add-ons while offline, optional needs only
+        # turn one feature off
         "skipped": offline and bool(critical),
         "degraded": offline and not critical and bool(optional),
     }
@@ -373,8 +373,8 @@ class PluginStatusModule(WebModule):
         return jsonify(pipelines=_build_vision_pipeline_payloads())
 
     def _network(self):
-        # base.html polls this for the offline banner; skipped/degraded grow
-        # as boot and the run loop record them
+        # base.html polls this for the offline banner, skipped/degraded grow as
+        # boot and the run loop record them
         return jsonify(network_policy.get_report())
 
     def _available(self):

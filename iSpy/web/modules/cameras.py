@@ -46,7 +46,7 @@ COCO17_OBJECT_POINTS = [
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
-#: how long a recent MJPEG pull keeps counting as "someone is watching"
+# how long a recent MJPEG pull keeps counting as "someone is watching"
 _FEED_VIEWER_GRACE_S = 3.0
 
 # auto-capture loop: the wizard's live feed stores a board frame by itself once
@@ -2018,8 +2018,8 @@ class CamerasModule(WebModule):
         quality = int(profile.mjpeg_quality)
         max_width = profile.mjpeg_max_width
         last_frame_time = time.monotonic()
-        # count the pull immediately: without this the frame store would keep
-        # skipping writes (nobody watching) while this generator waits for one
+        # count the pull now, or the frame store keeps skipping writes (nobody
+        # watching) while this generator waits for one
         self._feed_seen[camera_name] = time.monotonic()
         try:
             while True:

@@ -2050,13 +2050,13 @@ class TestPerformanceProfiles(unittest.TestCase):
         health, dashboard = _Fake(), _Fake()
         app.modules = {"health": health, "dashboard": dashboard}
 
-        # level 4: every module updates on every tick, like before the profile
+        # level 4 updates every module on every tick, like before the profile
         performance.set_level_for_run(4)
         for _ in range(10):
             app.update({})
         self.assertEqual((health.calls, dashboard.calls), (10, 10))
 
-        # level 1: 2 Hz cap for the payload builders, health never skipped
+        # level 1 caps the payload builders at 2 Hz, health never skipped
         performance.set_level_for_run(1)
         app._last_update.clear()
         health.calls = dashboard.calls = 0

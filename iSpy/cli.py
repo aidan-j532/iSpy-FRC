@@ -28,8 +28,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     boot.add_boot_arguments(start)
 
-    # recovery hatch for the performance slider: level 0 turns the web UI off,
-    # so "ispy performance 4" must be reachable over SSH alone
+    # level 0 turns the web ui off, so "ispy performance 4" needs to work
+    # over ssh alone
     perf = subparsers.add_parser(
         "performance",
         help="Set the performance profile (0=Max FPS .. 4=Full Features) in "

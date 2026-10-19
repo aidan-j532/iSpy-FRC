@@ -5,19 +5,8 @@ class YourTracker(FrameProcessorBase):
     plugin_name = "example/example_frame_processor"
     template = True
 
-    # internet needs for offline mode: skip when critical + unmet, "partially
-    # offline" when non-critical. this add-on needs none, so declares nothing.
-    # all-in-one flag:  needs_internet = True
-    # or per-setting, override network_requirements(cls, settings) and return
-    # NetworkRequirement(name=..., reason=..., critical=False) entries:
-    # @classmethod
-    # def network_requirements(cls, settings):
-    #     from iSpy.core.network_policy import NetworkRequirement
-    #     reqs = []
-    #     if settings.get("web_sync"):
-    #         reqs.append(NetworkRequirement(
-    #             name="web sync", reason="needs internet", critical=False))
-    #     return reqs
+    # set needs_internet = True to skip the add-on while offline, or override
+    # network_requirements() when only some settings need the internet
 
     @classmethod
     def config_schema(cls) -> dict:
