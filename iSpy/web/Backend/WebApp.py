@@ -1,8 +1,10 @@
 import logging
+import time
 from pathlib import Path
 from flask import Flask, jsonify, render_template
 
 from iSpy import __version__
+from iSpy.core import performance
 from iSpy.web.modules.dashboard import DashboardModule
 from iSpy.web.modules.cameras import CamerasModule
 from iSpy.web.modules.models import ModelsModule
@@ -20,6 +22,11 @@ from iSpy.web.Backend.PluginStatus import PluginStatusModule
 from iSpy.web.modules.health import HealthModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
+
+#: modules that must run on every vision tick regardless of the performance
+#: profile: health's staleness check is how /health knows the loop is alive,
+#: and the rollback module does no per-tick work at all.
+_ALWAYS_UPDATE = {"health", "rollback"}
 
 
 def _get_version() -> str:
@@ -79,6 +86,7 @@ class iSpyWebApp:
                 )
 
         self.context["dashboard_module"] = self.modules.get("dashboard")
+        self._last_update: dict[str, float] = {}
         self.flask_app.add_url_rule(
             "/", "root", lambda: render_template("dashboard.html")
         )
@@ -87,11 +95,42 @@ class iSpyWebApp:
         )
 
     def update(self, frame_data: dict):
+        profile = performance.get_profile()
+        interval = (1.0 / profile.web_update_hz) if profile.web_update_hz > 0 else 0.0
+        now = time.perf_counter()
         for name, mod in self.modules.items():
+            # the profile caps how often the expensive modules rebuild their
+            # payloads; health and rollback stay tick-rate on purpose
+            if interval and name not in _ALWAYS_UPDATE:
+                last = self._last_update.get(name)
+                if last is not None and (now - last) < interval:
+                    continue
+            self._last_update[name] = now
             try:
                 mod.update(frame_data)
             except Exception:
                 self.logger.exception("Web module '%s' update failed", name)
+
+    def anyone_watching(self) -> bool:
+        """True when some browser page currently consumes annotated frames.
+
+        Used by the vision loop to decide whether plot()/debug-frame drawing is
+        worth doing at the cheaper performance levels. Any module that exposes
+        has_viewers() participates; rollback recording is not a watcher because
+        it consumes the raw frames, not the annotated ones.
+        """
+        now = time.monotonic()
+        for mod in self.modules.values():
+            checker = getattr(mod, "has_viewers", None)
+            if not callable(checker):
+                continue
+            try:
+                if checker(now):
+                    return True
+            except Exception:
+                # a broken watcher must not blank the feeds
+                return True
+        return False
 
     def set_vision_instance(self, vision):
         self.context["vision_instance"] = vision

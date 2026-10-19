@@ -327,7 +327,6 @@ async function pollVisionStatus() {
     applyVisionBanner(!!j.vision_running);
   } catch (e) {}
 }
-setInterval(pollVisionStatus, 5000);
-pollVisionStatus();
+ispyPoll(pollVisionStatus, 5000);
 </script>
 {% endblock %}

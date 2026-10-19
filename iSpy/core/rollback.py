@@ -11,6 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from iSpy.core import performance
 from iSpy.plugins.bases import UtilityBase
 
 # recording pauses while the volume has less slack than this, so a filling SD
@@ -376,13 +377,27 @@ class RollBack(UtilityBase):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
         vision = self.context.get("vision_instance")
+        # the performance profile can turn the recorder off for the whole run
+        # (level 0) - in that case no session folder is ever opened because
+        # update() returns before _start_recorder
+        profile = performance.get_profile()
         self._enabled = bool(self.config.get("enabled", True)) and not bool(
             getattr(vision, "replay_mode", False)
         )
+        if not profile.rollback_recorder:
+            self._enabled = False
+        #: remembered so the UI/health can say WHY recording is off
+        self._disabled_by_profile = not profile.rollback_recorder
         self._video_output_dir = self.config.get("data_dir", "VideoRecordings")
         self._fps = float(self.config.get("fps", 30.0))
         self._max_queue = int(self.config.get("max_queue", 60))
-        self._downsample = max(1, int(self.config.get("downsample", 1)))
+        # the profile can raise the stride (keep fewer frames) but never lower
+        # it below what the user configured
+        self._downsample = max(
+            1,
+            int(self.config.get("downsample", 1)),
+            int(profile.rollback_downsample_min),
+        )
         self._segment_seconds = max(1, int(self.config.get("segment_minutes", 5))) * 60
         self._max_total_bytes = (
             int(self.config.get("max_total_mb", 2048)) * 1024 * 1024
@@ -598,6 +613,15 @@ class RollBack(UtilityBase):
 
     def start(self):
         pass
+
+    def wants_raw_frames(self) -> bool:
+        """False when the vision loop should skip its per-camera frame copies.
+
+        The recorder is the only raw-frames consumer. When it is disabled (by
+        config or by the performance profile) or disk-paused, copying every
+        frame every tick just feeds a dictionary nobody reads.
+        """
+        return self._enabled and not self._disk_paused
 
     def update(self, frame_data: dict):
         if not self._enabled:
@@ -1027,7 +1051,12 @@ class RollBack(UtilityBase):
             problem = "could not check the output directory"
 
         if not self._enabled:
-            color, state = "green", "Recording off"
+            color = "green"
+            state = (
+                "Recording off - performance profile"
+                if self._disabled_by_profile
+                else "Recording off"
+            )
         elif problem:
             color, state = "red", "Recorder idle"
         elif self._disk_paused:

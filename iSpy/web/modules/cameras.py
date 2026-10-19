@@ -10,6 +10,7 @@ import time
 from flask import Response, jsonify, render_template, request, send_file
 import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
+from iSpy.core import performance
 from iSpy.web.Backend.save_store import read, write
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 from iSpy.config.iSpyConfig import (
@@ -45,6 +46,8 @@ COCO17_OBJECT_POINTS = [
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
+#: how long a recent MJPEG pull keeps counting as "someone is watching"
+_FEED_VIEWER_GRACE_S = 3.0
 
 # auto-capture loop: the wizard's live feed stores a board frame by itself once
 # it is complete enough and moved from every prior capture, and runs a rolling
@@ -270,6 +273,17 @@ class CamerasModule(WebModule):
         self._auto_discover_thread: threading.Thread | None = None
         self._sse_lock = threading.Lock()
         self._sse_clients: list = []
+        # last time each camera's MJPEG stream was actively pulled - the vision
+        # loop uses this (plus the page's device SSE) to decide whether frames
+        # and annotations are worth building at the cheaper performance levels
+        self._feed_seen: dict[str, float] = {}
+
+    def has_viewers(self, now: float = 0.0) -> bool:
+        now = now or time.monotonic()
+        if any(now - t < _FEED_VIEWER_GRACE_S for t in self._feed_seen.values()):
+            return True
+        with self._sse_lock:
+            return bool(self._sse_clients)
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule(
@@ -673,6 +687,14 @@ class CamerasModule(WebModule):
         self.live_cameras = cam_by_name
         per_cam = frame_data.get("camera_frames")
         now = time.monotonic()
+        if (
+            performance.get_profile().skip_web_without_viewers
+            and not self.has_viewers(now)
+        ):
+            # nobody has the page (or a feed) open: holding a reference to
+            # every camera frame every tick feeds zero readers. the first store
+            # after a viewer connects lands one tick later.
+            return
         with self.lock:
             if per_cam:
                 for name, f in per_cam.items():
@@ -1991,8 +2013,17 @@ class CamerasModule(WebModule):
         )
 
     def _generate(self, camera_name):
-        target_interval = 1.0 / 20
+        # the performance profile owns the preview pace: fps, jpeg quality and
+        # an optional width cap (all three shrink the encode+network cost per
+        # open viewer)
+        profile = performance.get_profile()
+        target_interval = 1.0 / max(profile.mjpeg_fps, 0.1)
+        quality = int(profile.mjpeg_quality)
+        max_width = profile.mjpeg_max_width
         last_frame_time = time.monotonic()
+        # count the pull immediately: without this the frame store would keep
+        # skipping writes (nobody watching) while this generator waits for one
+        self._feed_seen[camera_name] = time.monotonic()
         try:
             while True:
                 t0 = time.perf_counter()
@@ -2004,7 +2035,16 @@ class CamerasModule(WebModule):
                     time.sleep(0.05)
                     continue
                 last_frame_time = time.monotonic()
-                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                self._feed_seen[camera_name] = last_frame_time
+                if max_width and frame.shape[1] > max_width:
+                    scale = max_width / float(frame.shape[1])
+                    frame = cv2.resize(
+                        frame,
+                        (int(max_width), max(1, int(round(frame.shape[0] * scale)))),
+                    )
+                ok, buf = cv2.imencode(
+                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality]
+                )
                 if not ok:
                     continue
                 yield (

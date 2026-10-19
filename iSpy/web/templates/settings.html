@@ -45,6 +45,48 @@ block content %}
 
 <div id="tab-general" class="settings-tab-content">
   <div class="settings-section">
+    <h3>Performance profile</h3>
+
+    <div class="perf-wrap">
+      <div class="perf-head">
+        <span id="perf-level-label" class="perf-level-label">Full Features</span>
+        <span
+          id="perf-restart-badge"
+          class="restart-badge"
+          style="display: none"
+          >restart required</span
+        >
+      </div>
+
+      <input
+        id="perf-slider"
+        class="perf-slider"
+        type="range"
+        min="0"
+        max="4"
+        step="1"
+        value="4"
+        aria-label="Performance profile"
+      />
+
+      <div class="perf-ticks" aria-hidden="true">
+        <span>Max FPS</span>
+        <span>Performance</span>
+        <span>Balanced</span>
+        <span>Smooth</span>
+        <span>Full Features</span>
+      </div>
+
+      <div id="perf-desc" class="perf-desc"></div>
+
+      <div class="text-sm" style="color: var(--text-dim)">
+        Applies at the next restart. Detection, trackers, NetworkTables and
+        robot pose are never affected by this slider.
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-section">
     <h3>Units</h3>
 
     <div class="form-row">
@@ -541,6 +583,10 @@ block content %}
         .querySelectorAll(".restart-badge")
         .forEach((b) => (b.style.display = "none"));
 
+      // the performance slider manages its own badge (it is not a [data-key]
+      // field), so give it back after the sweep above
+      if (typeof syncPerfBadge === "function") syncPerfBadge();
+
       if (j.needs_restart) {
         (j.changed || []).forEach((key) => {
           const el = document.querySelector(`[data-key="${key}"]`);
@@ -969,8 +1015,158 @@ block content %}
     }
   }
 
+  // ---- Performance profile slider ------------------------------------------
+  // Deliberately NOT a [data-key] field: the 400ms auto-save would persist
+  // level 0 the moment the knob lands there, before any warning could be
+  // read. The slider talks to /api/performance instead, and Save Settings
+  // never touches performance_level.
+  const perfState = {
+    level: 4, // running level (what the process is doing right now)
+    configured: 4, // level saved into config.json (runs after restart)
+    restart: false, // configured != running
+    levels: {}, // level -> {label, notes}
+  };
+
+  const perfSlider = document.getElementById("perf-slider");
+
+  function perfLabel(level) {
+    const info = perfState.levels[level];
+    const label = info && info.label ? info.label : "Level " + level;
+    return label + " (" + level + ")";
+  }
+
+  function syncPerfBadge() {
+    const badge = document.getElementById("perf-restart-badge");
+    if (badge) badge.style.display = perfState.restart ? "" : "none";
+  }
+
+  function renderPerfDesc(level) {
+    const label = document.getElementById("perf-level-label");
+    const desc = document.getElementById("perf-desc");
+    if (label) label.textContent = perfLabel(level);
+    if (!desc) return;
+    const notes = (perfState.levels[level] || {}).notes || [];
+    desc.textContent = "";
+    const head = document.createElement("strong");
+    head.textContent = perfLabel(level);
+    desc.appendChild(head);
+    if (notes.length) {
+      const ul = document.createElement("ul");
+      notes.forEach((n) => {
+        const li = document.createElement("li");
+        li.textContent = n;
+        ul.appendChild(li);
+      });
+      desc.appendChild(ul);
+    }
+  }
+
+  async function perfCommit(level, confirmMax) {
+    try {
+      const r = await fetch("/api/performance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level: level, confirm_max: !!confirmMax }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        showToast(j.error || "Could not save the performance profile", "error");
+        return false;
+      }
+      perfState.configured = level;
+      perfState.restart = !!j.restart_pending;
+      if (perfSlider) perfSlider.value = String(level);
+      // keep the raw editor's content in step (merge only this key so any
+      // unsaved raw edits survive) - otherwise a later Save from the Raw tab
+      // would write the old level back over this one
+      const cfgEl = document.getElementById("cfg");
+      if (cfgEl) {
+        try {
+          const cur = JSON.parse(cfgEl.value);
+          if (cur && typeof cur === "object") {
+            cur.performance_level = level;
+            cfgEl.value = JSON.stringify(cur, null, 2);
+          }
+        } catch (e) {}
+      }
+      renderPerfDesc(level);
+      syncPerfBadge();
+      showToast(
+        "Performance profile: " +
+          perfLabel(level) +
+          (perfState.restart ? " - restart to apply" : ""),
+        "success",
+      );
+      return true;
+    } catch (e) {
+      showToast("Could not save the performance profile", "error");
+      return false;
+    }
+  }
+
+  if (perfSlider) {
+    perfSlider.addEventListener("input", () => {
+      renderPerfDesc(Number(perfSlider.value));
+    });
+
+    perfSlider.addEventListener("change", () => {
+      const target = Number(perfSlider.value);
+      if (target === perfState.configured) return;
+
+      if (target === 0) {
+        // Max FPS takes the web UI away at the next restart, so the warning
+        // has to be read before it commits. The overlay has no cancel path -
+        // snap the knob back now and only commit inside onClose, which fires
+        // when the countdown actually finishes. Closing/navigating away in
+        // the meantime saves nothing.
+        perfSlider.value = String(perfState.configured);
+        renderPerfDesc(perfState.configured);
+        if (typeof showTimeWarning !== "function") return;
+        showTimeWarning({
+          header: "Switch to Max FPS?",
+          duration: 5,
+          description:
+            "At the next restart the web UI turns off. Also off: rollback " +
+            "recording, vision metrics, FPS console print and annotated " +
+            "frames. Still running: detection, trackers, NetworkTables and " +
+            "robot pose. To undo: run 'ispy performance 4' over SSH, start " +
+            "with 'ispy start --web', or set performance_level back to 4 in " +
+            "Config/config.json.",
+          continueMessage: "Switch to Max FPS",
+          onClose: () => {
+            perfCommit(0, true);
+          },
+        });
+        return;
+      }
+
+      perfCommit(target, false);
+    });
+  }
+
+  async function loadPerformance() {
+    try {
+      const j = await fetch("/api/performance").then((r) => r.json());
+      perfState.level = Number(j.level);
+      perfState.configured =
+        j.configured_level !== undefined
+          ? Number(j.configured_level)
+          : perfState.level;
+      perfState.restart = !!j.restart_pending;
+      (j.levels || []).forEach((lvl) => {
+        perfState.levels[Number(lvl.level)] = lvl;
+      });
+      if (perfSlider) perfSlider.value = String(perfState.configured);
+      renderPerfDesc(perfState.configured);
+      syncPerfBadge();
+    } catch (e) {
+      /* the rest of the page still works without the profile */
+    }
+  }
+
   load();
   loadAbout();
+  loadPerformance();
 </script>
 
 {% endblock %}

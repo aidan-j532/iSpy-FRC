@@ -172,6 +172,70 @@
         };
       })();
     </script>
+    <script>
+      // Performance profile plumbing: /api/performance is fetched once per
+      // page load and cached on window.ispyPerf, and every page timer goes
+      // through ispyPoll so the profile's interval multiplier and the
+      // hidden-tab pause apply everywhere at once.
+      (function () {
+        window.ispyPerf = {
+          level: 4,
+          label: "Full Features",
+          ui_poll_multiplier: 1,
+          pause_poll_hidden: false,
+          loaded: false,
+        };
+        const resyncs = [];
+        function resync() {
+          while (resyncs.length) {
+            try {
+              resyncs.shift()();
+            } catch (e) {}
+          }
+        }
+        fetch("/api/performance")
+          .then((r) => r.json())
+          .then((j) => {
+            window.ispyPerf = Object.assign(window.ispyPerf, j, {
+              loaded: true,
+            });
+            document.dispatchEvent(new CustomEvent("ispy:performance"));
+            resync();
+          })
+          .catch(() => {});
+
+        window.ispyPoll = function (fn, baseMs) {
+          // one shared poller: fires immediately, scales its interval by the
+          // profile's multiplier, pauses while the tab is hidden when the
+          // profile asks for it, and re-times itself once the profile lands.
+          const state = { timer: null, stopped: false };
+          function start() {
+            const k = window.ispyPerf.ui_poll_multiplier || 1;
+            state.timer = setInterval(loop, Math.max(1, Math.round(baseMs * k)));
+          }
+          function loop() {
+            if (
+              document.visibilityState === "hidden" &&
+              window.ispyPerf.pause_poll_hidden
+            )
+              return;
+            fn();
+          }
+          fn();
+          start();
+          resyncs.push(function () {
+            if (state.stopped) return;
+            clearInterval(state.timer);
+            start();
+          });
+          state.stop = function () {
+            state.stopped = true;
+            if (state.timer) clearInterval(state.timer);
+          };
+          return state;
+        };
+      })();
+    </script>
   </head>
   <body>
     <div class="app-shell">
@@ -384,6 +448,23 @@
             &times;
           </button>
         </div>
+        <div
+          id="perf-banner"
+          class="vision-banner"
+          style="display: none"
+        >
+          <span id="perf-banner-text"></span>
+          <a href="/settings" style="margin-left: auto; color: inherit">settings</a>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            title="Hide for this session"
+            style="background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1"
+            onclick="dismissPerfBanner()"
+          >
+            &times;
+          </button>
+        </div>
         {% block content %}{% endblock %}
       </main>
     </div>
@@ -464,6 +545,46 @@
         poll();
         // the report grows while running (try_online degrades), so refresh it
         setInterval(poll, 30000);
+      })();
+    </script>
+    <script>
+      // Performance profile banner: visible on every page whenever the active
+      // level is below Full Features, so a trimmed install is never a mystery.
+      (function () {
+        const KEY = "perf.banner.dismissed";
+        const el = document.getElementById("perf-banner");
+        if (!el) return;
+
+        window.dismissPerfBanner = function () {
+          sessionStorage.setItem(KEY, "1");
+          el.style.display = "none";
+        };
+
+        function render() {
+          const p = window.ispyPerf || {};
+          if (!p.loaded || p.level >= 4) {
+            el.style.display = "none";
+            return;
+          }
+          if (sessionStorage.getItem(KEY) === "1") {
+            el.style.display = "none";
+            return;
+          }
+          el.className = "vision-banner" + (p.level <= 1 ? " vision-warn" : "");
+          document.getElementById("perf-banner-text").textContent =
+            "Performance profile: " +
+            p.label +
+            " (" +
+            p.level +
+            ") - some web features are reduced" +
+            (p.restart_pending
+              ? " (restart required to apply the configured level)"
+              : "");
+          el.style.display = "";
+        }
+
+        if (window.ispyPerf && window.ispyPerf.loaded) render();
+        else document.addEventListener("ispy:performance", render);
       })();
     </script>
     <script>

@@ -645,9 +645,19 @@ def on_boot(
     install_service: bool = False,
     fresh: bool = False,
     wait: bool = False,
+    force_web: bool = False,
 ):
     _configure_quiet_logging()
     logger.info("ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix)
+
+    # recovery hatch for performance level 0: force the web UI on for this run
+    # without persisting anything, so the Settings slider stays reachable
+    if force_web:
+        os.environ["ISPY_FORCE_WEB"] = "1"
+        logger.warning(
+            "ISPY_FORCE_WEB: forcing the web UI on for this run only "
+            "(nothing is saved)."
+        )
 
     # offline mode must be known before setup_files downloads default models
     # (a full iSpyConfig does not exist yet at that point)
@@ -695,6 +705,12 @@ def on_boot(
 
     _consume_game_mode_web_off(config)
     _apply_offline_mode(config)
+
+    # resolve the performance profile once, in memory - the web-on/off
+    # decision, the vision loop and every web module read this one value.
+    from iSpy.core import performance
+
+    performance.arm_from_config(config)
 
     cleanup_missing_cameras(config)
     cleanup_broken_images(config)
@@ -746,6 +762,14 @@ def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
         help="Wait for all pipelines to be ready before running vision",
     )
     parser.add_argument(
+        "--web",
+        action="store_true",
+        help=(
+            "Force the web UI on for this run (recovery from performance "
+            "level 0). Nothing is saved - the configured level is unchanged."
+        ),
+    )
+    parser.add_argument(
         "--replay",
         metavar="SESSION_OR_CLIP",
         default="",
@@ -786,6 +810,7 @@ def main():
         install_service=args.service,
         fresh=args.fresh,
         wait=args.wait and not args.replay,
+        force_web=args.web,
     )
 
     if args.replay:

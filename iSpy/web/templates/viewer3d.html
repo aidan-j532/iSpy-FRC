@@ -970,7 +970,7 @@ block head %}
       renderTable(objects, overlays);
     } catch (_) {}
   }
-  setInterval(poll, 200);
+  ispyPoll(poll, 200);
 
   window.addEventListener("resize", () => {
     camera.aspect = container.clientWidth / container.clientHeight;

@@ -766,6 +766,12 @@ document.getElementById('addon-type-filter').addEventListener('blur', () => {
 });
 
 loadStatus(true);
-setInterval(() => loadStatus(false), 5000);
+// ispyPoll fires once immediately - skip that tick so it doesn't repeat the
+// forced load above, then keep polling when the snapshot can skip renders
+let addonsPollPrimed = false;
+ispyPoll(() => {
+  if (!addonsPollPrimed) { addonsPollPrimed = true; return; }
+  loadStatus(false);
+}, 5000);
 </script>
 {% endblock %}

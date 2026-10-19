@@ -302,6 +302,48 @@ and returns `fallback` when the internet is missing or flaky. A config-schema
 field marked `"requires_network": True` is forced back to its default while
 offline so a stale "check for updates"-style toggle cannot keep reaching out.
 
+### Performance profiles
+
+`performance_level` (top-level config key, Settings → General → Performance
+profile) is a 5-stop slider that trades background work and luxury features
+for FPS. It applies at the **next restart** - the picker works from an
+already-running web UI even at levels that would not have started one.
+
+| Slider | Level | What it changes |
+|--------|-------|-----------------|
+| Max FPS (left) | `0` | **Web UI off for the run.** Rollback recording off (no new sessions), vision metrics off, FPS console print off, annotated/debug frames off |
+| Performance | `1` | UI polling 4x slower (paused while the tab is hidden), web payloads skipped while nobody is watching, previews 10 fps/q50 capped at 960px, recording keeps every 4th frame at most, metrics sampled at 1 Hz, system metrics cached 5s |
+| Balanced | `2` | Half of Performance: 2x polling, previews 15 fps/q60, recording keeps every 2nd frame, metrics 5 Hz, cache 2s |
+| Smooth | `3` | Polling 1.5x slower, web modules updated at most 20x/s, previews/recording untouched |
+| Full Features (right) | `4` | **Default.** Nothing trimmed - exactly the behavior of an install without the key |
+
+What **no** level ever trims: core detection and its thresholds, trackers,
+NetworkTables publishing (rate and content are unchanged), robot pose reads,
+the watchdog/service control channel, and calibration correctness. Camera
+capture settings are not performance knobs either.
+
+Level `0` is the only level that takes the web UI away, so it is special:
+
+- the Settings slider makes you sit through a confirmation countdown listing
+  what turns off and what stays on before it saves;
+- the boot log prints a loud warning with the recovery commands;
+- `GET /api/performance` and the dashboard banner show the active level, and
+  a `POST /api/performance` of level 0 without `confirm_max: true` is
+  rejected - the raw JSON editor cannot set it by accident;
+- the run-time override is **in memory only** - `app_mode` in `config.json`
+  is never rewritten, so a crash can't leave the UI gone.
+
+To come back out of Max FPS without the UI:
+
+```bash
+ispy performance 4        # writes performance_level = 4, takes effect next start
+ispy start --web          # or: set ISPY_FORCE_WEB=1 - forces the UI on for this run only
+```
+
+The same rules on a one-shot run: **Game Mode** and the performance profile
+both apply, whichever turns the web off wins, and a `--web` start overrides
+both for that run.
+
 ### Camera calibration
 
 To get accurate distances, measure these values with your actual camera and game piece:

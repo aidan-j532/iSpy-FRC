@@ -82,6 +82,12 @@ function advanceHealthCycle(ah) {
   }
 }
 
+function withPerformance(data) {
+  const ah = (data.addon_health || []).slice();
+  if (data.performance) ah.unshift(data.performance);
+  return ah;
+}
+
 function renderHealthTable(ah) {
   const el = document.getElementById('h-addon-health');
   if (!ah.length) {
@@ -140,7 +146,7 @@ async function refresh() {
           <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}</span>
         </div>`).join('');
 
-    renderHealthTable(data.addon_health || []);
+    renderHealthTable(withPerformance(data));
 
     const plugins = data.plugins || [];
     document.getElementById('h-plugins').innerHTML = plugins.length === 0
@@ -161,16 +167,14 @@ async function refresh() {
 async function refreshAddonStatus() {
   try {
     const data = await fetch('/api/health').then(r => r.json());
-    const ah = data.addon_health || [];
+    const ah = withPerformance(data);
     advanceHealthCycle(ah);
     renderHealthTable(ah);
   } catch (e) {
     console.error('Health status refresh failed', e);
   }
 }
-setInterval(refresh, 500);
-setInterval(refreshAddonStatus, 5000);
-refresh();
-refreshAddonStatus();
+ispyPoll(refresh, 500);
+ispyPoll(refreshAddonStatus, 5000);
 </script>
 {% endblock %}

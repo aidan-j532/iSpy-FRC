@@ -4,7 +4,7 @@ import time
 
 from flask import jsonify, render_template
 
-from iSpy.core import network_policy
+from iSpy.core import network_policy, performance
 from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
@@ -117,7 +117,25 @@ class HealthModule(WebModule):
             "detections": detections,
             "cameras": cameras_data,
             "addon_health": addon_health,
+            "performance": self._performance_entry(),
         }, healthy
+
+    def _performance_entry(self) -> dict:
+        # always visible on the Health page: at levels 0-1 it is intentionally
+        # degraded UX, so it reads yellow like an offline skip. It rides in a
+        # separate payload key so addon_health stays "add-ons and pipelines
+        # only"; the page prepends it to the same table.
+        profile = performance.get_profile()
+        state = f"{profile.label} ({profile.level})"
+        if not profile.web_enabled:
+            state += " - web UI off for this run"
+        return {
+            "name": "Performance profile",
+            "type": "performance",
+            "color": "yellow" if profile.level <= 1 else "green",
+            "state": state,
+            "metrics": [],
+        }
 
     def _collect_addon_health(self) -> list:
         vision = self.context.get("vision_instance")

@@ -67,6 +67,20 @@ def _init_offline_mode(config) -> None:
         network_policy.set_offline(True, "config")
 
 
+def _init_performance_level(config) -> None:
+    # same reason as _init_offline_mode: the watchdog daemon path never calls
+    # boot.on_boot, so the level must be resolved here too or the web would
+    # come up at Full Features while the config says otherwise
+    try:
+        from iSpy.core import performance
+
+        performance.arm_from_config(config)
+    except Exception:
+        logger.exception(
+            "Could not resolve the performance profile - running at Full Features."
+        )
+
+
 def main(config=None):
     # a replay passes the config boot already built in memory; anything else
     # loads its own from disk
@@ -76,6 +90,7 @@ def main(config=None):
 
         config = iSpyConfig(str(config_path))
     _init_offline_mode(config)
+    _init_performance_level(config)
     vision = iSpy(config)
     vision.run()
 

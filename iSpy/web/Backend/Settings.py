@@ -20,6 +20,9 @@ _RESTART_REQUIRED_KEYS = {
     # add-ons are constructed at boot, so the offline gate only re-evaluates
     # after a restart
     "offline_mode",
+    # the web-enable decision, the module scheduler and the loop knobs are
+    # all set up at boot
+    "performance_level",
 }
 
 
@@ -82,6 +85,69 @@ class SettingsModule(WebModule):
         )
         flask_app.add_url_rule(
             "/api/settings/import", "api_settings_import", self._import, methods=["POST"]
+        )
+        # performance profile slider: get the running level + the whole table,
+        # set the configured level (restart applies it)
+        flask_app.add_url_rule(
+            "/api/performance",
+            "api_performance_get",
+            self._performance_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/performance",
+            "api_performance_post",
+            self._performance_post,
+            methods=["POST"],
+        )
+
+    def _performance_get(self):
+        from iSpy.core import performance
+
+        running = performance.get_level()
+        configured = performance.configured_level(self.context["config"])
+        return jsonify(
+            level=running,
+            configured_level=running if configured is None else configured,
+            label=performance.PROFILES[running].label,
+            restart_pending=performance.restart_pending(self.context["config"]),
+            web_enabled=performance.PROFILES[running].web_enabled,
+            levels=performance.levels_payload(),
+            recovery=performance.recovery_help(),
+        )
+
+    def _performance_post(self):
+        from iSpy.core import performance
+
+        config = self.context["config"]
+        data = request.get_json(force=True, silent=True) or {}
+        level = performance.clamp(data.get("level"))
+        if level is None:
+            return jsonify(error="level must be an integer 0-4"), 400
+        # the UI handles the level-0 countdown, but the raw JSON editor and
+        # curl can still reach this route - require the explicit flag so
+        # "web UI off" can never be a silent accident
+        if level == 0 and not data.get("confirm_max"):
+            return jsonify(
+                error=(
+                    "level 0 turns the web UI off for the next run - pass "
+                    "confirm_max: true to confirm"
+                )
+            ), 400
+
+        config.set("performance_level", level)
+        config.save(quiet=True)
+        if level == 0:
+            logger.warning(
+                "Performance profile set to 0 (Max FPS) - the web UI, rollback "
+                "recording, metrics and FPS console print will be off after the "
+                "next restart. %s",
+                performance.recovery_help(),
+            )
+        return jsonify(
+            success=True,
+            level=level,
+            restart_pending=performance.restart_pending(config),
         )
 
     def _export(self):

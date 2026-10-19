@@ -324,6 +324,13 @@ class iSpyConfig:
             # seconds without a fresh frame before /health reports degraded
             "health_stale_threshold": 1.0,
             "metrics": True,
+            # 0 = Max FPS, 1 = Performance, 2 = Balanced, 3 = Smooth,
+            # 4 = Full Features (default). One master knob that trades the
+            # luxury features (web UI, previews, overlays, recording rate,
+            # metrics) for FPS; detection, trackers and NetworkTables output
+            # are never affected. See iSpy/core/performance.py and the
+            # Settings slider; takes effect on the next boot.
+            "performance_level": 4,
             "app_mode": True,
             # One-shot "Game Mode" web-off: the Settings > Advanced > Game Mode
             # button arms this. The next boot skips the web dashboard for that

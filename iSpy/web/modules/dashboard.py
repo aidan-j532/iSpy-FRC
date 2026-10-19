@@ -7,6 +7,7 @@ import logging
 import threading
 from pathlib import Path
 from flask import jsonify, render_template, Response
+from iSpy.core import performance
 from iSpy.web.Backend.WebModule import WebModule
 
 try:
@@ -30,6 +31,9 @@ _GENERIC_CAMERA_TOKENS = (
     "usb",
     "unnamed",
 )
+
+#: display-only cache for the per-camera resolution string
+_RESOLUTION_CACHE_S = 5.0
 
 
 def _generic_camera_name(name: str) -> bool:
@@ -150,6 +154,12 @@ class DashboardModule(WebModule):
         self._sse_lock = threading.Lock()
         self._sse_clients: list = []
         self._npu_load_cache: tuple[float, list[int] | None] | None = None
+        # display-only caches: camera resolution and the psutil/hw/temp block.
+        # both used to be re-read on every vision tick via camera.get_frame()
+        # (a full copy AND every frame processor) which cost more than the rest
+        # of this module combined.
+        self._resolution_cache: dict[str, tuple[float, str | None]] = {}
+        self._system_cache: tuple[float, dict] | None = None
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule(
@@ -158,6 +168,13 @@ class DashboardModule(WebModule):
         flask_app.add_url_rule("/api/status", "api_status", self._api_status)
         flask_app.add_url_rule("/api/system", "api_system", self._api_system)
         flask_app.add_url_rule("/api/events", "api_events", self._sse_stream)
+
+    def has_viewers(self, now: float = 0.0) -> bool:
+        # the dashboard page's SSE stream is the only consumer of the tick
+        # payload; with nobody connected update() only keeps the cheap scalars
+        # fresh (the /api/status poll reads those)
+        with self._sse_lock:
+            return bool(self._sse_clients)
 
     def update(self, frame_data: dict):
         tick = {
@@ -180,6 +197,10 @@ class DashboardModule(WebModule):
             self._detection_classes = det_classes
             if not self._model_info:
                 self._refresh_model_info_unlocked()
+
+        profile = performance.get_profile()
+        if profile.skip_web_without_viewers and not self.has_viewers():
+            return
 
         vision_running = (
             (time.perf_counter() - self._vision_last_tick) < 5.0
@@ -241,6 +262,19 @@ class DashboardModule(WebModule):
             }
 
     def _get_system_metrics(self) -> dict:
+        # the psutil samples, temps and hardware loads are expensive; cheaper
+        # profiles serve a cached copy (0 = no cache, today's behavior)
+        cache_s = performance.get_profile().system_metrics_cache_s
+        now = time.monotonic()
+        if cache_s > 0 and self._system_cache is not None:
+            cached_at, cached = self._system_cache
+            if now - cached_at < cache_s:
+                return cached
+        data = self._collect_system_metrics()
+        self._system_cache = (now, data)
+        return data
+
+    def _collect_system_metrics(self) -> dict:
         if not PSUTIL_AVAILABLE:
             return {
                 "cpu_percent": None,
@@ -405,6 +439,32 @@ class DashboardModule(WebModule):
         self._npu_load_cache = (now, result)
         return result
 
+    def _camera_resolution(self, cam, name: str) -> str | None:
+        # cached display string, read straight off the capture buffer - never
+        # camera.get_frame(), which copies the frame and re-runs every frame
+        # processor just to learn its size
+        now = time.monotonic()
+        cached = self._resolution_cache.get(name)
+        if cached is not None and now - cached[0] < _RESOLUTION_CACHE_S:
+            return cached[1]
+
+        resolution = None
+        try:
+            frame = None
+            lock = getattr(cam, "frame_lock", None)
+            if lock is not None:
+                with lock:
+                    frame = getattr(cam, "frame", None)
+            else:
+                frame = getattr(cam, "frame", None)
+            if frame is not None:
+                h, w = frame.shape[:2]
+                resolution = f"{w}x{h}"
+        except Exception:
+            resolution = None
+        self._resolution_cache[name] = (now, resolution)
+        return resolution
+
     def _get_camera_status(self) -> list[dict]:
         cameras = self.context.get("cameras") or []
         cam_status = []
@@ -416,24 +476,13 @@ class DashboardModule(WebModule):
                     if hasattr(cam, "config")
                     else str(cam.source)
                 )
-                resolution = None
-                try:
-                    frame = cam.get_frame() if hasattr(cam, "get_frame") else None
-                    if frame is not None:
-                        import numpy as np
-
-                        if isinstance(frame, np.ndarray):
-                            h, w = frame.shape[:2]
-                            resolution = f"{w}x{h}"
-                except Exception:
-                    pass
                 cam_status.append(
                     {
                         "name": name,
                         "ok": age < 1.0,
                         "stale": 1.0 <= age < 3.0,
                         "frame_age_ms": round(age * 1000, 1),
-                        "resolution": resolution,
+                        "resolution": self._camera_resolution(cam, name),
                     }
                 )
             except Exception:

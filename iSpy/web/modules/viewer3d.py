@@ -1,9 +1,11 @@
 import math
+import time
 from pathlib import Path
 
 from flask import jsonify, render_template
 
 from iSpy.config.iSpyConfig import unit_to_inches
+from iSpy.core import performance
 from iSpy.web.Backend.WebModule import WebModule
 
 # inches -> config output unit scale, same literal duplicated across every
@@ -21,6 +23,9 @@ _INCHES_TO_OUTPUT_UNIT = {
     "frc": 0.0254,
 }
 
+#: how long a recent poll keeps the viewer counted as open
+_VIEWER_GRACE_S = 5.0
+
 
 class Viewer3DModule(WebModule):
     plugin_name = "viewer3d"
@@ -31,6 +36,13 @@ class Viewer3DModule(WebModule):
         self._cached_num_keypoints = None
         self._cached_camera_names = None
         self._overlays: dict[str, dict] = {}
+        # when the viewer page last polled - the cheaper profiles only rebuild
+        # the per-tick object snapshot while it is open
+        self._last_poll = 0.0
+
+    def has_viewers(self, now: float = 0.0) -> bool:
+        now = now or time.monotonic()
+        return (now - self._last_poll) < _VIEWER_GRACE_S
 
     # overlay API (called by add-ons)
 
@@ -55,6 +67,15 @@ class Viewer3DModule(WebModule):
     # update (called every vision tick)
 
     def update(self, frame_data: dict):
+        if (
+            performance.get_profile().viewer3d_open_only
+            and (time.monotonic() - self._last_poll) >= _VIEWER_GRACE_S
+        ):
+            # the viewer page polls /api/detections/latest every 200ms. with
+            # nobody polling, building the snapshot (one dict per detection)
+            # every tick is pure waste; the first poll after opening rebuilds
+            # it from the next tick.
+            return
         camera_names = {
             self._camera_display_name(cam) for cam in self.context.get("cameras", [])
         }
@@ -186,7 +207,9 @@ class Viewer3DModule(WebModule):
         return 17
 
     def _latest(self):
+        self._last_poll = time.monotonic()
         return jsonify(objects=self._latest_objects)
 
     def _overlays_endpoint(self):
+        self._last_poll = time.monotonic()
         return jsonify(overlays=list(self._overlays.values()))

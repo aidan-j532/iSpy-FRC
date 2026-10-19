@@ -1852,5 +1852,225 @@ class TestGameModeOfflineOverride(unittest.TestCase):
             self.assertTrue(bool(saved.get("game_mode_app_mode_backup", False)))
 
 
+class TestPerformanceProfiles(unittest.TestCase):
+    def setUp(self):
+        from iSpy.core import performance
+
+        os.environ.pop("ISPY_FORCE_WEB", None)
+        performance.set_level_for_run(performance.DEFAULT_LEVEL)
+
+    def tearDown(self):
+        from iSpy.core import performance
+
+        os.environ.pop("ISPY_FORCE_WEB", None)
+        performance.set_level_for_run(performance.DEFAULT_LEVEL)
+
+    @staticmethod
+    def _temp_config(tmp):
+        from iSpy.config.iSpyConfig import iSpyConfig
+
+        with _QuietLogging():
+            return iSpyConfig(str(Path(tmp) / "config.json"), create=True)
+
+    def test_clamp_accepts_only_real_levels(self):
+        from iSpy.core import performance
+
+        for level in range(0, 5):
+            self.assertEqual(performance.clamp(level), level)
+            self.assertEqual(performance.clamp(str(level)), level)
+        for bad in (None, -1, 5, 99, "banana", "2.5", 2.5, True, False, [], {}):
+            self.assertIsNone(performance.clamp(bad), f"{bad!r} must not be a level")
+
+    def test_invalid_config_falls_back_to_full_features(self):
+        from iSpy.core import performance
+
+        with _QuietLogging():
+            self.assertEqual(
+                performance.arm_from_config({"performance_level": 99}), 4
+            )
+            self.assertEqual(
+                performance.arm_from_config({"performance_level": "banana"}), 4
+            )
+            self.assertEqual(performance.arm_from_config({}), 4)
+            self.assertEqual(
+                performance.arm_from_config({"performance_level": "2"}), 2
+            )
+        self.assertEqual(performance.get_level(), 2)
+
+    def test_profiles_get_monotonically_cheaper(self):
+        from iSpy.core import performance
+
+        levels = list(range(4, -1, -1))  # 4 -> 0 = full features -> max fps
+
+        multipliers = [performance.PROFILES[l].ui_poll_multiplier for l in levels]
+        self.assertEqual(multipliers, sorted(multipliers))
+
+        caches = [performance.PROFILES[l].system_metrics_cache_s for l in levels]
+        self.assertEqual(caches, sorted(caches))
+
+        qualities = [performance.PROFILES[l].mjpeg_quality for l in levels]
+        self.assertEqual(qualities, sorted(qualities, reverse=True))
+
+        strides = [performance.PROFILES[l].rollback_downsample_min for l in levels]
+        self.assertEqual(strides, sorted(strides))
+
+        # 0 means "every tick"; the rated levels must throttle, never speed up
+        hz = [performance.PROFILES[l].web_update_hz for l in levels if l < 4]
+        self.assertTrue(hz)
+        self.assertEqual(hz, sorted(hz, reverse=True))
+
+        # the two "everything off" facts of level 0
+        self.assertFalse(performance.PROFILES[0].web_enabled)
+        self.assertFalse(performance.PROFILES[0].rollback_recorder)
+        self.assertFalse(performance.PROFILES[0].metrics_enabled)
+        # the default level keeps today's behavior
+        full = performance.PROFILES[4]
+        self.assertTrue(full.web_enabled)
+        self.assertTrue(full.rollback_recorder)
+        self.assertTrue(full.metrics_enabled)
+        self.assertEqual(full.ui_poll_multiplier, 1.0)
+        self.assertEqual(full.web_update_hz, 0)
+        self.assertFalse(full.skip_web_without_viewers)
+        self.assertFalse(full.annotate_only_when_watched)
+        self.assertTrue(full.fps_console_print)
+
+    def test_effective_app_mode_truth_table(self):
+        from iSpy.core import performance
+
+        on = {"app_mode": True}
+        off = {"app_mode": False}
+
+        performance.set_level_for_run(4)
+        self.assertTrue(performance.effective_app_mode(on))
+        self.assertFalse(performance.effective_app_mode(off))
+
+        # level 0 turns the web off even though app_mode still says True
+        performance.set_level_for_run(0)
+        self.assertFalse(performance.effective_app_mode(on))
+        self.assertFalse(performance.effective_app_mode(off))
+
+        # the recovery hatch wins for one run - and for the whole run only
+        with patch.dict(os.environ, {"ISPY_FORCE_WEB": "1"}):
+            self.assertTrue(performance.effective_app_mode(on))
+            self.assertTrue(performance.effective_app_mode(off))
+        os.environ.pop("ISPY_FORCE_WEB", None)
+        self.assertFalse(performance.effective_app_mode(on))
+
+    def test_effective_app_mode_never_writes_app_mode(self):
+        import json
+
+        from iSpy.core import performance
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._temp_config(tmp)
+            path = Path(tmp) / "config.json"
+            before_dict = json.loads(json.dumps(config.config))
+            before_file = path.read_bytes()
+
+            performance.set_level_for_run(0)
+            with _QuietLogging():
+                self.assertFalse(performance.effective_app_mode(config))
+                self.assertEqual(
+                    performance.arm_from_config(config), 4
+                )  # the test config has no level 0 - still 4
+
+            self.assertEqual(config.config, before_dict)
+            self.assertEqual(path.read_bytes(), before_file)
+            self.assertTrue(bool(config.get("app_mode", True)))
+
+    def test_api_rejects_level_zero_without_confirm(self):
+        from iSpy.core import performance
+        from iSpy.web.Backend.WebApp import create_app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._temp_config(tmp)
+            with _QuietLogging():
+                app = create_app(cameras=[], config=config)
+            client = app.flask_app.test_client()
+
+            resp = client.post("/api/performance", json={"level": 0})
+            self.assertEqual(resp.status_code, 400)
+            self.assertEqual(int(config.get("performance_level")), 4)
+
+            resp = client.post("/api/performance", json={"level": 0, "confirm_max": True})
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(int(config.get("performance_level")), 0)
+            self.assertTrue(resp.get_json().get("restart_pending"))
+            self.assertTrue(performance.restart_pending(config))
+
+            for bad in (5, -1, "banana", None):
+                resp = client.post("/api/performance", json={"level": bad})
+                self.assertEqual(resp.status_code, 400, f"level {bad!r}")
+
+            resp = client.get("/api/performance")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload["level"], 4)  # running level is unchanged
+            self.assertEqual(payload["configured_level"], 0)
+            self.assertTrue(payload["restart_pending"])
+            self.assertEqual(len(payload["levels"]), 5)
+            self.assertEqual(payload["levels"][0]["label"], "Max FPS")
+            self.assertEqual(payload["levels"][4]["label"], "Full Features")
+
+    def test_health_entry_reflects_the_level(self):
+        from iSpy.core import performance
+        from iSpy.web.modules.health import HealthModule
+
+        mod = HealthModule({"config": {"health_stale_threshold": 1.0}})
+
+        performance.set_level_for_run(4)
+        entry = mod._performance_entry()
+        self.assertEqual(entry["name"], "Performance profile")
+        self.assertEqual(entry["color"], "green")
+        self.assertIn("Full Features (4)", entry["state"])
+
+        performance.set_level_for_run(0)
+        entry = mod._performance_entry()
+        self.assertEqual(entry["color"], "yellow")
+        self.assertIn("web UI off for this run", entry["state"])
+
+    def test_web_scheduler_throttles_and_always_runs_health(self):
+        import time
+
+        from iSpy.core import performance
+        from iSpy.web.Backend.WebApp import create_app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._temp_config(tmp)
+            with _QuietLogging():
+                app = create_app(cameras=[], config=config)
+
+        class _Fake:
+            def __init__(self):
+                self.calls = 0
+
+            def update(self, frame_data):
+                self.calls += 1
+
+        health, dashboard = _Fake(), _Fake()
+        app.modules = {"health": health, "dashboard": dashboard}
+
+        # level 4: every module updates on every tick, like before the profile
+        performance.set_level_for_run(4)
+        for _ in range(10):
+            app.update({})
+        self.assertEqual((health.calls, dashboard.calls), (10, 10))
+
+        # level 1: 2 Hz cap for the payload builders, health never skipped
+        performance.set_level_for_run(1)
+        app._last_update.clear()
+        health.calls = dashboard.calls = 0
+        ticks = 0
+        deadline = time.perf_counter() + 0.6
+        while time.perf_counter() < deadline:
+            app.update({})
+            ticks += 1
+            time.sleep(0.005)
+        self.assertGreater(ticks, 10)
+        self.assertEqual(health.calls, ticks)
+        self.assertGreaterEqual(dashboard.calls, 1)
+        self.assertLessEqual(dashboard.calls, 3)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

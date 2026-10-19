@@ -8,7 +8,7 @@ from pathlib import Path
 from wpimath.geometry import Pose2d, Rotation2d
 
 from iSpy.config.iSpyConfig import iSpyAddonConfig, iSpyConfig
-from iSpy.core import network_policy
+from iSpy.core import network_policy, performance
 from iSpy.core.control_channel import ControlServer
 from iSpy.core.rollback import RollBack
 from iSpy.plugins._loader import load_plugins
@@ -47,7 +47,14 @@ class iSpy:
 
         # bring the web app up FIRST!! so the UI is reachable
         self.web_app = web_app
-        if self.web_app is None and config.config.get("app_mode", False):
+        if self.web_app is None and performance.effective_app_mode(config):
+            if performance.web_forced_on() and not performance.get_profile().web_enabled:
+                self.logger.warning(
+                    "ISPY_FORCE_WEB: web UI forced on for this run despite "
+                    "performance profile %s (%d) - nothing is saved.",
+                    performance.get_profile().label,
+                    performance.get_level(),
+                )
             self.web_app = create_app(cameras=[], config=config)
             threading.Thread(
                 target=self.web_app.run, daemon=True, name="iSpyWebServer"
@@ -564,10 +571,46 @@ class iSpy:
                 return str(name)
         return f"Camera {index + 1}"
 
+    def _recorder_wants_frames(self) -> bool:
+        """True when the rollback recorder will actually consume raw frames.
+
+        Building these copies costs a full frame copy per camera per tick even
+        when the recorder is off (performance level 0) or disk-paused, so the
+        loop asks first. An unexpected error is treated as "wanted" - never
+        silently drop a recording because of a probe failure.
+        """
+        recorder = self.utilities.get("rollback")
+        wants = getattr(recorder, "wants_raw_frames", None)
+        if not callable(wants):
+            return False
+        try:
+            return bool(wants())
+        except Exception:
+            return True
+
+    def _annotations_wanted(self) -> bool:
+        """True when this tick's plot()/debug-frame work has a consumer.
+
+        Only levels 2-0 skip annotation, and only when nothing is watching:
+        no MJPEG feed, no lightbox, no 3D-viewer poll, no dashboard SSE. The
+        calibration wizard drives its own feed and is unaffected.
+        """
+        if not performance.get_profile().annotate_only_when_watched:
+            return True
+        web = self.web_app
+        if web is None:
+            return False
+        try:
+            return web.anyone_watching()
+        except Exception:
+            return True
+
     def _raw_frames(self, cams) -> dict:
         # raw (pre-processor, pre-plot) frames for the rollback recorder. a
         # camera that is disconnected or serving a stale frame is skipped rather
         # than writing its placeholder "camera not found" image to disk
+        if not self._recorder_wants_frames():
+            return {}
         frames = {}
         for i, cam in enumerate(cams):
             try:
@@ -664,11 +707,15 @@ class iSpy:
         if hasattr(camera, "get_debug_data"):
             frame_data["debug_data"] = camera.get_debug_data() or {}
         if not camera.in_calibration_mode():
-            if hasattr(camera, "get_debug_frame"):
+            # plot()/debug-frame drawing is the most expensive part of building
+            # this dict - skip it when nothing is streaming or viewing (levels
+            # 2-0)
+            annotate = self._annotations_wanted()
+            if annotate and hasattr(camera, "get_debug_frame"):
                 debug_frame = camera.get_debug_frame(frame)
                 if debug_frame is not None:
                     frame_data["debug_frame"] = debug_frame
-            if hasattr(camera, "plot"):
+            if annotate and hasattr(camera, "plot"):
                 plotted_frame = camera.plot(frame)
                 if plotted_frame is not None:
                     frame_data["frame"] = plotted_frame
@@ -750,7 +797,7 @@ class iSpy:
         }
         if hasattr(handler, "get_camera_debug_data"):
             frame_data["debug_data"] = handler.get_camera_debug_data() or {}
-        if hasattr(handler, "get_camera_debug_frame"):
+        if self._annotations_wanted() and hasattr(handler, "get_camera_debug_frame"):
             debug_frame = handler.get_camera_debug_frame(frame)
             if debug_frame is not None:
                 frame_data["debug_frame"] = debug_frame
@@ -759,6 +806,7 @@ class iSpy:
 
     def run_solo_mode(self):
         max_fps = self.config.get("max_fps", 0)
+        print_fps = performance.get_profile().fps_console_print
         last_frame_data = None
         try:
             camera = self.cameras[0]
@@ -794,10 +842,12 @@ class iSpy:
                     time.sleep(sleep_time)
 
                 actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
-                print(f"\rFPS: {actual_fps:.1f}   ", end="")
+                if print_fps:
+                    print(f"\rFPS: {actual_fps:.1f}   ", end="")
 
         finally:
-            print()
+            if print_fps:
+                print()
             self._stop_all_plugins()
             if self.web_app:
                 self.web_app.stop()
@@ -810,6 +860,7 @@ class iSpy:
             self.logger.error("Multi-camera handler not initialized.")
             return
         max_fps = self.config.get("max_fps", 0)
+        print_fps = performance.get_profile().fps_console_print
         try:
             self.logger.info("Multi mode - warming up...")
             self.run_multi_vision(handler)
@@ -843,10 +894,12 @@ class iSpy:
                     time.sleep(sleep_time)
 
                 actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
-                print(f"\rFPS: {actual_fps:.1f}   ", end="")
+                if print_fps:
+                    print(f"\rFPS: {actual_fps:.1f}   ", end="")
 
         finally:
-            print()
+            if print_fps:
+                print()
             self._stop_all_plugins()
             if self.web_app:
                 self.web_app.stop()

@@ -131,8 +131,7 @@ async function refresh() {
     }
   } catch(e) { console.error('Metrics refresh failed:', e); metricsConn.fail(); }
 }
-setInterval(refresh, 1000);
-refresh();
+ispyPoll(refresh, 1000);
 
 window.addEventListener('beforeunload', () => {
   navigator.sendBeacon('/api/metrics/save');

@@ -344,6 +344,33 @@
 
 let refreshTimer = null;
 let currentRate = 1000;
+// the performance profile scales this page's own refresh dropdown and pauses
+// it while the tab is hidden - the user's choice of interval is preserved,
+// just stretched (and re-timed once /api/performance lands)
+function refreshMs(base) {
+  const k = (window.ispyPerf && window.ispyPerf.ui_poll_multiplier) || 1;
+  return Math.max(1, Math.round(base * k));
+}
+
+function stopRefreshTimer() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function startRefreshTimer() {
+  stopRefreshTimer();
+  refreshTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden' && window.ispyPerf.pause_poll_hidden) return;
+    refreshCameras();
+  }, refreshMs(currentRate));
+}
+
+document.addEventListener('ispy:performance', () => {
+  if (refreshTimer) startRefreshTimer();
+});
+
 let knownCameras = new Map();
 const camerasConn = connTracker(2);
 let pipelineSchemas = {};
@@ -2025,8 +2052,7 @@ function resetTuning() {
 
 function setRefreshRate() {
   currentRate = Number($id('refresh-rate').value);
-  clearInterval(refreshTimer);
-  refreshTimer = setInterval(refreshCameras, currentRate);
+  startRefreshTimer();
 }
 
 // camera calibration wizard
@@ -2374,8 +2400,7 @@ function openCalibrationWizard() {
   calibrationState.frozen = false;
 
   if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
+    stopRefreshTimer();
   }
   pauseCameraGridFeeds();
 
@@ -2459,7 +2484,7 @@ function closeCalibrationWizard() {
   stopAutoPolling();
   endCalibrationMode(camera);
   resumeCameraGridFeeds();
-  if (!refreshTimer) refreshTimer = setInterval(refreshCameras, currentRate);
+  if (!refreshTimer) startRefreshTimer();
 }
 
 function renderFocalCalibration(body) {
@@ -2873,7 +2898,7 @@ async function resetCalibration() {
 document.addEventListener('keydown', lightboxKey);
 
 refreshCameras();
-refreshTimer = setInterval(refreshCameras, currentRate);
+startRefreshTimer();
 _syncUnit();
 
 /* one timer toggles the blink class on every dot at the same instant - per-element

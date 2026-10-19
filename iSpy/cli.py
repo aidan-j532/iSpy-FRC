@@ -28,15 +28,58 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     boot.add_boot_arguments(start)
 
+    # recovery hatch for the performance slider: level 0 turns the web UI off,
+    # so "ispy performance 4" must be reachable over SSH alone
+    perf = subparsers.add_parser(
+        "performance",
+        help="Set the performance profile (0=Max FPS .. 4=Full Features) in "
+        "Config/config.json and exit",
+    )
+    perf.add_argument(
+        "level",
+        type=int,
+        choices=range(0, 5),
+        metavar="{0,1,2,3,4}",
+        help="0 Max FPS, 1 Performance, 2 Balanced, 3 Smooth, 4 Full Features",
+    )
+
     return parser
+
+
+def _set_performance_level(level: int) -> int:
+    from iSpy.config.iSpyConfig import iSpyConfig
+    from iSpy.core import performance
+
+    config_path = boot.search_for_config()
+    if not config_path:
+        print(
+            "No Config/config.json found - run 'ispy setup' first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    config = iSpyConfig(str(config_path), create=False)
+    config.set("performance_level", int(level))
+    config.save()
+    profile = performance.PROFILES[int(level)]
+    print(f"Performance profile set to {profile.label} ({profile.level}).")
+    print("Restart vision (or reboot) to apply it.")
+    if profile.level == 0:
+        print(performance.recovery_help())
+    return 0
 
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
+
+    if args.command == "performance":
+        return _set_performance_level(args.level)
+
     config = boot.on_boot(
         install_service=args.service and not args.replay,
         fresh=args.command == "setup",
         wait=args.wait and not args.replay,
+        force_web=getattr(args, "web", False),
     )
 
     if args.replay:
