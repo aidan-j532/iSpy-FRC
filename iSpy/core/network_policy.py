@@ -1,22 +1,5 @@
-"""Process-wide offline mode policy.
-
-Offline mode blocks traffic to the *public internet* only. Everything that
-talks to the robot LAN (NetworkTables, the dashboard, loopback, mDNS, the
-Tello drone) keeps working, because field boards sit on an isolated LAN and
-the whole point of the mode is to skip the online-only niceties without
-taking the robot link down with them.
-
-Two ways in:
-
-- the top-level ``offline_mode`` config key (a normal setting, saved to
-  config.json), and
-- Game Mode, which forces offline for its one-shot run without persisting
-  anything (see boot._consume_game_mode_web_off).
-
-``ISPY_OFFLINE=1`` in the environment mirrors the state into every
-subprocess (pip, the RKNN convert worker, the yolo-world reparam worker),
-so no child can quietly start downloading while the parent is offline.
-"""
+# offline mode: blocks the public internet only - the robot LAN (NetworkTables,
+# dashboard, loopback, mDNS, Tello) keeps working. ISPY_OFFLINE=1 mirrors it to children
 
 import ipaddress
 import logging
@@ -29,25 +12,19 @@ logger = logging.getLogger(__name__)
 
 OFFLINE_ENV = "ISPY_OFFLINE"
 
-# set while offline so huggingface_hub / transformers fail fast instead of
-# hanging on a retry storm, and cleared again when offline mode turns off (a
-# stray value must not keep HF offline afterwards).
+# set while offline so huggingface_hub/transformers fail fast instead of hanging
+# on a retry storm, cleared again when offline mode turns off
 _HF_ENV_KEYS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
 
 
 class OfflineError(RuntimeError):
-    """Offline mode blocked an attempt to reach the internet."""
+    pass
 
 
+# one internet need an add-on declares. critical means it can't work without
+# it (skipped offline), non-critical means one optional feature goes away
 @dataclass
 class NetworkRequirement:
-    """One internet need an add-on declares.
-
-    ``critical=True`` means the add-on cannot do its job without it and is
-    skipped while offline; ``critical=False`` means only some optional
-    feature goes away and the add-on still loads.
-    """
-
     name: str
     reason: str
     critical: bool = True
@@ -61,18 +38,14 @@ _lock = threading.RLock()
 _offline = os.environ.get(OFFLINE_ENV) == "1"
 _reason = "environment" if _offline else ""
 
-# what got skipped / degraded this process; the web UI reads this through
-# get_report(). deduplicated on (bucket, kind, name, feature).
+# what got skipped/degraded this process, the web UI reads it through get_report().
+# deduplicated on (bucket, kind, name, feature)
 _events: dict[str, list] = {"skipped": [], "degraded": []}
 _seen: set = set()
 
 
 def set_offline(on: bool, reason: str = "") -> None:
-    """Turn offline mode on/off for this process (and its children).
-
-    Idempotent - flipping it twice does not double-log or leave half of the
-    guard installed.
-    """
+    # idempotent - flipping it twice doesn't double-log or half-uninstall the guard
     global _offline, _reason
     on = bool(on)
     with _lock:
@@ -80,8 +53,8 @@ def set_offline(on: bool, reason: str = "") -> None:
         _offline = on
         if changed:
             _reason = str(reason or "config") if on else ""
-            # never leak skips/degradeds across a flip - the next run rebuilds
-            # its own report from the add-ons it actually loaded
+            # never leak skips/degradeds across a flip - the next run rebuilds its
+            # own report from the add-ons it actually loaded
             _events["skipped"].clear()
             _events["degraded"].clear()
             _seen.clear()
@@ -113,7 +86,7 @@ def is_offline() -> bool:
 
 def offline_reason() -> str:
     if os.environ.get(OFFLINE_ENV) == "1" and not _offline:
-        # a child process inherits the flag but not the in-process reason
+        # a child inherits the flag but not the in-process reason
         return "environment"
     with _lock:
         return _reason
@@ -123,13 +96,13 @@ def offline_reason() -> str:
 # report registry
 
 
+# an add-on was not loaded because offline mode blocks it
 def record_skip(kind: str, name: str, reason: str) -> None:
-    """An add-on was not loaded because offline mode blocks it."""
     _record_event("skipped", {"kind": kind, "name": name, "reason": reason})
 
 
+# an add-on loaded, but one optional online feature is disabled
 def record_degraded(kind: str, name: str, feature: str, reason: str) -> None:
-    """An add-on loaded, but one optional online feature is disabled."""
     _record_event(
         "degraded",
         {"kind": kind, "name": name, "feature": feature, "reason": reason},
@@ -166,9 +139,8 @@ def reset_report() -> None:
 # address policy
 
 
-#: Everything offline mode is allowed to reach: loopback, RFC1918,
-#: link-local and the IPv6 private ranges. Deliberately a fixed list - the
-#: spec is "the public internet is off", not "whatever is_private says".
+#: everything offline mode may reach: loopback, RFC1918, link-local and the IPv6
+#: private ranges. fixed list - the spec is "the public internet is off"
 _ALLOWED_NETWORKS = tuple(
     ipaddress.ip_network(net)
     for net in (
@@ -193,14 +165,9 @@ def _ip_is_local(ip) -> bool:
     )
 
 
+# true when host points at this machine or the local network. hostnames get
+# resolved; one that won't resolve counts as blocked (can't prove it's local)
 def is_private_address(host) -> bool:
-    """True when *host* points at this machine or the local network.
-
-    Accepts an IP literal or a hostname; hostnames are resolved (through the
-    real getaddrinfo, never the guarded one). A hostname that cannot be
-    resolved is *not* private - while offline we cannot prove it is local,
-    so it counts as blocked.
-    """
     if not host:
         return False
     text = str(host).strip()
@@ -232,12 +199,8 @@ def is_private_address(host) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# socket guard
-#
-# Defense in depth for the code we do not control (huggingface_hub,
-# requests, urllib, pip invoked in-process). Plugins are supposed to gate
-# themselves through the policy, but a friendly `requests.get` in a third
-# party helper would otherwise sail straight out of the LAN.
+# socket guard - catches third-party code (huggingface_hub, requests, urllib,
+# in-process pip) that would otherwise sail straight out of the LAN
 
 _guard_lock = threading.Lock()
 _guard_installed = False
@@ -305,16 +268,12 @@ def _remove_socket_guard() -> None:
 # ---------------------------------------------------------------------------
 # error classification for try_online() callers
 
-
 _network_exceptions: tuple | None = None
 
 
+# OfflineError plus the connection-level errors; requests/urllib wrap socket
+# errors in their own types, so grab those when they're importable
 def network_exceptions() -> tuple:
-    """Exception types that mean 'the network is missing or flaky'.
-
-    OfflineError plus the connection-level errors; requests/urllib wrap
-    socket errors in their own types, so add those when importable.
-    """
     global _network_exceptions
     if _network_exceptions is not None:
         return _network_exceptions
@@ -341,9 +300,7 @@ def network_exceptions() -> tuple:
     return _network_exceptions
 
 
-# a child process (the RKNN convert worker, the yolo-world reparam worker,
-# pip itself) inherits ISPY_OFFLINE=1 - the flag alone is not enough, so arm
-# the guard at import time too. the module-level _offline above already
-# picked the environment up.
+# a child (RKNN convert worker, yolo-world reparam worker, pip) inherits
+# ISPY_OFFLINE=1 - the flag alone isn't enough, so arm the guard at import too
 if os.environ.get(OFFLINE_ENV) == "1":
     _install_socket_guard()

@@ -23,9 +23,8 @@ from iSpy.web.modules.health import HealthModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
 
-#: modules that must run on every vision tick regardless of the performance
-#: profile: health's staleness check is how /health knows the loop is alive,
-#: and the rollback module does no per-tick work at all.
+#: modules that must run on every vision tick regardless of the profile: health's
+#: staleness check is how /health knows the loop is alive, rollback does no work
 _ALWAYS_UPDATE = {"health", "rollback"}
 
 
@@ -111,14 +110,9 @@ class iSpyWebApp:
             except Exception:
                 self.logger.exception("Web module '%s' update failed", name)
 
+    # is any browser page consuming annotated frames? the loop uses this to decide
+    # if plot()/debug drawing is worth doing. rollback isn't a watcher (raw frames)
     def anyone_watching(self) -> bool:
-        """True when some browser page currently consumes annotated frames.
-
-        Used by the vision loop to decide whether plot()/debug-frame drawing is
-        worth doing at the cheaper performance levels. Any module that exposes
-        has_viewers() participates; rollback recording is not a watcher because
-        it consumes the raw frames, not the annotated ones.
-        """
         now = time.monotonic()
         for mod in self.modules.values():
             checker = getattr(mod, "has_viewers", None)

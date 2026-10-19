@@ -1,19 +1,5 @@
-"""Performance profiles: one table that trades "luxury" features for FPS.
-
-The Settings page exposes a 5-stop slider backed by the top-level
-``performance_level`` config value (0 = Max FPS ... 4 = Full Features, the
-default). Every consumer reads its knobs from the PROFILES table here - there
-are deliberately no scattered ``if level == 2`` checks anywhere else.
-
-What no level may ever trim: core detection, trackers, NetworkTables
-publishing, robot pose reads, the watchdog/control channel and calibration
-correctness. Those are not performance knobs and never appear in this table.
-
-The level is resolved into memory once per boot (``arm_from_config``) so the
-web-on/off decision, the loop and every web module all read the same value.
-Changing the config value takes effect on the next boot;
-``set_level_for_run`` exists for the bench harness and tests.
-"""
+# performance profiles: one table trading luxury features for FPS. backed by the
+# performance_level key (0 = Max FPS ... 4 = Full Features); detection is never trimmed
 
 from __future__ import annotations
 
@@ -26,8 +12,7 @@ logger = logging.getLogger(__name__)
 
 MIN_LEVEL = 0
 MAX_LEVEL = 4
-#: what an install without any performance_level (or an invalid one) gets -
-#: exactly today's full-feature behavior.
+#: what an install without a performance_level (or an invalid one) gets
 DEFAULT_LEVEL = 4
 
 
@@ -68,9 +53,8 @@ class Profile:
     viewer3d_open_only: bool
 
 
-# the single source of truth. at level 0 the web is off, so its knobs mirror
-# level 1: if the UI is forced back on (ispy start --web / ISPY_FORCE_WEB=1) it
-# must be the cheapest possible UI, never a full-featured one.
+# the whole table. level 0's web knobs mirror level 1 so a forced-on UI stays
+# the cheapest possible one
 PROFILES: dict[int, Profile] = {
     4: Profile(
         level=4,
@@ -174,8 +158,8 @@ PROFILES: dict[int, Profile] = {
     ),
 }
 
-#: per-level bullet list for the settings slider and the confirmation dialog.
-#: describes what the level changes relative to Full Features.
+#: per-level bullet list for the settings slider and the confirmation dialog,
+#: describing what each level changes relative to Full Features
 LEVEL_NOTES: dict[int, tuple[str, ...]] = {
     4: (
         "Everything on - the full web UI, live previews, overlays and recording.",
@@ -226,8 +210,8 @@ _lock = threading.Lock()
 _runtime_level: int | None = None
 
 
+# turns garbage into None so a bad config value just falls back to the default
 def clamp(value) -> int | None:
-    """Coerce value into 0..4, or None when it is not a usable number."""
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, float) and not value.is_integer():
@@ -242,7 +226,6 @@ def clamp(value) -> int | None:
 
 
 def get_level() -> int:
-    """The level in effect for this run (defaults to Full Features)."""
     with _lock:
         return _runtime_level if _runtime_level is not None else DEFAULT_LEVEL
 
@@ -251,8 +234,8 @@ def get_profile() -> Profile:
     return PROFILES[get_level()]
 
 
+# in-memory only, never written anywhere. returns the applied value
 def set_level_for_run(level: int) -> int:
-    """Set the in-memory level (never written anywhere). Returns the applied value."""
     global _runtime_level
     if level is None:
         level = DEFAULT_LEVEL
@@ -273,12 +256,12 @@ def set_level_for_run(level: int) -> int:
     return applied
 
 
+# the boot log line, plus recovery help at level 0 (the one level that takes
+# the UI away, so it warns loud on purpose)
 def log_profile(level: int | None = None) -> None:
-    """The boot log line for the active profile (with recovery help at level 0)."""
     profile = PROFILES[get_level() if level is None else level]
     logger.info("Performance profile: %s (%d)", profile.label, profile.level)
     if profile.level == 0:
-        # loud on purpose: 0 is the only level that takes the UI away
         logger.warning(
             "Performance profile 0 (Max FPS): web UI OFF, rollback recorder "
             "OFF, metrics OFF, FPS console print OFF. %s",
@@ -286,8 +269,8 @@ def log_profile(level: int | None = None) -> None:
         )
 
 
+# the raw performance_level from a config object, None when unset/invalid
 def configured_level(config) -> int | None:
-    """The raw performance_level from a config object, or None when unset/invalid."""
     if config is None:
         return None
     try:
@@ -306,20 +289,18 @@ def configured_level(config) -> int | None:
     return level
 
 
+# resolve the level out of the config into memory, called once at boot
 def arm_from_config(config) -> int:
-    """Resolve the level out of the config into memory. Called once at boot."""
     level = configured_level(config)
     return set_level_for_run(DEFAULT_LEVEL if level is None else level)
 
 
 def restart_pending(config) -> bool:
-    """True when the configured level differs from the one the process runs."""
     level = configured_level(config)
     return level is not None and level != get_level()
 
 
 def web_forced_on() -> bool:
-    """True when the web UI was force-enabled for this run (recovery path)."""
     return os.environ.get("ISPY_FORCE_WEB", "").strip().lower() in (
         "1",
         "true",
@@ -333,13 +314,9 @@ def _truthy(value) -> bool:
     return bool(value)
 
 
+# the one web on/off decision, shared by boot and iSpy.__init__. never writes
+# app_mode; ISPY_FORCE_WEB=1 brings the UI back for a single run
 def effective_app_mode(config) -> bool:
-    """The one web-UI on/off decision, shared by boot and iSpy.__init__.
-
-    Off when the user disabled app_mode, when Game Mode armed its one-shot run,
-    or when the performance level turns the web off. ISPY_FORCE_WEB=1 forces it
-    back on for this run only. This never writes app_mode anywhere.
-    """
     if web_forced_on():
         return True
     try:
@@ -352,7 +329,6 @@ def effective_app_mode(config) -> bool:
 
 
 def describe(level: int) -> list[str]:
-    """The bullet list for a level (falls back to the default level's)."""
     level = clamp(level)
     if level is None:
         level = DEFAULT_LEVEL
@@ -363,8 +339,8 @@ def recovery_help() -> str:
     return _RECOVERY
 
 
+# everything the settings slider needs to render all five stops
 def levels_payload() -> list[dict]:
-    """Everything the settings slider needs to render all five stops."""
     return [
         {
             "level": level,

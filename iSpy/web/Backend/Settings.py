@@ -125,8 +125,7 @@ class SettingsModule(WebModule):
         if level is None:
             return jsonify(error="level must be an integer 0-4"), 400
         # the UI handles the level-0 countdown, but the raw JSON editor and
-        # curl can still reach this route - require the explicit flag so
-        # "web UI off" can never be a silent accident
+        # curl can still reach this route - require the explicit flag
         if level == 0 and not data.get("confirm_max"):
             return jsonify(
                 error=(
@@ -167,9 +166,8 @@ class SettingsModule(WebModule):
             old_offline = bool(config.get("offline_mode", False))
             config._update_config(data)
             config.save()
-            # the imported file owns offline_mode (it is not ours to silently
-            # drop or flip) - but a machine-to-machine import that changes it
-            # must say so, or it reads as the internet "randomly" breaking
+            # the imported file owns offline_mode - not ours to silently drop
+            # or flip - but say so, or it reads as the internet randomly breaking
             new_offline = bool(config.get("offline_mode", False))
             if old_offline != new_offline:
                 logger.warning(

@@ -729,10 +729,8 @@ def converter_python() -> Path:
         # before attempting a potentially large converter installation, so a
         # repeated provisioning failure can never keep accumulating stale envs.
         _cleanup_orphans(_identity_hash(identity))
-        # offline mode: provisioning pip-installs the RKNN toolkit, which can
-        # never succeed without the internet - fail with an actionable reason
-        # instead of a pip retry/timeout traceback, and let the caller fall
-        # back to the .pt
+        # offline mode: provisioning pip-installs the RKNN toolkit, which can't
+        # succeed without the internet - fail clean and let the caller use the .pt
         from iSpy.core import network_policy
 
         if network_policy.is_offline():

@@ -121,10 +121,8 @@ class HealthModule(WebModule):
         }, healthy
 
     def _performance_entry(self) -> dict:
-        # always visible on the Health page: at levels 0-1 it is intentionally
-        # degraded UX, so it reads yellow like an offline skip. It rides in a
-        # separate payload key so addon_health stays "add-ons and pipelines
-        # only"; the page prepends it to the same table.
+        # always visible: at levels 0-1 it is intentionally degraded UX, so it
+        # reads yellow. own payload key so addon_health stays add-ons only
         profile = performance.get_profile()
         state = f"{profile.label} ({profile.level})"
         if not profile.web_enabled:
@@ -194,10 +192,8 @@ class HealthModule(WebModule):
                 }
             )
 
-        # add-ons offline mode skipped were never constructed, so there is no
-        # instance to ask - surface them from the policy report instead.
-        # yellow, not red: skipping is the intended behavior while offline.
-        # pipelines are left out because their camera row already reports it.
+        # skipped add-ons were never constructed, no instance to ask - surface
+        # them from the report. yellow, pipelines left to their camera row
         for skip in network_policy.get_report().get("skipped", []):
             if str(skip.get("kind")) == "pipeline":
                 continue

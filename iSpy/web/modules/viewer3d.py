@@ -71,10 +71,8 @@ class Viewer3DModule(WebModule):
             performance.get_profile().viewer3d_open_only
             and (time.monotonic() - self._last_poll) >= _VIEWER_GRACE_S
         ):
-            # the viewer page polls /api/detections/latest every 200ms. with
-            # nobody polling, building the snapshot (one dict per detection)
-            # every tick is pure waste; the first poll after opening rebuilds
-            # it from the next tick.
+            # the viewer page polls /api/detections/latest every 200ms - nobody
+            # polling means building the snapshot every tick is pure waste
             return
         camera_names = {
             self._camera_display_name(cam) for cam in self.context.get("cameras", [])

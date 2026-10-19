@@ -50,15 +50,9 @@ def _recommended_format_cached() -> str:
     return recommend_format(ignore_dependencies=True, runtime_supported=False)
 
 
+# internet needs of an optimize/quantize request. a build with missing deps can never
+# finish offline (pipeline would sit at "optimizing" forever), so the camera gets skipped
 def offline_build_requirements(settings: dict) -> list:
-    """Critical internet needs of an optimize/quantize request.
-
-    Judged from the raw pipeline settings. A build whose dependencies (or
-    the RKNN converter environment) are missing locally can never finish
-    while offline - the pipeline would sit at "optimizing" forever instead
-    of falling back to the .pt - so the offline gate skips the camera with
-    this reason rather than letting it dangle.
-    """
     optimize = settings.get("optimize", settings.get("auto_opt", False))
     if isinstance(optimize, str) and optimize.strip().lower() in (
         "off",

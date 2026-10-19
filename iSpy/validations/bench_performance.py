@@ -1,18 +1,5 @@
-"""Bench the performance profiles end to end.
-
-Runs the REAL vision loop body (camera -> trackers -> utilities -> web module
-fan-out) against the bench image source for N seconds per level, then prints
-the achieved FPS and the per-part ``code_times`` breakdown. The point is to
-tune the profile table against measured numbers instead of guesses: each step
-down the slider should show up as loop time going away.
-
-Level 0 is measured with the web app absent, because that is what level 0
-actually does at boot - if you force the UI back on for the run the profile
-still keeps every web knob at its cheapest setting.
-
-Usage:
-    python -m iSpy.validations.bench_performance --seconds 5
-"""
+# benches the performance profiles: real loop body against the bench still, fps +
+# per-part code_times per level. python -m iSpy.validations.bench_performance
 
 import argparse
 import copy
@@ -29,7 +16,6 @@ _PROJECT_ROOT = Path.cwd()
 
 
 def _bench_source_image() -> Path:
-    """The synthetic bench still, same one benchmarking.py uses."""
     import cv2
     import numpy as np
 
@@ -58,9 +44,8 @@ def _load_bench_config(config_path: Path, bench_image: Path):
     if not cameras:
         raise SystemExit("No camera_configs in the config - run 'ispy setup' first.")
 
-    # exactly one camera, pointed at the still: one pipeline, no live-scene
-    # flakiness, and solo mode (which is what MultiCameraHandler-free boards
-    # actually run)
+    # exactly one camera on the still: one pipeline, no live-scene flakiness,
+    # and solo mode (what boards actually run)
     name, camera = next(iter(cameras.items()))
     camera = copy.deepcopy(camera if isinstance(camera, dict) else {})
     camera["source"] = str(bench_image)
@@ -197,10 +182,8 @@ def main(argv=None) -> int:
     repeats = max(1, int(args.repeat))
     raw_rows = []
     for rep in range(repeats):
-        # rotate the order every pass: with one full rotation per level (5
-        # passes over the 5 levels) each level sits in each position exactly
-        # once, which cancels the "the machine only gets hotter" bias that
-        # plain interleaving aliases into the numbers
+        # rotate the order every pass so each level sits in each position once -
+        # cancels the "the machine only gets hotter" bias
         rot = rep % len(levels)
         order = levels[rot:] + levels[:rot]
         print(f"-- pass {rep + 1}/{repeats}: {order} --")

@@ -60,9 +60,8 @@ def main() -> None:
 
     ensure_torch_imported()
 
-    # the parent's offline state arrives as ISPY_OFFLINE=1; importing the
-    # policy arms the socket guard in this process too, so a conversion that
-    # tries to fetch something fails fast instead of hanging
+    # ISPY_OFFLINE=1 from the parent arms the socket guard here too, so a fetch
+    # fails fast instead of hanging
     from iSpy.core import network_policy  # noqa: F401
 
     # lazy import so a bad args file fails fast w/o paying boot.py's heavy import cost

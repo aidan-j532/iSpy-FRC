@@ -178,10 +178,8 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
     @classmethod
     def network_requirements(cls, settings: dict) -> list:
-        # model weights load from local disk, so the only thing that can need
-        # the internet is a requested optimize/quantize build whose deps are
-        # missing locally (it would pip-install them or provision the RKNN
-        # converter env).
+        # weights load from local disk; only an optimize/quantize build with
+        # missing deps could need the internet (pip install / RKNN converter)
         from iSpy.vision.pipelines.optimizable import offline_build_requirements
 
         return offline_build_requirements(settings)

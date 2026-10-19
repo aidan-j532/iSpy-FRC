@@ -50,14 +50,12 @@ logger = logging.getLogger("iSpy.core.game_loop")
 
 
 def _init_offline_mode(config) -> None:
-    # both launch paths (ispy start, and the service daemon running this
-    # module directly) end up here, so the policy has to be armed here - not
-    # only in boot.on_boot, which the daemon path never calls.
+    # both launch paths (ispy start, and the service daemon running this module
+    # directly) end up here - the daemon never calls boot.on_boot
     from iSpy.core import network_policy
 
     if network_policy.is_offline():
-        # boot already armed it for this process (Game Mode), or ISPY_OFFLINE
-        # came in from a parent - never downgrade either back to the config
+        # boot already armed it (Game Mode) or ISPY_OFFLINE came from a parent
         return
     try:
         enabled = bool(config.get("offline_mode", False))
@@ -68,9 +66,8 @@ def _init_offline_mode(config) -> None:
 
 
 def _init_performance_level(config) -> None:
-    # same reason as _init_offline_mode: the watchdog daemon path never calls
-    # boot.on_boot, so the level must be resolved here too or the web would
-    # come up at Full Features while the config says otherwise
+    # same reason as _init_offline_mode: the daemon path never calls on_boot,
+    # so the level has to be resolved here too
     try:
         from iSpy.core import performance
 

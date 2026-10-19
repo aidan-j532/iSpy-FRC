@@ -377,9 +377,8 @@ class RollBack(UtilityBase):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
         vision = self.context.get("vision_instance")
-        # the performance profile can turn the recorder off for the whole run
-        # (level 0) - in that case no session folder is ever opened because
-        # update() returns before _start_recorder
+        # the performance profile can turn the recorder off for the run (level 0),
+        # in which case update() returns before _start_recorder opens a session
         profile = performance.get_profile()
         self._enabled = bool(self.config.get("enabled", True)) and not bool(
             getattr(vision, "replay_mode", False)
@@ -614,13 +613,9 @@ class RollBack(UtilityBase):
     def start(self):
         pass
 
+    # false when the loop should skip its per-camera frame copies: the recorder
+    # is the only consumer, and copying for nothing wastes a frame copy per tick
     def wants_raw_frames(self) -> bool:
-        """False when the vision loop should skip its per-camera frame copies.
-
-        The recorder is the only raw-frames consumer. When it is disabled (by
-        config or by the performance profile) or disk-paused, copying every
-        frame every tick just feeds a dictionary nobody reads.
-        """
         return self._enabled and not self._disk_paused
 
     def update(self, frame_data: dict):

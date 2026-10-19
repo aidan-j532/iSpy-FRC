@@ -479,9 +479,8 @@ class RollbackModule(WebModule):
             free = None
 
         return jsonify(
-            # runtime state, not the config value: the performance profile can
-            # turn the recorder off for this run (level 0) without touching
-            # config.json
+            # runtime state, not the config value - the profile can turn the
+            # recorder off for this run (level 0) without touching config.json
             enabled=bool(getattr(recorder, "_enabled", block.get("enabled", True))),
             performance_off=bool(getattr(recorder, "_disabled_by_profile", False)),
             replay_mode=replay_mode,

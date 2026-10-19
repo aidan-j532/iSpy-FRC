@@ -285,14 +285,9 @@ class VisionPipeline(Camera, VisionBase):
         return None
 
 
+# stand-in camera for a pipeline whose critical internet need is unmet. it
+# still shows in the UI reading "needs internet"; run() returns the raw frame
 class OfflineUnavailablePipeline(VisionPipeline):
-    """Stand-in camera for a pipeline whose critical internet need is unmet.
-
-    The camera still shows up in the UI (feed, health, status) so the user
-    reads "needs internet" instead of a camera silently vanishing or a trace
-    in the log; run() just returns the raw frame without any detection.
-    """
-
     plugin_name = "offline"
     calibration_sections = []
 

@@ -173,10 +173,8 @@
       })();
     </script>
     <script>
-      // Performance profile plumbing: /api/performance is fetched once per
-      // page load and cached on window.ispyPerf, and every page timer goes
-      // through ispyPoll so the profile's interval multiplier and the
-      // hidden-tab pause apply everywhere at once.
+      // /api/performance loads once onto window.ispyPerf; every page timer goes
+      // through ispyPoll so the multiplier + hidden-tab pause apply everywhere
       (function () {
         window.ispyPerf = {
           level: 4,
@@ -205,9 +203,8 @@
           .catch(() => {});
 
         window.ispyPoll = function (fn, baseMs) {
-          // one shared poller: fires immediately, scales its interval by the
-          // profile's multiplier, pauses while the tab is hidden when the
-          // profile asks for it, and re-times itself once the profile lands.
+          // one shared poller: fires now, scales by the profile multiplier,
+          // pauses while hidden when asked, re-times once the profile lands
           const state = { timer: null, stopped: false };
           function start() {
             const k = window.ispyPerf.ui_poll_multiplier || 1;
@@ -484,9 +481,8 @@
         .catch(() => {});
     </script>
     <script>
-      // Offline mode banner: sticks around while offline, dismissible for the
-      // session (sessionStorage) per banner. game mode runs with the web UI
-      // off, so the log stays the source of truth there.
+      // Offline mode banner: stays while offline, dismissible for the session
+      // (sessionStorage). game mode has the web off, the log is the source there
       (function () {
         const MAIN_KEY = "offline.banner.dismissed";
         const SKIP_KEY = "offline.skip.dismissed";
@@ -548,8 +544,8 @@
       })();
     </script>
     <script>
-      // Performance profile banner: visible on every page whenever the active
-      // level is below Full Features, so a trimmed install is never a mystery.
+      // Performance banner: shows on every page whenever the active level is
+      // below Full Features, so a trimmed install is never a mystery
       (function () {
         const KEY = "perf.banner.dismissed";
         const el = document.getElementById("perf-banner");

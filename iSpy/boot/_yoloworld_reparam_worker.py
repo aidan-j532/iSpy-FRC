@@ -25,9 +25,8 @@ def main():
 
         ensure_torch_imported()
 
-        # the parent's offline state arrives as ISPY_OFFLINE=1; importing the
-        # policy arms the socket guard in this process too, so ultralytics
-        # fails fast instead of trying to download anything
+        # ISPY_OFFLINE=1 arms the socket guard here too, so ultralytics fails
+        # fast instead of trying to download anything
         from iSpy.core import network_policy  # noqa: F401
 
         from ultralytics import YOLO, YOLOWorld

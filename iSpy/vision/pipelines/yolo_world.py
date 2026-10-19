@@ -91,9 +91,8 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 )
             ]
 
-        # the prompt has to be baked into the weights locally before loading;
-        # that step runs in a subprocess that imports Ultralytics, so without
-        # it installed the bake can never happen offline
+        # the prompt gets baked into the weights in a subprocess that imports
+        # Ultralytics, so the bake can't happen offline without it installed
         classes = cls._parse_classes(str(settings.get("prompt") or "A dog."))
         classes_key = hashlib.sha1("|".join(classes).encode("utf-8")).hexdigest()[:8]
         fixed = _WORLD_MODEL_DIR / "world" / f"{weights.stem}-{classes_key}.pt"

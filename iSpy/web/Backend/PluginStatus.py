@@ -198,15 +198,9 @@ def _active_pipeline_names(config) -> set:
     return names
 
 
+# evaluate an add-on's declared internet needs for the addons page. one entry
+# per camera; settings-aware, so a cached model needs nothing
 def _network_info(cls, settings_list: list[dict]) -> dict:
-    """Evaluate an add-on's declared internet needs for the addons page.
-
-    Requirements are settings-aware (a cached model needs no internet), so
-    they are evaluated against the current settings - one entry per camera,
-    or the add-on's own settings. Missing reasons under offline mode show up
-    as "skipped"/"degraded" badges; otherwise the row just gets the plain
-    "needs internet" note.
-    """
     critical: list[str] = []
     optional: list[str] = []
     for settings in settings_list or [{}]:
@@ -246,13 +240,9 @@ def _pipeline_settings_list(config, name: str) -> list[dict]:
 _NETWORK_IMPORT_ROOTS = ("requests", "urllib", "httpx", "aiohttp")
 
 
+# best-effort AST scan for a networked add-on with no offline declaration. a
+# warning, never a rejection - worst case the socket guard stops it anyway
 def _offline_declaration_warning(code: str) -> str | None:
-    """Best-effort AST scan: networked add-on without an offline declaration.
-
-    A warning (never a rejection) - the source may be doing something clever,
-    and worst case the process-wide socket guard still stops it while
-    offline.
-    """
     try:
         tree = ast.parse(code)
     except SyntaxError:

@@ -643,10 +643,8 @@ def _pip_install(
     from iSpy.core import network_policy
 
     if network_policy.is_offline():
-        # a local wheel/path still installs fine offline (and is the documented
-        # way to get uninstalled backends onto an air-gapped board); anything
-        # pip would fetch goes away with one clear reason instead of pip
-        # retrying a dead index five times.
+        # a local wheel/path still installs fine offline (air-gapped boards);
+        # anything pip would fetch is skipped instead of retrying a dead index
         is_remote = install_target.startswith(("http://", "https://"))
         is_local = not is_remote and Path(install_target).exists()
         if not is_local:
@@ -865,12 +863,9 @@ _EXPORT_DEPS = (
 )
 
 
+# build modules an optimize/quantize would need that aren't installed locally -
+# the offline policy uses this to decide if the build could ever finish
 def _missing_build_modules(backend: str | None = None) -> list[str]:
-    """Modules a model build would need that are not installed locally.
-
-    Used by the offline policy to decide whether an optimize/quantize
-    request could ever finish without pip.
-    """
     missing = [mod for mod, _ in _EXPORT_DEPS if not _is_installed(mod)]
     if backend:
         for entry in BACKEND_DEPENDENCIES.get(backend, ()):

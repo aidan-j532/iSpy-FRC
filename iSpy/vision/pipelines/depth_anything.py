@@ -26,13 +26,9 @@ _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1,
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
 
+# are the V2 weights (or a pre-exported artifact) on disk? cached means the
+# pipeline runs fine offline, missing means it would download on first use
 def _depth_weights_cached() -> bool:
-    """True when the V2 weights (or a pre-exported artifact) are on disk.
-
-    With the weights cached the pipeline runs fine offline (HF_HUB_OFFLINE
-    keeps from_pretrained on the local cache); without them it downloads on
-    first use, which offline mode blocks.
-    """
     hub = _DEPTH_HF_CACHE_DIR / "models--depth-anything--Depth-Anything-V2-Small-hf"
     try:
         if hub.is_dir() and any(hub.rglob("*.safetensors")):
@@ -104,9 +100,8 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         reqs.extend(offline_build_requirements(settings))
         return reqs
 
+    # while offline the from_pretrained paths need the weights already cached
     def _ensure_weights_local(self) -> None:
-        """Guard the from_pretrained paths: while offline the weights must
-        already be cached (an exported artifact counts too)."""
         if self.network_allowed or _depth_weights_cached():
             return
         self.require_network("downloading the Depth Anything V2 weights")

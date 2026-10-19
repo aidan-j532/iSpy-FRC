@@ -155,9 +155,7 @@ class DashboardModule(WebModule):
         self._sse_clients: list = []
         self._npu_load_cache: tuple[float, list[int] | None] | None = None
         # display-only caches: camera resolution and the psutil/hw/temp block.
-        # both used to be re-read on every vision tick via camera.get_frame()
-        # (a full copy AND every frame processor) which cost more than the rest
-        # of this module combined.
+        # both were re-read every tick via get_frame(), a full frame copy
         self._resolution_cache: dict[str, tuple[float, str | None]] = {}
         self._system_cache: tuple[float, dict] | None = None
 
@@ -170,9 +168,8 @@ class DashboardModule(WebModule):
         flask_app.add_url_rule("/api/events", "api_events", self._sse_stream)
 
     def has_viewers(self, now: float = 0.0) -> bool:
-        # the dashboard page's SSE stream is the only consumer of the tick
-        # payload; with nobody connected update() only keeps the cheap scalars
-        # fresh (the /api/status poll reads those)
+        # the SSE stream is the only consumer of the tick payload - nobody
+        # connected means update() only keeps the cheap scalars fresh
         with self._sse_lock:
             return bool(self._sse_clients)
 
@@ -440,9 +437,8 @@ class DashboardModule(WebModule):
         return result
 
     def _camera_resolution(self, cam, name: str) -> str | None:
-        # cached display string, read straight off the capture buffer - never
-        # camera.get_frame(), which copies the frame and re-runs every frame
-        # processor just to learn its size
+        # cached display string, read off the capture buffer - never get_frame(),
+        # which copies the frame and re-runs every frame processor
         now = time.monotonic()
         cached = self._resolution_cache.get(name)
         if cached is not None and now - cached[0] < _RESOLUTION_CACHE_S:

@@ -344,9 +344,8 @@
 
 let refreshTimer = null;
 let currentRate = 1000;
-// the performance profile scales this page's own refresh dropdown and pauses
-// it while the tab is hidden - the user's choice of interval is preserved,
-// just stretched (and re-timed once /api/performance lands)
+// the profile scales this page's refresh dropdown and pauses it while the tab is
+// hidden - the user's interval is kept, just stretched
 function refreshMs(base) {
   const k = (window.ispyPerf && window.ispyPerf.ui_poll_multiplier) || 1;
   return Math.max(1, Math.round(base * k));

@@ -583,8 +583,8 @@ block content %}
         .querySelectorAll(".restart-badge")
         .forEach((b) => (b.style.display = "none"));
 
-      // the performance slider manages its own badge (it is not a [data-key]
-      // field), so give it back after the sweep above
+      // the slider manages its own badge (it isn't a [data-key] field), so put
+      // it back after the sweep above
       if (typeof syncPerfBadge === "function") syncPerfBadge();
 
       if (j.needs_restart) {
@@ -1017,9 +1017,8 @@ block content %}
 
   // ---- Performance profile slider ------------------------------------------
   // Deliberately NOT a [data-key] field: the 400ms auto-save would persist
-  // level 0 the moment the knob lands there, before any warning could be
-  // read. The slider talks to /api/performance instead, and Save Settings
-  // never touches performance_level.
+  // level 0 before any warning could be read. It talks to /api/performance
+  // instead, and Save Settings never touches performance_level.
   const perfState = {
     level: 4, // running level (what the process is doing right now)
     configured: 4, // level saved into config.json (runs after restart)
@@ -1076,9 +1075,8 @@ block content %}
       perfState.configured = level;
       perfState.restart = !!j.restart_pending;
       if (perfSlider) perfSlider.value = String(level);
-      // keep the raw editor's content in step (merge only this key so any
-      // unsaved raw edits survive) - otherwise a later Save from the Raw tab
-      // would write the old level back over this one
+      // keep the raw editor in step (merge only this key so unsaved raw edits
+      // survive) - else a later Save from the Raw tab writes the old level back
       const cfgEl = document.getElementById("cfg");
       if (cfgEl) {
         try {

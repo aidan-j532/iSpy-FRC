@@ -324,12 +324,8 @@ class iSpyConfig:
             # seconds without a fresh frame before /health reports degraded
             "health_stale_threshold": 1.0,
             "metrics": True,
-            # 0 = Max FPS, 1 = Performance, 2 = Balanced, 3 = Smooth,
-            # 4 = Full Features (default). One master knob that trades the
-            # luxury features (web UI, previews, overlays, recording rate,
-            # metrics) for FPS; detection, trackers and NetworkTables output
-            # are never affected. See iSpy/core/performance.py and the
-            # Settings slider; takes effect on the next boot.
+            # 0 = Max FPS ... 4 = Full Features (default). one master knob trading
+            # luxury features for FPS, never detection/trackers/NetworkTables
             "performance_level": 4,
             "app_mode": True,
             # One-shot "Game Mode" web-off: the Settings > Advanced > Game Mode
@@ -339,11 +335,8 @@ class iSpyConfig:
             # back so the web UI comes on again automatically.
             "game_mode_web_off_next_run": False,
             "game_mode_app_mode_backup": None,
-            # Blocks traffic to the public internet only - loopback, the robot
-            # LAN (NetworkTables, dashboard), mDNS and the Tello keep working.
-            # Game Mode forces this on for its one-shot run WITHOUT saving it
-            # here, and add-ons that only need the net for niceties keep
-            # running with those parts disabled.
+            # Blocks the public internet only - robot LAN, mDNS, loopback and the
+            # Tello keep working. Game Mode forces this on for its run (not saved).
             "offline_mode": False,
             "max_fps": 0,
             # reset to False by every `boot -f` (fresh install) so the web UI

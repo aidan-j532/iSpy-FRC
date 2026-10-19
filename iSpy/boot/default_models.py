@@ -90,8 +90,7 @@ def download_default_models(fresh: bool = False) -> dict[str, Path]:
 
         if network_policy.is_offline():
             # only warn about models that are actually missing - a cached set
-            # boots silently, and the warning is one line per absent model,
-            # not a retry storm
+            # boots silently, no retry storm
             logger.warning(
                 "Offline mode: default model %s is missing and cannot be "
                 "downloaded - the pipeline that uses it will report the "

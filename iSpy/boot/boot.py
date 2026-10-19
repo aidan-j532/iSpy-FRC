@@ -191,13 +191,9 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
     config.save()
 
 
+# read offline_mode straight off disk before setup_files pulls the default
+# models (that runs before the full iSpyConfig exists); failures fall through
 def _arm_offline_mode_early() -> None:
-    """Peek offline_mode out of the on-disk config before anything downloads.
-
-    setup_files pulls the default models, and that happens before the full
-    iSpyConfig exists - so read just this one key straight from the file.
-    An unreadable config is ignored here; boot fails loudly on it later.
-    """
     from iSpy.core import network_policy
 
     if network_policy.is_offline():
@@ -214,13 +210,9 @@ def _arm_offline_mode_early() -> None:
         return
 
 
+# arm the policy from the loaded config. game mode (or an inherited
+# ISPY_OFFLINE) may have turned it on already - never downgrade that
 def _apply_offline_mode(config: iSpyConfig) -> None:
-    """Arm the offline policy from the loaded config.
-
-    Game Mode (or an inherited ISPY_OFFLINE) may have turned it on already;
-    never downgrade that - first reason wins, and the "ON" line is logged
-    once.
-    """
     from iSpy.core import network_policy
 
     if network_policy.is_offline():
@@ -246,9 +238,8 @@ def _consume_game_mode_web_off(config: iSpyConfig) -> None:
         return
 
     logger.warning("Game Mode: web UI disabled for this run only.")
-    # offline is forced for the game-mode run itself. in-memory only - a
-    # crash mid-run must never leave offline_mode stuck on in config.json,
-    # which is exactly why this never touches the config file.
+    # offline is forced for the run, in-memory only - a crash mid-run must never
+    # leave offline_mode stuck on in config.json
     from iSpy.core import network_policy
 
     network_policy.set_offline(True, "game_mode")

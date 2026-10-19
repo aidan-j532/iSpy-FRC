@@ -299,14 +299,9 @@ class iSpy:
             out.append((name, settings if isinstance(settings, dict) else {}))
         return out
 
+    # false when offline mode means this add-on must not be constructed. critical
+    # unmet need = skipped + reported, non-critical = loads degraded. never raises
     def _gate_addon(self, group: str, name: str, cls, settings: dict) -> bool:
-        """False when offline mode means this add-on must not be constructed.
-
-        The add-on itself declares its needs (network_requirements(), judged
-        against its current settings). A critical unmet need skips it with a
-        warning and a report entry; a non-critical one still loads but is
-        recorded as degraded. Never raises - boot always continues.
-        """
         if not network_policy.is_offline():
             return True
         try:
@@ -571,14 +566,9 @@ class iSpy:
                 return str(name)
         return f"Camera {index + 1}"
 
+    # does the rollback recorder actually want raw frames? the copies cost a full
+    # frame copy per camera per tick, so ask first. probe failure = assume wanted
     def _recorder_wants_frames(self) -> bool:
-        """True when the rollback recorder will actually consume raw frames.
-
-        Building these copies costs a full frame copy per camera per tick even
-        when the recorder is off (performance level 0) or disk-paused, so the
-        loop asks first. An unexpected error is treated as "wanted" - never
-        silently drop a recording because of a probe failure.
-        """
         recorder = self.utilities.get("rollback")
         wants = getattr(recorder, "wants_raw_frames", None)
         if not callable(wants):
@@ -588,13 +578,9 @@ class iSpy:
         except Exception:
             return True
 
+    # does this tick's plot()/debug-frame work have a consumer? levels 2-0
+    # skip when no feed, lightbox, viewer or dashboard SSE is watching
     def _annotations_wanted(self) -> bool:
-        """True when this tick's plot()/debug-frame work has a consumer.
-
-        Only levels 2-0 skip annotation, and only when nothing is watching:
-        no MJPEG feed, no lightbox, no 3D-viewer poll, no dashboard SSE. The
-        calibration wizard drives its own feed and is unaffected.
-        """
         if not performance.get_profile().annotate_only_when_watched:
             return True
         web = self.web_app
@@ -707,9 +693,8 @@ class iSpy:
         if hasattr(camera, "get_debug_data"):
             frame_data["debug_data"] = camera.get_debug_data() or {}
         if not camera.in_calibration_mode():
-            # plot()/debug-frame drawing is the most expensive part of building
-            # this dict - skip it when nothing is streaming or viewing (levels
-            # 2-0)
+            # plot()/debug drawing is the expensive part here - skip it when
+            # nothing is streaming or viewing (levels 2-0)
             annotate = self._annotations_wanted()
             if annotate and hasattr(camera, "get_debug_frame"):
                 debug_frame = camera.get_debug_frame(frame)

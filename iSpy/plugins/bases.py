@@ -30,25 +30,16 @@ class StatusMixin:
         return getattr(self, "_status", "unknown")
 
 
+# offline-mode plumbing shared by add-ons and pipelines: needs_internet = True
+# or network_requirements(); require_network/try_online guard online-only actions
 class NetworkMixin:
-    """Offline-mode plumbing shared by add-ons and vision pipelines.
-
-    An add-on declares its internet needs either with the blunt
-    ``needs_internet = True`` flag (one critical requirement) or, when the
-    need depends on settings, by overriding ``network_requirements()``.
-    While offline the loader skips critical add-ons and annotates the rest;
-    at runtime ``require_network`` / ``try_online`` keep optional online
-    actions from tripping over the missing internet.
-    """
-
-    # shortcut for add-ons whose every feature needs the internet: one
-    # critical requirement with a generic reason. a subclass that overrides
-    # network_requirements() replaces this entirely.
+    # shortcut for add-ons whose every feature needs the internet. a subclass
+    # that overrides network_requirements() replaces this entirely
     needs_internet = False
 
+    # what this add-on needs the internet for, judged from its settings
     @classmethod
     def network_requirements(cls, settings: dict) -> list:
-        """What this add-on needs the internet for, judged from *settings*."""
         if getattr(cls, "needs_internet", False):
             return [
                 network_policy.NetworkRequirement(
@@ -63,23 +54,17 @@ class NetworkMixin:
     def network_allowed(self) -> bool:
         return not network_policy.is_offline()
 
+    # raises OfflineError when the feature would need the internet - call it
+    # before an optional online action so it fails loud instead of hanging
     def require_network(self, feature: str) -> None:
-        """Raise OfflineError when *feature* would need the internet.
-
-        Call this before an optional online action; while offline it fails
-        loudly instead of hanging on a dead connection.
-        """
         if network_policy.is_offline():
             raise network_policy.OfflineError(
                 f"offline mode: {feature} needs the internet"
             )
 
+    # runs fn when online, else records one degraded note and returns fallback.
+    # flaky connections land here too so a dead network can't kill the tick
     def try_online(self, feature: str, fn, fallback=None):
-        """Run *fn* when online, else record a degraded event and return fallback.
-
-        Offline mode is the expected case (one degraded note); a flaky
-        connection also lands here so a dead network cannot kill the tick.
-        """
         if not self.network_allowed:
             self._record_offline_feature(feature, "offline mode")
             return fallback
@@ -97,12 +82,9 @@ class NetworkMixin:
             reason,
         )
 
+    # schema fields marked requires_network get reset to their default while
+    # offline, so an online-only knob can't stay on and keep reaching out
     def _ignore_offline_settings(self) -> None:
-        """Reset schema fields marked ``requires_network`` to their default.
-
-        While offline the field is ignored - a "check for updates" toggle or
-        similar online-only knob cannot stay on and keep reaching out.
-        """
         if not network_policy.is_offline():
             return
         try:

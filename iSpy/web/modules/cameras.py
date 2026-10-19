@@ -273,9 +273,8 @@ class CamerasModule(WebModule):
         self._auto_discover_thread: threading.Thread | None = None
         self._sse_lock = threading.Lock()
         self._sse_clients: list = []
-        # last time each camera's MJPEG stream was actively pulled - the vision
-        # loop uses this (plus the page's device SSE) to decide whether frames
-        # and annotations are worth building at the cheaper performance levels
+        # last pull time per camera's MJPEG stream - the loop uses this (plus
+        # the page's device SSE) to decide what's worth building
         self._feed_seen: dict[str, float] = {}
 
     def has_viewers(self, now: float = 0.0) -> bool:
@@ -691,9 +690,8 @@ class CamerasModule(WebModule):
             performance.get_profile().skip_web_without_viewers
             and not self.has_viewers(now)
         ):
-            # nobody has the page (or a feed) open: holding a reference to
-            # every camera frame every tick feeds zero readers. the first store
-            # after a viewer connects lands one tick later.
+            # nobody has the page (or a feed) open - holding every camera frame
+            # every tick feeds zero readers
             return
         with self.lock:
             if per_cam:
@@ -2013,9 +2011,8 @@ class CamerasModule(WebModule):
         )
 
     def _generate(self, camera_name):
-        # the performance profile owns the preview pace: fps, jpeg quality and
-        # an optional width cap (all three shrink the encode+network cost per
-        # open viewer)
+        # the profile owns the preview pace: fps, quality and an optional width
+        # cap, all shrinking the encode+network cost per open viewer
         profile = performance.get_profile()
         target_interval = 1.0 / max(profile.mjpeg_fps, 0.1)
         quality = int(profile.mjpeg_quality)
