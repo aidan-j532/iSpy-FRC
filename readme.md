@@ -199,6 +199,55 @@ entry; missing settings fall back to defaults declared by the add-on's schema.
 | `trackers.path_planner` | `epsilon: 0.3`, `min_samples: 3` | DBSCAN clustering of tracked objects into game-piece piles |
 | `utilities.FRC/network_table_handler` | `network_tables_ip: "10.0.0.2"` | Publishes vision output to the robot over NetworkTables |
 
+### HSV color detection
+
+Set `"pipeline": "hsv_detection"` on a camera to detect game pieces by color
+instead of training a model. It uses only OpenCV and NumPy, so it runs on the
+board with no model file and no extra dependencies. The settings live in the
+camera's `pipeline.settings` block and are also editable on the Cameras page.
+
+| Setting | Default | What it does |
+|---------|---------|-------------|
+| `preset` | `custom` | `orange`, `yellow`, `red`, `green`, `blue` or `white` take over the HSV ranges at runtime; `custom` keeps the ranges below |
+| `hue_range` | `[5, 25]` | OpenCV hue band (0-179). With `wrap`, a low end above the high end picks reds across 0 |
+| `sat_range` | `[110, 255]` | Saturation band. Lower values admit washed-out pixels |
+| `val_range` | `[80, 255]` | Brightness band. Raise the low end to drop shadows |
+| `lighting_normalize` | `off` | `clahe` or `auto_gamma` flatten lighting on V before thresholding |
+| `clahe_clip` | `3.0` | Contrast limit when `lighting_normalize` is `clahe` |
+| `blur_kernel` | `0` | Odd blur size applied to S/V; `0` is off |
+| `morph_open_iters` | `0` | Erosion passes that remove specks |
+| `morph_close_iters` | `1` | Dilation passes that fill pinholes |
+| `morph_kernel_size` | `5` | Odd kernel used by both passes |
+| `morph_kernel_shape` | `ellipse` | `ellipse` or `rect` |
+| `process_scale` | `1.0` | Threshold on a smaller frame, then scale boxes back. Lower is faster |
+| `roi_top_ignore_pct` | `0.0` | Skip a top band of the frame, e.g. a colored ceiling |
+| `min_area_px` | `150` | Ignore blobs smaller than this |
+| `max_area_px` | `250000` | Ignore blobs larger than this, e.g. a colored wall |
+| `min_circularity` | `0.0` | Reject ragged blobs (`1.0` is a circle) |
+| `min_solidity` | `0.0` | Reject blobs with bites taken out of them |
+| `min_aspect` / `max_aspect` | `1.0` / `6.0` | Long side over short side; drops cables and lane lines |
+| `shape_hint` | `any` | `circle` or `rect` picks which shape term feeds confidence and depth |
+| `max_detections` | `10` | Keep the N biggest blobs |
+| `merge_distance_px` | `0` | Bridge blobs closer than this; `0` is off |
+| `object_name` | `hsv_object` | Name reported for each detection |
+| `object_size_in` | `4.0` | Real width in inches, used by `size_based` depth |
+| `z_mode` | `ground_plane` | `ground_plane` casts a ray onto the object plane; `size_based` uses the known size |
+| `plane_height_in` | `0.0` | Height of the plane the object center sits on (`0` is the floor) |
+| `view_mode` | `outline` | `outline` keeps the camera picture; `mask` shows only thresholded pixels |
+| `mask_style` | `color` | In mask view, `color` keeps source pixels and `binary` draws white on black |
+| `draw_labels` | `true` | Draw name and confidence on detections |
+
+Open a camera's lightbox from the Cameras page for **live tuning**. The HSV
+panel writes changes to the running pipeline immediately (no restart) and saves
+them to the config. The **Eyedropper** button samples the pixel you click and
+offers a range widened by the hue/saturation/value tolerances shown next to it -
+handy for picking a game piece color under field lighting. **Reset** restores
+the schema defaults. The card header also gets buttons for the current
+pipeline's actions, such as switching the view between outline and mask.
+
+Because HSV detection is model-free, `vision_model` may be omitted entirely
+when every camera uses a pipeline that does not need a model.
+
 ### Rollback (recording and replay)
 
 Rollback is **not** an add-on either. The recorder is always-on core code
@@ -408,6 +457,9 @@ When the pipeline is running, open a browser and go to `http://<board-ip>:5000`.
 | `/api/cameras` | List of connected cameras |
 | `/video/<name>` | Live annotated stream for a specific camera |
 | `/api/cameras/config/<name>` | GET, PUT or DELETE a camera's settings |
+| `/api/cameras/<name>/pipeline_settings` | GET or POST live-tunable pipeline settings |
+| `/api/cameras/<name>/sample_hsv` | Sample HSV at a clicked frame pixel |
+| `/api/cameras/<name>/actions/<action_id>` | POST a per-camera action button |
 
 The health endpoint returns `200 OK` when everything is healthy, `503` when degraded. Useful for robot code that wants to know if vision is alive.
 
@@ -506,6 +558,67 @@ class MyUtility(UtilityBase):
 Then add `"my_utility": {}` to `plugins.utilities` in your config - its
 presence enables it. Settings declared in `config_schema()` are editable from
 the Add-ons page in the web UI and arrive in `context["config"]`.
+
+### Action buttons
+
+Add-ons and vision pipelines can put buttons on the camera card header. Return
+one entry per action from `get_actions()`; `kind` is `button` or `toggle`, and
+`value` is the current toggle state. When the button is pressed, iSpy POSTs to
+`/api/cameras/<name>/actions/<id>` and calls `invoke_action(id, value)` with the
+toggle state (or `None` for a plain button). Reply with `{"ok": true}` to show
+the action worked.
+
+```python
+class MyTracker(TrackerBase):
+    plugin_name = "my_tracker"
+
+    def get_actions(self) -> list[dict]:
+        return [
+            {
+                "id": "record",
+                "label": "Record",
+                "kind": "toggle",
+                "value": self.recording,
+                "title": "Save a snapshot of the current detections",
+            }
+        ]
+
+    def invoke_action(self, action_id: str, value=None) -> dict:
+        if action_id == "record":
+            self.recording = bool(value)
+            return {"ok": True, "actions": self.get_actions()}
+        return {"ok": False, "error": "unsupported"}
+```
+
+Only ids returned by `get_actions()` are accepted by the route, and returning
+`actions` from `invoke_action` updates the button state without a page reload.
+Changes made by a pipeline action are persisted through the same config path as
+the Settings page.
+
+### Schema field types
+
+`config_schema()` fields can be `number`, `toggle`, `text`, `select`, `range`
+or `list`. A `range` is a two-value slider that arrives as `[low, high]`:
+
+```python
+"hue_range": {
+    "type": "range",
+    "label": "Hue range",
+    "min": 0,
+    "max": 179,
+    "step": 1,
+    "default": [5, 25],
+    "wrap": True,
+    "gradient": "hue",
+    "help": "OpenCV hue 0-179",
+}
+```
+
+Values are clamped to `min`/`max`. Without `wrap`, a low end above the high end
+is rejected and the schema default is used; with `wrap`, the band is allowed to
+run through the end of the scale and back (reds on the hue wheel). `gradient:
+"hue"` colors the slider track with the hue wheel, and omitting it leaves the
+normal track.
 
 ---
 

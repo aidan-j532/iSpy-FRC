@@ -245,6 +245,37 @@ class ConversionRoutingTests(unittest.TestCase):
 
             self.assertEqual(result, Path("out.rknn"))
 
+    def test_rknn_worker_env_does_not_inherit_pythonpath(self):
+        """Runtime paths must not shadow the converter env's pinned packages."""
+        from iSpy.boot import _rknn_converter_env
+        from iSpy.vision import optimizer as opt
+
+        with mock.patch.dict(
+            os.environ, {"PYTHONPATH": os.path.join("main", "site-packages")}
+        ), mock.patch.object(
+            _rknn_converter_env,
+            "converter_python",
+            return_value=Path("/fake/converter/bin/python"),
+        ), mock.patch.object(
+            _rknn_converter_env, "ispy_source_root", return_value=_REPO_ROOT
+        ), mock.patch("subprocess.run") as mock_run:
+
+            def fake_run(cmd, **kwargs):
+                args_path = Path(cmd[-1])
+                result_path = Path(str(args_path) + ".result.json")
+                result_path.write_text(json.dumps({"result": "out.rknn"}))
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            mock_run.side_effect = fake_run
+
+            opt._convert_model_subprocess(
+                "model.pt", "rknn", [640, 640], quantize=False
+            )
+
+            env = mock_run.call_args[1].get("env")
+            self.assertEqual(env.get("PYTHONPATH"), str(_REPO_ROOT))
+            self.assertEqual(env.get("PYTHONNOUSERSITE"), "1")
+
     def test_non_rknn_uses_main_python(self):
         """Non-RKNN conversion continues using sys.executable."""
         from iSpy.vision import optimizer as opt
@@ -871,6 +902,7 @@ class DepthWorkerRoutingTests(unittest.TestCase):
             self.assertIn("iSpy.boot._rknn_onnx_worker", cmd[1:])
             env = call[1].get("env", {})
             self.assertIn(str(_REPO_ROOT), env.get("PYTHONPATH", ""))
+            self.assertEqual(env.get("PYTHONNOUSERSITE"), "1")
 
     def test_depth_rknn_worker_failure_raises_with_real_error(self):
         from iSpy.boot import _rknn_converter_env
@@ -1077,6 +1109,13 @@ class LightVerifyTests(unittest.TestCase):
 
             self.assertTrue(result)
             mock_sub.run.assert_not_called()
+
+    def test_verify_scripts_probe_protobuf_onnx_compat(self):
+        """Both checks exercise the onnx API rknn.build() depends on."""
+        from iSpy.boot import _rknn_converter_env as env
+
+        for script in (env._VERIFY_SCRIPT, env._LIGHT_VERIFY_SCRIPT):
+            self.assertIn("onnx.helper.strip_doc_string", script)
 
 
 if __name__ == "__main__":

@@ -2072,5 +2072,280 @@ class TestPerformanceProfiles(unittest.TestCase):
         self.assertLessEqual(dashboard.calls, 3)
 
 
+class TestHSVDetectionPipeline(unittest.TestCase):
+    _DEFAULT_HSV = {
+        "hue_range": [8, 20],
+        "sat_range": [120, 255],
+        "val_range": [120, 255],
+    }
+
+    def _base_frame(self, color=(0, 128, 255), radius=40):
+        import cv2
+
+        image = np.full((480, 640, 3), 128, dtype=np.uint8)
+        cv2.circle(image, (320, 240), radius, color, -1)
+        return image
+
+    def _write_image(self, image):
+        import cv2
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = str(Path(tmp.name) / "frame.png")
+        self.assertTrue(cv2.imwrite(path, image))
+        return path
+
+    def _build(self, settings=None, image=None, name="hsv_cam"):
+        from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
+        from iSpy.vision.pipelines.hsv_detection import HSVDetectionPipeline
+
+        image = self._base_frame() if image is None else image
+        cam_entry = {
+            "name": name,
+            "source": self._write_image(image),
+            "yaw": 0,
+            "pitch": 0,
+            "height": 24.0,
+            "x": 0,
+            "y": 0,
+            "grayscale": False,
+            "subsystem": "test",
+            "calibration": {
+                "distance": 0.0,
+                "game_piece_size": 0.0,
+                "size": 0,
+                "fov": 60,
+                "focal_length_pixels": 500,
+            },
+            "pipeline": {
+                "name": "hsv_detection",
+                "settings": dict(settings or {}),
+            },
+        }
+        config = iSpyConfig()
+        config.set("camera_configs", {name: cam_entry})
+        cam_cfg = iSpyCameraConfig(cam_entry)
+        camera = HSVDetectionPipeline(cam_cfg, config)
+        self.addCleanup(camera.destroy)
+        return camera, config, cam_entry
+
+    def _make_camera(self, settings=None, image=None):
+        return self._build(settings, image)[0]
+
+    def test_detects_orange_circle(self):
+        camera = self._make_camera(dict(self._DEFAULT_HSV, shape_hint="circle"))
+
+        objects, frame = camera.run()
+
+        self.assertIsNotNone(frame)
+        self.assertEqual(len(objects), 1)
+        obj = objects[0]
+        self.assertEqual(obj.name, "hsv_object")
+        self.assertGreater(obj.confidence, 0.5)
+        self.assertEqual(obj.vis_meta["kind"], "hsv")
+        self.assertIn(obj.depth_source, ("ground_plane", "size_based"))
+        box = obj.vis_meta["bbox"]
+        self.assertAlmostEqual(box[0] + box[2] / 2.0, 320, delta=6)
+        self.assertAlmostEqual(box[1] + box[3] / 2.0, 240, delta=6)
+
+    def test_hue_wrap_detects_red(self):
+        red = self._base_frame(color=(0, 0, 255))
+        camera = self._make_camera(
+            {
+                "hue_range": [170, 10],
+                "sat_range": [120, 255],
+                "val_range": [80, 255],
+            },
+            image=red,
+        )
+
+        objects, _ = camera.run()
+
+        self.assertEqual(len(objects), 1)
+
+    def test_lighting_normalize_keeps_dark_and_bright_blobs(self):
+        import cv2
+
+        base = self._base_frame(color=(0, 128, 255))
+        hsv = cv2.cvtColor(base, cv2.COLOR_BGR2HSV)
+
+        dark_hsv = hsv.copy()
+        dark_hsv[:, :, 2] = (dark_hsv[:, :, 2].astype(np.float32) * 0.35).astype(
+            np.uint8
+        )
+        dark = cv2.cvtColor(dark_hsv, cv2.COLOR_HSV2BGR)
+
+        bright_hsv = hsv.copy()
+        bright_hsv[:, :, 2] = np.clip(
+            bright_hsv[:, :, 2].astype(np.int16) + 60, 0, 255
+        ).astype(np.uint8)
+        bright = cv2.cvtColor(bright_hsv, cv2.COLOR_HSV2BGR)
+
+        for label, image in (("dark", dark), ("bright", bright)):
+            camera = self._make_camera(
+                dict(
+                    self._DEFAULT_HSV,
+                    val_range=[20, 255],
+                    lighting_normalize="clahe",
+                ),
+                image=image,
+            )
+            objects, _ = camera.run()
+            self.assertEqual(len(objects), 1, label)
+
+    def test_filters_reject_noise_and_elongated_blobs(self):
+        import cv2
+
+        noisy = self._base_frame(color=(0, 128, 255), radius=40)
+        cv2.circle(noisy, (60, 60), 1, (0, 128, 255), -1)
+        camera = self._make_camera(dict(self._DEFAULT_HSV, min_area_px=150), image=noisy)
+        objects, _ = camera.run()
+        self.assertEqual(len(objects), 1)
+        self.assertGreaterEqual(objects[0].vis_meta["area_px"], 150)
+
+        strip = np.full((480, 640, 3), 128, dtype=np.uint8)
+        cv2.rectangle(strip, (170, 230), (470, 250), (0, 128, 255), -1)
+        camera = self._make_camera(
+            dict(self._DEFAULT_HSV, min_area_px=150, max_aspect=6),
+            image=strip,
+        )
+        objects, _ = camera.run()
+        self.assertEqual(objects, [])
+
+    def test_garbage_settings_clamp_without_raising(self):
+        camera = self._make_camera(
+            {
+                "hue_range": [999, -5],
+                "sat_range": ["nope", 2],
+                "val_range": [300, -10],
+                "process_scale": 5,
+                "max_aspect": 0,
+                "min_area_px": -50,
+                "blur_kernel": 4,
+                "morph_kernel_size": 2,
+                "preset": "not_a_color",
+                "z_mode": "sideways",
+                "max_detections": 0,
+            }
+        )
+
+        params = camera._runtime.params
+        self.assertEqual(params.preset, "custom")
+        self.assertEqual(params.hue_range, (179, 0))  # clamped, wrap kept
+        self.assertEqual(params.sat_range, (110, 255))  # fell back to default
+        self.assertEqual(params.val_range, (80, 255))  # non-wrap lo>hi -> default
+        self.assertEqual(params.process_scale, 1.0)
+        self.assertEqual(params.max_aspect, 1.0)
+        self.assertEqual(params.min_area_px, 0.0)
+        self.assertEqual(params.blur_kernel, 5)  # even size pushed odd
+        self.assertEqual(params.morph_kernel_size, 3)
+        self.assertEqual(params.z_mode, "ground_plane")
+        self.assertEqual(params.max_detections, 1)
+
+        objects, _ = camera.run()  # must not raise
+        self.assertIsInstance(objects, list)
+
+    def test_range_setting_coercion(self):
+        from iSpy.web.Backend.PluginStatus import _coerce_setting_value
+
+        defn = {"type": "range", "min": 0, "max": 179, "step": 1, "default": [5, 25]}
+        self.assertEqual(_coerce_setting_value([10, 999], defn), [10, 179])
+        self.assertEqual(_coerce_setting_value(["8", "20"], defn), [8, 20])
+        self.assertEqual(
+            _coerce_setting_value([170, 10], dict(defn, wrap=True)), [170, 10]
+        )
+        with self.assertRaises(ValueError):
+            _coerce_setting_value([20, 10], defn)
+        with self.assertRaises(ValueError):
+            _coerce_setting_value([1], defn)
+        with self.assertRaises(ValueError):
+            _coerce_setting_value(["x", 3], defn)
+
+    def test_mask_view_action_switches_the_returned_frame(self):
+        camera = self._make_camera(dict(self._DEFAULT_HSV))
+
+        objects, frame = camera.run()
+        self.assertEqual(len(objects), 1)
+        self.assertGreater(int(frame[240, 320].sum()), 0)
+
+        result = camera.invoke_action("mask_view", True)
+        self.assertTrue(result["ok"])
+        actions = {action["id"]: action for action in result["actions"]}
+        self.assertTrue(actions["mask_view"]["value"])
+
+        objects, frame = camera.run()
+        self.assertEqual(len(objects), 1)
+        self.assertEqual(int(frame[5, 5].sum()), 0)  # background masked out
+        self.assertGreater(int(frame[240, 320].sum()), 0)  # blob kept
+
+        result = camera.invoke_action("cycle_mask_style")
+        self.assertTrue(result["ok"])
+        self.assertEqual(camera._runtime.params.mask_style, "binary")
+
+        self.assertFalse(camera.invoke_action("not_a_real_action")["ok"])
+
+    def test_action_route_rejects_undeclared_actions(self):
+        from flask import Flask
+
+        from iSpy.config.iSpyConfig import get_pipeline_settings
+        from iSpy.web.modules.cameras import CamerasModule
+
+        camera, config, cam_entry = self._build(dict(self._DEFAULT_HSV))
+        saved = []
+        config.save = lambda quiet=False: saved.append(bool(quiet))
+
+        module = CamerasModule({"config": config})
+        module.live_cameras["hsv_cam"] = camera
+        app = Flask(__name__)
+
+        with app.test_request_context("/", method="POST", json={"value": True}):
+            _response, status = module._camera_action("hsv_cam", "no_such_action")
+        self.assertEqual(status, 404)
+
+        with app.test_request_context("/", method="POST", json={"value": True}):
+            response = module._camera_action("hsv_cam", "mask_view")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+        self.assertTrue(saved)
+        self.assertEqual(
+            get_pipeline_settings(cam_entry).get("view_mode"), "mask"
+        )
+        self.assertEqual(camera.take_pending_settings(), {})
+
+    def test_update_settings_applies_to_next_run(self):
+        camera = self._make_camera(dict(self._DEFAULT_HSV))
+        before = camera._runtime
+
+        applied = camera.update_settings({"min_area_px": 100000})
+        self.assertEqual(applied["min_area_px"], 100000)
+        self.assertIsNot(camera._runtime, before)
+        objects, _ = camera.run()
+        self.assertEqual(objects, [])
+
+        camera.update_settings({"min_area_px": 10})
+        objects, _ = camera.run()
+        self.assertEqual(len(objects), 1)
+
+        self.assertEqual(camera.update_settings({"not_a_key": 1}), {})
+
+    def test_sample_hsv_returns_median(self):
+        from flask import Flask
+
+        from iSpy.web.modules.cameras import CamerasModule
+
+        camera, config, _cam_entry = self._build(dict(self._DEFAULT_HSV))
+        config.save = lambda quiet=False: None
+
+        module = CamerasModule({"config": config})
+        module.live_cameras["hsv_cam"] = camera
+        app = Flask(__name__)
+
+        with app.test_request_context("/?x=320&y=240&w=640&h=480"):
+            response = module._sample_hsv("hsv_cam")
+
+        payload = response.get_json()
+        self.assertEqual(payload["hsv"], [15, 255, 255])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

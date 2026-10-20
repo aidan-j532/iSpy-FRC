@@ -171,6 +171,7 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
         raise ValueError("camera_configs cannot be empty")
 
     model_cameras = 0
+    needs_model = False
     for cam_name, cam_config in camera_configs.items():
         cam_required = ["name", "source", "subsystem", "pipeline"]
         for field in cam_required:
@@ -201,6 +202,13 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
         if not pipeline_name:
             raise ValueError(f"Camera '{cam_name}' pipeline must have a name")
 
+        from iSpy.config.iSpyConfig import is_model_backed_pipeline
+
+        # only model-backed pipelines need a vision_model block - an HSV or
+        # AprilTag camera is perfectly valid without one
+        if is_model_backed_pipeline(pipeline_name):
+            needs_model = True
+
         vision_model = settings.get("vision_model")
         if isinstance(vision_model, dict):
             model_cameras += 1
@@ -213,7 +221,7 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
                     f"Camera '{cam_name}' vision_model must have 'input_size'"
                 )
 
-    if model_cameras == 0:
+    if needs_model and model_cameras == 0:
         raise ValueError("No camera has a vision_model configured")
 
     # network_tables_ip is an add-on setting now (FRC/network_table_handler utility); only validated when the add-on is enabled

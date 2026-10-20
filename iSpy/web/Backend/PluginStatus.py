@@ -108,6 +108,31 @@ def _coerce_setting_value(value, defn: dict):
         return bool(value)
     if stype == "text":
         return str(value)
+    if stype == "range":
+        label = defn.get("label", "value")
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError(f"'{label}' must be a two number range")
+        lo_bound = defn.get("min", 0)
+        hi_bound = defn.get("max", 255)
+        nums = []
+        for part in value:
+            if isinstance(part, bool):
+                raise ValueError(f"'{label}' must contain numbers")
+            try:
+                nums.append(float(part))
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"'{label}' must contain numbers, got {part!r}"
+                ) from None
+        lo = min(max(nums[0], lo_bound), hi_bound)
+        hi = min(max(nums[1], lo_bound), hi_bound)
+        # a wrapped range (hue) is allowed to run lo > hi, it just means the
+        # band wraps through 0
+        if lo > hi and not defn.get("wrap"):
+            raise ValueError(f"'{label}' low end must not be above the high end")
+        if isinstance(defn.get("step", 1), int):
+            return [int(round(lo)), int(round(hi))]
+        return [lo, hi]
     if stype == "list":
         if not isinstance(value, list):
             raise ValueError(f"'{defn.get('label', 'value')}' must be a list")

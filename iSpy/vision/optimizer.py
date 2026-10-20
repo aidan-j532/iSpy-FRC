@@ -2344,11 +2344,16 @@ def _convert_model_subprocess_report(
             env_mod = _converter_env_module()
             worker_python = str(env_mod.converter_python())
             worker_env = os.environ.copy()
-            src = str(env_mod.ispy_source_root())
-            existing = worker_env.get("PYTHONPATH", "")
-            worker_env["PYTHONPATH"] = src + (
-                os.pathsep + existing if existing else ""
-            )
+            # Replace, never inherit, the parent's PYTHONPATH: entries from the
+            # runtime environment (user-site, main venv) come before the
+            # converter env's site-packages and can silently shadow its pinned
+            # packages.  That is how a newer protobuf used to reach onnx 1.16
+            # and crash rknn.build() with "'FieldDescriptor' object has no
+            # attribute 'label'".  The worker only needs the iSpy source root.
+            worker_env["PYTHONPATH"] = str(env_mod.ispy_source_root())
+            # venv disables user-site already; be explicit so nothing outside
+            # the converter environment can satisfy the toolkit's imports.
+            worker_env["PYTHONNOUSERSITE"] = "1"
         except Exception as exc:
             # The converter environment could not be obtained (unsupported
             # arch/ABI, disk full, no network, ...) - classify as a dependency

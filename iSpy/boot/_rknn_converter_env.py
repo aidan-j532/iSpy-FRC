@@ -38,9 +38,13 @@ logger = logging.getLogger(__name__)
 # Identity / versioning
 # ---------------------------------------------------------------------------
 
-#: Bumped whenever the pinned conversion dependency set changes.  An existing
-#: converter environment built with an older depset version is rebuilt.
-DEPSET_VERSION = 5
+#: Bumped whenever the pinned conversion dependency set (or the checks that
+#: prove it is usable) changes.  An existing converter environment built with
+#: an older depset version is rebuilt.  v6 adds the protobuf/onnx
+#: compatibility probe: envs that drifted onto a newer protobuf used to pass
+#: verification and then crash inside rknn.build() with
+#: "'FieldDescriptor' object has no attribute 'label'".
+DEPSET_VERSION = 6
 #: RKNN Toolkit 2 version targeted by this project.
 RKNN_TOOLKIT_VERSION = "2.3.2"
 
@@ -103,6 +107,10 @@ _VERIFY_SCRIPT = "\n".join(
         "import numpy; assert numpy.__version__.split('.')[0] == '1', numpy.__version__",
         "import scipy",
         "import onnx",
+        # Exercise the exact API rknn.build() uses.  onnx 1.16 reads
+        # FieldDescriptor.label; protobuf builds that dropped it (>=5.x in
+        # some releases) fail here instead of deep inside the toolkit.
+        "onnx.helper.strip_doc_string(onnx.ModelProto())",
         "import google.protobuf",
         "assert (4, 21, 6) <= tuple(map(int, google.protobuf.__version__.split('.')[:3])) <= (4, 25, 4), google.protobuf.__version__",
         "from ruamel.yaml import YAML",
@@ -119,13 +127,17 @@ _VERIFY_SCRIPT = "\n".join(
 )
 
 #: Lightweight re-verification run on *reuse*.  The full ``_VERIFY_SCRIPT``
-#: imports ultralytics/torch/onnx which is expensive; a daily sanity check of
-#: the two things most likely to silently break a cached environment (NumPy 1.x
-#: and the toolkit import itself) is enough to keep stale environments from
-#: being reused while not paying the full import tax on every launch.
+#: imports ultralytics/torch, which is expensive; a daily sanity check of the
+#: things most likely to silently break a cached environment is enough to keep
+#: stale environments from being reused.  Besides NumPy 1.x and the toolkit
+#: import, this repeats the onnx/protobuf probe: a converter env can drift onto
+#: a newer protobuf (e.g. through an inherited PYTHONPATH) while ``import
+#: rknn`` still succeeds, and the failure only surfaces during rknn.build().
 _LIGHT_VERIFY_SCRIPT = "\n".join(
     [
         "import numpy; assert numpy.__version__.split('.')[0] == '1', numpy.__version__",
+        "import onnx",
+        "onnx.helper.strip_doc_string(onnx.ModelProto())",
         "from rknn.api import RKNN",
         "print('OK')",
     ]
@@ -489,7 +501,10 @@ def _pip_install(py: Path, *requirements: str, no_deps: bool = False) -> None:
 def _verify(py: Path) -> None:
     try:
         proc = subprocess.run(
-            [str(py), "-c", _VERIFY_SCRIPT],
+            # -I ignores PYTHONPATH/PYTHONHOME and the user site directory, so
+            # the check reflects the environment's own site-packages rather
+            # than whatever the provisioning process happened to inherit.
+            [str(py), "-I", "-c", _VERIFY_SCRIPT],
             capture_output=True,
             text=True,
             timeout=_VERIFY_TIMEOUT,
@@ -526,7 +541,9 @@ def _light_verify(py: Path, env_dir: Path) -> bool:
             pass
     try:
         proc = subprocess.run(
-            [str(py), "-c", _LIGHT_VERIFY_SCRIPT],
+            # -I: same isolation as the full verification - never let an
+            # inherited PYTHONPATH make a broken env look healthy.
+            [str(py), "-I", "-c", _LIGHT_VERIFY_SCRIPT],
             capture_output=True,
             text=True,
             timeout=_LIGHT_VERIFY_TIMEOUT,

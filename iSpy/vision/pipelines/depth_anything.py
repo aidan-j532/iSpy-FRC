@@ -817,7 +817,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         result_path = Path(str(args_path) + ".result.json")
 
         env = os.environ.copy()
+        # Replace the parent's PYTHONPATH so runtime packages cannot shadow
+        # the converter env's pinned stack (see optimizer's worker spawn).
         env["PYTHONPATH"] = str(_rknn_converter_env.ispy_source_root())
+        env["PYTHONNOUSERSITE"] = "1"
         try:
             self.logger.info("Running RKNN ONNX build subprocess: %s", args_path)
             proc = subprocess.run(

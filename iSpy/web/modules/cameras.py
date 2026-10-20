@@ -339,6 +339,30 @@ class CamerasModule(WebModule):
             methods=["POST"],
         )
         flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/actions/<action_id>",
+            "api_cameras_action",
+            self._camera_action,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/pipeline_settings",
+            "api_cameras_pipeline_settings_get",
+            self._pipeline_settings_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/pipeline_settings",
+            "api_cameras_pipeline_settings_set",
+            self._pipeline_settings_set,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/sample_hsv",
+            "api_cameras_sample_hsv",
+            self._sample_hsv,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
             "/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines
         )
         flask_app.add_url_rule(
@@ -810,6 +834,178 @@ class CamerasModule(WebModule):
             note="Saved - applies immediately to the live feed.",
             applied=applied,
         )
+
+    # ------------------------------------------------------------------
+    # Camera actions + live pipeline tuning
+    # ------------------------------------------------------------------
+
+    def _persist_live_settings(self, key: str, inst) -> dict:
+        # pipelines stash settings an action changed (view mode etc). the web
+        # module owns the real config entry, so it writes them through here
+        taker = getattr(inst, "take_pending_settings", None)
+        if not callable(taker):
+            return {}
+        try:
+            pending = taker() or {}
+        except Exception:
+            return {}
+        if not pending:
+            return {}
+        cams, _key, entry = self._find_camera_entry(key)
+        if entry is None:
+            return {}
+        settings = get_pipeline_settings(entry)
+        settings.update(pending)
+        config = self.context["config"]
+        config.set("camera_configs", cams)
+        config.save(quiet=True)
+        return pending
+
+    def _camera_action(self, cam_name, action_id):
+        _cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        inst = self._live_cam_for(key, cam_name)
+        if inst is None:
+            return jsonify(error="Camera is not live"), 404
+        get_actions = getattr(inst, "get_actions", None)
+        invoke = getattr(inst, "invoke_action", None)
+        if not callable(get_actions) or not callable(invoke):
+            return jsonify(error="Camera does not support actions"), 404
+        try:
+            declared = {
+                action.get("id")
+                for action in (get_actions() or [])
+                if isinstance(action, dict)
+            }
+        except Exception:
+            declared = set()
+        # never dispatch an id the pipeline did not declare
+        if action_id not in declared:
+            return jsonify(error=f"Unknown action '{action_id}'"), 404
+
+        data = request.get_json(silent=True) or {}
+        try:
+            result = invoke(action_id, data.get("value"))
+        except Exception as exc:
+            logger.exception("Camera action '%s' failed", action_id)
+            return jsonify(ok=False, error=str(exc)), 500
+
+        result = result or {"ok": False, "error": "no result"}
+        if result.get("ok"):
+            self._persist_live_settings(key, inst)
+        return jsonify(result)
+
+    def _pipeline_settings_get(self, cam_name):
+        _cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        pipeline_name = get_pipeline_name(entry)
+        cls = get_pipeline_classes().get(pipeline_name)
+        if cls is None:
+            return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 404
+        schema = cls.config_schema() or {}
+        stored = get_pipeline_settings(entry) or {}
+        settings = {
+            name: stored.get(name, defn.get("default"))
+            for name, defn in schema.items()
+        }
+        live = None
+        inst = self._live_cam_for(key, cam_name)
+        if inst is not None and hasattr(inst, "current_settings"):
+            try:
+                live = inst.current_settings()
+            except Exception:
+                live = None
+        return jsonify(
+            camera=key,
+            pipeline=pipeline_name,
+            live_tunable=bool(getattr(cls, "live_tunable", False)),
+            schema=schema,
+            settings=settings,
+            live=live,
+        )
+
+    def _pipeline_settings_set(self, cam_name):
+        data = request.get_json(force=True) or {}
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        pipeline_name = get_pipeline_name(entry)
+        cls = get_pipeline_classes().get(pipeline_name)
+        if cls is None:
+            return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 404
+        schema = cls.config_schema() or {}
+        # only schema keys are writable, so the route can never invent a setting
+        allowed = {name: value for name, value in data.items() if name in schema}
+        if not allowed:
+            return jsonify(error="No pipeline settings provided"), 400
+
+        config = self.context["config"]
+        inst = self._live_cam_for(key, cam_name)
+        if inst is not None and hasattr(inst, "update_settings"):
+            try:
+                applied = inst.update_settings(allowed) or {}
+            except Exception as exc:
+                return jsonify(error=f"Failed to apply settings: {exc}"), 500
+            if not applied:
+                return jsonify(error="No settings were applied"), 400
+            note = "Applied live."
+        else:
+            applied = allowed
+            note = "Saved to config. Restart vision to apply - camera is not live."
+
+        settings = get_pipeline_settings(entry)
+        for name, value in applied.items():
+            settings[name] = list(value) if isinstance(value, tuple) else value
+        config.set("camera_configs", cams)
+        config.save(quiet=True)
+        return jsonify(success=True, note=note, applied=applied)
+
+    def _sample_hsv(self, cam_name):
+        _cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        inst = self._live_cam_for(key, cam_name)
+        if inst is None:
+            return jsonify(error="Camera is not live"), 404
+        getter = getattr(inst, "get_raw_frame", None)
+        if not callable(getter):
+            return jsonify(error="Camera has no raw frame"), 404
+        try:
+            frame = getter()
+        except Exception as exc:
+            return jsonify(error=f"Could not read a frame: {exc}"), 500
+        if frame is None or getattr(frame, "size", 0) == 0:
+            return jsonify(error="No frame available"), 404
+        try:
+            x = float(request.args.get("x", 0))
+            y = float(request.args.get("y", 0))
+        except (TypeError, ValueError):
+            return jsonify(error="x and y must be numbers"), 400
+
+        frame_h, frame_w = frame.shape[:2]
+        # the click comes from the displayed image, which may be scaled down
+        disp_w = _to_float(request.args.get("w"), frame_w) or frame_w
+        disp_h = _to_float(request.args.get("h"), frame_h) or frame_h
+        px = int(round(x * frame_w / disp_w))
+        py = int(round(y * frame_h / disp_h))
+        px = min(max(px, 0), frame_w - 1)
+        py = min(max(py, 0), frame_h - 1)
+
+        # median over a 5x5 patch keeps a single hot pixel from setting the range
+        patch = frame[max(0, py - 2) : min(frame_h, py + 3), max(0, px - 2) : min(frame_w, px + 3)]
+        if patch.size == 0:
+            return jsonify(error="Sample is outside the frame"), 400
+        hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        h = int(np.median(hsv[:, :, 0]))
+        s = int(np.median(hsv[:, :, 1]))
+        v = int(np.median(hsv[:, :, 2]))
+        return jsonify(x=px, y=py, w=frame_w, h=frame_h, hsv=[h, s, v])
 
     def _vision_pipelines(self):
         config = self.context["config"]
@@ -1909,6 +2105,15 @@ class CamerasModule(WebModule):
                     payload["ready"] = None
                     payload["status"] = None
                     payload["state"] = None
+                actions = []
+                if inst is not None:
+                    getter = getattr(inst, "get_actions", None)
+                    if callable(getter):
+                        try:
+                            actions = getter() or []
+                        except Exception:
+                            actions = []
+                payload["actions"] = actions
                 payload["streaming"] = True
                 cameras.append(payload)
 
@@ -1937,6 +2142,7 @@ class CamerasModule(WebModule):
                         if isinstance(entry, dict)
                         else "object_detection"
                     ),
+                    "actions": [],
                     "streaming": False,
                 }
                 cameras.append(payload)

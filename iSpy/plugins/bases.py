@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from iSpy.config.iSpyConfig import iSpyAddonConfig
 from iSpy.core import network_policy
 
-_SCHEMA_TYPES = ("text", "number", "toggle", "list")
+_SCHEMA_TYPES = ("text", "number", "toggle", "list", "range")
 _SCHEMA_TYPE_FALLBACK = {
     bool: "toggle",
     int: "number",
@@ -147,6 +147,16 @@ class AddonBase(NetworkMixin, StatusMixin):
     def default_settings(cls) -> dict:
         return default_settings_from_schema(cls.config_schema())
 
+    # per-camera action buttons the web UI renders on the camera card. each
+    # entry is {"id", "label", "kind": "button"|"toggle", "value", "title"}
+    def get_actions(self) -> list[dict]:
+        return []
+
+    # the route only forwards ids that get_actions() declared, so an action
+    # that is not currently offered can never be dispatched
+    def invoke_action(self, action_id: str, value=None) -> dict:
+        return {"ok": False, "error": "unsupported"}
+
 
 class TrackerBase(AddonBase):
     def __init__(self, context: dict):
@@ -272,6 +282,13 @@ class VisionBase(NetworkMixin, ABC):
 
     def plot(self, frame):
         return frame
+
+    # per-camera action buttons - same contract as AddonBase.get_actions()
+    def get_actions(self) -> list[dict]:
+        return []
+
+    def invoke_action(self, action_id: str, value=None) -> dict:
+        return {"ok": False, "error": "unsupported"}
 
     @abstractmethod
     def run(self):
