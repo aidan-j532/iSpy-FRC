@@ -784,13 +784,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._load_onnx(force)
 
     def _build_rknn_subprocess(self, onnx_path: Path, rknn_path: Path) -> None:
-        """Build a .rknn artifact via the isolated converter environment.
-
-        The full rknn-toolkit2 stack (and its incompatible numpy<2/scipy/
-        setuptools<82 pins) is never imported into the main runtime
-        environment - the build runs as a subprocess under the converter
-        environment's Python instead, and inference still uses rknnlite.
-        """
         import json
         import os
         import subprocess

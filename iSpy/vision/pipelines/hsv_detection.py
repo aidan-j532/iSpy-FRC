@@ -376,8 +376,7 @@ class HSVDetectionPipeline(VisionPipeline):
     def needs_calibration_to_run(self) -> bool:
         return False
 
-    # settings parsing - everything goes through here, so a garbage value from
-    # the json editor lands on the schema default instead of killing the tick
+    # bad settings fall back to defaults
 
     def _warn_setting(self, key: str, value, fallback) -> None:
         self.logger.warning(
@@ -524,8 +523,7 @@ class HSVDetectionPipeline(VisionPipeline):
 
         merge_kernel = None
         if params.merge_distance_px > 0:
-            # close with a kernel big enough to bridge the requested gap, then
-            # the erode half of the close restores the blob outline
+            # close then open restores the outline
             distance = max(1, int(round(params.merge_distance_px * params.process_scale)))
             size = 2 * distance + 1
             merge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
@@ -552,7 +550,7 @@ class HSVDetectionPipeline(VisionPipeline):
             clahe=clahe,
         )
 
-    # live tuning -----------------------------------------------------------------
+    # live tuning
 
     def take_pending_settings(self) -> dict:
         with self._settings_lock:
@@ -580,7 +578,7 @@ class HSVDetectionPipeline(VisionPipeline):
             self._raw_settings = merged
         return {key: getattr(runtime.params, key) for key in allowed}
 
-    # action buttons ---------------------------------------------------------------
+    # action buttons
 
     def get_actions(self) -> list[dict]:
         try:
@@ -626,7 +624,7 @@ class HSVDetectionPipeline(VisionPipeline):
 
         return {"ok": False, "error": "unsupported"}
 
-    # geometry ---------------------------------------------------------------------
+    # geometry
 
     def _focal_length_px_fov(self, img_w: int) -> float:
         intr = cam_calibration.intrinsics_for_frame(
@@ -639,8 +637,7 @@ class HSVDetectionPipeline(VisionPipeline):
         configured = getattr(self, "focal_length_pixels", 0.0)
         if configured and configured > 1:
             return float(configured)
-        # no calibration: assume a typical 60 deg horizontal fov so depth is
-        # at least in the right ballpark
+        # no calibration: assume 60 deg fov
         return (img_w / 2.0) / math.tan(math.radians(60.0 / 2.0))
 
     def _pixel_ray(self, pixel_x: float, pixel_y: float, img_w: int, img_h: int):
@@ -663,8 +660,7 @@ class HSVDetectionPipeline(VisionPipeline):
         f = max(self._focal_length_px_fov(img_w), 1e-6)
         horizontal_angle_rad = math.atan((pixel_x - img_w / 2.0) / f)
 
-        # same triangle as object_detection: an elevated object shortens the
-        # vertical leg between camera and assumed plane
+        # account for camera height
         vertical_delta = max(self.camera_height - obj_height_z, 0.0)
         if vertical_delta > 0 and distance_los > vertical_delta:
             true_horiz = math.sqrt(distance_los**2 - vertical_delta**2)
@@ -698,7 +694,7 @@ class HSVDetectionPipeline(VisionPipeline):
             [base[0], base[1], params.plane_height_in * scale], dtype=np.float64
         )
 
-    # detection --------------------------------------------------------------------
+    # detection
 
     def _detect(self, frame, params, runtime):
         img_h, img_w = frame.shape[:2]
@@ -722,8 +718,7 @@ class HSVDetectionPipeline(VisionPipeline):
             )
 
         if runtime.blur_size is not None:
-            # blur s/v only - blurring h smears colors that touch into a third
-            # hue that neither blob actually has
+            # blur s/v only; blurring h mixes colors
             hsv[:, :, 1] = cv2.blur(hsv[:, :, 1], runtime.blur_size)
             hsv[:, :, 2] = cv2.blur(hsv[:, :, 2], runtime.blur_size)
 
@@ -806,8 +801,7 @@ class HSVDetectionPipeline(VisionPipeline):
                 cx = (bx + bw / 2.0) * inv
                 cy = (by + bh / 2.0) * inv
 
-            # confidence blends how much of the shape box the blob fills with
-            # how well it matches the shape hint
+            # blend fill and shape match into confidence
             if params.shape_hint == "circle":
                 shape_score = circularity
             elif params.shape_hint == "rect":
@@ -840,8 +834,7 @@ class HSVDetectionPipeline(VisionPipeline):
 
     def _make_object(self, detection, params, img_w, img_h):
         _, _contour, cx, cy, box, _circularity, confidence = detection
-        # a sphere's center is on the plane, everything else sits with its
-        # bottom edge on it
+        # spheres center on the plane; others sit on their bottom edge
         pixel_y = cy if params.shape_hint == "circle" else box[1] + box[3]
         ray = self._pixel_ray(cx, pixel_y, img_w, img_h)
         on_plane = triangulation.ground_plane_intersection(
@@ -883,7 +876,7 @@ class HSVDetectionPipeline(VisionPipeline):
             },
         )
 
-    # rendering --------------------------------------------------------------------
+    # rendering
 
     def _render(self, frame, mask, detections, params):
         if params.view_mode == "mask":
@@ -953,8 +946,7 @@ class HSVDetectionPipeline(VisionPipeline):
         return self._last_objects
 
     def plot(self, frame):
-        # run() already returned the rendered view (solo mode passes it here),
-        # so there is nothing left to draw
+        # run() already drew the view
         return frame
 
     def destroy(self):

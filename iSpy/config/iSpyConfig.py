@@ -120,13 +120,6 @@ def unit_to_inches(value: float, unit: str) -> float:
 
 
 def unit_to_output(value: float, unit: str) -> float:
-    """A config value in the same unit detections are reported in.
-
-    Detections are the output unit, camera geometry is entered in the config
-    unit, and the two are the same for every unit except frc (inches in, metres
-    out). Anything subtracting one from the other - the rollback player's
-    projection, for one - has to go through here.
-    """
     key = (unit or "frc").lower().strip()
     inches = _UNIT_TO_INCHES.get(key, 1.0)
     return value * inches * _INCHES_TO_OUTPUT_UNIT.get(key, _INCHES_TO_OUTPUT_UNIT["frc"])

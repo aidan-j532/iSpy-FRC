@@ -234,9 +234,6 @@ def _profile_pipeline_class(pipeline_name: str):
 
 
 def _save_model_profile(config, pipeline_name: str, settings: dict) -> None:
-    """Side effect of every camera add/edit: validated model-backed settings
-    become the camera's profile snapshot. Never saves a broken config, so the
-    Load Profile tab only ever offers settings that can actually run."""
     cls = _profile_pipeline_class(pipeline_name)
     if cls is None:
         return
@@ -835,13 +832,8 @@ class CamerasModule(WebModule):
             applied=applied,
         )
 
-    # ------------------------------------------------------------------
-    # Camera actions + live pipeline tuning
-    # ------------------------------------------------------------------
-
     def _persist_live_settings(self, key: str, inst) -> dict:
-        # pipelines stash settings an action changed (view mode etc). the web
-        # module owns the real config entry, so it writes them through here
+        # write settings changed by a camera action back to config
         taker = getattr(inst, "take_pending_settings", None)
         if not callable(taker):
             return {}
@@ -880,7 +872,7 @@ class CamerasModule(WebModule):
             }
         except Exception:
             declared = set()
-        # never dispatch an id the pipeline did not declare
+        # only dispatch actions the pipeline declared
         if action_id not in declared:
             return jsonify(error=f"Unknown action '{action_id}'"), 404
 
@@ -940,7 +932,7 @@ class CamerasModule(WebModule):
         if cls is None:
             return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 404
         schema = cls.config_schema() or {}
-        # only schema keys are writable, so the route can never invent a setting
+        # only allow keys that exist in the schema
         allowed = {name: value for name, value in data.items() if name in schema}
         if not allowed:
             return jsonify(error="No pipeline settings provided"), 400
@@ -989,7 +981,7 @@ class CamerasModule(WebModule):
             return jsonify(error="x and y must be numbers"), 400
 
         frame_h, frame_w = frame.shape[:2]
-        # the click comes from the displayed image, which may be scaled down
+        # click is in displayed pixels, map it back to the frame
         disp_w = _to_float(request.args.get("w"), frame_w) or frame_w
         disp_h = _to_float(request.args.get("h"), frame_h) or frame_h
         px = int(round(x * frame_w / disp_w))
@@ -997,7 +989,7 @@ class CamerasModule(WebModule):
         px = min(max(px, 0), frame_w - 1)
         py = min(max(py, 0), frame_h - 1)
 
-        # median over a 5x5 patch keeps a single hot pixel from setting the range
+        # median of a small patch avoids hot pixels
         patch = frame[max(0, py - 2) : min(frame_h, py + 3), max(0, px - 2) : min(frame_w, px + 3)]
         if patch.size == 0:
             return jsonify(error="Sample is outside the frame"), 400

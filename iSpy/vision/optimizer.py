@@ -475,7 +475,6 @@ _rknn_converter_env: object | None = None
 
 
 def _converter_env_module():
-    """Return the RKNN converter-environment manager (provisioned lazily)."""
     global _rknn_converter_env
     if _rknn_converter_env is None:
         from iSpy.boot import _rknn_converter_env as _env
@@ -592,12 +591,6 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
 
 
 def _purge_pip_cache() -> bool:
-    """Drop the pip download cache so a full disk gets room to retry.
-
-    The cache is per-user, not per-interpreter, so purging with the running
-    interpreter frees the space pip would otherwise re-download into.  Never
-    raises - a failed purge just means the caller reports the pip error.
-    """
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pip", "cache", "purge"],
@@ -2217,18 +2210,6 @@ def _classify_worker_failure(
     error: str,
     error_type: str | None = None,
 ) -> str:
-    """Classify a failed conversion subprocess for accurate diagnostics.
-
-    Returns one of:
-
-    - ``"terminated"``: killed by a signal (negative return code) - e.g. the
-      OOM killer during int8 calibration.  *Not* a Python exception.
-    - ``"dependency"``: the worker could not import its conversion stack
-      (ImportError / ModuleNotFoundError, or the converter environment itself
-      is unavailable).  Retrying cannot help.
-    - ``"resource"``: an explicit out-of-memory exception from the worker.
-    - ``"conversion"``: any other conversion-side failure.
-    """
     if returncode is not None and returncode < 0:
         return "terminated"
     lowered = (error or "").lower()
@@ -2255,14 +2236,6 @@ def _cached_rknn_artifact(
     quantize: bool | None = None,
     force: bool = False,
 ) -> Path | None:
-    """Return a usable cached .rknn artifact without provisioning anything.
-
-    Mirrors ``convert_model()``'s cache logic: the artifact must exist and its
-    metadata sidecar (if present) must agree with the requested quantization.
-    ``force=True`` disables the cache.  Returns ``None`` when a real
-    conversion is required - never provisions the converter environment, so
-    reusing a cached artifact never triggers a build.
-    """
     if force:
         return None
     if quantize is None:
@@ -2303,14 +2276,6 @@ def _convert_model_subprocess_report(
     force=False,
     dataset_path=None,
 ) -> tuple[Path, dict | None]:
-    """Subprocess conversion that also reports *why* a conversion failed.
-
-    Returns ``(Path, None)`` on success and ``(fallback_path, report)`` on
-    failure, where ``report`` is a JSON-serialisable dict with at least
-    ``status`` (terminated/dependency/resource/conversion) and ``error``.
-    Callers like the benchmarker use the report so a failed RKNN conversion is
-    recorded as a failure instead of silently becoming a .pt run.
-    """
     outputs_dir = _PROJECT_ROOT / "Outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2333,10 +2298,7 @@ def _convert_model_subprocess_report(
         if cached is not None:
             return cached, None
 
-    # RKNN conversion runs in the isolated converter environment so the full
-    # toolkit2 + its incompatible numpy/scipy/setuptools pins never touch the
-    # main runtime environment.  The worker finds the iSpy source via
-    # PYTHONPATH (set below) regardless of install layout.
+    # rknn conversion runs in its own env
     worker_python = sys.executable
     worker_env = None
     if target_format == "rknn":
@@ -2344,21 +2306,11 @@ def _convert_model_subprocess_report(
             env_mod = _converter_env_module()
             worker_python = str(env_mod.converter_python())
             worker_env = os.environ.copy()
-            # Replace, never inherit, the parent's PYTHONPATH: entries from the
-            # runtime environment (user-site, main venv) come before the
-            # converter env's site-packages and can silently shadow its pinned
-            # packages.  That is how a newer protobuf used to reach onnx 1.16
-            # and crash rknn.build() with "'FieldDescriptor' object has no
-            # attribute 'label'".  The worker only needs the iSpy source root.
+            # only give the worker the source root, not the runtime paths
             worker_env["PYTHONPATH"] = str(env_mod.ispy_source_root())
-            # venv disables user-site already; be explicit so nothing outside
-            # the converter environment can satisfy the toolkit's imports.
             worker_env["PYTHONNOUSERSITE"] = "1"
         except Exception as exc:
-            # The converter environment could not be obtained (unsupported
-            # arch/ABI, disk full, no network, ...) - classify as a dependency
-            # failure and fall back to the source model.  A retry would fail
-            # identically.
+            # no converter env: fall back to the .pt
             report = {
                 "status": "dependency",
                 "error": f"converter environment unavailable: {exc}",
