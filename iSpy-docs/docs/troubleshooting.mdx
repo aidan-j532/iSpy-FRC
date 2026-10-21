@@ -95,7 +95,43 @@ If the dashboard can connect but the roboRIO cannot, the issue is probably in th
 
 Confirm that the base `.pt` model works first. Then check the model status and logs for the selected format, installed runtime, and device. An accelerator file is not portable between all boards, and a conversion that succeeds on a desktop does not guarantee that the target board can load it. Compare timing under the same input size and frame conditions; conversion can be a regression as well as an improvement.
 
-## Resetting the system
+## Config and startup failures
+
+These show up before any camera ever produces a frame, and the log line that names them is usually the whole answer.
+
+### A different config loads than the one I edited
+
+Boot searches `Config/` recursively for `*.json`, sorts the results, and prefers the first file whose name is not `config.json`. That last part is the trap: a file named `config_backup.json` sitting in `Config/` sorts before or after `config.json` depending on name and gets picked, so your edits to `config.json` appear to do nothing. The log prints the full list of files it found and the one it chose.
+
+Keep backups out of `Config/`, or name them so they do not end in `.json` (for example `config.json.bak`). The boot log is the fastest way to confirm which file actually loaded.
+
+### Boot stops with an invalid JSON error
+
+The loader does not repair a broken file. It raises and the run stops, naming the character position. The usual causes are a trailing comma, a comment, single quotes, or a missing brace. Validate the file with a JSON tool before starting. A UTF-8 BOM from an editor is stripped automatically, but that is the only editor artifact handled for you.
+
+### A top-level vision_model causes a failure
+
+Older configs put `vision_model` at the top level. That key is no longer accepted there and raises during load with a message telling you to move it under a camera's `pipeline.settings`. If you are hand-merging an old config, this is the first error you will hit. Move the model block into the camera it belongs to.
+
+### A camera is missing after editing the config
+
+Two different things produce this. Boot cleanup removes configured local cameras it cannot detect when iSpy starts, and saves their settings to `Save/camera_profiles.json` under `device_id`. Separately, a camera whose pipeline name is unknown is skipped with a warning, and a camera whose constructor raises (bad model path, missing key) is skipped with a full traceback. In all three cases the remaining cameras still start, so a single missing camera usually means its own entry, not a global failure.
+
+Read the log for the camera's name. If it is not there at all, cleanup removed it because the device was not present. If it is there with a warning or traceback, the entry itself is wrong.
+
+### Every camera is missing and one keeps coming back
+
+If cleanup would remove every camera, it keeps one anyway so the process still has something to run, and logs a warning naming the one it kept. That kept camera will fail to open and log capture errors. This is a signal that no configured device matches the hardware, usually because the config came from another machine or the cameras are unplugged.
+
+### The web UI never comes up
+
+`app_mode` controls whether the web server starts. If it is false, the process runs vision only and there is no page to open. The usual cause is Game Mode, which turns the web server off for exactly one run and restores it on the next start. If you disabled `app_mode` deliberately and need the UI back, edit the file directly, since there is no UI to change it from.
+
+### A restart did not pick up a setting
+
+Most camera and pipeline values are read when the pipeline is built at startup, so they need a restart. A few top-level keys are marked as restart-required by the settings API: `unit`, `debug_mode`, `frame_sync`, `log_level`, `metrics`, `plugins`, `camera_configs`, `device`, and `num_gpus`. The rest of the top-level keys, such as `admin` and the temperature values, take effect as the app reads them. When in doubt, restart; it is the only way to be sure for camera and model changes.
+
+
 
 Do not use `ispy-boot -f` as a general repair or restart command. It deletes `Config/`, `YoloModels/`, `Outputs/`, and the active dataset directory, including files you may have added there. First save a copy of `Config/config.json`, then fix the specific error shown in the log and restart with `ispy-run` (or restart the systemd service).
 

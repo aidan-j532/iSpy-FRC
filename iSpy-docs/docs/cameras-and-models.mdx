@@ -32,6 +32,18 @@ The source is interpreted by the selected camera backend. A number such as `0` i
 
 An FRC setup often has a USB camera on a coprocessor and a separate driver-station camera. The latter is not automatically a vision source: add only the camera that this iSpy process is meant to read. If adding a second camera, test it by itself first, then check both feeds and the combined loop rate.
 
+The set of accepted `source` values depends on the backend:
+
+| `camera_type` | Source forms |
+| --- | --- |
+| `opencv` | Integer index (`0`, `1`), `/dev/videoN`, a network URL (`rtsp://`, `http://`, `udp://`), or a path to an image or video file. |
+| `tello` | A `udp://` URL. If you leave `source` as an index or anything that is not a `udp://` URL, the backend fills in `udp://0.0.0.0:11111` for you. |
+| `replay` | A recorded session, used internally by the rollback player. You do not add this one by hand. |
+
+The Tello backend talks to the drone over UDP before OpenCV sees any video, so it also reads three companion keys: `tello_ip` (default `192.168.10.1`), `tello_command_port` (default `8889`), and `tello_video_port` (default `11111`). Those defaults match a stock Tello in its own access-point mode.
+
+An image file source is treated as a still frame that the camera hands back on every read, which is the point of it: you can point a pipeline at a fixed picture and check the model without a physical camera. Video files and network streams go through OpenCV like a device and run at whatever rate the source produces. A still image is the only source that is defined to never change.
+
 ## Camera setup workflow
 
 For a first camera, use this order:
@@ -82,6 +94,21 @@ The project also writes metadata sidecars next to a model when it can. Those sid
 
 This matters because the code is not just guessing based on file extension; it reads metadata where possible.
 
+## Device identity
+
+A camera entry can carry a `device_id`, a stable string that discovery assigns from the hardware itself rather than from its position in the list. On Windows it is derived from the USB `VID`/`PID` and interface path. On Linux it is built from the sysfs node behind `/dev/videoN`.
+
+The reason it exists is that indices move. Plug a second camera in and `0` and `1` can swap; unplug one and the surviving camera's index can shift. The index is a convenience for a fixed rig, and `device_id` is what survives changes.
+
+Two features key off it:
+
+- Boot cleanup. When iSpy starts and a configured camera's device is not detected, the entry is removed and its settings are written to `Save/camera_profiles.json` under its `device_id`. Re-adding the same hardware can refill those settings. The cleanup never removes the last camera, because the runtime needs at least one to boot.
+- Camera profiles. The Lightbox profile button stores and restores a camera's tuning and calibration under its `device_id`.
+
+Exporting a config through the Settings page strips `device_id` from every camera, since it is machine specific. Re-importing on another machine leaves the entries without IDs until you pick devices again, so cleanup and profiles will not match until then.
+
+Discovery also filters out things that look like video nodes but are not cameras. On Linux it reads the V4L2 capabilities and drops memory-to-memory codec nodes such as `bcm2835-codec-decode`, which claim capture capability without being a camera. On Windows it ignores the generic names the OS hands out when it has nothing better. If a camera you know exists does not appear in the discovery list, that filter is the usual reason.
+
 ## Default model behavior
 
 On first boot, `ispy-boot -f` creates the model folders and downloads the default models. That is why a fresh install often needs internet at least once.
@@ -89,6 +116,23 @@ On first boot, `ispy-boot -f` creates the model folders and downloads the defaul
 The exact default model used is project-specific and can change over time, but the key point is that a default path is created for you so the first camera setup has something to work with.
 
 The Models page is mainly for managing PyTorch `.pt` source models. Uploading/selecting a source model is separate from converting it: iSpy may generate an optimized artifact later, and the camera can continue using the source while that work happens. Do not delete a model that is marked active, and do not copy an optimized file into the `pytorch` folder just because its filename looks similar.
+
+### What the sidecar actually holds
+
+The metadata sidecar is written next to a model when the runtime can inspect it, and the boot sequence makes sure every `.pt` in `YoloModels/pytorch` has one. It records the model task, the class names and count, the input size, and the output layout. Those values are what the pipeline uses to decide how to interpret raw model output, which is why the task being right matters more than the file existing.
+
+Two failure modes are worth separating:
+
+- A missing sidecar. Boot tries to generate one by inspecting the model. If that fails, the camera starts but the pipeline reports that it cannot run, because it has no architecture to work from. The camera stays in the config; it just produces nothing until the model is fixed.
+- A wrong sidecar. This is worse. A sidecar that describes a different task or a different class list loads without complaint and produces confidently wrong output. If a model was renamed, re-exported, or swapped on disk, regenerate its sidecar rather than reusing the old one.
+
+### Profiles saved from the editor
+
+The editor remembers validated model settings as a profile. When you save a camera that uses a model-backed pipeline, the runtime runs the pipeline's own profile check on the settings. If they pass, a snapshot is stored under `model_profiles.<pipeline>.<name>` and offered on the Load Profile tab of any camera using that pipeline. Because the check gates it, a profile never contains settings that cannot run; a broken configuration is simply not saved as a profile.
+
+The snapshot is deep-copied, so editing the original camera afterward does not change the stored profile. Loading a profile copies its settings onto the camera you are editing. These profiles are a convenience for reusing a good setup across cameras, not a source of truth; the camera's own settings win for that camera.
+
+Camera profiles are separate and keyed differently. A camera profile stores a camera's tuning and calibration under its `device_id` in `Save/camera_profiles.json`, which is also where boot cleanup parks the settings of a camera that was unplugged. Model profiles are keyed by pipeline and name.
 
 ## Model optimization and backend selection
 

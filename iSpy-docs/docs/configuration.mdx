@@ -6,11 +6,71 @@ sidebar_position: 4
 
 # Configuration Reference
 
-The runtime loads `Config/config.json` relative to its current working directory. In a repository checkout, run iSpy from the repository root and edit `<repo>/Config/config.json`. The provisioned service's working directory is `/opt/iSpy`, so the current runtime reads `/opt/iSpy/Config/config.json`.
+This page documents the whole `Config/config.json` file: every top-level key, every camera field, the settings each pipeline accepts, the add-on entries, and the recording block. It also covers what happens when you edit the file by hand, which values take effect without a restart, and the mistakes that are easy to make in JSON.
 
-The provision script also writes `/etc/iSpy/config.json` and sets an `iSpy_CONFIG` environment variable, but the current boot/runtime code does not read that variable. For the version in this repository, edit the file under `/opt/iSpy/Config/` used by the service, not the unused copy under `/etc/iSpy/`.
+If you only need to change a camera or pick a model, the web UI is faster and safer. Use this page when you need to know what a value actually does, when you are moving a config between machines, or when the UI is not available.
 
-The config is not one giant single structure with random values. It is a nested dictionary with a few major blocks:
+## Where the file lives
+
+The runtime opens `Config/config.json` relative to its current working directory. Two cases matter:
+
+| How iSpy is running | Config path |
+| --- | --- |
+| From a repository checkout | `<repo>/Config/config.json` |
+| Provisioned service | `/opt/iSpy/Config/config.json` |
+
+The service sets its working directory to `/opt/iSpy`, which is why the path is not `/etc/iSpy`. The provision script also writes `/etc/iSpy/config.json` and sets an `iSpy_CONFIG` environment variable, but the boot and runtime code do not read that variable. Editing the copy under `/etc` does nothing for the service in this repository.
+
+Model paths inside the config are relative to the installation directory, the folder that contains `iSpy/`. `YoloModels/pytorch/model.pt` means `<repo>/YoloModels/pytorch/model.pt` or `/opt/iSpy/YoloModels/pytorch/model.pt`. The loaders anchor these paths to the source tree rather than to the process directory, and the two happen to be the same folder in both supported setups. What they never mean is "next to the config file".
+
+### How boot chooses a file
+
+A fresh install (`boot -f`) is destructive. It deletes `Config/`, `YoloModels/`, `Outputs/`, and the active dataset directory, then writes a new `Config/config.json`. Default model downloads run again on the next boot. Do not run `boot -f` to fix a bad value unless you are ready to lose models, logs, and datasets.
+
+A normal boot looks for JSON files inside `Config/` and chooses one. The search has a quirk worth knowing:
+
+1. It collects every `*.json` under `Config/`, including subdirectories.
+2. If any file is not named `config.json`, it uses the first of those instead of `config.json`.
+3. Otherwise it uses the first file it found.
+
+That means a file named `Config/config_backup.json` will be loaded instead of `Config/config.json`. Backups inside `Config/` should end in something other than `.json`, for example `config.json.bak`. This is the single easiest way to spend an afternoon debugging a setting that "will not apply".
+
+### Files next to the config
+
+Some settings that look like config live under `Save/`. They are written by the web app and are not part of `config.json`:
+
+| File | Contents |
+| --- | --- |
+| `Save/camera_profiles.json` | Camera entries remembered by hardware ID after a camera disappears or is removed. Used to refill settings when the device is re-added. |
+| `Save/config_snapshot.json` | One-shot snapshot taken from Settings. Restoring consumes it. |
+| `Save/game_mode_armed.json` | Marker used by the Game Mode button. |
+| `Save/raw_json_unlocked.json` | Remembers that the raw JSON editor was unlocked. |
+
+Do not copy these into `Config/` as JSON config files. They are separate stores with their own shape.
+
+## How values are loaded, merged, and saved
+
+`iSpyConfig` starts with a full default dictionary and then merges the file over it. Missing keys keep their defaults in memory, so a config written by an older version still boots with the current defaults for anything it does not mention. Unknown keys are preserved when the file is rewritten, but nothing reads them.
+
+A few behaviors follow from that design:
+
+- A malformed file is a hard failure. The loader raises an error and boot stops. It does not quietly regenerate the file. `boot -f` is the explicit way to start over.
+- A UTF-8 BOM is tolerated. Notepad and some Windows editors add one, and the loader strips it.
+- Writes are atomic. The app writes a temporary file in the same directory, flushes it, then replaces the real file. A power cut during a save should leave either the old file or the new one, not a half-written file.
+- The file is rewritten with four-space indentation. Custom formatting and comments are lost, and JSON does not support comments anyway.
+- The file is not watched. If you edit it while a process is running, that process keeps the values it loaded at startup.
+
+### Which changes need a restart
+
+The settings API marks these paths as restart-required: `unit`, `debug_mode`, `frame_sync`, `log_level`, `metrics`, `plugins`, `camera_configs`, `device`, and `num_gpus`.
+
+In practice, most pipeline and camera values are read when the camera object is constructed, so they also need a restart even if the UI does not label them. That includes models, confidence thresholds, calibration, mount geometry, and pipeline settings. A restart here means stopping and starting the vision process, not reloading the browser tab.
+
+Values that are read per request, and therefore change without a restart, include `admin` (pipeline list), `temperature_unit` and `temperature_warning` (dashboard display), and `app_mode` only when a new process starts. `health_stale_threshold` is read when the health module is created, so edit it and restart if you want the new value immediately.
+
+## Config map
+
+The file has five major blocks:
 
 - top-level runtime settings
 - `camera_configs`
@@ -18,23 +78,41 @@ The config is not one giant single structure with random values. It is a nested 
 - `rollback`
 - `model_profiles`
 
-## Default config structure
-
-A minimal generated config looks roughly like this:
+A generated config contains all of them. This is the shape, shortened only where a value is generated per machine:
 
 ```json
 {
+  "num_gpus": "auto",
+  "temperature_unit": "fahrenheit",
+  "temperature_warning": 80,
   "device": 0,
   "unit": "frc",
   "debug_mode": true,
-  "app_mode": true,
+  "frame_sync": false,
+  "admin": false,
+  "log_level": "INFO",
+  "log_file": "Outputs/log.txt",
   "health_stale_threshold": 1.0,
+  "metrics": true,
+  "app_mode": true,
+  "game_mode_web_off_next_run": false,
+  "game_mode_app_mode_backup": null,
+  "max_fps": 0,
+  "onboarding": {
+    "completed": false
+  },
   "camera_configs": {
     "default_cam": {
       "name": "default_cam",
       "camera_type": "opencv",
       "source": 0,
       "subsystem": "field",
+      "grayscale": false,
+      "yaw": 0,
+      "pitch": 0,
+      "height": 1.0,
+      "x": 0,
+      "y": 0,
       "calibration": {
         "distance": 0.0,
         "game_piece_size": 0.0,
@@ -68,201 +146,464 @@ A minimal generated config looks roughly like this:
     "downsample": 1,
     "segment_minutes": 5,
     "max_total_mb": 2048
-  }
-}
-```
-
-This is the config that the project creates on first boot. It is intentionally not empty. It contains the sane defaults that most installs can work from once a camera and model are filled in.
-
-The example is deliberately shortened to the parts most people need to recognize. Boot may add camera IDs and model metadata, and the web UI can save more pipeline-specific settings. Use the running UI or the generated config as the source of truth for a particular install; do not replace the whole file with a small example just to change one value.
-
-## Important top-level settings
-
-These are the values most likely to affect a normal setup:
-
-### `unit`
-
-Controls the output unit used for geometry and detection coordinates.
-
-Supported values include:
-
-- `frc` - common FRC/WPILib convention; outputs in meters while calibration inputs remain in inches
-- `meter`
-- `inch`
-- `foot`
-- `centimeter`
-
-This is important because robot code usually expects field-relative coordinates in meters, while calibration values are often entered in inches.
-
-### `debug_mode`
-
-Turns on extra visualization overlays in the UI and in the stream. This is primarily useful during setup and calibration.
-
-### `app_mode`
-
-Controls whether the full web dashboard is active. It can be toggled in a normal session and also used in a game mode flow that temporarily disables the web UI for a run.
-
-### `health_stale_threshold`
-
-Number of seconds before the health module reports a degraded state when a frame has not arrived in time.
-
-### `max_fps`
-
-Optional hard cap on pipeline FPS. A value of `0` leaves the cap disabled; set a positive value when the machine is overloaded or a camera is producing more frames than the robot needs.
-
-### Logging and pipeline choices
-
-- `log_level` controls the minimum severity written to the log. The default is `INFO`.
-- `log_file` is the runtime log path; by default it is `Outputs/log.txt`, relative to the current working directory.
-- `admin` exposes experimental pipeline choices such as QR code and optical flow in the pipeline selector. Leave it off unless you need those options.
-- `model_profiles` stores reusable model-backed pipeline settings saved by the web UI. It is managed automatically and usually does not need hand editing.
-
-Here is the short version of the root-level settings that affect day-to-day use:
-
-| Setting | Default | Practical meaning |
-| --- | --- | --- |
-| `unit` | `frc` | Camera geometry and calibration inputs use inches; position outputs use meters. |
-| `debug_mode` | `true` | Enables additional visual debugging information. |
-| `app_mode` | `true` | Starts the local dashboard with the vision runtime. |
-| `health_stale_threshold` | `1.0` | Seconds without fresh loop/frame activity before health is marked degraded. |
-| `max_fps` | `0` | No global loop cap when `0`; a positive value caps the runtime loop. |
-| `metrics` | `true` | Enables runtime metrics collection. |
-| `admin` | `false` | Shows the experimental QR-code and optical-flow choices in the pipeline selector. |
-| `log_level` | `INFO` | Minimum severity for the runtime log. |
-| `log_file` | `Outputs/log.txt` | Log path, resolved from the working directory. |
-
-The default values can move as the project changes. The generated file and web editor are authoritative for the version you have installed.
-
-## Camera config entries
-
-Each camera lives under `camera_configs` and has its own settings.
-
-Example:
-
-```json
-"camera_configs": {
-  "front_cam": {
-    "name": "front_cam",
-    "source": "/dev/video0",
-    "camera_type": "opencv",
-    "subsystem": "field",
-    "fps_cap": 30,
-    "yaw": 0,
-    "pitch": 0,
-    "height": 1.0,
-    "x": 0,
-    "y": 0,
-    "calibration": {
-      "distance": 24,
-      "game_piece_size": 3.5,
-      "size": 120,
-      "fov": 70
-    },
-    "pipeline": {
-      "name": "object_detection",
-      "settings": {
-        "vision_model": {
-          "file_path": "YoloModels/pytorch/my_model.pt",
-          "source_pt": "YoloModels/pytorch/my_model.pt",
-          "min_conf": 0.5,
-          "optimize": "auto"
-        }
-      }
-    }
-  }
-}
-```
-
-Important camera fields:
-
-- `source` - camera path, device index, video file, or URL
-- `camera_type` - camera backend type, often `opencv`
-- `subsystem` - usually `field` for robot field-relative vision
-- `yaw`, `pitch`, `height`, `x`, `y` - camera mount angles and offsets. Angles are in degrees; distances use the top-level `unit` setting.
-- `fps_cap` - optional per-camera frame-rate cap
-- `grayscale` - whether the camera frames are converted to grayscale
-- `calibration.distance` - distance used during calibration
-- `calibration.game_piece_size` - target real-world size in inches
-- `calibration.size` - pixel size at that reference distance
-- `calibration.fov` - camera FOV in degrees
-
-Keep the camera's identity/source fields on the camera entry and pipeline options under `pipeline.settings`. This makes it possible to switch pipelines without carrying unrelated settings from the old one. The web editor handles that separation and removes settings that do not belong to the selected pipeline.
-
-For example, a second camera is another entry with its own `source`, `pipeline`, and mount. It does not need its own global `unit` or `plugins` block:
-
-```json
-"camera_configs": {
-  "front_cam": {
-    "name": "front_cam",
-    "source": 0,
-    "camera_type": "opencv",
-    "pipeline": {
-      "name": "object_detection",
-      "settings": {
-        "vision_model": {
-          "file_path": "YoloModels/pytorch/fuel.pt",
-          "source_pt": "YoloModels/pytorch/fuel.pt",
-          "min_conf": 0.5
-        }
-      }
-    }
   },
-  "rear_cam": {
-    "name": "rear_cam",
-    "source": 1,
-    "camera_type": "opencv",
-    "pipeline": {
-      "name": "april_tag",
-      "settings": {}
-    }
+  "model_profiles": {}
+}
+```
+
+## Top-level settings
+
+These control the process as a whole, not one camera.
+
+| Key | Default | Type | What it does |
+| --- | --- | --- | --- |
+| `num_gpus` | `"auto"` | `"auto"` or integer | Number of GPUs for multi-GPU model pools. See the note below on current wiring. |
+| `temperature_unit` | `"fahrenheit"` | `"celsius"` or `"fahrenheit"` | Unit used when the dashboard displays hardware temperature. |
+| `temperature_warning` | `80` | number | Temperature threshold used by the dashboard warning color. Stored in Celsius. |
+| `device` | `0` | integer or string | Model device hint. See the note below on current wiring. |
+| `unit` | `"frc"` | `"frc"`, `"meter"`, `"inch"`, `"foot"`, `"centimeter"` | Input and output units for geometry. |
+| `debug_mode` | `true` | boolean | Draws an FPS counter on annotated object-detection frames. |
+| `frame_sync` | `false` | boolean | Makes object detection wait for frames instead of timing out. |
+| `admin` | `false` | boolean | Switches the camera pipeline list between the normal set and the experimental set. |
+| `log_level` | `"INFO"` | `"DEBUG"`, `"INFO"`, `"WARNING"`, `"ERROR"` | Minimum severity written to the log. |
+| `log_file` | `"Outputs/log.txt"` | string path | Log file location, relative to the working directory. |
+| `health_stale_threshold` | `1.0` | number (seconds) | Loop stall time before `/health` reports degraded. |
+| `metrics` | `true` | boolean | Accepted and shown in Settings. No runtime code branches on it in this tree. |
+| `app_mode` | `true` | boolean | Starts the web dashboard with the vision process. |
+| `game_mode_web_off_next_run` | `false` | boolean | One-shot flag used by the Game Mode button. |
+| `game_mode_app_mode_backup` | `null` | boolean or null | Internal value used to restore `app_mode` after Game Mode. |
+| `max_fps` | `0` | number | Cap on the vision loop rate. `0` means no cap. |
+| `onboarding` | `{"completed": false}` | object | Tracks whether the first-run tutorial was dismissed. |
+| `camera_configs` | one default camera | object | Per-camera configuration. |
+| `plugins` | empty lists | object | Enabled add-ons. |
+| `rollback` | see below | object | Session recorder settings. |
+| `model_profiles` | `{}` | object | Saved pipeline settings used by Load Profile. |
+
+### Units and how they interact
+
+`unit` is the most consequential key to change by accident. It affects mount geometry and the numbers reported back to robot code, and the two are not always the same unit.
+
+With `unit: "frc"`, which is the default:
+
+- Mount fields (`x`, `y`, `height`) are entered in inches.
+- Calibration distance and object size are entered in inches.
+- Detection coordinates and object positions are reported in meters.
+
+That split matches WPILib conventions and the way most teams measure a robot by hand, but it means a value of `height: 20` is 20 inches (0.508 m), and a reported `z` of 0.5 is half a meter. Do not assume one unit applies to both sides.
+
+The other values use the same unit on both sides:
+
+| `unit` | Inputs | Outputs |
+| --- | --- | --- |
+| `frc` | inches | meters |
+| `inch` or `inches` | inches | inches |
+| `foot` or `feet` | feet | feet |
+| `meter` or `meters` | meters | meters |
+| `centimeter` or `centimeters` | centimeters | centimeters |
+
+Unrecognized strings do not raise. The conversion helpers fall back to the `frc` factors, so an unknown unit behaves like inches in and meters out. Stick to the values above.
+
+Changing `unit` does not convert existing values. A camera configured with `height: 20` in `frc` mode means 20 inches. If you switch to `meter`, the same `20` now means 20 meters. Update every geometric field after a unit change, and expect robot code that consumes the numbers to need a matching change.
+
+### Temperature display
+
+`temperature_unit` only changes what the dashboard shows. The sensor reads Celsius, and the warning threshold is stored in Celsius as well. When the unit is Fahrenheit, both the reading and the threshold are converted for display. If `temperature_warning` is `80`, that is 80 °C (176 °F on screen), not 80 °F.
+
+The dashboard uses the threshold to color the temperature reading. It does not shut anything down. High readings are a reason to improve cooling or reduce load, not something the config will enforce.
+
+### Loop rate and latency
+
+`max_fps` caps the whole vision loop, across all cameras. It is read once when the run starts, so edit it and restart. `0` leaves the loop uncapped. Use a positive value when the machine is saturated, when the cameras produce more frames than the robot can use, or when you want a predictable load for thermal testing.
+
+Per-camera capture rate is separate. `fps_cap` on a camera entry limits that camera. The two controls multiply: a global cap of 20 and a camera cap of 30 gives at most 20 processed frames per second from that camera.
+
+`frame_sync` is used by the object-detection pipeline. With it enabled, the pipeline waits for a fresh frame instead of timing out and reusing or skipping. It can line up processing with capture, and it can also add latency, which is why the code logs a warning when it is on. Leave it off unless you are diagnosing a frame-timing problem.
+
+`debug_mode` is narrower than the name suggests. In the object-detection pipeline it draws the pipeline's FPS on the annotated frame. It is useful when checking whether the model is keeping up, but it is not a general logging switch. Use `log_level: "DEBUG"` for that.
+
+`health_stale_threshold` is measured against the time since the last loop tick. If the loop has not ticked for longer than this, `/health` reports `degraded`. Camera health and add-on health are checked separately, so a fresh loop with a dead camera can still be degraded. The default of one second is tight enough to notice a stall and loose enough to survive a slow frame.
+
+### Logging
+
+`log_level` sets the level on the `iSpy` logger, which every module inherits. A module that sets its own level still wins, which is how the web server noise gets quieted. `DEBUG` is noisy enough to affect timing on a small computer, so use it for a short investigation and then put it back. `log_file` is opened relative to the working directory, and its parent folder is created if needed. If the file still cannot be opened, logging setup aborts partway, the failure is logged, and the process continues with the handlers it already had. Look for that message in the console, because the file log you were expecting will not exist.
+
+The settings page shows a restart badge for `log_level`. A hand edit also needs a restart because logging is configured during load.
+
+### Admin mode and experimental pipelines
+
+The camera editor's pipeline list is filtered by `admin`. The filter is stricter than the label in the Settings page suggests:
+
+- With `admin: false`, the list contains the normal pipelines and hides `qr_code` and `optical_flow`.
+- With `admin: true`, the list contains only `qr_code` and `optical_flow`.
+
+Treat it as a developer switch for working on the experimental two, not as a way to show every pipeline at once. Set it back to `false` when you are done, or the normal pipelines will not appear in the camera editor.
+
+The filter is applied when the camera page requests its pipeline list, so this one takes effect on the next page load rather than requiring a process restart.
+
+### App mode and Game Mode
+
+`app_mode` decides whether the process starts the Flask dashboard. With `app_mode: true`, the web server starts in a background thread before the cameras are built. With `app_mode: false`, you get vision only. That is useful on a match-day image where nothing should be listening on the network, but it also means there is no UI to turn it back on. Edit the file or use the Game Mode flow.
+
+Game Mode is a one-run web shutdown. Pressing the button in Settings writes `game_mode_web_off_next_run: true` and a marker file. On the next boot:
+
+1. The previous `app_mode` value is copied into `game_mode_app_mode_backup`.
+2. `app_mode` is set to `false` for that run.
+3. `game_mode_web_off_next_run` is cleared and the config is saved.
+
+On the following boot, the backup is restored and cleared, so the dashboard comes back automatically. You do not need to edit `app_mode` by hand for this.
+
+`game_mode_app_mode_backup` is internal state. If it is left set after a crash, the next boot will restore that value and clear it. Do not use it as a normal setting.
+
+`onboarding.completed` only controls the first-run tutorial in the web UI. `boot -f` resets it along with the rest of the config.
+
+### `device` and `num_gpus`
+
+Both keys exist in the default config, are exposed to the settings API, and are listed as restart-required. In this code tree, however, the model loaders read `device` and `num_gpus` from the model's own configuration block, not from these top-level keys. The top-level values are not injected into the model config anywhere in the startup path.
+
+That makes them reserved for now. Changing them does not move a model to another GPU in this version. Model placement follows the artifact and the backend settings attached to the model. Treat edits here as no-ops unless you are changing the code that wires them up.
+
+`metrics` is in the same category. It is stored, validated, and marked restart-required, but the Metrics page and its instrumentation are registered regardless. The flag currently has no runtime branch.
+
+## Camera entries
+
+Every camera is a key under `camera_configs`. The key is the camera name used by the UI, logs, recordings, and `get_data_for_subsystem`. The entry also has a `name` field with the same value. Keep them equal. The web editor writes both; hand-edited entries that disagree will be confusing in logs and recordings.
+
+A camera entry has three kinds of fields:
+
+- identity and source (`name`, `source`, `camera_type`, `device_id`)
+- capture and mounting (`subsystem`, `grayscale`, tuning keys, `x`, `y`, `height`, `yaw`, `pitch`)
+- processing (`calibration`, `pipeline`)
+
+### Camera keys
+
+| Key | Default | Type | What it does |
+| --- | --- | --- | --- |
+| `name` | camera key | string | Display name. Should match the key. |
+| `source` | `0` | integer or string | Capture source. See the source table below. The base camera class default is `/dev/video0`. |
+| `camera_type` | `"opencv"` | `"opencv"` or `"tello"` | Backend class used to open the source. |
+| `device_id` | none | string | Stable hardware identifier from discovery. Used for profiles and boot cleanup. |
+| `subsystem` | `"field"` | string | Label used to route data to a consumer. |
+| `grayscale` | `false` | boolean | Convert frames to grayscale before the pipeline sees them. |
+| `fps_cap` | `0` | number | Per-camera maximum processed frames per second. `0` means uncapped. |
+| `exposure_time` | none | number, 1 to 100000 | Fixed exposure value in microseconds, as labeled by the UI. Left out with `gain` to keep auto-exposure. |
+| `gain` | none | number, 0 to 1024 | Fixed sensor gain. See the exposure note below. |
+| `brightness` | `0` | number, -100 to 100 | Additive brightness offset. |
+| `contrast` | `0` | number, -100 to 100 | Contrast multiplier. |
+| `saturation` | `0` | number, -100 to 100 | Saturation boost or drain. |
+| `gamma` | `1.0` | number, 0.3 to 3.0 | Gamma curve applied to the frame. |
+| `white_balance` | `0` | number, -100 to 100 | Blue/red balance. Positive adds blue, negative warms the image. |
+| `tint` | `0` | number, -100 to 100 | Green/magenta balance. Positive adds magenta, negative adds green. |
+| `x`, `y` | `0` | number | Camera offset from the robot origin, in config units. |
+| `height` | `0` | number | Camera height above the ground, in config units. The generated default camera uses `1.0`. |
+| `yaw` | `0` | degrees | Horizontal rotation. Positive turns right. |
+| `pitch` | `0` | degrees | Vertical tilt. Positive tilts down. |
+| `calibration` | zeros | object | Focal, geometry, and ChArUco calibration values. |
+| `pipeline` | object | object | Pipeline name and its settings. |
+
+`z` is still present in some old files. It is accepted but not used; `height` is the single mount-height field that feeds the ray origin. Remove `z` if you are cleaning up a config.
+
+`csi` is also accepted at camera level and is not read anywhere. It survives only so old files do not get their keys folded into pipeline settings.
+
+`path` is a legacy alias used for matching discovered devices when `source` is missing. New entries should use `source`.
+
+### Sources
+
+The `source` value is interpreted by the camera backend.
+
+| Source | Meaning |
+| --- | --- |
+| `0`, `1`, ... | Local camera index passed to OpenCV. Numbering can change when devices are plugged in or reordered. |
+| `/dev/video0` | Linux device path. More stable than an index on some systems, but still tied to enumeration order. |
+| `rtsp://...`, `http://...` | Network stream. The camera is not a local USB device, so USB diagnostics do not apply. |
+| `udp://0.0.0.0:11111` | UDP stream, used by the Tello backend. |
+| Path to an image file | A still image. The camera loops the same frame, which is useful for testing a model without a physical camera. |
+| Path to a video file | A local video used as a source. |
+
+A `device_id` is what discovery reports for a physical camera. Profiles are keyed by it, and boot cleanup uses it to decide whether a configured camera is still present. Do not invent one or copy one from another machine. The web editor fills it when you pick a discovered device.
+
+### Camera types
+
+`opencv` is the normal choice. `tello` adds the Tello handshake and uses the drone's UDP stream. Tello entries also accept:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `tello_ip` | `192.168.10.1` | IP of the drone's access point. |
+| `tello_command_port` | `8889` | UDP port for AT commands. |
+| `tello_video_port` | `11111` | Local UDP port for the H.264 video stream. |
+
+If a Tello entry has no `udp://` source, the backend points it at the default stream URL automatically.
+
+### Exposure, gain, and image tuning
+
+The tuning keys are applied in two places. `brightness`, `contrast`, `saturation`, `white_balance`, `tint`, and `gamma` are post-processing steps on the frame. They work on any source, including a recorded video. `exposure_time` and `gain` are sent to the camera driver and only make sense for a real UVC or v4l2 device.
+
+There is a pairing rule for exposure and gain. If neither key is present on the camera entry, the backend leaves the camera on its automatic exposure. If either key is present, it switches to fixed mode and sets both values. Missing companion values fall back to `100` for exposure and `200` for gain. Setting only `gain` therefore also fixes exposure at 100.
+
+The units are driver-specific. The UI labels exposure in microseconds, but v4l2 and UVC implementations do not all interpret the number the same way. Change one step at a time and watch the image.
+
+`fps_cap` is enforced after capture. It does not change the camera's negotiated format; it drops frames so the pipeline sees fewer of them.
+
+`grayscale` converts to a single channel before processing. It saves a little work and is fine for detection models trained on grayscale, but a color model may lose useful information. Test it rather than assuming it helps.
+
+### Mount geometry and subsystems
+
+`x`, `y`, and `height` place the camera relative to the robot origin. They are entered in the top-level config unit. With `frc`, that means inches. `height` is the one that triangulation uses for the ray origin, which is why it matters more than `z` ever did.
+
+`yaw` is the camera's horizontal rotation relative to the robot, positive to the right. `pitch` is vertical tilt, positive downward. A forward-facing camera at zero pitch looks at the horizon; a camera aimed at the floor needs a positive pitch.
+
+`subsystem` is a free-form label compared with exact string equality by each pipeline's `get_data_for_subsystem(target)`. The camera editor dropdown offers `field`, `robot`, and `other`, but the value is just a string, so a hand edit can set anything. The bundled NetworkTables utility has a special case for `hopper`: a camera labeled `hopper` publishes a `hopper_sees_object` boolean, and the object pipeline returns that boolean instead of a full object list. Because the dropdown does not include `hopper`, set it in the file if you want that behavior. Custom robot code can ask for any label, but nothing else in the bundled code consumes one.
+
+### Camera profiles and boot cleanup
+
+When a configured camera is not present at boot, the cleanup step removes it from `camera_configs` and stores the entry in `Save/camera_profiles.json` under its `device_id`. It never removes the last camera, even if every device is missing, because the rest of the system expects at least one camera entry to exist.
+
+The practical effect is that unplugging a camera for a boot can remove it from the config. The settings are not lost, and re-adding the same hardware can refill them from the profile. Exporting a config strips `device_id` because it is machine-specific; that is deliberate, and it means an imported config will not match profiles until the devices are picked again.
+
+## Calibration
+
+The `calibration` object holds two different kinds of calibration: a known-object focal estimate and a ChArUco intrinsics solve. Both write into the same block.
+
+| Key | Unit | Meaning |
+| --- | --- | --- |
+| `distance` | inches | Distance from the camera to the known object when the pixel height was measured. |
+| `size` | pixels | Height of the known object in the frame at that distance. |
+| `game_piece_size` | inches | Real height of the known object. |
+| `fov` | degrees | Horizontal field of view. |
+| `camera_matrix` | 3x3 array | Intrinsic matrix from ChArUco. |
+| `dist_coeffs` | array | Lens distortion coefficients from ChArUco. |
+| `resolution` | `[width, height]` | Frame size the intrinsics were solved at. |
+| `rms` | pixels | Reprojection error reported by the ChArUco solve. |
+| `count` | integer | Number of board views used in the solve. |
+| `focal_length_pixels` | pixels | Focal length derived from the known-object measurement or from intrinsics. |
+
+The known-object fields are always in inches, even when the top-level unit is not `frc`. The calibration wizard asks for object size and distance in inches and labels them that way.
+
+For size-based distance, the pipeline computes:
+
+```text
+focal_px = (size_px * distance_in) / game_piece_size_in
+distance_in = (game_piece_size_in * focal_px) / measured_pixel_height
+```
+
+All three of `size`, `distance`, and `game_piece_size` must be positive. If they are not, the focal length falls back to `1.0` and the reported distances are meaningless. That is the usual reason a camera "works" but every distance is wrong.
+
+For ray-based distance, intrinsics take precedence in this order:
+
+1. `camera_matrix` from ChArUco, adjusted for the current frame width.
+2. `fov`, converted to a focal length.
+3. The size-based focal length above.
+
+A ChArUco calibration is the most accurate source and also gives you lens distortion. The FOV path is quicker and does not need a board. The size-based path needs a known object but no board.
+
+### PnP for pose models
+
+Pose models can use a PnP block inside `vision_model`:
+
+```json
+"vision_model": {
+  "file_path": "YoloModels/pytorch/pose.pt",
+  "source_pt": "YoloModels/pytorch/pose.pt",
+  "pnp": {
+    "object_points": [[0, 0, 0]],
+    "camera_matrix": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+    "dist_coeffs": [0, 0, 0, 0, 0],
+    "min_keypoint_conf": 0.5,
+    "mode": "flexible"
   }
 }
 ```
 
-This is just the `camera_configs` value, not a complete config file. Use camera sources that exist on the actual machine; index `1` is only an example and is not guaranteed to be the rear camera.
+| Key | Meaning |
+| --- | --- |
+| `object_points` | 3D keypoint positions in the model's skeleton, in the same order as the model's keypoints. |
+| `camera_matrix` | Intrinsics used for the pose solve. |
+| `dist_coeffs` | Distortion coefficients. |
+| `min_keypoint_conf` | Minimum keypoint confidence accepted into the solve. |
+| `mode` | `flexible` or `rigid`. Flexible allows more variation between keypoints; rigid assumes a fixed body shape. |
 
-With the default `unit: "frc"`, mount distances are entered in inches and detections are output in meters. The known-object calibration wizard also asks for object size and distance in inches. Keep these units consistent when editing the JSON by hand.
+The web calibration wizard writes this block for you when the selected model reports pose keypoints. Editing it by hand is possible but easy to get wrong, because the object points must match the model's keypoint order.
 
-## `pipeline` and `vision_model`
+## Pipeline settings
 
-The pipeline block is important. For object detection, you will usually see:
+The `pipeline` block is:
 
 ```json
 "pipeline": {
   "name": "object_detection",
-  "settings": {
-    "vision_model": {
-      "file_path": "YoloModels/pytorch/model.pt",
-      "source_pt": "YoloModels/pytorch/model.pt",
-      "min_conf": 0.5,
-      "optimize": "auto",
-      "quantize": false
-    }
-  }
+  "settings": {}
 }
 ```
 
-The `vision_model` block is where the actual model is selected and tuned. The project expects a real model path and generated metadata sidecars next to the model when possible.
+`name` selects the registered pipeline. If the name is unknown, that camera is skipped at startup with a warning, and the other cameras still run. The same applies when a pipeline constructor raises, so a camera with a bad model path does not take the whole process down. `settings` holds the keys that pipeline declares.
 
-The common `vision_model` values are:
+When you execute a save from the web editor, it removes keys in `settings` that belong to a different pipeline's schema, and it drops the legacy aliases when the canonical name is present. Unknown keys that no pipeline claims are left alone. A hand edit can leave stale keys behind; they are ignored, but they make the file harder to read. Clean them out when you change pipeline names manually.
 
-| Value | Meaning |
-| --- | --- |
-| `file_path` | The model artifact the pipeline should load. Initially this is usually the `.pt` source model; after optimization it may point to the selected artifact. |
-| `source_pt` | The original PyTorch model used as the source for optimization and model selection. |
-| `min_conf` | Detection confidence threshold; increase it to reject more weak detections, or lower it if valid targets are being missed. |
-| `optimize` | `off`, `auto`, or a conversion path such as `onnx`. The result depends on pipeline support and installed runtime packages. |
-| `target_format` | Requested output when optimization is enabled; `auto` lets iSpy choose from the options available on that system. |
-| `quantize` | Requests quantization for conversion paths that support it. Check the output against the original model. |
-| `quantization_dataset` | Optional image folder used by backends that need calibration samples. |
+### Shared model settings
 
-Do not assume that editing `file_path` to an accelerator extension installs or enables that accelerator. The file, model metadata, runtime package, and target device all need to agree. Start with the `.pt` model and a known input before testing an optimized copy.
+The model-backed pipelines share a set of settings. They can appear inside `vision_model` (older layout and the shipped default) or as siblings of `vision_model` under `settings` (what the web editor writes). If a key exists in both places, the sibling wins and the duplicate inside `vision_model` is removed during load.
 
-## Add-ons and plugin entries
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `min_conf` | `0.5` | Minimum detection confidence. Raise it to reject weak boxes; lower it to catch targets the model is unsure about. |
+| `optimize` | `"off"` | `off`, `auto`, or `onnx`. `auto` builds the best artifact for the machine in the background. |
+| `target_format` | `"auto"` | Requested artifact format. Available choices depend on the pipeline. |
+| `quantize` | `false` | Request int8 quantization for the optimized artifact. |
+| `quantization_dataset` | empty | Folder of calibration images under `QuantizeDataset/`. Empty means synthetic calibration images. |
 
-Add-ons are enabled by their presence in the config. There is no separate `enabled` flag in the config. If the entry exists, it is enabled.
+`optimize` runs in the background. The `.pt` model keeps serving until the converted artifact is ready, so a conversion does not block boot. If the runtime package for the requested backend is missing, the build or the load fails and the pipeline logs the reason. A file extension alone does not make an accelerator work.
 
-Example:
+The target format list is per pipeline. Object detection and depth estimation expose `auto` and `onnx`. YOLO-World exposes `auto`, `onnx`, `rknn`, `tflite`, `openvino`, `engine`, `coreml`, `hailo`, and `qnn`. Whether a format actually runs depends on the installed packages and the hardware present.
+
+Legacy aliases still load: `auto_opt` maps to `optimize`, and `quantized` maps to `quantize`.
+
+### `object_detection`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `vision_model` | default model | Model selection and model-level settings. |
+| `min_conf` | `0.5` | Confidence threshold. |
+| `z_mode` | `"size_based"` | Distance method: `size_based` or `ground_plane`. |
+| `object_heights` | `[]` | Per-class heights above the ground plane, in inches. |
+| `optimize`, `target_format`, `quantize`, `quantization_dataset` | see above | Conversion settings. |
+
+`vision_model` normally contains `file_path` and `source_pt`. The file path points at the artifact the pipeline loads; `source_pt` points at the original PyTorch model used for conversions. When you pick a new model in the UI, both are updated. If you move or rename a model, update both.
+
+The model's metadata sidecar (`<model_stem>_metadata.yaml`) supplies the task, class count, input layout, output layout, and input size. Those values are auto-detected and normally should not be overridden. If the sidecar is missing, the inspector tries to infer the details from the model file. If it cannot, the camera starts without detection and logs the failure. A mismatched sidecar is worse than a missing one; retrain or re-export rather than guessing.
+
+`z_mode` selects how depth is estimated:
+
+- `size_based` uses the known-object calibration and the detected bounding box height. It needs usable `calibration.distance`, `calibration.size`, and `calibration.game_piece_size`.
+- `ground_plane` casts a ray through the detection and intersects it with the ground plane, or with a plane at the class height from `object_heights`. It uses mount height, yaw, pitch, and intrinsics.
+
+If the primary method cannot produce a distance, the other is used as a fallback. The fallback depends on the same calibration data, so a camera with no calibration at all still produces poor positions.
+
+There is a mismatch worth knowing about here. The settings schema advertises `size_based` as the default, and the web editor writes that value when it saves a camera. The pipeline's own fallback for a missing key is `ground_plane`. Since the shipped default camera has no `z_mode` key at all, a freshly generated config runs `ground_plane` until the camera is saved through the UI or the key is added by hand. If you are editing the file and care which method runs, write `z_mode` explicitly.
+
+`object_heights` is a list of objects with `class_name` and `height_in`:
+
+```json
+"object_heights": [
+  { "class_name": "note", "height_in": 1.25 },
+  { "class_name": "cube", "height_in": 3.5 }
+]
+```
+
+Classes not listed are assumed to sit on the ground. This is a flat per-class assumption, not a full 3D size model. It is most useful for game pieces that are consistently above the floor, such as a note held over a barrier.
+
+### `hsv_detection`
+
+This pipeline detects colored blobs by thresholding in HSV. It has no model and no `vision_model`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `preset` | `"custom"` | One of `custom`, `orange`, `yellow`, `red`, `green`, `blue`, `white`. A preset overrides the three ranges below. |
+| `hue_range` | `[5, 25]` | OpenCV hue band, `0` to `179`. A low end above the high end spans the red wrap. |
+| `sat_range` | `[110, 255]` | Saturation band, `0` to `255`. |
+| `val_range` | `[80, 255]` | Brightness band, `0` to `255`. |
+| `lighting_normalize` | `"off"` | `off`, `clahe`, or `auto_gamma`. Flattens the brightness channel before thresholding. |
+| `clahe_clip` | `3.0` | CLAHE contrast limit. |
+| `blur_kernel` | `0` | Odd blur size for saturation and value. Below `3` is treated as off. |
+| `morph_open_iters` | `0` | Open passes to remove specks. |
+| `morph_close_iters` | `1` | Close passes to fill pinholes. |
+| `morph_kernel_size` | `5` | Kernel size for open and close. Forced odd. |
+| `morph_kernel_shape` | `"ellipse"` | `ellipse` or `rect`. |
+| `process_scale` | `1.0` | Threshold at a fraction of the frame, then scale boxes back. Lower is faster. |
+| `roi_top_ignore_pct` | `0.0` | Percent of the frame height ignored from the top. |
+| `min_area_px` | `150` | Minimum blob area in pixels. |
+| `max_area_px` | `250000` | Maximum blob area in pixels. |
+| `min_circularity` | `0.0` | Minimum circularity, `4π·area / perimeter²`. |
+| `min_solidity` | `0.0` | Minimum blob area over convex hull area. |
+| `min_aspect` | `1.0` | Minimum long-side over short-side ratio. |
+| `max_aspect` | `6.0` | Maximum long-side over short-side ratio. |
+| `shape_hint` | `"any"` | `any`, `circle`, or `rect`. Selects the shape term for confidence and the pixel used for the position. |
+| `max_detections` | `10` | Keep the N biggest blobs. |
+| `merge_distance_px` | `0` | Merge blobs closer than this; `0` disables merging. |
+| `object_name` | `"hsv_object"` | Class name reported on every detection. |
+| `object_size_in` | `4.0` | Real object width or diameter in inches, used by `size_based` depth. |
+| `z_mode` | `"ground_plane"` | `ground_plane` or `size_based`. |
+| `plane_height_in` | `0.0` | Height of the object plane in inches. `0` is the floor. |
+| `view_mode` | `"outline"` | `outline` or `mask`. Rendering only. |
+| `mask_style` | `"color"` | `color` or `binary`. Rendering only. |
+| `draw_labels` | `true` | Draw the name and confidence. Rendering only. |
+
+Unlike `object_detection`, this pipeline's fallback for a missing `z_mode` is `ground_plane`, which matches the schema default here, so no mismatch applies.
+
+Invalid values are clamped to their range and logged, and a bad range or unknown choice falls back to the schema default. `blur_kernel` and `morph_kernel_size` are rounded to odd numbers, and a `blur_kernel` under `3` is turned off.
+
+`preset` replaces `hue_range`, `sat_range`, and `val_range` at runtime, so editing the ranges does nothing while a non-`custom` preset is selected. The built-in preset ranges are listed in [Vision Pipelines and Backends](./vision-pipelines#presets).
+
+The position of a detection depends on `shape_hint`: `circle` uses the blob centroid, while `any` and `rect` use the bottom of the box. See [Vision Pipelines and Backends](./vision-pipelines#color-detection-with-hsv_detection) for the full processing order.
+
+### `yolo_world`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `prompt` | `"A dog."` | Class prompt. Commas separate classes; trailing punctuation is stripped. |
+| `model_size` | `"s"` | One of `s`, `m`, `l`. Weights download on first use. |
+| `input_size` | `640` | Letterbox size for conversion and inference. |
+| `optimize`, `target_format`, `quantize`, `quantization_dataset` | see above | Conversion settings. |
+
+The prompt is the model's vocabulary. "A red ball, a blue ball" produces two classes, not one class with an adjective. Use concrete nouns and keep the list short; every extra phrase costs accuracy and time.
+
+Weights are downloaded from Ultralytics into the model cache. The first run needs network access. After that the files are local.
+
+### `depth_anything`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `model_size` | `"small"` | Depth Anything V2 Small. The only option in this version. |
+| `estimate_depth` | `true` | Enables depth estimation. Turn it off to use the pipeline as a passthrough while debugging. |
+| `max_depth` | `10.0` | Maximum depth in meters used for scaling and visualization. |
+| `process_every` | `5` | Run inference every N frames and reuse the last result in between. |
+| `input_size` | `518` | Square resolution for the ONNX export and inference. |
+| `optimize`, `target_format`, `quantize`, `quantization_dataset` | see above | Conversion settings. |
+
+`process_every` is the main speed control. A value of `5` at 30 fps gives about six depth updates per second. Raising it lowers CPU and GPU load and makes the depth map lag behind moving objects.
+
+### `april_tag`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `tag_size_inches` | `6.5` | Physical edge length of the tag in inches. |
+
+AprilTag pose comes from the camera intrinsics and the tag size, so this pipeline uses the ChArUco calibration. The tag size must match the printed tag, not the black square alone. Measure the full black border to the outer edge as specified by the tag family.
+
+The pipeline does not use a YOLO model and is not model-backed, so `vision_model` is irrelevant here.
+
+### `optical_flow`
+
+This pipeline is marked experimental and is hidden unless `admin` is on.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `method` | `"farneback"` | `farneback` for dense flow, `lk` for sparse corner tracking. |
+| `flow_scale` | `0.5` | Downscale factor before computing flow. `0.5` is half resolution and roughly four times faster. |
+| `win_size` | `15` | Farneback window size. |
+| `lk_win_size` | `21` | Lucas-Kanade window size. |
+| `max_corners` | `250` | Maximum corners for LK tracking. |
+| `min_flow` | `0.2` | Flows below this magnitude, in pixels, are ignored in the average. |
+| `smoothing` | `0.3` | EMA alpha for the velocity estimate. Lower is smoother and laggier. |
+| `ground_ratio` | `0.6` | Fraction of the frame, measured from the bottom, treated as ground. |
+| `nominal_range` | `60` | Assumed distance to the ground features in inches. Used with the focal length to turn pixel motion into a linear velocity. |
+| `flow_saturation` | `24` | Flow magnitude, in pixels, that renders as full color intensity in the visualization. |
+| `draw_debug` | `true` | Draws the flow overlay. |
+
+Optical flow estimates motion from frame-to-frame pixel movement. It uses the camera FOV to turn that into velocity, so either the FOV from the focal wizard or the ChArUco intrinsics should be calibrated. It is not a replacement for wheel odometry; expect drift.
+
+### `qr_code`
+
+This pipeline is marked experimental and is hidden unless `admin` is on.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `qr_size` | `0.1` | Edge length of the QR code passed to the pose solver. The default corresponds to a 10 cm code. |
+| `decode_mode` | `"standard"` | `standard` or `fast`. Fast mode trades some robustness for speed. |
+
+QR pose uses the ChArUco intrinsics. The size value is consumed directly by the solver, so keep it in the unit you expect the pose translation to use. In practice that means meters, with `0.1` for a 10 cm code.
+
+## Add-ons
+
+Add-ons are enabled by presence. There is no `enabled` flag inside an entry. To disable an add-on, remove its entry. To enable one, add it with an empty object or with settings; missing settings fall back to the add-on's schema defaults at runtime.
 
 ```json
 "plugins": {
@@ -281,11 +622,57 @@ Example:
 }
 ```
 
-This style is a little different from older configs, but it is the pattern the project uses now. Remove a plugin entry to disable it.
+### Trackers
 
-## Rollback and recording
+Trackers receive the current detections and return a tracked list. They run in the order the entries appear in the file.
 
-Rollback is a core feature and is not an optional plugin. It is configured in the top-level `rollback` block.
+| Add-on | Key | Default | Meaning |
+| --- | --- | --- | --- |
+| `FRC/object_tracker` | `distance_threshold` | `0.5` | Merge distance in meters. Detections closer than this to an existing track update it instead of creating a new one. |
+| | `stale_threshold` | `1.0` | Seconds without an update before a track is dropped. |
+| `ekf_tracker` | `process_noise` | `0.5` | Trust in the motion model. Higher follows measurements faster and is noisier. |
+| | `measurement_noise` | `0.1` | Trust in each detection. Higher is smoother and laggier. |
+| | `distance_threshold` | `0.5` | Merge distance in meters. |
+| | `stale_threshold` | `1.0` | Seconds before a track is dropped. |
+| `path_planner` | `epsilon` | `0.3` | DBSCAN cluster radius in meters. |
+| | `min_samples` | `3` | Minimum detections to form a cluster. Smaller clusters are treated as noise. |
+
+`FRC/object_tracker` uses a simple distance merge and an EMA for smoothing. `ekf_tracker` adds a Kalman filter per track, which is better for a target that moves smoothly and worse when detections jump. `path_planner` clusters detections into groups rather than tracking individual objects.
+
+The merge distances are in meters regardless of the top-level `unit`. A value of `0.5` is half a meter.
+
+### Utilities
+
+| Add-on | Key | Default | Meaning |
+| --- | --- | --- | --- |
+| `FRC/network_table_handler` | `network_tables_ip` | `10.0.0.2` | IP of the robot's NetworkTables server. |
+| | `publish` | built-in list | Entries published every tick. Each entry has `name`, `data_type`, `source`, and `nt_topic`. |
+| `target_selector` | `reacquire_timeout_s` | `1.0` | Seconds to keep a selection after the target drops out of frame. |
+| | `output_key` | `"selected_target"` | Key under `addon_data` where the selection is exposed. |
+
+The `publish` list is the part most worth understanding. `source` is a key from the frame data or a utility output:
+
+- `fps`, `loop_s`, `vision_s`, `camera_lag_s`
+- `detection_count`
+- `detections` (published as a struct array or JSON depending on `data_type`)
+- `robot_pose.x`, `robot_pose.y`, `robot_pose.heading`
+- `addon_data.<output_key>` for a utility such as the target selector
+
+`data_type` can be `auto`, `number`, `boolean`, `string`, `json`, or `struct[]`. `auto` inspects the value. Dicts and lists are published as JSON strings. `struct[]` is the structured detection array used by robot code that wants WPILib structs rather than JSON.
+
+Removing the NetworkTables entry stops all publishing. That is the only switch.
+
+`target_selector` exposes one selected detection using the selection state shared with the dashboard. The timeout keeps the lock through brief detection dropouts so the robot does not lose its target every time the model blinks.
+
+### Frame processors
+
+`frame_processors` is a valid add-on slot, and the repository ships an example implementation rather than a built-in processor. Frame processors receive each frame and return a frame. They can be used for custom preprocessing, overlays, or logging. There is no built-in entry in a default config.
+
+Add-on names moved to namespaces in newer configs. Old names such as `object_tracker`, `network_table_handler`, and the example names are migrated on load. The old top-level keys `distance_threshold`, `stale_threshold`, `network_tables_ip`, and `use_network_tables` are also folded into the new entries and then removed.
+
+## Rollback recordings
+
+Rollback is core code, not an add-on. It records each run so you can review what the cameras and pipelines saw. The block is:
 
 ```json
 "rollback": {
@@ -299,26 +686,74 @@ Rollback is a core feature and is not an optional plugin. It is configured in th
 }
 ```
 
-This does a few things:
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Start a recording session on each run. |
+| `data_dir` | `"VideoRecordings"` | Output folder, relative to the working directory. |
+| `fps` | `30.0` | Frame rate written to the video file. |
+| `max_queue` | `60` | Buffered write items before the recorder starts dropping. One item carries every camera's frame for a tick, so at 30 fps this is roughly a two second stall budget. |
+| `downsample` | `1` | Record every Nth frame. `1` records every frame. |
+| `segment_minutes` | `5` | Length of each segment before a new file is started. |
+| `max_total_mb` | `2048` | Retention cap. Oldest unpinned sessions are deleted when the folder exceeds this. |
 
-- records a session for each run
-- writes `.avi` files per camera
-- stores JSON sidecar data with frame-level detections and robot pose
-- rotates sessions and keeps disk usage bounded
-- allows replay of old sessions
+A session is a directory named `session_<timestamp>`. Inside it, each segment has a shared stem:
 
-## When to edit the config directly
+```text
+VideoRecordings/session_2026-01-15_18-42-10/
+  session.json
+  rollback_2026-01-15_18-42-10.json
+  rollback_2026-01-15_18-42-10_front_cam.avi
+  rollback_2026-01-15_18-42-10_rear_cam.avi
+  rollback_2026-01-15_18-47-10.json
+  rollback_2026-01-15_18-47-10_front_cam.avi
+```
 
-The web UI is the safer choice for routine camera and model changes because it validates fields and saves the right nested structure. Direct JSON editing is useful when:
+The `.json` sidecar holds the frame records: detections, poses, and timing. The `.avi` files hold the frames, one per camera, encoded as MJPG so seeking works in a browser. `session.json` stores the camera calibration and geometry for the run, which is why the player can project detections back onto the video even after the config changes.
 
-- you are editing a machine in a clean environment
-- you want to move a config between systems
-- you are debugging a malformed camera entry
-- you are creating a saved config for a new robot setup
+Retention works at the session level. The active session is never deleted, and a session with a `PINNED` file is never deleted. If everything left is pinned or active and the folder is still over the cap, the recorder logs a warning and keeps writing. Free space is also checked; recording pauses if the volume has less than 100 MB free.
 
-If you edit the file by hand, keep a backup and preserve valid JSON syntax. Stop and restart the runtime so it reloads the values. The web app may save changes immediately, but camera pipeline/model settings can still require a vision restart to take effect.
+Older flat recordings, and the pre-2.0 `recording_<ts>.mp4` files, still list and replay. They count toward the retention cap.
 
-Make a copy before a bigger edit:
+`downsample` records every Nth frame, so the clip's effective rate is `fps / downsample`. With `fps` 30 and `downsample` 2, the recorder writes frames at a 15 per second rate. The player paces replay off the sidecar timestamps, so a downsampled clip plays at the right speed instead of running at double speed.
+
+## Model profiles
+
+`model_profiles` stores snapshots of model-backed pipeline settings:
+
+```json
+"model_profiles": {
+  "object_detection": {
+    "fuel-2026": {
+      "min_conf": 0.55,
+      "optimize": "auto",
+      "vision_model": {
+        "file_path": "YoloModels/pytorch/fuel.pt",
+        "source_pt": "YoloModels/pytorch/fuel.pt"
+      }
+    }
+  }
+}
+```
+
+The web UI writes a profile when you save a model-backed camera whose settings pass the pipeline's own profile check, so a profile only ever contains settings that can run. The profile is keyed by pipeline and then by the generated name shown in the Load Profile tab. Loading a profile applies the stored settings to another camera. The snapshot is deep-copied, so later edits to the original camera do not change the profile.
+
+Hand-editing this block is possible but rarely useful. Profiles are a convenience, not a source of truth. If a camera and its profile disagree, the camera wins for that camera.
+
+## Editing the file by hand
+
+The web UI is the safer route for camera and model changes because it validates values and writes the nested structure the runtime expects. Direct editing still makes sense for a clean machine, a config moved between systems, a malformed entry the UI will not load, or a scripted deployment.
+
+Use this checklist:
+
+1. Stop the vision process. A running process will not see the edit.
+2. Copy the file to a name that does not end in `.json` inside `Config/`.
+3. Make one logical change.
+4. Validate the JSON before starting. A trailing comma fails the whole file.
+5. Keep paths relative to the working directory.
+6. Start the process and read the log for the camera name and pipeline.
+7. If the camera is skipped, check the pipeline name, model path, and metadata sidecar before changing anything else.
+
+A safe backup on Linux:
 
 ```bash
 cp Config/config.json Config/config.json.bak
@@ -330,10 +765,19 @@ On PowerShell:
 Copy-Item .\Config\config.json .\Config\config.json.bak
 ```
 
-When troubleshooting a config edit, reduce the change to one setting and restart. If the process is already running, it may still be using the config it loaded at startup.
+Avoid `Config/config-backup.json`. Boot will prefer it over `config.json`.
 
-## Important gotcha
+### Common failure modes
 
-The repo is opinionated about where model and config files live. The default model layouts and metadata files are expected to be in the `YoloModels/` tree. If you move or rename things without updating the config, the pipeline will not be able to find the model correctly.
+| Symptom | Likely cause |
+| --- | --- |
+| Settings do not apply | The process is still running with the old config, or you edited the wrong copy. |
+| A different config loads than the one you edited | Another `.json` exists under `Config/` and boot prefers it. |
+| Boot stops with "invalid JSON" | Trailing comma, missing brace, or a comment. JSON does not allow comments. |
+| Camera is missing after a reboot | Boot cleanup removed it because the device was not detected. Check `Save/camera_profiles.json`. |
+| Distances are nonsense | Calibration values are zero, or mount height, unit, or pitch is wrong. |
+| Model not found | The path is relative to the working directory, or the file was moved without updating `file_path` and `source_pt`. |
+| Pipeline does not appear in the editor | `admin` is filtering the list, or the pipeline name is misspelled. |
+| Web UI is unreachable | `app_mode` is false. Edit the file or wait for Game Mode to restore it. |
 
-That is one of the most common setup issues. The config path and the model path must match on disk.
+The config is a plain file with a lot of behavior behind it. When something does not match the docs, the generated default and the code are the authority for the version you have installed.

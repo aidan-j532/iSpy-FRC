@@ -34,6 +34,29 @@ The Python install also installs the runtime dependencies declared in `pyproject
 
 Before installing on a board, check that you have the right image for its architecture and enough storage for Python wheels and model files. A successful `pip install` only says the Python dependencies installed; it does not prove that the camera is accessible or that an accelerator runtime can use your model.
 
+## Choosing an install source
+
+There are two ways to get the code, and they serve different purposes.
+
+**Install from PyPI for the latest stable version.** The package is published as `ispy-frc`, and a normal install pulls the most recent released version with its dependencies:
+
+```bash
+python -m pip install ispy-frc
+```
+
+This is the right choice when you want something that has been released and tested, and you are not tracking changes to the source. The released version is what most users should run.
+
+**Clone the repository for the newest fixes.** The `main` branch can be ahead of the last release, so cloning gets you the latest changes, fixes, and features that have not been packaged into a stable version yet:
+
+```bash
+git clone https://github.com/aidan-j532/iSpy-FRC.git
+cd iSpy-FRC
+```
+
+Use the clone path when you need a recent fix that has not shipped in a release, when you want to read or change the code, or when a board image provisions straight from the repository. It trades the stability of a release for recency, so expect the occasional rough edge.
+
+The rest of this page shows the clone install in detail because it is the editable path used during development. If you installed from PyPI, skip to [First boot after install](#first-boot-after-install); the entry points and the first-run steps are the same.
+
 ## Fresh install from the repo
 
 Clone the repository, then create a virtual environment in the repository root. On Linux or macOS:
@@ -76,7 +99,9 @@ The root `install.sh` is an alternative for Linux, not a cross-platform installe
 
 | Situation | Start with |
 | --- | --- |
+| Running a released version without touching the source | `python -m pip install ispy-frc` |
 | Trying iSpy on a laptop or desktop | The virtual environment above |
+| Needing a fix that is not in a release yet | Clone the repository |
 | Developing the Python code | Editable install (`python -m pip install -e .`) |
 | Deploying on a supported robot board | The board image/provisioning process, after checking its current limitations |
 | Installing only to benchmark a backend | The normal package, then install an optional extra only if that benchmark needs it |

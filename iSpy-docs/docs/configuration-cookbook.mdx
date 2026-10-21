@@ -1,0 +1,242 @@
+---
+title: Configuration Cookbook
+author: iSpy FRC
+sidebar_position: 4.5
+---
+
+# Configuration Cookbook
+
+The reference page explains what each value does. This page answers the narrower question: what do I actually change to get a specific result? Every recipe here is something you can copy into `Config/config.json` or, in most cases, do faster through the camera editor.
+
+Where a recipe has a matching UI path, that path is listed first. The JSON is for scripting, clean-machine setup, or times when the web server is not running.
+
+## Verify a config edit took effect
+
+The single most common problem with hand editing is that the process was still running. Nothing reads the file after boot except Game Mode bookkeeping, so an edit while iSpy is up does nothing until the next start.
+
+The reliable sequence:
+
+1. Stop the process. `Ctrl+C` in a foreground run, or `sudo systemctl stop iSpy` for the service.
+2. Edit `Config/config.json`.
+3. Start again and watch the first lines of the log.
+4. Confirm the log shows your camera names and pipelines.
+
+If you started a second copy while the first was still running, only one of them holds the camera. The other logs a capture failure and sits idle. Two processes sharing `Config/` will also fight over `Save/config_snapshot.json` and the recording folders.
+
+## Change how distances are reported
+
+`unit` decides two things at once: the units you type into geometry fields such as `x`, `y`, `height`, and `yaw`/`pitch` are always degrees, and the units the pipeline reports in detections.
+
+```json
+"unit": "frc"
+```
+
+With `frc`, mount and calibration values are inches and outputs are meters, which is what WPILib robot code expects. With `meter`, `inch`, `foot`, or `centimeter`, values are the same unit going in and coming out.
+
+Changing `unit` does not convert numbers already in the file. If you switch from `frc` to `meter` and leave `height: 30` alone, the camera is now 30 meters off the ground and every distance is wrong. Convert the geometry fields yourself when you change this key.
+
+## Make a camera run faster
+
+There are two frame rate controls and they multiply.
+
+`max_fps` caps the whole vision loop. `fps_cap` on one camera caps that camera's capture rate.
+
+```json
+"max_fps": 20,
+"camera_configs": {
+  "front_cam": {
+    "fps_cap": 30
+  }
+}
+```
+
+With the values above, the loop runs at most 20 times a second, so `front_cam` effectively runs at 20 even though its own cap is 30. To slow one noisy camera without affecting the rest, set only its `fps_cap`. To slow everything, set `max_fps`. Setting both to 0 leaves the loop uncapped, and the loop then runs as fast as the slowest pipeline allows.
+
+If the bottleneck is the model rather than capture, the depth pipeline has its own throttle. See the recipe below.
+
+## Run depth less often than detection
+
+The `depth_anything` pipeline runs a heavy model. `process_every` runs it once every N frames and reuses the last result in between.
+
+```json
+"pipeline": {
+  "name": "depth_anything",
+  "settings": {
+    "process_every": 10
+  }
+}
+```
+
+At 30 fps, `process_every: 5` (the default) gives about six depth updates a second, and `10` gives about three. The camera feed itself stays full rate; only the depth overlay updates less often. This is the cheapest way to keep a depth camera on a small computer.
+
+## Keep the web interface off during a match
+
+Game Mode hides the web server on the next restart, then brings it back the restart after that. It is built for a match where you do not want any web overhead but you do want to be able to configure the robot between matches.
+
+The flow lives in the config as a small state machine:
+
+```json
+"game_mode_web_off_next_run": true,
+"game_mode_app_mode_backup": null
+```
+
+When you press the Game Mode control in the UI, it sets `game_mode_web_off_next_run` and writes a marker file. On the next start, the runtime copies the current `app_mode` into `game_mode_app_mode_backup`, forces `app_mode` to false, and clears the request. The start after that restores `app_mode` from the backup and clears it again. The result is exactly one run with the web server off.
+
+If you want the web server off permanently, set `app_mode` to false and leave it. The only way back in is to edit the file, because there is no UI when the UI is what you disabled. Keep a copy of the config outside `Config/` in case you lock yourself out.
+
+## Add a second camera without discovery
+
+The camera editor is easier, but a hand-written entry is fine when you know the device path.
+
+```json
+"camera_configs": {
+  "front_cam": {
+    "name": "front_cam",
+    "camera_type": "opencv",
+    "source": 0,
+    "subsystem": "field",
+    "fps_cap": 0,
+    "height": 1.0,
+    "pitch": 0,
+    "yaw": 0,
+    "calibration": {
+      "distance": 0.0,
+      "game_piece_size": 0.0,
+      "size": 0,
+      "fov": 0
+    },
+    "pipeline": {
+      "name": "object_detection",
+      "settings": {}
+    }
+  }
+}
+```
+
+Points that trip people up:
+
+- The key (`front_cam`) and the `name` field should match. The key is what the log and the UI use.
+- `source` for OpenCV is usually an integer index, but it can be a path or URL.
+- `pipeline.name` must be a registered pipeline. A typo here skips the camera at startup with a warning rather than stopping the process.
+- `vision_model` is required for `object_detection` and the other model-backed pipelines. Without it the camera runs but produces no detections.
+
+## Move a config to a new machine
+
+The export button in Settings produces a config with each camera's `device_id` removed, because device IDs are tied to this machine's USB topology. Import accepts any JSON object with a `camera_configs` key.
+
+The catch is that profiles and boot cleanup both key off `device_id`. An imported config has none, so:
+
+- Boot cleanup cannot match the imported cameras to hardware until they have IDs.
+- Loading a model profile still works, because profiles are keyed by pipeline and name, not by device.
+
+The practical fix is to import, then open each camera in the editor and pick its device. That refills `device_id` and lets cleanup do its job again.
+
+## Reset to a clean install
+
+`boot -f` (or `boot --fresh`) deletes `Config/`, `YoloModels/`, `Outputs/`, and the active dataset directory, then writes a fresh default config. On the next boot it downloads the default models again.
+
+Run it only when you are ready to lose all of that. For a softer reset, delete `Config/config.json` alone and let the next boot generate a default, or restore a copy from outside `Config/`. Do not leave a second `.json` file in `Config/` and expect it to be ignored; boot prefers the first file whose name is not `config.json`.
+
+## Pin a recording so it survives cleanup
+
+Rollback deletes the oldest unpinned sessions when the folder grows past `max_total_mb`. To keep a session, drop a `PINNED` file in its directory.
+
+```bash
+touch VideoRecordings/session_2026-01-15_18-42-10/PINNED
+```
+
+The active session is never deleted either, so the safest time to pin something is right after you stop the run that produced it. The same rule applies on the rollback page in the UI, which toggles the same file.
+
+## Point at a robot without a roboRIO
+
+The NetworkTables utility defaults to `10.0.0.2`, the usual roboRIO address on an FRC field. On a practice setup, change it to wherever NetworkTables is actually served.
+
+```json
+"plugins": {
+  "utilities": {
+    "FRC/network_table_handler": {
+      "network_tables_ip": "127.0.0.1"
+    }
+  }
+}
+```
+
+The client connects in the background, so a wrong address does not stall boot. It shows as disconnected on the dashboard instead. Check the connection indicator before assuming a publish entry is broken.
+
+## Add a publish entry
+
+The default publish list covers fps, detection count, camera lag, the full detection set, and the selected target. To add one, append to the `publish` list. Each entry needs four fields.
+
+```json
+{
+  "name": "loop_ms",
+  "data_type": "number",
+  "source": "loop_s",
+  "nt_topic": "loop_ms"
+}
+```
+
+`source` is a frame data key or a utility output written as `addon_data.<output_key>`. Valid sources include `fps`, `loop_s`, `vision_s`, `camera_lag_s`, `detection_count`, `detections`, and `robot_pose.x` / `.y` / `.heading`. `data_type` is `auto`, `number`, `boolean`, `string`, `json`, or `struct[]`. If you set `source` to something the publisher does not recognize, the entry is skipped rather than publishing a null.
+
+## Build a two-stage tracker
+
+Trackers run in the order they appear in the config, so a chain can smooth first and cluster second.
+
+```json
+"trackers": {
+  "ekf_tracker": {
+    "process_noise": 0.5,
+    "measurement_noise": 0.1,
+    "stale_threshold": 1.0
+  },
+  "path_planner": {
+    "epsilon": 0.3,
+    "min_samples": 3
+  }
+}
+```
+
+Raise `process_noise` when the robot changes direction quickly and you want the tracks to follow. Raise `measurement_noise` when detections are jumpy and you would rather have smooth, slightly laggy tracks. Both are in meters, independent of the top-level `unit`.
+
+## Read a config that will not load
+
+A file that fails to parse stops boot. The error names the position, and the fix is almost always one of these:
+
+- A trailing comma before a closing brace or bracket.
+- A comment. JSON has no comments.
+- Single quotes instead of double quotes around a key or string.
+- A missing comma between two entries.
+- A UTF-8 BOM, which editors like Notepad add. The loader strips this specific case, but other editors can produce worse artifacts.
+
+Paste the file into a JSON validator before starting. It is faster than reading a stack trace.
+
+A file that parses but behaves oddly usually has a type mismatch rather than a syntax error: a number where a string is expected, or `false` where a list belongs. The reference page lists the expected type for each key.
+
+## A minimal known-good config
+
+When you want to start from something small and add pieces, this covers one USB camera running object detection with default everything else:
+
+```json
+{
+  "unit": "frc",
+  "app_mode": true,
+  "camera_configs": {
+    "default_cam": {
+      "name": "default_cam",
+      "camera_type": "opencv",
+      "source": 0,
+      "pipeline": {
+        "name": "object_detection",
+        "settings": {
+          "vision_model": {
+            "file_path": "YoloModels/pytorch/best.pt",
+            "source_pt": "YoloModels/pytorch/best.pt"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Everything not listed falls back to the defaults in the reference page, so this file works even though it is short. The model path must exist, or the camera starts without detection.

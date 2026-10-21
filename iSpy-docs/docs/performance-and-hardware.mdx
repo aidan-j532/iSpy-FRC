@@ -1,0 +1,155 @@
+---
+title: Performance and Hardware
+author: iSpy FRC
+sidebar_position: 6.5
+---
+
+# Performance and Hardware
+
+Vision is the part of an iSpy setup that is easiest to make slow. A camera that works on a laptop can drop to a few frames a second on a Raspberry Pi, and the reason is usually not a single bad setting. This page covers what actually consumes time, how to measure it, and what to change when the loop is too slow.
+
+## What the loop does each tick
+
+Every pass through the main loop does roughly this, in order:
+
+1. Grab one frame from each camera.
+2. Run each camera's pipeline on its frame.
+3. Run the configured trackers over the combined detections.
+4. Run utilities, which includes publishing to NetworkTables and writing to recordings.
+5. Update the web modules, then sleep if `max_fps` is set.
+
+The slowest of those steps sets the loop rate. On most machines that is the model inference in step two. On a machine with several cameras it can be capture or the recorder. The web update is almost never the bottleneck unless the dashboard is being streamed to many browsers at once.
+
+## Measuring before changing
+
+The dashboard and the health page read the same numbers, and both update while the robot runs.
+
+The two timings worth watching are `loop_s` and `vision_s`.
+
+- `loop_s` is the time for one full pass. Its inverse is the real frame rate, which is why the dashboard shows `1 / loop_s` as fps.
+- `vision_s` is the time spent inside pipelines and trackers, with frame processor time broken out separately.
+
+If `loop_s` is much larger than `vision_s`, the time is going somewhere else: capture on a slow camera, the recorder flushing to a slow SD card, or the sleep from `max_fps`. If the two are close, the model is your bottleneck and the recipes below apply.
+
+The metrics page keeps a timeline of both, so you can see whether a change helped instead of guessing from a single reading.
+
+The health page has one more useful signal: `loop_stale_s`, the seconds since the last loop tick. A number that climbs above `health_stale_threshold` (1.0 by default) flags the loop as stalled, which usually means a camera was unplugged or a model is blocking.
+
+## The inference throttle
+
+Almost every quality-versus-speed trade in iSpy comes back to inference. The knobs, in the order they usually help:
+
+### 1. Prefer a smaller model
+
+A `n` or `s` YOLO model is several times faster than an `l` model for modest accuracy loss on the classes iSpy sees. The pipeline schema lists the sizes it accepts. If you trained your own model, exporting a smaller size is the single biggest lever.
+
+### 2. Let optimize build a faster artifact
+
+On a model-backed pipeline, `optimize` can be `off`, `auto`, or `onnx`. With `auto`, the runtime detects the hardware and builds the best artifact for it in the background: RKNN on a Rockchip NPU, a TensorRT engine on NVIDIA, ONNX elsewhere. The `.pt` keeps serving frames while the build runs, then the faster artifact takes over.
+
+```json
+"settings": {
+  "optimize": "auto",
+  "target_format": "auto"
+}
+```
+
+You can force a specific backend with `target_format` and `optimize: "onnx"`. This only helps when the hardware is actually present. Forcing `rknn` on a machine with no Rockchip NPU or an `engine` on a machine with no NVIDIA GPU makes the profile fall back to CPU instead of speeding anything up, and the editor warns about it when you save such a profile.
+
+### 3. Quantize, carefully
+
+`quantize` converts the optimized model to a lower-precision form, which is faster on the edge accelerators. It needs `quantization_dataset` to point at a folder of representative images. Quantizing with the wrong images makes detections worse in a way that is hard to notice until a match. If you quantize, use a dataset that looks like what the camera actually sees.
+
+### 4. Throttle the expensive pipeline
+
+The depth pipeline added `process_every` for exactly this. It runs inference every N frames and reuses the last result between runs. Detection pipelines do not have a per-frame throttle, because their output is what the trackers and publish entries depend on.
+
+## Picking a target format
+
+The optimizer's `auto` recommendation follows the hardware it can detect, in this order of preference:
+
+| Hardware | Recommended format |
+| --- | --- |
+| Rockchip NPU | `rknn` |
+| Hailo NPU | `hailo` |
+| Qualcomm NPU | `qnn` |
+| Google Edge TPU | `tflite` |
+| Apple Silicon | `coreml` |
+| Google TPU | `tpu` |
+| NVIDIA GPU with TensorRT | `engine` |
+| NVIDIA GPU without TensorRT | `onnx` |
+| Intel GPU or VPU | `openvino` |
+| AMD GPU | `onnx` |
+| ARM edge device | `tflite` |
+| Anything else | `onnx` on CPU |
+
+The detection is a probe, not a guarantee. A GPU can be detected while its driver or runtime is missing, in which case the artifact still has to be built and can fail. Watch the model status on the dashboard after enabling optimization. A model stuck on "optimizing" usually means a missing dependency for the chosen backend.
+
+Not every pipeline offers every format. `object_detection` and `depth_anything` accept only `auto` and `onnx`, because the other backends are not wired for those export paths. `yolo_world` accepts the full list. Setting an unsupported `target_format` does nothing useful.
+
+## Where the model runs
+
+Two keys inside the model block decide the device, and they are easy to misplace.
+
+```json
+"settings": {
+  "vision_model": {
+    "file_path": "YoloModels/pytorch/best.pt",
+    "source_pt": "YoloModels/pytorch/best.pt",
+    "device": 0,
+    "num_gpus": "auto"
+  }
+}
+```
+
+`device` is the CUDA device index or a special value such as `"cpu"` or `"tpu"`. `num_gpus` is `"auto"` or an integer, and when it is greater than one the runtime starts a pool of inference workers across the GPUs.
+
+Both keys are read from the model block, not from the top level of the config. The top-level `device` and `num_gpus` keys exist in the defaults and are marked as needing a restart in the settings API, but the loaders do not read them. If you want to move a model to a specific GPU, set `device` inside `vision_model`.
+
+On a machine with no CUDA, setting `device` to an index that does not exist falls back to CPU with a warning rather than failing outright. That warning is worth reading, because a silent fall back to CPU is a common cause of "it got slower after I changed one thing".
+
+## Thermal behavior
+
+Small computers throttle when they get hot. A Raspberry Pi or Jetson that runs at full speed for a minute and then halves its clock looks like a vision problem but is a cooling problem.
+
+The dashboard shows CPU and memory and, when the platform exposes it, a temperature. `temperature_unit` controls only how that number is displayed; the stored `temperature_warning` value is always Celsius. When the reading crosses the threshold the dashboard colors it, and that is your cue that sustained performance will drop.
+
+Things that help, in rough order of effect:
+
+- Reduce sustained load with a smaller model or a lower `max_fps` rather than adding a fan to a workload that is too large.
+- If you must run near the thermal limit, cap the loop with `max_fps` so the CPU has idle time between frames. A cap that leaves headroom is faster over a full match than an uncapped loop that throttles.
+- Heatsinks help more than fans on passively cooled boards, because the bottleneck is usually heat transfer into the air.
+
+## Cameras and capture
+
+Capture is rarely the bottleneck on a single camera, but it can be with several.
+
+- USB bandwidth is shared. Two high-resolution cameras on one USB controller can starve each other. Separate controllers or a lower resolution fixes it.
+- `fps_cap` on a camera is enforced after the frame is read, so it reduces downstream work but not capture cost. If the camera itself is the cost, lower its resolution where the driver allows it.
+- A network stream adds latency that shows up as `camera_lag_s`. It does not necessarily slow the loop, but it makes every position stale by that amount, which matters for a fast-moving robot.
+
+## Recording cost
+
+Rollback writes every frame to disk. On a fast SSD this is cheap. On an SD card it can become the loop's slowest step, and a full queue means the recorder drops frames.
+
+If recordings are hurting frame rate:
+
+- Raise `downsample` so the recorder writes every Nth frame. The clips stay watchable and the disk traffic drops by the same factor.
+- Lower `segment_minutes` only if you are debugging; shorter segments mean more files, not less work.
+- Point `data_dir` at the fastest storage available.
+- If you do not need recordings, the honest answer is to turn `rollback` off. It is on by default because being able to replay a run is worth a lot during development.
+
+The recorder checks free space and pauses below 100 MB, so a full disk degrades rather than corrupting. It also deletes the oldest unpinned sessions once the folder passes `max_total_mb`.
+
+## A tuning order that works
+
+When the loop is too slow, change one thing at a time and read the timings after each.
+
+1. Look at `loop_s` versus `vision_s` to find which half is slow.
+2. If vision is slow, drop to a smaller model before anything else.
+3. If the hardware supports it, enable `optimize: "auto"` and let the artifact build.
+4. If it is still slow, lower the model's input resolution where the pipeline exposes it.
+5. If the whole loop is slow but vision is not, look at capture, the recorder, or a `max_fps` sleep you forgot about.
+6. Only then consider adding `max_fps` as a cap. A cap hides a slow loop rather than fixing it, but it also gives a hot CPU room to breathe, which is a real trade on a small board.
+
+The point of measuring first is that the fix is different depending on which half is slow. Reaching for `max_fps` immediately makes the symptom go away and leaves the actual cost in place.
