@@ -848,6 +848,18 @@ class CameraOpenBoundedTests(unittest.TestCase):
                 cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
         self.assertEqual(cam_mod._open_worker_live, baseline)
 
+    def test_stopped_camera_does_not_consume_a_slot(self):
+        from iSpy.vision.Cameras import base as cam_mod
+
+        cam = self._mk_cam()
+        cam.stopped = True
+        # Regression: the old order took a slot and then raised "stopping",
+        # leaking it. One more attempt than there are slots means a leak would
+        # surface as the max-slots error instead of the stopping error.
+        for _ in range(cam_mod._OPEN_WORKER_MAX + 1):
+            with self.assertRaisesRegex(cam_mod.CameraOpenTimeout, "stopping"):
+                cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
+
     def test_cap_blocks_oversubscription_and_releases_slot(self):
         from iSpy.vision.Cameras import base as cam_mod
 

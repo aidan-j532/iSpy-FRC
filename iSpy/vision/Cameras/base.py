@@ -231,19 +231,14 @@ class CameraBase:
 
     def _open_capture_bounded(self, backend):
         global _open_worker_live
+        # Check stopped before taking a slot: every slot taken below must be
+        # released by the worker (or by the start() failure path); raising
+        # from here would otherwise strand one permanently.
         if self.stopped:
             raise CameraOpenTimeout(
                 f"Camera {self.source}: stopping - aborting open with backend {backend}"
             )
         holder = {"cap": None, "error": None, "abandoned": False}
-
-        with _open_worker_guard:
-            if _open_worker_live >= _OPEN_WORKER_MAX:
-                raise CameraOpenTimeout(
-                    f"Camera {self.source}: too many capture opens are hung "
-                    "(driver wedged?) - deferring this retry until one exits."
-                )
-            _open_worker_live += 1
 
         def _worker():
             global _open_worker_live
@@ -269,11 +264,22 @@ class CameraBase:
                 with _open_worker_guard:
                     _open_worker_live -= 1
 
+        # Build the thread before taking a slot: the increment below must be
+        # paired with a release on every path. The worker releases the slot in
+        # its finally block once it has started; start() failure is handled
+        # here, and constructing the Thread above cannot strand a slot.
         opener = threading.Thread(
             target=_worker,
             daemon=True,
             name=f"CapOpen-{self.source}-{backend}",
         )
+        with _open_worker_guard:
+            if _open_worker_live >= _OPEN_WORKER_MAX:
+                raise CameraOpenTimeout(
+                    f"Camera {self.source}: too many capture opens are hung "
+                    "(driver wedged?) - deferring this retry until one exits."
+                )
+            _open_worker_live += 1
         try:
             opener.start()
         except Exception:
