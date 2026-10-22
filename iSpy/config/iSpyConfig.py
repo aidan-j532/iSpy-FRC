@@ -42,6 +42,10 @@ _CAMERA_CORE_KEYS = {
     "tello_ip",
     "tello_command_port",
     "tello_video_port",
+    # Optional per-camera assignment for frame processors.  The list contains
+    # enabled processor names in execution order.  When it is absent the old
+    # "every enabled processor runs on every camera" behavior is preserved.
+    "frame_processors",
 }
 
 # Camera-source config keys that are valid at the top level for every

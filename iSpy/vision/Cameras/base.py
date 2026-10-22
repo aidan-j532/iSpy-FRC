@@ -90,6 +90,9 @@ class CameraBase:
         **kwargs,
     ):
         self.logger = logging.getLogger(__name__)
+        # Keep the raw entry so runtime wiring can read optional per-camera
+        # assignments (frame_processors) without guessing by source.
+        self._camera_config = camera_config
 
         if input_size is None:
             input_size = (self._PLACEHOLDER_W, self._PLACEHOLDER_H)

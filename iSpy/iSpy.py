@@ -193,13 +193,45 @@ class iSpy:
         self._silence_external_loggers()
 
         if self.frame_processors:
-            for camera in self.cameras:
-                for name, processor in self.frame_processors.items():
-                    camera.add_frame_processor(processor)
+            self._attach_frame_processors()
 
         # I think this has to be at very bottom
         if self.web_app:
             self.web_app.set_vision_instance(self)
+
+    def _attach_frame_processors(self):
+        """Attach each camera's configured processors, preserving legacy wiring.
+
+        A camera with no ``frame_processors`` list gets every enabled processor,
+        exactly like iSpy did before per-camera assignment existed.  An empty
+        list is an explicit "no processors on this camera"; unknown names are
+        skipped with a warning so one stale name cannot break every camera.
+        """
+        for camera in self.cameras:
+            cam_cfg = getattr(camera, "_camera_config", None)
+            assigned = (
+                cam_cfg.get("frame_processors")
+                if hasattr(cam_cfg, "get")
+                else None
+            )
+            if isinstance(assigned, list):
+                processors = []
+                for name in assigned:
+                    processor = self.frame_processors.get(name)
+                    if processor is None:
+                        self.logger.warning(
+                            "Camera '%s' references unknown frame processor '%s' - "
+                            "skipping it.",
+                            cam_cfg.get("name", "?"),
+                            name,
+                        )
+                        continue
+                    processors.append(processor)
+            else:
+                processors = list(self.frame_processors.values())
+
+            for processor in processors:
+                camera.add_frame_processor(processor)
 
     @staticmethod
     def _build_cameras_from_config(config: iSpyConfig) -> list[VisionPipeline]:
