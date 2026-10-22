@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Pipeline Editor · iSpy{% endblock %}
+{% block head %}
+<style>
+  .editor-shell { min-height: 60vh; display: grid; place-items: center; }
+  .editor-placeholder { max-width: 620px; text-align: center; }
+  .editor-placeholder code { color: var(--accent); }
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Pipeline Editor</h1>
+    <p class="page-sub">Visual camera → frame processors → pipeline → trackers → utilities graph.</p>
+  </div>
+</div>
+<div class="card editor-shell">
+  <div class="editor-placeholder">
+    <h2>Loading editor…</h2>
+    <p class="muted">The canvas is being wired to the live config. If this message stays visible, the
+      editor frontend failed to load.</p>
+    <p class="muted">API: <code>/api/editor/graph</code></p>
+  </div>
+</div>
+{% endblock %}

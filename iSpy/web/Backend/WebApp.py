@@ -25,6 +25,7 @@ from iSpy.web.Backend.SetupWizard import SetupWizardModule
 from iSpy.web.modules.recommendations import RecommendationsModule
 from iSpy.web.Backend.PluginStatus import PluginStatusModule
 from iSpy.web.modules.health import HealthModule
+from iSpy.web.modules.editor import EditorModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
 
@@ -66,6 +67,7 @@ class iSpyWebApp:
 
         self.modules: dict[str, WebModule] = {
             "cameras": CamerasModule(context),
+            "editor": EditorModule(context),
             "models": ModelsModule(context),
             "datasets": DatasetsModule(context),
             "viewer3d": Viewer3DModule(context),
