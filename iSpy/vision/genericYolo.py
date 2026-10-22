@@ -1,0 +1,2302 @@
+import contextlib
+import functools
+import importlib
+import logging
+import math
+import os
+import pickletools
+import queue
+import sys
+import threading
+import time
+import warnings
+import zipfile
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from iSpy.vision.engine_utils import execute_engine, read_engine_plan
+from iSpy.vision.ModelInspector import fill_missing_config
+
+
+def torch_load(path, trusted: bool = True):
+    import torch
+
+    from iSpy.vision.yolo_pt import register_shim
+
+    register_shim()
+    if not trusted:
+        entries = _safe_globals_for_checkpoint(_checkpoint_pickle_bytes(path))
+        if entries:
+            torch.serialization.add_safe_globals(entries)
+        return torch.load(str(path), map_location="cpu", weights_only=True)
+    return torch.load(str(path), map_location="cpu", weights_only=False)
+
+
+def _checkpoint_pickle_bytes(path) -> bytes:
+    if zipfile.is_zipfile(str(path)):
+        with zipfile.ZipFile(str(path)) as zf:
+            entry = next((n for n in zf.namelist() if n.endswith("data.pkl")), None)
+            if entry is None:
+                raise RuntimeError("checkpoint archive has no data.pkl entry")
+            return zf.read(entry)
+    try:
+        return Path(path).read_bytes()
+    except OSError as e:
+        raise RuntimeError(f"checkpoint could not be read: {e}") from e
+
+
+def _safe_globals_for_checkpoint(raw: bytes):
+    try:
+        globals_in_file = set()
+        waiting_stack_global = 0
+        stack_global_parts = ["", ""]
+        for op, arg, _ in pickletools.genops(raw):
+            if op.name == "GLOBAL":
+                path = arg if isinstance(arg, str) else arg.decode("utf-8")
+                module, sep, name = path.partition(" ")
+                if not sep:
+                    module, sep, name = path.partition(".")
+                if sep:
+                    globals_in_file.add((module.strip(), name.strip()))
+            elif op.name == "STACK_GLOBAL":
+                # protocol-4+ pickles emit STACK_GLOBAL and then push the two
+                # strings (module, name) for the referenced global.
+                waiting_stack_global = 2
+            elif waiting_stack_global and isinstance(arg, str):
+                stack_global_parts[2 - waiting_stack_global] = arg
+                waiting_stack_global -= 1
+                if waiting_stack_global == 0:
+                    globals_in_file.add(
+                        (stack_global_parts[0].strip(), stack_global_parts[1].strip())
+                    )
+    except Exception as e:
+        raise RuntimeError(f"checkpoint could not be scanned safely: {e}") from e
+
+    entries = []
+    for module, name in sorted(globals_in_file):
+        obj = _resolve_safe_global(module, name)
+        if obj is _ALLOWED_BY_DEFAULT:
+            continue
+        entries.append((obj, f"{_torch_global_path(module)}.{name}"))
+    return entries
+
+
+class _AllowedByDefault:
+    pass
+
+
+_ALLOWED_BY_DEFAULT = _AllowedByDefault()
+
+
+@functools.lru_cache(maxsize=1)
+def _torch_default_allowed() -> set:
+    from torch._weights_only_unpickler import _get_allowed_globals
+
+    return set(_get_allowed_globals())
+
+
+def _torch_global_path(module: str) -> str:
+    from torch._utils import IMPORT_MAPPING
+
+    return IMPORT_MAPPING.get(module, module)
+
+
+def _resolve_safe_global(module: str, name: str):
+    from torch._utils import IMPORT_MAPPING, NAME_MAPPING
+
+    from iSpy.vision.yolo_pt import register_shim
+
+    module = IMPORT_MAPPING.get(module, module)
+    if (module, name) in NAME_MAPPING:
+        module, name = NAME_MAPPING[(module, name)]
+    full_path = f"{module}.{name}"
+
+    if full_path in _torch_default_allowed():
+        return _ALLOWED_BY_DEFAULT
+
+    if module == "builtins" and name == "getattr":
+        # ``getattr`` only ever read attributes off objects the sandbox already
+        # produced (shim classes / torch.nn containers / torch builtins). It is
+        # not itself a code-execution gadget here: torch still refuses REDUCE /
+        # NEWOBJ / BUILD on anything that is not allowlisted, and no reachable
+        # object exposes a side-effecting attribute-get, so offering ``getattr``
+        # cannot escalate to arbitrary calls.
+        return getattr
+
+    if module.startswith("ultralytics"):
+        register_shim()
+        mod = sys.modules.get(module)
+        obj = None if mod is None else getattr(mod, name, None)
+        if (
+            obj is not None
+            and isinstance(obj, type)
+            and obj.__module__.startswith("iSpy.vision.yolo_pt")
+        ):
+            return obj
+        raise RuntimeError(
+            f"checkpoint references non-shim ultralytics global {full_path}"
+        )
+
+    if module.startswith("torch.nn"):
+        try:
+            obj = getattr(importlib.import_module(module), name)
+        except (ImportError, AttributeError) as e:
+            raise RuntimeError(
+                f"checkpoint references unresolved torch.nn global {full_path}"
+            ) from e
+        if isinstance(obj, type):
+            return obj
+        raise RuntimeError(
+            f"checkpoint references non-class torch.nn global {full_path}"
+        )
+
+    raise RuntimeError(f"checkpoint references non-allowlisted global {full_path}")
+
+
+class ModelFileError(RuntimeError):
+    pass
+
+
+def _validate_model_file(path: str) -> None:
+    p = Path(path)
+    if not p.exists():
+        raise ModelFileError(f"Model file does not exist: {p}")
+    size = (
+        p.stat().st_size
+        if p.is_file()
+        else sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+    )
+    if size < 1024:
+        raise ModelFileError(
+            f"Model file '{p}' is only {size} bytes - empty or truncated"
+        )
+
+
+try:
+    # rknnlite clobbers stdlib logging level names on import, which breaks
+    # torch's setLevel('WARNING') bootstrap later - use the guarded importer
+    from iSpy.vision._safe_imports import import_rknnlite
+
+    RKNNLite = import_rknnlite()
+    warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
+
+    RKNN_FOUND = True
+
+    import ctypes
+    import os as _os
+
+    _rknn_log_set = False
+
+    def _set_rknn_log_level(level: int) -> None:
+        global _rknn_log_set
+        if _rknn_log_set:
+            return
+        _rknn_log_set = True
+        _lib = None
+        # Search rknnlite package directory for librknnrt.so
+        _pkg_dir = _os.path.dirname(__import__("rknnlite").__file__)
+        try:
+            _rknn_pkg_files = _os.listdir(_pkg_dir)
+        except OSError:
+            _rknn_pkg_files = []
+        for _f in _rknn_pkg_files:
+            if "librknnrt" in _f and (_f.endswith(".so") or ".so." in _f):
+                try:
+                    _lib = ctypes.CDLL(_os.path.join(_pkg_dir, _f), use_errno=False)
+                    _lib.rknn_set_log_level
+                    break
+                except (AttributeError, OSError):
+                    _lib = None
+        # Fallback: try standard dlopen search
+        if _lib is None:
+            for _name in ("librknnrt.so", "librknnmrt.so"):
+                try:
+                    _lib = ctypes.CDLL(_name, use_errno=False)
+                    _lib.rknn_set_log_level
+                    break
+                except (AttributeError, OSError):
+                    _lib = None
+        if _lib is not None:
+            try:
+                _lib.rknn_set_log_level(ctypes.c_int(level))
+            except Exception:
+                pass
+
+except ImportError:
+    RKNN_FOUND = False
+
+    class RKNNLite:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("RKNNLite not available - rknnlite not installed")
+
+    def _set_rknn_log_level(level: int) -> None:
+        pass
+
+
+class _ONNXInferencePool:
+    def __init__(self, model_file: str, devices: list[int], providers_template):
+        self._in_q = queue.Queue()
+        self._out_q = queue.Queue()
+        self._n = len(devices)
+        self.logger = logging.getLogger(__name__)
+        for device in devices:
+            threading.Thread(
+                target=self._worker,
+                args=(model_file, device, providers_template),
+                daemon=True,
+                name=f"ONNX-GPU{device}-Infer",
+            ).start()
+        self.logger.info("Multi-GPU ONNX pool: %d device(s) %s", len(devices), devices)
+
+    def _worker(self, model_file, device, providers_template):
+        import onnxruntime as ort
+
+        ort.set_default_logger_severity(4)
+        providers = [
+            (ep, {**opts, "device_id": device}) if opts else ep
+            for ep, opts in providers_template
+        ]
+        session = ort.InferenceSession(model_file, providers=providers)
+        inp_name = session.get_inputs()[0].name
+        out_names = [o.name for o in session.get_outputs()]
+        while True:
+            item = self._in_q.get()
+            if item is None:
+                break
+            idx, inp_tensor = item
+            try:
+                raw = session.run(out_names, {inp_name: inp_tensor})
+            except Exception as e:
+                self.logger.error("ONNX pool worker (device %s) failed: %s", device, e)
+                raw = None
+            self._out_q.put((idx, raw))
+
+    def infer_batch(self, input_tensors: list[np.ndarray]):
+        n = len(input_tensors)
+        for idx, t in enumerate(input_tensors):
+            self._in_q.put((idx, t))
+        results = [None] * n
+        for _ in range(n):
+            idx, raw = self._out_q.get()
+            results[idx] = raw
+        return results
+
+    def stop(self):
+        for _ in range(self._n):
+            self._in_q.put(None)
+
+
+class _GPUInferencePool:
+    def __init__(
+        self,
+        model_file: str,
+        task: str,
+        devices: list[int],
+        input_size: tuple,
+        min_conf: float,
+    ):
+        self._in_q = queue.Queue()
+        self._out_q = queue.Queue()
+        self._input_size = (input_size[1], input_size[0])
+        self._min_conf = min_conf
+        self._n = len(devices)
+        self._model_file = model_file
+        self._task = task
+
+        self.logger = logging.getLogger(__name__)
+
+        for device in devices:
+            threading.Thread(
+                target=self._worker,
+                args=(device,),
+                daemon=True,
+                name=f"GPU{device}-Infer",
+            ).start()
+
+        self.logger.info(
+            "Multi-GPU inference pool: %d device(s) %s", len(devices), devices
+        )
+
+    def _worker(self, device):
+        # Load model INSIDE the worker thread so TensorRT creates a context on this GPU
+        import torch
+
+        from .yolo_pt import load_yolo_pt
+
+        torch.cuda.set_device(device)
+        model = load_yolo_pt(self._model_file, task=self._task)
+        if self._model_file.endswith(".pt"):
+            model.to(f"cuda:{device}")
+
+        dummy_frame = np.zeros(
+            (self._input_size[1], self._input_size[0], 3), dtype=np.uint8
+        )
+        model(
+            dummy_frame,
+            verbose=False,
+            show=False,
+            imgsz=self._input_size,
+            device=device,
+        )
+
+        while True:
+            item = self._in_q.get()
+            if item is None:
+                break
+
+            idx, frame = item
+
+            result = model(
+                frame,
+                verbose=False,
+                show=False,
+                imgsz=self._input_size,
+                conf=self._min_conf,
+                device=device,
+            )
+            result[0].orig_img = None
+
+            self._out_q.put((idx, result[0]))
+
+    def infer_batch(self, frames: list[np.ndarray]):
+        num_frames = len(frames)
+
+        for idx, frame in enumerate(frames):
+            self._in_q.put((idx, frame))
+
+        # results come back out of order
+        results = [None] * num_frames
+        for _ in range(num_frames):
+            idx, res = self._out_q.get()
+            results[idx] = res
+
+        return results
+
+    def stop(self):
+        for _ in range(self._n):
+            self._in_q.put(None)
+
+
+def normalize_model_config(model_config: dict) -> dict:
+    cfg = dict(model_config)
+    for key in ("file_path", "task", "num_classes", "input_size", "output"):
+        if key not in cfg:
+            raise ValueError(f"model_config must include '{key}'.")
+
+    task = cfg["task"]
+    if task not in ("detect", "pose"):
+        raise ValueError(f"Unsupported task '{task}'. Use 'detect' or 'pose'.")
+
+    num_classes = int(cfg["num_classes"])
+    if num_classes < 1:
+        raise ValueError("num_classes must be >= 1.")
+
+    out = dict(cfg["output"])
+    _validate_output_block(out, task, num_classes)
+    cfg["output"] = out
+
+    if "input" in cfg:
+        cfg["input"] = _validate_input_block(dict(cfg["input"]))
+
+    frame_batches = int(cfg.get("frame_batches", 1))
+    if frame_batches < 1:
+        raise ValueError("frame_batches must be >= 1.")
+    cfg["frame_batches"] = frame_batches
+    batch_size = int(cfg.get("batch_size", frame_batches))
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1.")
+    cfg["batch_size"] = batch_size
+    tpu_dtype = str(cfg.get("tpu_dtype", "bf16")).lower()
+    if tpu_dtype not in ("bf16", "fp32"):
+        raise ValueError("tpu_dtype must be 'bf16' or 'fp32'.")
+    cfg["tpu_dtype"] = tpu_dtype
+
+    return cfg
+
+
+def _validate_input_block(inp: dict) -> dict:
+    layout = inp.get("layout")
+    if layout not in ("nhwc", "nchw"):
+        raise ValueError("input.layout must be 'nhwc' or 'nchw'.")
+    dtype = inp.get("dtype")
+    if dtype not in ("uint8", "float32"):
+        raise ValueError("input.dtype must be 'uint8' or 'float32'.")
+    if "letterbox" not in inp:
+        raise ValueError("input.letterbox is required (true or false).")
+    if inp["letterbox"] and "pad_value" not in inp:
+        raise ValueError("input.pad_value is required when input.letterbox is true.")
+    if "normalize" not in inp:
+        raise ValueError("input.normalize is required (true or false).")
+    if inp["normalize"] and "scale" not in inp:
+        raise ValueError("input.scale is required when input.normalize is true.")
+    return inp
+
+
+def _validate_output_block(out: dict, task: str, num_classes: int) -> None:
+    fmt = out.get("format")
+    if fmt not in ("hardware_nms", "raw"):
+        raise ValueError("output.format must be 'hardware_nms' or 'raw'.")
+    if "layout" not in out:
+        raise ValueError(
+            "output.layout is required ('anchors_first' or 'features_first')."
+        )
+    if out["layout"] not in ("anchors_first", "features_first"):
+        raise ValueError("output.layout must be 'anchors_first' or 'features_first'.")
+    if "quantization" not in out:
+        raise ValueError(
+            "output.quantization is required ('none', 'int8', or 'uint8')."
+        )
+    if out["quantization"] not in ("none", "int8", "uint8"):
+        raise ValueError("output.quantization must be 'none', 'int8', or 'uint8'.")
+    if out["quantization"] in ("int8", "uint8") and "quant_scale" not in out:
+        raise ValueError(
+            "output.quant_scale is required when output.quantization is int8 or uint8."
+        )
+    if fmt == "hardware_nms":
+        return
+    for key in (
+        "box_format",
+        "score_mode",
+        "scores_are_logits",
+        "apply_software_nms",
+        "nms_iou",
+    ):
+        if key not in out:
+            raise ValueError(f"output.{key} is required for raw format.")
+    if out["box_format"] not in ("cxcywh", "xyxy"):
+        raise ValueError("output.box_format must be 'cxcywh' or 'xyxy'.")
+    if out["score_mode"] not in ("multi_class", "objectness"):
+        raise ValueError("output.score_mode must be 'multi_class' or 'objectness'.")
+    if out["score_mode"] == "objectness" and num_classes != 1:
+        raise ValueError("output.score_mode 'objectness' requires num_classes == 1.")
+    if task == "pose":
+        for key in ("num_keypoints", "keypoint_dims", "keypoint_scores_are_logits"):
+            if key not in out:
+                raise ValueError(f"output.{key} is required for task='pose'.")
+
+
+class Box:
+    def __init__(
+        self, xyxy, conf, cls_id=0, translation=None, rotation=None, keypoints_3d=None
+    ):
+        self.xyxy = xyxy
+        self.conf = conf
+        self.cls_id = cls_id
+        # PnP results, both None for detect-only models
+        self.translation = translation  # (x, y, z) metres in camera frame
+        self.rotation = rotation  # (roll, pitch, yaw) radians in camera frame
+        self.keypoints_3d = (
+            keypoints_3d  # list of [x,y,z] per keypoint in camera frame or None
+        )
+
+
+class Results:
+    def __init__(
+        self, boxes: list[Box], orig_shape, keypoints: list[np.ndarray] | None = None
+    ):
+        self.boxes = boxes
+        self.orig_shape = orig_shape
+        self.keypoints = keypoints if keypoints is not None else []
+
+    _SKELETONS = {
+        17: [
+            (0, 1),
+            (0, 2),
+            (1, 3),
+            (2, 4),
+            (5, 6),
+            (5, 7),
+            (7, 9),
+            (6, 8),
+            (8, 10),
+            (5, 11),
+            (6, 12),
+            (11, 12),
+            (11, 13),
+            (13, 15),
+            (12, 14),
+            (14, 16),
+        ],
+    }
+
+    def plot(self, frame):
+        for box in self.boxes:
+            if not all(math.isfinite(v) for v in box.xyxy):
+                continue
+            x1, y1, x2, y2 = map(int, box.xyxy)
+            # confidence-based color: green >= 0.7, yellow >= 0.4, red < 0.4
+            if box.conf >= 0.7:
+                color = (0, 255, 0)
+            elif box.conf >= 0.4:
+                color = (0, 255, 255)
+            else:
+                color = (0, 0, 255)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            label = f"{box.conf:.0%}"
+            if box.rotation is not None:
+                roll, pitch, yaw = box.rotation
+                label = (
+                    f"R:{math.degrees(roll):.0f} "
+                    f"P:{math.degrees(pitch):.0f} "
+                    f"Y:{math.degrees(yaw):.0f}"
+                )
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+            cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+            cv2.putText(
+                frame,
+                label,
+                (x1 + 2, y1 - 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 0, 0),
+                1,
+                cv2.LINE_AA,
+            )
+        for kpt_set in self.keypoints:
+            nk = kpt_set.shape[0]
+            skeleton = self._SKELETONS.get(nk)
+            if skeleton is not None:
+                for i, j in skeleton:
+                    if i >= nk or j >= nk:
+                        continue
+                    x1, y1, c1 = kpt_set[i]
+                    x2, y2, c2 = kpt_set[j]
+                    if c1 > 0.5 and c2 > 0.5:
+                        cv2.line(
+                            frame,
+                            (int(x1), int(y1)),
+                            (int(x2), int(y2)),
+                            (0, 255, 255),
+                            2,
+                        )
+            for kpt in kpt_set:
+                x, y, conf = kpt
+                if conf > 0.5:
+                    cv2.circle(frame, (int(x), int(y)), 4, (0, 0, 255), -1)
+        return frame
+
+    def __str__(self):
+        return f"Results(boxes={len(self.boxes)}, keypoints={len(self.keypoints)})"
+
+
+class GenericYolo:
+    def __init__(self, model_config: dict, core_mask=None, iSpy_config=None):
+        self.logger = logging.getLogger(__name__)
+        self._iSpy_config = iSpy_config
+        _validate_model_file(model_config.get("file_path", ""))
+        model_config = fill_missing_config(model_config)
+
+        cfg = normalize_model_config(model_config)
+        model_file_path = cfg["file_path"]
+        self.device = cfg.get("device", 0)
+        requested_device = cfg.get("device", 0)
+        self._is_tpu = False
+        self._tpu_device = None
+        self._is_openvino = "openvino_model" in model_file_path
+
+        try:
+            import torch
+
+            cuda_ok = (
+                torch.cuda.is_available()
+                and isinstance(requested_device, int)
+                and requested_device < torch.cuda.device_count()
+            )
+        except Exception:
+            cuda_ok = False
+
+        if isinstance(requested_device, str) and requested_device == "tpu":
+            try:
+                import torch_xla.core.xla_model as xm
+
+                self._tpu_device = xm.xla_device()
+                self._is_tpu = True
+                self.device = "tpu"
+                self.logger.info("TPU device initialized: %s", self._tpu_device)
+            except Exception:
+                self.logger.warning(
+                    "TPU requested but torch_xla not available - falling back to CPU"
+                )
+                self.device = "cpu"
+        elif self._is_openvino:
+            from iSpy.config.AutoOpt import resolve_openvino_device
+
+            self.device = resolve_openvino_device(requested_device)
+            self.logger.info("OpenVINO device resolved to: %s", self.device)
+        elif not cuda_ok and requested_device != "cpu":
+            self.logger.info(
+                "Device %r not available (CUDA=%s, count=%d) - falling back to CPU",
+                requested_device,
+                torch.cuda.is_available() if "torch" in dir() else False,
+                torch.cuda.device_count() if "torch" in dir() else 0,
+            )
+            self.device = "cpu"
+        else:
+            self.device = requested_device
+
+        self.model_file = cfg["file_path"]
+        self.task = cfg["task"]
+        self.num_classes = int(cfg["num_classes"])
+        self.input_size = tuple(cfg["input_size"])
+        raw_min_conf = cfg.get("min_conf")
+        self.min_conf = float(raw_min_conf) if raw_min_conf is not None else 0.25
+        self.frame_batches = cfg.get("frame_batches", 1)
+        self.batch_size = cfg["batch_size"]
+        self.tpu_dtype = cfg["tpu_dtype"]
+        self.output = cfg["output"]
+        self.pnp_config = cfg.get("pnp")
+        self.input = cfg.get("input")
+        self._preprocess_bufs: list[np.ndarray | None] = [None, None]
+        self._preprocess_buf_idx = 0
+
+        self.has_hardware_nms = self.output["format"] == "hardware_nms"
+        self.model_type = None
+
+        if self.model_file.endswith(".rknn"):
+            if not RKNN_FOUND:
+                raise ImportError(
+                    "rknnlite not installed but .rknn model was specified."
+                )
+            self._require_input_block()
+            self.model_type = "rknn"
+            self._rknn_fmt_checked = False
+            self.model = RKNNLite(verbose=False)
+            try:
+                if self.model.load_rknn(self.model_file) != 0:
+                    raise ValueError(f"Failed to load RKNN model: {self.model_file}")
+            except Exception as e:
+                raise ValueError(f"Failed to load RKNN model: {self.model_file}") from e
+            _set_rknn_log_level(3)
+            try:
+                if (
+                    self.model.init_runtime(
+                        core_mask=(core_mask if core_mask is not None else 7)
+                    )
+                    != 0
+                ):
+                    raise ValueError(f"Failed to init RKNN runtime: {self.model_file}")
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to init RKNN runtime: {self.model_file}"
+                ) from e
+
+        elif self.model_file.endswith(".hef"):
+            self._require_input_block()
+            self.model_type = "hailo"
+            self._hailo_fmt_checked = False
+            self._hailo_activation = None
+            self._load_hailo(self.model_file)
+
+        elif self.model_file.endswith(".onnx"):
+            self._require_input_block()
+            self.model_type = "onnx"
+            self._onnx_pool: _ONNXInferencePool | None = None
+            self._load_onnx(self.model_file)
+
+            num_gpus = cfg.get("num_gpus", 1)
+            if num_gpus == "auto":
+                try:
+                    import torch
+
+                    num_gpus = torch.cuda.device_count()
+                except Exception:
+                    num_gpus = 1
+            if (
+                num_gpus
+                and num_gpus > 1
+                and "CUDAExecutionProvider" in self.model.get_providers()
+            ):
+                try:
+                    import torch
+
+                    devices = list(range(min(num_gpus, torch.cuda.device_count())))
+                    if len(devices) > 1:
+                        providers_template = [
+                            ("CUDAExecutionProvider", {}),
+                            ("CPUExecutionProvider", None),
+                        ]
+                        self._onnx_pool = _ONNXInferencePool(
+                            self.model_file, devices, providers_template
+                        )
+                except Exception as e:
+                    self.logger.warning(
+                        "Multi-GPU ONNX pool failed, falling back to single device: %s",
+                        e,
+                    )
+
+        elif self.model_file.endswith(".tflite"):
+            self._require_input_block()
+            self.model_type = "tflite"
+            self._load_tflite(self.model_file)
+
+        elif self.model_file.endswith(".pt") and self._is_tpu:
+            self.model_type = "tpu"
+            self._load_tpu(self.model_file)
+            self._pool = None
+
+        elif (
+            self.model_file.endswith(".engine")
+            or "openvino_model" in self.model_file
+            or self.model_file.endswith(".xml")
+        ):
+            # Compiled accelerator formats (TensorRT / OpenVINO), converted from
+            # an onnx source by optimizer.convert_model() - NOT raw checkpoints,
+            # so they bypass the ".pt never live-runs" ModelFileError guard.
+            self._require_input_block()
+            if self.model_file.endswith(".engine"):
+                self.model_type = "engine"
+                self._load_engine(self.model_file)
+            else:
+                self.model_type = "openvino"
+                self._load_openvino(self.model_file)
+
+        elif self.model_file.endswith(".mlpackage"):
+            # CoreML stays unimplemented for runtime inference (Apple Silicon
+            # has no CI coverage). recommend_format(..., runtime_supported=False)
+            # avoids ever recommending coreml for a load-and-run path; if one is
+            # still handed to us, raise like the old compiled-format guard did.
+            raise ValueError(
+                "Runtime loading of .mlpackage (CoreML) requires coremltools "
+                "export tooling and is not supported; use a .pt model (loaded "
+                "via the dependency-free yolo_pt loader) for runtime inference."
+            )
+
+        elif self.model_file.endswith(".pt"):
+            self.model_type = "yolo"
+            from .yolo_pt import load_yolo_pt
+
+            self.model = load_yolo_pt(self.model_file, task=self.task)
+            self.model.to("cpu" if self.device == "cpu" else f"cuda:{self.device}")
+
+            self._pool: _GPUInferencePool | None = None
+
+            num_gpus = cfg.get("num_gpus", 1)
+            if num_gpus == "auto":
+                try:
+                    import torch
+
+                    num_gpus = torch.cuda.device_count()
+                except Exception:
+                    num_gpus = 1
+
+            if num_gpus > 1:
+                try:
+                    import torch
+
+                    available = torch.cuda.device_count()
+                    devices = list(range(min(num_gpus, available)))
+                    if len(devices) > 1:
+                        self._pool = _GPUInferencePool(
+                            model_file=self.model_file,
+                            task=self.task,
+                            devices=devices,
+                            input_size=self.input_size,
+                            min_conf=self.min_conf,
+                        )
+                except Exception as e:
+                    self.logger.warning(
+                        "Multi-GPU pool failed, falling back to single GPU: %s", e
+                    )
+        else:
+            raise ValueError(f"Unsupported model file type: {self.model_file}")
+
+        self._output_verified = False
+        self._feat_width = 0
+
+        inp_cfg = self.input or {}
+        msg_lines = [
+            f"Model             : {self.model_file}",
+            f"Type              : {self.model_type}",
+            f"Task              : {self.task}",
+            f"Classes           : {self.num_classes}",
+            f"Input size        : {self.input_size[0]}x{self.input_size[1]}",
+            f"Min confidence    : {self.min_conf}",
+            f"Device            : {self.device}",
+            f"Output format     : {self.output['format']}",
+            f"Output layout     : {self.output.get('layout', 'N/A')}",
+            f"Batch size        : {self.batch_size}",
+        ]
+        if inp_cfg:
+            msg_lines.append(f"Input layout      : {inp_cfg.get('layout', 'N/A')}")
+            msg_lines.append(f"Input dtype       : {inp_cfg.get('dtype', 'N/A')}")
+            msg_lines.append(f"Letterbox         : {inp_cfg.get('letterbox', 'N/A')}")
+        if self.output["format"] == "raw":
+            msg_lines.append(
+                f"Box format        : {self.output.get('box_format', 'N/A')}"
+            )
+            msg_lines.append(
+                f"Score mode        : {self.output.get('score_mode', 'N/A')}"
+            )
+            msg_lines.append(
+                f"Software NMS      : {self.output.get('apply_software_nms', 'N/A')}"
+            )
+            if self.output.get("apply_software_nms"):
+                msg_lines.append(
+                    f"NMS IoU           : {self.output.get('nms_iou', 'N/A')}"
+                )
+
+        pad = max(len(l) for l in msg_lines)
+        sep = "=" * pad
+        full = "\n".join(
+            [
+                f"+{sep}+",
+                *[f"|{l:<{pad}}|" for l in msg_lines],
+                f"+{sep}+",
+            ]
+        )
+        self.logger.info("GenericYolo loaded:\n%s", full)
+
+    def _require_input_block(self) -> None:
+        if self.input is None:
+            raise ValueError(
+                "model_config.input is required for RKNN, ONNX, and TFLite models."
+            )
+
+    def _feature_width(self) -> int:
+        out = self.output
+        if out["format"] == "hardware_nms":
+            return 6
+        if self.task == "pose":
+            score_cols = 1 if out["score_mode"] == "objectness" else self.num_classes
+            return 4 + score_cols + out["num_keypoints"] * out["keypoint_dims"]
+        score_cols = 1 if out["score_mode"] == "objectness" else self.num_classes
+        return 4 + score_cols
+
+    def _next_preprocess_buffer(self) -> np.ndarray:
+        idx = self._preprocess_buf_idx
+        self._preprocess_buf_idx = 1 - idx
+        if self._preprocess_bufs[idx] is None:
+            self._preprocess_bufs[idx] = self._alloc_preprocess_buffer()
+        return self._preprocess_bufs[idx]
+
+    def _load_onnx(self, model_file: str) -> None:
+        try:
+            import onnxruntime as ort
+
+            ort.set_default_logger_severity(4)
+        except ImportError as exc:
+            raise ImportError("onnxruntime is required for .onnx models.") from exc
+
+        device_id = self.device if isinstance(self.device, int) else 0
+        providers = []
+        if self.device == "cpu":
+            providers = ["CPUExecutionProvider"]
+        else:
+            try:
+                # onnxruntime-qnn (Qualcomm NPU on Rubik Pi / QCS6490) ships as an
+                # execution-provider PLUGIN: it only appears in
+                # get_available_providers() after its shared library is registered
+                # by name. Register it first; if the wheel isn't installed the
+                # import fails and we simply never offer the provider.
+                try:
+                    import onnxruntime_qnn as _qnn_plugin
+
+                    ort.register_execution_provider_library(
+                        "QNNExecutionProvider", _qnn_plugin.get_library_path()
+                    )
+                    self.logger.info("onnxruntime-qnn plugin registered.")
+                except Exception:
+                    pass
+                available = ort.get_available_providers()
+                candidates = [
+                    (
+                        "QNNExecutionProvider",
+                        {"backend_type": "QNN", "device_id": device_id},
+                    ),
+                    ("TensorrtExecutionProvider", {"device_id": device_id}),
+                    ("CUDAExecutionProvider", {"device_id": device_id}),
+                    ("ROCMExecutionProvider", {"device_id": device_id}),
+                    ("DmlExecutionProvider", {"device_id": device_id}),
+                    ("CPUExecutionProvider", None),
+                ]
+                for ep, opts in candidates:
+                    if ep in available:
+                        providers.append((ep, opts) if opts else ep)
+            except Exception:
+                providers = ["CPUExecutionProvider"]
+        if not providers:
+            providers = ["CPUExecutionProvider"]
+
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = (
+            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        )
+        cpu_count = os.cpu_count() or 4
+        # leave a core free for the camera reader / preprocess threads instead
+        # of letting ORT claim every logical core for intra-op parallelism
+        sess_options.intra_op_num_threads = max(1, cpu_count - 1)
+        sess_options.inter_op_num_threads = 1
+        sess_options.enable_mem_pattern = True
+        sess_options.enable_cpu_mem_arena = True
+
+        self.model = ort.InferenceSession(
+            model_file, sess_options=sess_options, providers=providers
+        )
+        self._onnx_inp_name = self.model.get_inputs()[0].name
+        self._onnx_out_names = [o.name for o in self.model.get_outputs()]
+        self.logger.info(
+            "ONNX providers: %s (intra_op_threads=%d)",
+            self.model.get_providers(),
+            sess_options.intra_op_num_threads,
+        )
+
+        actual_providers = self.model.get_providers()
+        self.provider = actual_providers[0] if actual_providers else "unknown"
+        try:
+            from iSpy.config.AutoOpt import has_nvidia
+
+            if has_nvidia() and "CUDAExecutionProvider" not in actual_providers and "TensorrtExecutionProvider" not in actual_providers:
+                self.logger.warning(
+                    "NVIDIA GPU detected but onnxruntime has no CUDA/TensorRT provider (providers=%s) - inference is "
+                    "running on CPU.",
+                    actual_providers,
+                )
+            # if no GPU providers but hardware exists - mark potential fallback
+            if has_nvidia() and "CPUExecutionProvider" in actual_providers and len(actual_providers) == 1:
+                self._onnx_cpu_fallback = True
+        except Exception:
+            pass
+
+    def _load_hailo(self, model_file: str):
+        # HailoRT wrapper over the .hef. The python API is stable across
+        # recent bindings: VDevice -> configure -> activate -> InferVStreams.
+        try:
+            from hailo_platform import (
+                HEF,
+                ConfigureParams,
+                FormatType,
+                HailoStreamInterface,
+                InferVStreams,
+                InputVStreamParams,
+                OutputVStreamParams,
+                VDevice,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "hailo_platform (HailoRT bindings) is required for .hef models. "
+                "Install the HailoRT python bindings on this device."
+            ) from exc
+
+        hef = HEF(model_file)
+        input_infos = hef.get_input_vstream_infos()
+        if not input_infos:
+            raise ValueError(f"HEF {model_file} exposes no input vstreams.")
+        self._hailo_inp_name = input_infos[0].name
+
+        self._hailo_vdevice = VDevice()
+        try:
+            configure_params = ConfigureParams.create_from_hef(
+                hef, interface=HailoStreamInterface.PCIe
+            )
+            network_group = self._hailo_vdevice.configure(hef, configure_params)[0]
+            group_params = network_group.create_params()
+            input_vstreams_params = InputVStreamParams.make(
+                network_group, format_type=FormatType.UINT8
+            )
+            output_vstreams_params = OutputVStreamParams.make(
+                network_group, format_type=FormatType.FLOAT32
+            )
+            self._hailo_infer = InferVStreams(
+                network_group, output_vstreams_params, input_vstreams_params
+            )
+            self._hailo_network_group = network_group
+            self._hailo_group_params = group_params
+            self._hailo_hef = hef
+            # arm the network once and hold the activation for the lifetime of
+            # this session so per-frame infer() has zero activation overhead
+            self._hailo_activation = network_group.activate(group_params)
+            self._hailo_activation.__enter__()
+            self.logger.info(
+                "Hailo .hef loaded: %s (input vstream %s, %d output(s))",
+                Path(model_file).name,
+                self._hailo_inp_name,
+                len(hef.get_output_vstream_infos()),
+            )
+        except Exception:
+            try:
+                self._hailo_vdevice.release()
+            except Exception:
+                pass
+            raise ValueError(f"Failed to load Hailo .hef model: {model_file}")
+
+    def _run_hailo(self, preprocessed: np.ndarray, orig_shape) -> Results:
+        if getattr(self, "_hailo_infer", None) is None:
+            raise RuntimeError("Hailo infer pipeline not initialized")
+        try:
+            raw_outputs = self._hailo_infer.infer({self._hailo_inp_name: preprocessed})
+        except Exception as e:
+            self.logger.error("Hailo inference failed: %s", e)
+            return Results([], orig_shape)
+
+        vals = [np.asarray(v) for v in raw_outputs.values()]
+        if not vals:
+            return Results([], orig_shape)
+        # baked-NMS compile -> single output; a multi-output build (raw tail
+        # convs) would need the same merge the rknn path does. Fail loud rather
+        # than silently parsing the wrong tensor.
+        if len(vals) > 1:
+            raise ValueError(
+                f"Hailo .hef returned {len(vals)} output(s) "
+                f"{[v.shape for v in vals]}; the baked-NMS pipeline expects a "
+                "single (num_classes, max_dets, 5) output. Recompile the .hef "
+                "with Hailo model-zoo NMS, or wire up split-output merging."
+            )
+        tensor = vals[0]
+        if not self._hailo_fmt_checked:
+            self._hailo_fmt_checked = True
+            # per-class grouped NMS is distinguishable by a trailing '5' axis
+            # (num_classes, max_dets, 5) - anything else means the sidecar's
+            # output format contract and the .hef disagree.
+            last = tensor.shape[-1] if tensor.ndim else 0
+            actual_fmt = "hardware_nms" if (tensor.ndim >= 2 and last == 5) else "raw"
+            if actual_fmt != self.output["format"]:
+                raise ValueError(
+                    f"Hailo model output shape {tensor.shape} indicates "
+                    f"output.format should be {actual_fmt!r}, but the metadata "
+                    f"sidecar says {self.output['format']!r}. Re-run boot.py "
+                    f"conversion to regenerate the sidecar for this .hef."
+                )
+        return self.postprocess([tensor], orig_shape)
+
+    def _load_tflite(self, model_file: str):
+        num_threads = max(1, (os.cpu_count() or 4) - 1)
+        try:
+            from tflite_runtime.interpreter import Interpreter, load_delegate
+
+            delegates = []
+            try:
+                delegates = [load_delegate("libedgetpu.so.1")]
+                self.logger.info("Coral Edge TPU delegate loaded.")
+            except Exception:
+                self.logger.info(
+                    "No Edge TPU delegate - running TFLite on CPU (%d threads).",
+                    num_threads,
+                )
+            self.model = Interpreter(
+                model_path=model_file,
+                experimental_delegates=delegates,
+                num_threads=num_threads,
+            )
+        except ImportError:
+            from tensorflow.lite.python.interpreter import Interpreter
+
+            self.model = Interpreter(model_path=model_file, num_threads=num_threads)
+
+        self.model.allocate_tensors()
+        self._tflite_inp = self.model.get_input_details()[0]
+        self._tflite_out = self.model.get_output_details()
+
+    def _load_engine(self, model_file: str) -> None:
+        # TensorRT .engine artifact, converted from an onnx source by
+        # optimizer.convert_model(). Deserialize once; create context and
+        # preallocate buffers once for performance.
+        try:
+            import tensorrt as trt
+        except ImportError as exc:
+            raise ImportError("tensorrt is required for .engine models.") from exc
+
+        try:
+            runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
+            engine: trt.ICudaEngine = runtime.deserialize_cuda_engine(
+                read_engine_plan(Path(model_file))
+            )
+            if engine is None:
+                raise ValueError(
+                    f"TensorRT engine deserialization returned None: {model_file}"
+                )
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to load TensorRT engine: {model_file} ({exc})"
+            ) from exc
+
+        self.model = engine
+        self._engine_context = engine.create_execution_context()
+        if self._engine_context is None:
+            raise ValueError(
+                f"TensorRT failed to create an execution context: {model_file}"
+            )
+        self._engine_stream = None
+        self._engine_buffers = {}  # name -> torch tensor
+        from iSpy.vision.engine_utils import engine_io_names
+
+        self._engine_input_names, self._engine_output_names = engine_io_names(engine)
+        self.logger.info(
+            "Loaded TensorRT engine from %s (device %s)", model_file, self.device
+        )
+
+    def _load_openvino(self, model_file: str) -> None:
+        # OpenVINO IR (.xml + .bin) artifact. mirror the resolve/fallback
+        # pattern from depth_anything._load_openvino (cache dir + device
+        # registration fallback), but reuse self.device which GenericYolo.__init__
+        # already resolved via resolve_openvino_device.
+        try:
+            import openvino as ov
+        except ImportError as exc:
+            raise ImportError("openvino is required for .xml models.") from exc
+
+        # model_file is usually the *directory* produced by the optimizer
+        # (YoloModels/openvino/<stem>_openvino_model/) - resolve the actual IR.
+        model_path = Path(model_file)
+        if model_path.is_dir():
+            ir_xml = model_path / f"{model_path.name}.xml"
+            if not ir_xml.exists():
+                xmls = sorted(model_path.glob("*.xml"))
+                if not xmls:
+                    raise ValueError(
+                        f"OpenVINO model directory has no .xml IR: {model_path}"
+                    )
+                ir_xml = xmls[0]
+        else:
+            ir_xml = model_path
+
+        device = self.device
+        if isinstance(device, str) and device.startswith("intel:"):
+            device = device.split(":", 1)[1]  # OpenVINO wants 'GPU', not 'intel:gpu'
+
+        core = ov.Core()
+        try:
+            registered = next(
+                (d for d in core.available_devices if d.lower() == device.lower()),
+                None,
+            )
+            if registered is None:
+                registered = next(
+                    (d for d in core.available_devices if device.lower() in d.lower()),
+                    None,
+                )
+            if registered is None:
+                self.logger.warning(
+                    "OpenVINO device %r not registered (%s) - using AUTO",
+                    device,
+                    core.available_devices,
+                )
+                registered = "AUTO"
+
+            compiled = self._compile_openvino(core, ir_xml, registered)
+            self.model = compiled
+            ov_input = next(iter(compiled.inputs))
+            self._openvino_inp_name = ov_input.get_any_name()
+            try:
+                ov_shape = tuple(ov_input.get_shape())
+                ov_dtype = ov_input.get_element_type().to_dtype()
+            except Exception:
+                ov_shape, ov_dtype = (), None
+            self._align_openvino_input(ov_shape, ov_dtype)
+            try:
+                ov_out_shape = tuple(next(iter(compiled.outputs)).get_shape())
+            except Exception:
+                ov_out_shape = ()
+            self._align_openvino_output(ov_out_shape)
+            self.logger.info(
+                "Loaded OpenVINO IR from %s (device %s)", ir_xml, registered
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to load OpenVINO model: {model_file} ({exc})"
+            ) from exc
+
+    def _compile_openvino(self, core, ir_xml: Path, device: str):
+        try:
+            return core.compile_model(str(ir_xml), device)
+        except Exception as exc:
+            self.logger.warning(
+                "OpenVINO compile failed on %r (%s) - falling back to AUTO",
+                device,
+                exc,
+            )
+            return core.compile_model(str(ir_xml), "AUTO")
+
+    def _align_openvino_input(self, ov_shape: tuple, ov_dtype) -> None:
+        # The pipeline's input metadata is inherited from the source .pt
+        # (nhwc uint8), but Ultralytics' OpenVINO export is NCHW float32.
+        # The GPU plugin enforces an exact shape/dtype match, so align the
+        # preprocessor to the IR's real input before any prediction runs.
+        if self.input is None or not isinstance(self.input, dict) or len(ov_shape) != 4:
+            return
+        inp = dict(self.input)
+        nchw = ov_shape[3] != 3 or ov_shape[1] in (1, 3)
+        inp["layout"] = "nchw" if nchw else "nhwc"
+        if ov_dtype is not None and ov_dtype != np.dtype("uint8"):
+            inp["dtype"] = "float32"
+            inp["normalize"] = True
+            inp["scale"] = inp.get("scale", 255)
+        else:
+            inp["dtype"] = "uint8"
+        self.input = inp
+        h, w = int(ov_shape[-2]), int(ov_shape[-1])
+        if (h, w) != self.input_size:
+            self.logger.info("OpenVINO IR input is %dx%d - updating input_size", w, h)
+            self.input_size = (w, h)
+        self.logger.info(
+            "OpenVINO input aligned: layout=%s dtype=%s shape=%s",
+            inp["layout"],
+            inp["dtype"],
+            tuple(ov_shape),
+        )
+
+    def _align_openvino_output(self, ov_out_shape: tuple) -> None:
+        # The IR metadata is a verbatim copy of the .pt metadata
+        # (hardware_nms / anchors_first / xyxy), but Ultralytics' OpenVINO
+        # export emits a raw detect tensor [1, F, N] (N anchors, features
+        # first, F = 4 + score columns, coords in cxcywh pixel space). The
+        # old config sent that tensor to the hardware-NMS parser, which read
+        # the wrong axis and produced misplaced boxes. Re-derive the parser
+        # config from the IR's real output instead.
+        if (
+            self.output is None
+            or not isinstance(self.output, dict)
+            or len(ov_out_shape) != 3
+            or ov_out_shape[0] != 1
+        ):
+            return
+        feat = int(ov_out_shape[1])
+        anchors = int(ov_out_shape[2])
+        if anchors < feat:
+            return
+        out = dict(self.output)
+        out["format"] = "raw_detect"
+        out["layout"] = "features_first"
+        out["box_format"] = "xywh"
+        if out.get("score_mode") not in ("objectness", "classwise"):
+            out["score_mode"] = "classwise"
+        # Ultralytics detect heads emit sigmoid-activated class probabilities.
+        out["scores_are_logits"] = False
+        out["apply_software_nms"] = True
+        out["nms_iou"] = float(out.get("nms_iou") or 0.45)
+        self.output = out
+        self.logger.info(
+            "OpenVINO output aligned: format=raw_detect layout=%s shape=%s "
+            "score_mode=%s scores_are_logits=False software_nms=True",
+            "features_first",
+            tuple(ov_out_shape),
+            out["score_mode"],
+        )
+
+    def _run_engine(self, frame: np.ndarray, orig_shape) -> Results:
+        import torch
+
+        from iSpy.vision.engine_utils import (
+            bind_engine_io,
+            execute_bound_async_v3,
+        )
+
+        inp = self._preprocess_frame(frame)
+        engine = self.model
+        context = self._engine_context
+        if context is None:
+            raise RuntimeError(
+                "TensorRT execution context missing - engine failed to load"
+            )
+        device_index = int(self.device) if isinstance(self.device, int) else 0
+        if device_index < 0 or (
+            torch.cuda.is_available() and device_index >= torch.cuda.device_count()
+        ):
+            device_index = 0 if torch.cuda.is_available() else -1
+
+        if self._engine_stream is None:
+            cuda_device = torch.device(f"cuda:{device_index}")
+            self._engine_stream = torch.cuda.Stream(device=cuda_device)
+            self._engine_buffers = {}  # name -> torch tensor, reused across calls
+
+        # feed the same preprocessed frame to every declared input; real
+        # engines are single-input but multi-input plans shouldn't silently
+        # bind an empty name
+        inputs = {name: inp for name in self._engine_input_names}
+        output_names = bind_engine_io(
+            engine, context, inputs, self._engine_buffers, device=device_index
+        )
+
+        with torch.cuda.device(device_index), torch.cuda.stream(self._engine_stream):
+            execute_bound_async_v3(context, self._engine_stream.cuda_stream)
+
+        self._engine_stream.synchronize()
+
+        outputs = [self._engine_buffers[name].cpu().numpy() for name in output_names]
+        return self.postprocess(outputs, orig_shape)
+
+    def _run_openvino(self, frame: np.ndarray, orig_shape) -> Results:
+        inp = self._preprocess_frame(frame)
+        outputs = self.model({self._openvino_inp_name: inp})
+        out = np.asarray(next(iter(outputs.values())))
+        return self.postprocess([out], orig_shape)
+
+    def _letterbox_into(self, img, dst, target_size, pad_value=114):
+        h, w = img.shape[:2]
+        target_w, target_h = target_size
+        scale = min(target_w / w, target_h / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        top = (target_h - new_h) // 2
+        left = (target_w - new_w) // 2
+        dst[:] = pad_value
+        dst[top : top + new_h, left : left + new_w] = cv2.resize(img, (new_w, new_h))
+
+    def _alloc_preprocess_buffer(self) -> np.ndarray:
+        inp = self.input
+        target_w, target_h = self.input_size
+        shape = (
+            (1, target_h, target_w, 3)
+            if inp["layout"] == "nhwc"
+            else (1, 3, target_h, target_w)
+        )
+        buf_dtype = np.uint8 if inp["dtype"] == "uint8" else np.float32
+        return np.empty(shape, dtype=buf_dtype)
+
+    def _preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
+        inp = self.input
+        target_w, target_h = self.input_size
+        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        if inp["letterbox"]:
+            buf = self._next_preprocess_buffer()
+            pad_value = int(inp["pad_value"])
+            if inp["layout"] == "nhwc":
+                self._letterbox_into(img_rgb, buf[0], self.input_size, pad_value)
+            else:
+                nhwc = np.empty((target_h, target_w, 3), dtype=np.uint8)
+                self._letterbox_into(img_rgb, nhwc, self.input_size, pad_value)
+                buf[0][:] = np.transpose(nhwc, (2, 0, 1))
+            tensor = buf
+        else:
+            resized = cv2.resize(img_rgb, (target_w, target_h))
+            tensor = (
+                np.transpose(resized, (2, 0, 1))[np.newaxis]
+                if inp["layout"] == "nchw"
+                else resized[np.newaxis]
+            )
+
+        if inp["dtype"] == "float32":
+            out = tensor.astype(np.float32, copy=False)
+            if inp["normalize"]:
+                out = out / float(inp["scale"])
+            return out
+
+        if tensor.dtype != np.uint8:
+            return np.clip(tensor, 0, 255).astype(np.uint8)
+        return tensor
+
+    def predict(self, frame_or_frames, orig_shape=None) -> "Results | list[Results]":
+        is_list = isinstance(frame_or_frames, list)
+        frames = frame_or_frames if is_list else [frame_or_frames]
+        shapes = (
+            list(orig_shape)
+            if isinstance(orig_shape, list)
+            else [
+                orig_shape if orig_shape is not None else frame.shape
+                for frame in frames
+            ]
+        )
+        if len(shapes) != len(frames):
+            raise ValueError("orig_shape count must match the number of frames")
+
+        if self.model_type == "tpu":
+            results = []
+            stage_totals = {"preprocess": 0.0, "device": 0.0, "postprocess": 0.0}
+            timed_frames = 0
+            for start in range(0, len(frames), self.batch_size):
+                chunk = frames[start : start + self.batch_size]
+                preprocess_start = time.perf_counter()
+                preprocessed = [self._preprocess_tpu_frame(frame) for frame in chunk]
+                stage_totals["preprocess"] += (
+                    time.perf_counter() - preprocess_start
+                ) * 1000
+                device_start = time.perf_counter()
+                outputs = self.forward_tpu_batch(preprocessed)
+                stage_totals["device"] += (time.perf_counter() - device_start) * 1000
+                postprocess_start = time.perf_counter()
+                results.extend(
+                    self.postprocess_tpu_output(output, shape)
+                    for output, shape in zip(
+                        outputs, shapes[start : start + len(chunk)]
+                    )
+                )
+                stage_totals["postprocess"] += (
+                    time.perf_counter() - postprocess_start
+                ) * 1000
+                timed_frames += len(chunk)
+            self.last_tpu_stage_ms = {
+                key: value / max(timed_frames, 1) for key, value in stage_totals.items()
+            }
+            return results if is_list else results[0]
+
+        if self.model_type == "yolo" and self._pool is not None and is_list:
+            raw_results = self._pool.infer_batch(frames)
+            return [self._convert_ultralytics_to_results(raw) for raw in raw_results]
+
+        if self.model_type == "engine" and is_list:
+            results_list = []
+            for frame, target_shape in zip(frames, shapes):
+                results_list.append(self._run_engine(frame, target_shape))
+            return results_list
+
+        if self.model_type == "onnx" and self._onnx_pool is not None and is_list:
+            preprocessed = [self._preprocess_frame(f) for f in frames]
+            raw_batches = self._onnx_pool.infer_batch(preprocessed)
+            out = []
+            for raw, target_shape in zip(raw_batches, shapes):
+                if raw is None:
+                    out.append(Results([], target_shape))
+                    continue
+                raw = list(raw)
+                raw[0] = self._dequantize_tensor(raw[0])
+                out.append(self.postprocess(raw, target_shape))
+            return out
+
+        results_list = []
+        if self.model_type == "yolo" and is_list and len(frames) > 1:
+            raw_results = self.model(
+                frames,
+                verbose=False,
+                show=False,
+                imgsz=(self.input_size[1], self.input_size[0]),
+                conf=self.min_conf,
+                device=self.device,
+            )
+            for r in raw_results:
+                r.orig_img = None
+                results_list.append(self._convert_ultralytics_to_results(r))
+        else:
+            for frame, target_shape in zip(frames, shapes):
+                if self.model_type == "rknn":
+                    results_list.append(
+                        self._run_rknn(self._preprocess_frame(frame), target_shape)
+                    )
+                elif self.model_type == "hailo":
+                    results_list.append(
+                        self._run_hailo(self._preprocess_frame(frame), target_shape)
+                    )
+                elif self.model_type == "onnx":
+                    results_list.append(self._run_onnx(frame, target_shape))
+                elif self.model_type == "tflite":
+                    results_list.append(self._run_tflite(frame, target_shape))
+                elif self.model_type == "tpu":
+                    results_list.append(self._run_tpu(frame, target_shape))
+                elif self.model_type == "engine":
+                    results_list.append(self._run_engine(frame, target_shape))
+                elif self.model_type == "openvino":
+                    results_list.append(self._run_openvino(frame, target_shape))
+                else:
+                    result = self.model(
+                        frame,
+                        verbose=False,
+                        show=False,
+                        imgsz=(self.input_size[1], self.input_size[0]),
+                        conf=self.min_conf,
+                        device=self.device,
+                    )
+                    result[0].orig_img = None
+                    results_list.append(self._convert_ultralytics_to_results(result[0]))
+
+        return results_list if is_list else results_list[0]
+
+    def _preprocess_tpu_frame(self, frame: np.ndarray) -> np.ndarray:
+        target_w, target_h = self.input_size
+        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        inp = self.input
+        if inp and inp.get("letterbox", True):
+            canvas = np.full(
+                (target_h, target_w, 3), inp.get("pad_value", 114), dtype=np.uint8
+            )
+            self._letterbox_into(
+                img_rgb, canvas, self.input_size, inp.get("pad_value", 114)
+            )
+            img_rgb = canvas
+        else:
+            img_rgb = cv2.resize(img_rgb, (target_w, target_h))
+        return np.ascontiguousarray(img_rgb, dtype=np.uint8)
+
+    def _tpu_sync(self, wait: bool = True, output=None) -> None:
+        # xla work is async - a timer that doesn't block measures dispatch
+        # overhead, not inference, so the benchmark path must actually wait
+        import torch_xla
+        import torch_xla.core.xla_model as xm
+
+        sync = getattr(torch_xla, "sync", None)
+        if callable(sync):
+            try:
+                sync(wait=wait)
+            except TypeError:
+                # old torch_xla.sync() has no wait kwarg; it still blocks
+                sync()
+            return
+
+        # torch_xla < 2.0 only has mark_step(), which does NOT guarantee the
+        # device finished - force completion via a real data read instead of
+        # pretending the dispatch time was the latency
+        xm.mark_step()
+        if output is not None:
+            output.cpu()
+        elif wait and not getattr(self, "_tpu_sync_warned", False):
+            self._tpu_sync_warned = True
+            self.logger.warning(
+                "torch_xla.sync() unavailable; mark_step() does not block, so "
+                "timings may reflect dispatch overhead rather than TPU latency"
+            )
+
+    def _tpu_autocast(self, torch):
+        if self.tpu_dtype == "bf16":
+            return torch.autocast(device_type="xla", dtype=torch.bfloat16)
+        return contextlib.nullcontext()
+
+    @staticmethod
+    def _pad_tpu_batch(preprocessed: list[np.ndarray], batch_size: int) -> np.ndarray:
+        batch = np.stack(preprocessed, axis=0)
+        if len(batch) > batch_size:
+            raise ValueError(
+                f"TPU batch has {len(batch)} frames; configured batch_size is "
+                f"{batch_size}."
+            )
+        if len(batch) < batch_size:
+            padding = np.repeat(batch[-1:], batch_size - len(batch), axis=0)
+            batch = np.concatenate((batch, padding), axis=0)
+        return batch
+
+    def forward_tpu_batch(self, preprocessed: list[np.ndarray]) -> np.ndarray:
+        import torch
+
+        if not preprocessed:
+            return np.empty((0,), dtype=np.float32)
+        actual_size = len(preprocessed)
+        batch = self._pad_tpu_batch(preprocessed, self.batch_size)
+
+        tensor = torch.from_numpy(batch).to(self._tpu_device, non_blocking=True)
+        tensor = tensor.permute(0, 3, 1, 2).to(dtype=torch.float32).div_(255.0)
+        if self.tpu_dtype == "bf16":
+            tensor = tensor.to(dtype=torch.bfloat16)
+
+        with torch.inference_mode(), self._tpu_autocast(torch):
+            output = self.model(tensor)
+        if isinstance(output, (list, tuple)):
+            output = output[0]
+        # hand the output over so the legacy mark_step() path can force a real
+        # device wait (materializing the tensor) instead of just dispatching
+        self._tpu_sync(output=output)
+        output = output.to(dtype=torch.float32).cpu().numpy()
+        return output[:actual_size]
+
+    def postprocess_tpu_output(self, output: np.ndarray, orig_shape) -> "Results":
+        if output.ndim == 3 and output.shape[0] == 1:
+            output = output[0]
+        return self.postprocess([output], orig_shape)
+
+    def _load_tpu(self, model_file: str):
+        from .yolo_pt import load_yolo_pt
+
+        raw_model = load_yolo_pt(model_file, task=self.task).model
+        raw_model = raw_model.to(self._tpu_device)
+        raw_model.eval()
+
+        self.model = raw_model
+        self._configure_tpu_output()
+        target_w, target_h = self.input_size
+        dummy = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        self.forward_tpu_batch([dummy] * self.batch_size)
+        self.logger.info("TPU model loaded on %s", self._tpu_device)
+
+    def _configure_tpu_output(self) -> None:
+        self.output.update(
+            format="raw",
+            layout="features_first",
+            box_format="cxcywh",
+            score_mode="objectness" if self.num_classes == 1 else "multi_class",
+            apply_software_nms=True,
+            nms_iou=float(self.output.get("nms_iou") or 0.45),
+        )
+
+    def _run_tpu(self, frame: np.ndarray, orig_shape) -> "Results":
+        preprocessed = self._preprocess_tpu_frame(frame)
+        output = self.forward_tpu_batch([preprocessed])[0]
+        return self.postprocess_tpu_output(output, orig_shape)
+
+    def _dequantize_tensor(self, tensor: np.ndarray) -> np.ndarray:
+        if tensor.dtype == np.float32:
+            return tensor
+
+        default_scale = 255.0 if tensor.dtype == np.uint8 else 127.0
+        scale = float(self.output.get("quant_scale", default_scale))
+
+        return tensor.astype(np.float32) / scale
+
+    def _merge_rknn_outputs(self, raw_outputs: list) -> np.ndarray:
+        if not raw_outputs:
+            return np.empty((0,), dtype=np.float32)
+
+        if len(raw_outputs) == 1:
+            return self._dequantize_tensor(raw_outputs[0])
+
+        if not getattr(self, "_rknn_split_logged", False):
+            self._rknn_split_logged = True
+            shapes = [o.shape for o in raw_outputs]
+            self.logger.info(
+                "RKNN returned %d split output(s) %s — merging before postprocess",
+                len(raw_outputs),
+                shapes,
+            )
+
+        parts: list[np.ndarray] = []
+        for raw in raw_outputs:
+            t = self._dequantize_tensor(raw)
+            if t.ndim == 3:
+                t = t[0]
+            if t.ndim != 2:
+                raise ValueError(f"Expected 2D RKNN output slice, got shape {t.shape}.")
+            # Normalize to features_first (C, N).
+            if t.shape[0] > t.shape[1]:
+                t = t.T
+            parts.append(t)
+
+        box_parts = [p for p in parts if p.shape[0] == 4]
+        other_parts = [p for p in parts if p.shape[0] != 4]
+        ordered = (box_parts + other_parts) if len(box_parts) == 1 else parts
+
+        anchor_counts = {p.shape[1] for p in ordered}
+        if len(anchor_counts) != 1:
+            raise ValueError(
+                f"RKNN split outputs disagree on anchor count: "
+                f"{[p.shape for p in ordered]}"
+            )
+
+        merged = np.concatenate(ordered, axis=0)
+        expected = self._feature_width()
+        if merged.shape[0] > expected:
+            self.logger.debug(
+                "RKNN split outputs merged to %d channels, trimming to expected %d",
+                merged.shape[0],
+                expected,
+            )
+            merged = merged[:expected]
+        elif merged.shape[0] < expected:
+            self.logger.warning(
+                "RKNN split outputs merged to %d channels but expected %d",
+                merged.shape[0],
+                expected,
+            )
+
+        return merged[np.newaxis, ...]
+
+    def _run_rknn(self, preprocessed: np.ndarray, orig_shape) -> Results:
+        raw_outputs = self.model.inference(inputs=[preprocessed])
+        if raw_outputs is None:
+            return Results([], orig_shape)
+
+        tensor = self._merge_rknn_outputs(raw_outputs)
+        if not self._rknn_fmt_checked:
+            self._rknn_fmt_checked = True
+            t = tensor[0] if tensor.ndim == 3 else tensor
+            smaller = min(t.shape[0], t.shape[-1])
+            larger = max(t.shape[0], t.shape[-1])
+            actual_fmt = "hardware_nms" if (smaller == 6 and larger < 1000) else "raw"
+
+            if actual_fmt != self.output["format"]:
+                raise ValueError(
+                    f"RKNN model output shape {tensor.shape} indicates "
+                    f"output.format should be {actual_fmt!r}, but the metadata "
+                    f"sidecar says {self.output['format']!r}. The _metadata.yaml "
+                    f"for this .rknn model is wrong or stale (likely re-exported "
+                    f"without re-running boot.py conversion). Re-run boot.py to "
+                    f"regenerate the sidecar - vision_model output fields are "
+                    f"metadata-only and should never be hand-edited or "
+                    f"auto-corrected at runtime."
+                )
+
+        return self.postprocess([tensor], orig_shape)
+
+    def _run_onnx(self, frame: np.ndarray, orig_shape) -> Results:
+        return self._infer_onnx(self._preprocess_frame(frame), orig_shape)
+
+    def _infer_onnx(self, inp: np.ndarray, orig_shape) -> Results:
+        raw = self.model.run(self._onnx_out_names, {self._onnx_inp_name: inp})
+        raw[0] = self._dequantize_tensor(raw[0])
+        return self.postprocess(raw, orig_shape)
+
+    def _run_tflite(self, frame: np.ndarray, orig_shape) -> Results:
+        return self._infer_tflite(self._preprocess_frame(frame), orig_shape)
+
+    def _infer_tflite(self, inp: np.ndarray, orig_shape) -> Results:
+        self.model.set_tensor(self._tflite_inp["index"], inp)
+        self.model.invoke()
+        raw = [self.model.get_tensor(d["index"]) for d in self._tflite_out]
+        raw[0] = self._dequantize_tensor(raw[0])
+        return self.postprocess(raw, orig_shape)
+
+    def predict_preprocessed(self, preprocessed: np.ndarray, orig_shape) -> Results:
+        if self.model_type == "tpu":
+            output = self.forward_tpu_batch([preprocessed])[0]
+            return self.postprocess_tpu_output(output, orig_shape)
+        if self.model_type == "rknn":
+            return self._run_rknn(preprocessed, orig_shape)
+        if self.model_type == "hailo":
+            return self._run_hailo(preprocessed, orig_shape)
+        if self.model_type == "onnx":
+            return self._infer_onnx(preprocessed, orig_shape)
+        if self.model_type == "tflite":
+            return self._infer_tflite(preprocessed, orig_shape)
+        raise RuntimeError(
+            f"predict_preprocessed is not supported for model_type={self.model_type!r} "
+            "- engine/openvino/coreml/.pt models run through Ultralytics' own "
+            "internal preprocessing and can't accept an externally preprocessed tensor."
+        )
+
+    def postprocess(self, raw_outputs, orig_shape) -> Results:
+        tensor = raw_outputs[0]
+        tensor = self._prepare_output_tensor(tensor)
+        if tensor.size == 0:
+            return Results([], orig_shape)
+        if self.model_type == "hailo":
+            return self._parse_hailo_nms(tensor, orig_shape)
+        if self.output["format"] == "hardware_nms":
+            return self._parse_hardware_nms(tensor, orig_shape)
+        if self.task == "detect":
+            return self._parse_raw_detect(tensor, orig_shape)
+        return self._parse_raw_pose(tensor, orig_shape)
+
+    def _parse_hailo_nms(self, tensor: np.ndarray, orig_shape) -> Results:
+        # Hailo's baked-NMS output is grouped per class: (num_classes,
+        # max_dets, 5) with each row [y1, x1, y2, x2, score] in COORDS
+        # NORMALIZED 0-1 (relative to the network input), not pixels - unlike
+        # the flat (N, 6+) tensor the generic _parse_hardware_nms expects.
+        buf = np.asarray(tensor)
+        # drop a leading singleton batch axis if present
+        while buf.ndim > 2 and buf.shape[0] == 1:
+            buf = buf[0]
+
+        if buf.ndim == 2 and buf.shape[1] == 5:
+            # single-class build already squeezed to (max_dets, 5)
+            per_class = [buf]
+        elif buf.ndim == 3 and buf.shape[1] == 5:
+            # (num_classes, 5, max_dets) layout - move the 5-axis last
+            per_class = [buf[c].T for c in range(buf.shape[0])]
+        elif buf.ndim == 3 and buf.shape[2] == 5:
+            per_class = [buf[c] for c in range(buf.shape[0])]
+        else:
+            raise ValueError(
+                f"Hailo .hef output shape {tensor.shape} doesn't match the "
+                "expected per-class NMS layout (num_classes, max_dets, 5) or "
+                "(num_classes, 5, max_dets). The sidecar metadata or the .hef "
+                "itself may be stale - re-run boot.py conversion."
+            )
+
+        target_w, target_h = self.input_size
+        boxes = []
+        for cls_id, dets in enumerate(per_class):
+            confs = dets[:, 4]
+            finite = np.isfinite(dets[:, :4]).all(axis=1) & np.isfinite(confs)
+            dropped = int((~finite).sum())
+            if dropped:
+                self.logger.debug(
+                    "Dropped %d/%d Hailo detection(s) with non-finite "
+                    "coordinates/confidence (class %d).",
+                    dropped,
+                    len(dets),
+                    cls_id,
+                )
+            valid = dets[(confs >= self.min_conf) & finite]
+            for det in valid:
+                # normalized [y1, x1, y2, x2] -> pixel xyxy in the letterboxed
+                # input, then map back to the original frame
+                y1, x1, y2, x2 = (
+                    float(det[0]),
+                    float(det[1]),
+                    float(det[2]),
+                    float(det[3]),
+                )
+                xyxy = np.array(
+                    [x1 * target_w, y1 * target_h, x2 * target_w, y2 * target_h]
+                )
+                xyxy = self._scale_coords(xyxy, orig_shape, is_kpts=False)
+                boxes.append(Box(xyxy.tolist(), float(det[4]), int(cls_id)))
+        return Results(boxes, orig_shape)
+
+    def _prepare_output_tensor(self, tensor: np.ndarray) -> np.ndarray:
+        while isinstance(tensor, (list, tuple)) and len(tensor) > 0:
+            tensor = tensor[0]
+        if self.model_type == "hailo":
+            # per-class grouped NMS output - keep it exactly as the NPU
+            # produced it; the hailo parser knows its layout
+            self._output_verified = True
+            return tensor
+        if tensor.ndim == 3 and tensor.shape[0] == 1:
+            tensor = tensor[0]
+        if not self._output_verified:
+            self._verify_output_format(tensor)
+        if self.output["format"] == "hardware_nms":
+            return tensor
+
+        feat_w = self._feat_width
+        if self.output["layout"] == "features_first":
+            if tensor.shape[0] == feat_w:
+                tensor = tensor.T
+        return tensor
+
+    def _verify_output_format(self, tensor: np.ndarray) -> None:
+        if tensor.ndim != 2:
+            raise ValueError(f"Expected 2D output tensor, got shape {tensor.shape}.")
+        if self.output["format"] == "hardware_nms":
+            self._output_verified = True
+            return
+        feat_w = self._feature_width()
+        if self.output["layout"] == "features_first":
+            if not (tensor.shape[0] == feat_w or tensor.shape[1] == feat_w):
+                raise ValueError(
+                    f"Tensor shape {tensor.shape} vs feature width {feat_w}."
+                )
+        elif tensor.shape[1] != feat_w:
+            if tensor.shape[0] == feat_w:
+                raise ValueError(
+                    "output.layout is 'anchors_first' but feature dim is on axis 0. "
+                    "Set output.layout to 'features_first'."
+                )
+            raise ValueError(f"Tensor shape {tensor.shape} vs feature width {feat_w}.")
+        self._feat_width = feat_w
+        self._output_verified = True
+
+    def _apply_score_activation(
+        self, scores: np.ndarray, are_logits: bool
+    ) -> np.ndarray:
+        if scores.size == 0 or not are_logits:
+            return scores
+        return 1.0 / (1.0 + np.exp(-np.clip(scores, -88.0, 88.0)))
+
+    def _boxes_from_encoding(self, tensor: np.ndarray) -> np.ndarray:
+        box_coord_scale = self.output.get("box_coord_scale")
+        if self.output["box_format"] == "xyxy":
+            boxes = tensor[:, :4].astype(np.float32)
+            if box_coord_scale is not None:
+                boxes = boxes * box_coord_scale
+            return np.where(np.isfinite(boxes), boxes, np.nan)
+
+        cx = tensor[:, 0].astype(np.float32)
+        cy = tensor[:, 1].astype(np.float32)
+        w = tensor[:, 2].astype(np.float32)
+        h = tensor[:, 3].astype(np.float32)
+        if box_coord_scale is not None:
+            cx = cx * box_coord_scale
+            cy = cy * box_coord_scale
+            w = w * box_coord_scale
+            h = h * box_coord_scale
+
+        boxes = np.full((tensor.shape[0], 4), np.nan, dtype=np.float32)
+        finite = np.isfinite(cx) & np.isfinite(cy) & np.isfinite(w) & np.isfinite(h)
+        if np.any(finite):
+            half_w = np.empty_like(w, dtype=np.float32)
+            half_h = np.empty_like(h, dtype=np.float32)
+            np.divide(w, 2.0, out=half_w, where=np.isfinite(w))
+            np.divide(h, 2.0, out=half_h, where=np.isfinite(h))
+
+            np.subtract(cx, half_w, out=boxes[:, 0], where=finite)
+            np.subtract(cy, half_h, out=boxes[:, 1], where=finite)
+            np.add(cx, half_w, out=boxes[:, 2], where=finite)
+            np.add(cy, half_h, out=boxes[:, 3], where=finite)
+
+        return boxes
+
+    def _scores_from_tensor(self, tensor: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        out = self.output
+        if out["score_mode"] == "objectness":
+            raw = tensor[:, 4]
+            confs = self._apply_score_activation(raw, out["scores_are_logits"])
+            return confs, np.zeros(len(confs), dtype=np.int32)
+        class_scores = tensor[:, 4 : 4 + self.num_classes]
+        class_scores = self._apply_score_activation(
+            class_scores, out["scores_are_logits"]
+        )
+        confs = np.max(class_scores, axis=1)
+        class_ids = np.argmax(class_scores, axis=1)
+        return confs, class_ids
+
+    def _scale_coords(
+        self, coords: np.ndarray, orig_shape, is_kpts=False
+    ) -> np.ndarray:
+        orig_h, orig_w = orig_shape[:2]
+        target_w, target_h = self.input_size
+        scale = min(target_w / orig_w, target_h / orig_h)
+        pad_x = (target_w - int(orig_w * scale)) / 2
+        pad_y = (target_h - int(orig_h * scale)) / 2
+        scaled = coords.copy().astype(np.float32)
+        if not is_kpts:
+            scaled[[0, 2]] = np.clip((scaled[[0, 2]] - pad_x) / scale, 0, orig_w)
+            scaled[[1, 3]] = np.clip((scaled[[1, 3]] - pad_y) / scale, 0, orig_h)
+        else:
+            scaled[:, 0] = (scaled[:, 0] - pad_x) / scale
+            scaled[:, 1] = (scaled[:, 1] - pad_y) / scale
+        return scaled
+
+    def _rvec_to_euler(self, rvec: np.ndarray) -> tuple[float, float, float]:
+        R, _ = cv2.Rodrigues(rvec)
+        sy = math.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
+        if sy > 1e-6:
+            roll = math.atan2(R[2, 1], R[2, 2])
+            pitch = math.atan2(-R[2, 0], sy)
+            yaw = math.atan2(R[1, 0], R[0, 0])
+        else:  # gimbal lock
+            roll = math.atan2(-R[1, 2], R[1, 1])
+            pitch = math.atan2(-R[2, 0], sy)
+            yaw = 0.0
+        return roll, pitch, yaw
+
+    def _rescale_camera_matrix(
+        self, K: np.ndarray, img_w: int, img_h: int
+    ) -> np.ndarray:
+        if img_w <= 0 or img_h <= 0:
+            return K
+        calib_w = 2.0 * float(K[0, 2])
+        calib_h = 2.0 * float(K[1, 2])
+        if calib_w <= 1 or calib_h <= 1:
+            return K
+        sx = img_w / calib_w
+        sy = img_h / calib_h
+        if abs(sx - 1.0) < 1e-3 and abs(sy - 1.0) < 1e-3:
+            return K
+        return np.diag([sx, sy, 1.0]) @ K
+
+    def _solve_pnp(
+        self, keypoints: np.ndarray, img_w: int = 0, img_h: int = 0
+    ) -> tuple[tuple[float, float, float] | None, np.ndarray | None, list | None]:
+        if not self.pnp_config:
+            return None, None, None
+
+        object_points = np.asarray(self.pnp_config["object_points"], dtype=np.float64)
+        camera_matrix = self._rescale_camera_matrix(
+            np.asarray(self.pnp_config["camera_matrix"], dtype=np.float64),
+            img_w,
+            img_h,
+        )
+        dist_coeffs = np.asarray(
+            self.pnp_config.get("dist_coeffs", [0.0, 0.0, 0.0, 0.0, 0.0]),
+            dtype=np.float64,
+        )
+        min_kpt_conf = float(self.pnp_config.get("min_keypoint_conf", 0.5))
+        mode = str(self.pnp_config.get("mode", "flexible")).lower()
+
+        image_points, model_points = [], []
+        for i, pt in enumerate(keypoints):
+            if i >= len(object_points):
+                break
+            if pt[2] < min_kpt_conf:
+                continue
+            image_points.append([float(pt[0]), float(pt[1])])
+            model_points.append(object_points[i])
+
+        if len(image_points) < 4:
+            return None, None, None
+
+        image_points = np.asarray(image_points, dtype=np.float64)
+        model_points = np.asarray(model_points, dtype=np.float64)
+
+        ok, rvec, tvec = cv2.solvePnP(
+            model_points,
+            image_points,
+            camera_matrix,
+            dist_coeffs,
+            flags=cv2.SOLVEPNP_EPNP,
+        )
+        if ok and len(image_points) >= 6:
+            ok_refined, rvec_refined, tvec_refined = cv2.solvePnP(
+                model_points,
+                image_points,
+                camera_matrix,
+                dist_coeffs,
+                rvec,
+                tvec,
+                useExtrinsicGuess=True,
+                flags=cv2.SOLVEPNP_ITERATIVE,
+            )
+            if ok_refined:
+                rvec, tvec = rvec_refined, tvec_refined
+        if not ok:
+            return None, None, None
+
+        tvec = tvec.reshape(3)
+        R, _ = cv2.Rodrigues(rvec)
+
+        if mode == "rigid":
+            # rigid: the fitted pose is the whole story - return the canonical
+            # model transformed by (R, tvec) so keypoints trace the real 3D shape
+            keypoints_3d = [(R @ pt + tvec).tolist() for pt in object_points]
+        else:
+            # flexible/deformable: keep every observed 2D keypoint but inflate it to
+            # 3D on a plane at the shared PnP depth, preserving the detected pose
+            # shape instead of forcing a rigid template
+            depth_z = float(tvec[2])
+            fx = camera_matrix[0, 0]
+            fy = camera_matrix[1, 1]
+            cx = camera_matrix[0, 2]
+            cy = camera_matrix[1, 2]
+            keypoints_3d = []
+            for pt in keypoints:
+                u, v = float(pt[0]), float(pt[1])
+                X = (u - cx) * depth_z / fx
+                Y = (v - cy) * depth_z / fy
+                Z = depth_z
+                keypoints_3d.append([float(X), float(Y), float(Z)])
+
+        euler = self._rvec_to_euler(rvec.reshape(3))
+        return euler, tvec, keypoints_3d
+
+    def _apply_software_nms(
+        self,
+        boxes_xyxy: np.ndarray,
+        confs: np.ndarray,
+        class_ids: np.ndarray,
+        orig_shape,
+        kpts_raw: np.ndarray | None = None,
+    ) -> Results:
+        finite = np.isfinite(boxes_xyxy).all(axis=1) & np.isfinite(confs)
+        dropped = int((~finite).sum())
+        if dropped:
+            self.logger.debug(
+                "Dropped %d/%d raw anchor(s) with non-finite (NaN/Inf) "
+                "box coordinates or confidence before NMS.",
+                dropped,
+                len(boxes_xyxy),
+            )
+        mask = (confs >= self.min_conf) & finite
+        boxes_xyxy = boxes_xyxy[mask]
+        confs = confs[mask]
+        class_ids = class_ids[mask]
+        if kpts_raw is not None:
+            kpts_raw = kpts_raw[mask]
+
+        kept = np.ones(len(boxes_xyxy), dtype=bool)
+        if self.output.get("input_letterbox", False):
+            oh, ow = orig_shape[:2]
+            tw, th = self.input_size
+            scale = min(tw / ow, th / oh)
+            rw, rh = ow * scale, oh * scale
+            px = (tw - rw) / 2.0
+            py = (th - rh) / 2.0
+            xs1 = np.maximum(boxes_xyxy[:, 0], px)
+            ys1 = np.maximum(boxes_xyxy[:, 1], py)
+            xs2 = np.minimum(boxes_xyxy[:, 2], px + rw)
+            ys2 = np.minimum(boxes_xyxy[:, 3], py + rh)
+            inter = np.maximum(0.0, xs2 - xs1) * np.maximum(0.0, ys2 - ys1)
+            areas = (boxes_xyxy[:, 2] - boxes_xyxy[:, 0]) * (
+                boxes_xyxy[:, 3] - boxes_xyxy[:, 1]
+            )
+            interior = inter / np.maximum(areas, 1e-6)
+            kept = interior >= 0.5
+        drop = int((~kept).sum())
+        if drop:
+            self.logger.debug(
+                "Dropped %d/%d detection(s) lying mostly in the letterbox "
+                "padding band.",
+                drop,
+                len(boxes_xyxy),
+            )
+        boxes_xyxy = boxes_xyxy[kept]
+        confs = confs[kept]
+        class_ids = class_ids[kept]
+        if kpts_raw is not None:
+            kpts_raw = kpts_raw[kept]
+
+        if len(boxes_xyxy) == 0:
+            return Results([], orig_shape)
+
+        if not self.output["apply_software_nms"]:
+            return self._pack_detections(
+                boxes_xyxy, confs, class_ids, orig_shape, kpts_raw, None
+            )
+
+        nms_iou = float(self.output["nms_iou"])
+        nms_input = [
+            [float(b[0]), float(b[1]), float(b[2] - b[0]), float(b[3] - b[1])]
+            for b in boxes_xyxy
+        ]
+        indices = cv2.dnn.NMSBoxes(nms_input, confs.tolist(), self.min_conf, nms_iou)
+        indices = indices.flatten() if len(indices) > 0 else []
+        return self._pack_detections(
+            boxes_xyxy, confs, class_ids, orig_shape, kpts_raw, indices
+        )
+
+    def _pack_detections(
+        self,
+        boxes_xyxy: np.ndarray,
+        confs: np.ndarray,
+        class_ids: np.ndarray,
+        orig_shape,
+        kpts_raw: np.ndarray | None,
+        indices,
+    ) -> Results:
+        if indices is None:
+            indices = range(len(boxes_xyxy))
+
+        final_boxes: list[Box] = []
+        final_kpts: list[np.ndarray] = []
+        num_kpts = self.output.get("num_keypoints", 0) if kpts_raw is not None else 0
+        kpt_dims = self.output.get("keypoint_dims", 3) if kpts_raw is not None else 3
+
+        for i in indices:
+            xyxy = self._scale_coords(boxes_xyxy[i], orig_shape, is_kpts=False)
+            translation: list | None = None
+            rotation: tuple | None = None
+            kpt_scaled: np.ndarray | None = None
+            kpts_3d: list | None = None
+
+            if kpts_raw is not None and num_kpts > 0:
+                kpt_set = kpts_raw[i].reshape(num_kpts, kpt_dims)
+                kpt_scaled = self._scale_coords(kpt_set, orig_shape, is_kpts=True)
+
+                if self.pnp_config:
+                    euler, tvec, kpts_3d = self._solve_pnp(
+                        kpt_scaled, orig_shape[1], orig_shape[0]
+                    )
+                    if tvec is not None:
+                        translation = tvec.tolist()
+                    if euler is not None:
+                        rotation = euler  # (roll, pitch, yaw) in radians
+
+            final_boxes.append(
+                Box(
+                    xyxy.tolist(),
+                    float(confs[i]),
+                    int(class_ids[i]),
+                    translation,
+                    rotation,
+                    keypoints_3d=kpts_3d,
+                )
+            )
+            if kpt_scaled is not None:
+                final_kpts.append(kpt_scaled)
+
+        return Results(
+            final_boxes,
+            orig_shape,
+            keypoints=final_kpts if kpts_raw is not None else None,
+        )
+
+    def _parse_hardware_nms(self, tensor: np.ndarray, orig_shape) -> Results:
+        if tensor.ndim == 2 and tensor.shape[0] == 6 and tensor.shape[1] != 6:
+            tensor = tensor.T
+        if tensor.shape[1] < 6:
+            return Results([], orig_shape)
+
+        confs = tensor[:, 4]
+        finite = np.isfinite(tensor[:, :4]).all(axis=1) & np.isfinite(confs)
+        dropped = int((~finite).sum())
+        if dropped:
+            self.logger.debug(
+                "Dropped %d/%d hardware-NMS detection(s) with non-finite "
+                "(NaN/Inf) box coordinates or confidence.",
+                dropped,
+                len(tensor),
+            )
+        valid = tensor[(confs >= self.min_conf) & finite]
+
+        boxes = []
+        for det in valid:
+            xyxy = self._scale_coords(det[:4], orig_shape, is_kpts=False)
+            cls_id = int(det[5]) if det.shape[0] > 5 else 0
+            boxes.append(Box(xyxy.tolist(), float(det[4]), cls_id))
+        return Results(boxes, orig_shape)
+
+    def _parse_raw_detect(self, tensor: np.ndarray, orig_shape) -> Results:
+        boxes_xyxy = self._boxes_from_encoding(tensor)
+        confs, class_ids = self._scores_from_tensor(tensor)
+        return self._apply_software_nms(boxes_xyxy, confs, class_ids, orig_shape)
+
+    def _parse_raw_pose(self, tensor: np.ndarray, orig_shape) -> Results:
+        boxes_xyxy = self._boxes_from_encoding(tensor)
+        confs, class_ids = self._scores_from_tensor(tensor)
+
+        score_cols = (
+            1 if self.output["score_mode"] == "objectness" else self.num_classes
+        )
+        kpts_start = 4 + score_cols
+        kpts_raw = tensor[:, kpts_start:]
+        expected = self.output["num_keypoints"] * self.output["keypoint_dims"]
+        if kpts_raw.shape[1] != expected:
+            raise ValueError(
+                f"Pose keypoint columns {kpts_raw.shape[1]} != expected {expected}."
+            )
+
+        kpt_coord_scale = self.output.get("kpt_coord_scale")
+        if kpt_coord_scale is not None:
+            kd = self.output["keypoint_dims"]
+            kpts_raw = kpts_raw.astype(np.float32, copy=True)
+            for k in range(0, kpts_raw.shape[1], kd):
+                kpts_raw[:, k] *= kpt_coord_scale  # x
+                kpts_raw[:, k + 1] *= kpt_coord_scale  # y
+                # k+2 (confidence) intentionally left unscaled
+
+        if self.output["keypoint_scores_are_logits"]:
+            kd = self.output["keypoint_dims"]
+            for k in range(2, kpts_raw.shape[1], kd):
+                kpts_raw[:, k] = self._apply_score_activation(kpts_raw[:, k], True)
+
+        return self._apply_software_nms(
+            boxes_xyxy, confs, class_ids, orig_shape, kpts_raw=kpts_raw
+        )
+
+    def _convert_ultralytics_to_results(self, ultralytics_result) -> Results:
+        boxes = []
+        _is_torch = False
+        for b in ultralytics_result.boxes:
+            xyxy = b.xyxy
+            if not _is_torch:
+                _is_torch = hasattr(xyxy, "cpu")
+            if _is_torch:
+                xyxy = xyxy.cpu().numpy()
+                conf = b.conf.cpu().item()
+                cls_id = b.cls.cpu().item() if hasattr(b, "cls") else 0
+            else:
+                xyxy = np.asarray(xyxy)
+                conf = float(np.asarray(b.conf).item())
+                cls_id = int(np.asarray(b.cls).item()) if hasattr(b, "cls") else 0
+            xyxy = xyxy[0] if xyxy.ndim > 1 else xyxy
+            boxes.append(Box(xyxy.tolist(), conf, cls_id))
+
+        keypoints_list = []
+        kpt_data = getattr(ultralytics_result, "keypoints", None)
+        if kpt_data is not None and kpt_data.data is not None:
+            kpt_arrs = (
+                kpt_data.data.cpu().numpy()
+                if hasattr(kpt_data.data, "cpu")
+                else np.asarray(kpt_data.data)
+            )
+            oshape = getattr(ultralytics_result, "orig_shape", None)
+            img_w = int(oshape[1]) if oshape is not None and len(oshape) > 1 else 0
+            img_h = int(oshape[0]) if oshape is not None else 0
+            for i, kpt_set in enumerate(kpt_arrs):
+                kpt_arr = np.asarray(kpt_set)
+                if self.pnp_config and len(boxes) == len(kpt_arrs):
+                    idx = len(keypoints_list)
+                    euler, tvec, kpts_3d = self._solve_pnp(kpt_arr, img_w, img_h)
+                    if euler is not None:
+                        boxes[idx].rotation = euler
+                    if tvec is not None:
+                        boxes[idx].translation = tvec.tolist()
+                    if kpts_3d is not None:
+                        boxes[idx].keypoints_3d = kpts_3d
+                keypoints_list.append(kpt_arr)
+
+        return Results(boxes, ultralytics_result.orig_shape, keypoints_list or None)
+
+    def release(self):
+        if self.model_type == "rknn":
+            self.model.release()
+        elif self.model_type == "onnx":
+            del self.model  # ORT session has no explicit close; drop the ref
+            if self._onnx_pool is not None:
+                self._onnx_pool.stop()
+        elif self.model_type == "tflite":
+            del self.model
+        elif self.model_type == "hailo":
+            act = getattr(self, "_hailo_activation", None)
+            if act is not None:
+                try:
+                    act.__exit__(None, None, None)
+                except Exception:
+                    pass
+            vdevice = getattr(self, "_hailo_vdevice", None)
+            if vdevice is not None:
+                try:
+                    vdevice.release()
+                except Exception:
+                    pass
+        elif self.model_type in ("engine", "openvino"):
+            # drop refs to free the CUDA context / compiled blob
+            del self.model
+        pool = getattr(self, "_pool", None)
+        if pool is not None:
+            pool.stop()

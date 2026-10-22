@@ -1,0 +1,199 @@
+import time
+import math
+
+from iSpy.vision.pipelines.base import VisionPipeline
+from iSpy.vision.Object import Object
+from iSpy.vision import triangulation
+import cv2
+import numpy as np
+import logging
+import threading
+from iSpy.config.iSpyConfig import _INCHES_TO_OUTPUT_UNIT
+
+
+class MultipleCameraHandler:
+    def __init__(self, cameras: list[VisionPipeline], config=None):
+        self.cameras = cameras
+        self.logger = logging.getLogger(__name__)
+        self._stopped = False
+        self._max_residual = (
+            config.get("triangulation_max_residual", 0.5) if config else 0.5
+        )
+        self._match_gate = (
+            config.get("triangulation_match_distance", 2.0) if config else 2.0
+        )
+        # Ray geometry and max_residual are in inches; detections and the
+        # match-distance gate are in the configured output unit.
+        unit = str((config or {}).get("unit", "frc")).lower().strip()
+        self._inches_to_output_unit = _INCHES_TO_OUTPUT_UNIT.get(
+            unit, _INCHES_TO_OUTPUT_UNIT["frc"]
+        )
+
+        self._objects: list[list[Object]] = [[] for _ in cameras]
+        self._frames = [None] * len(cameras)
+        self._locks = [threading.Lock() for _ in cameras]
+        self._fresh = [threading.Event() for _ in cameras]
+        self._stop_events = [threading.Event() for _ in cameras]
+        self._threads = []
+
+        for i, cam in enumerate(cameras):
+            self._threads.append(
+                threading.Thread(target=self._camera_loop, args=(i, cam), daemon=True)
+            )
+            self._threads[-1].start()
+
+    def _camera_loop(self, i: int, camera: VisionPipeline):
+        stop_event = self._stop_events[i]
+        last_timestamp = None
+        while not self._stopped and not stop_event.is_set():
+            # Synchronous pipelines (AprilTag, QR, optical flow, yolo_world,
+            # depth) return the moment they have processed the current frame.
+            # Without waiting for the camera to publish a new one they reprocess
+            # the same frame and peg a core. Async pipelines that queue their
+            # own work (object_detection) block until a fresh frame is ready, so
+            # by the time they return the timestamp has moved and this gate is a
+            # no-op for them.
+            if getattr(camera, "is_image", False):
+                # static source - pace instead of hot-looping on the one frame
+                time.sleep(0.01)
+            else:
+                timestamp = getattr(camera, "frame_timestamp", None)
+                if timestamp is not None and timestamp == last_timestamp:
+                    time.sleep(0.005)
+                    continue
+                last_timestamp = timestamp
+            try:
+                if camera.in_calibration_mode():
+                    objects, frame = [], camera.get_raw_frame()
+                else:
+                    objects, frame = camera.run()
+                if frame is None:
+                    objects, frame = [], camera.get_frame()
+            except Exception as e:
+                self.logger.warning(f"Camera {camera.source} error: {e}")
+                objects, frame = [], camera.get_frame()
+                time.sleep(0.05)  # Dont starve CPU
+            try:
+                with self._locks[i]:
+                    self._objects[i] = objects if objects is not None else []
+                    self._frames[i] = frame
+                self._fresh[i].set()
+            except Exception:
+                pass
+
+    def predict(self) -> list[Object]:
+        for event in self._fresh:
+            if not event.wait(timeout=0.2):
+                self.logger.debug("Camera timed out waiting for fresh frame")
+            event.clear()
+
+        per_camera: list[list[Object]] = []
+        for i in range(len(self.cameras)):
+            with self._locks[i]:
+                per_camera.append(list(self._objects[i]))
+
+        return self._merge_with_triangulation(per_camera)
+
+    def _merge_with_triangulation(
+        self, per_camera: list[list["Object"]]
+    ) -> list["Object"]:
+        used: set[tuple[int, int]] = set()
+        merged: list[Object] = []
+
+        for cam_a in range(len(per_camera)):
+            for idx_a, obj_a in enumerate(per_camera[cam_a]):
+                if (cam_a, idx_a) in used:
+                    continue
+                best = None  # (residual, cam_b, idx_b, point)
+                if obj_a.ray_origin is not None:
+                    for cam_b in range(cam_a + 1, len(per_camera)):
+                        for idx_b, obj_b in enumerate(per_camera[cam_b]):
+                            if (cam_b, idx_b) in used:
+                                continue
+                            if obj_b.name != obj_a.name or obj_b.ray_origin is None:
+                                continue
+                            rough = math.hypot(obj_a.x - obj_b.x, obj_a.y - obj_b.y)
+                            if rough > self._match_gate:
+                                continue
+                            ray_a = triangulation.Ray(
+                                obj_a.ray_origin, obj_a.ray_direction
+                            )
+                            ray_b = triangulation.Ray(
+                                obj_b.ray_origin, obj_b.ray_direction
+                            )
+                            result = triangulation.closest_point_between_rays(
+                                ray_a, ray_b, max_residual=self._max_residual
+                            )
+                            if result is None:
+                                continue
+                            point, residual = result
+                            if best is None or residual < best[0]:
+                                best = (residual, cam_b, idx_b, point)
+
+                if best is not None:
+                    residual, cam_b, idx_b, point = best
+                    obj_a.x, obj_a.y, obj_a.z = (
+                        float(point[0]) * self._inches_to_output_unit,
+                        float(point[1]) * self._inches_to_output_unit,
+                        float(point[2]) * self._inches_to_output_unit,
+                    )
+                    obj_a.depth_source = "triangulated"
+                    used.add((cam_b, idx_b))
+
+                used.add((cam_a, idx_a))
+                merged.append(obj_a)
+
+        return merged
+
+    def get_combined_frame(self, display_width=640):
+        frames = []
+        for i, cam in enumerate(self.cameras):
+            with self._locks[i]:
+                f = self._frames[i]
+            if f is None:
+                f = cam.get_frame()
+            if f is not None:
+                frames.append(f.copy())
+
+        if not frames:
+            return None
+        if len(frames) == 1:
+            f = frames[0]
+        else:
+            target_h = min(f.shape[0] for f in frames)
+            resized = []
+            for f in frames:
+                h, w = f.shape[:2]
+                if h != target_h:
+                    new_w = int(w * (target_h / h))
+                    f = cv2.resize(f, (new_w, target_h), interpolation=cv2.INTER_AREA)
+                resized.append(f)
+            f = np.hstack(resized)
+
+        h, w = f.shape[:2]
+        if w > display_width:
+            scale = display_width / w
+            f = cv2.resize(
+                f, (display_width, int(h * scale)), interpolation=cv2.INTER_AREA
+            )
+        return f
+
+    def get_camera_frames(self) -> dict[str, np.ndarray]:
+        result = {}
+        for i, cam in enumerate(self.cameras):
+            with self._locks[i]:
+                f = self._frames[i]
+            if f is None:
+                continue
+            name = (
+                cam.config.get("name", f"Camera {i + 1}")
+                if hasattr(cam, "config")
+                else f"Camera {i + 1}"
+            )
+            result[name] = f.copy()
+        return result
+
+    def destroy(self):
+        self._stopped = True
+        for cam in self.cameras:
+            cam.destroy()

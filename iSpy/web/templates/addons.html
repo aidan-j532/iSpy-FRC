@@ -1,0 +1,777 @@
+{% extends "base.html" %}
+{% block title %}Add-ons - iSpy{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Add-ons</h1>
+  <p class="page-sub">Trackers, utilities, and frame processors that extend vision.
+    Changes take effect after the vision service restarts (Dashboard &rarr; Restart).</p>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h3>New Add-on</h3>
+    <div class="addon-new-tabs">
+      <button class="settings-tab active" onclick="switchNewTab('upload', this)">Upload File</button>
+      <button class="settings-tab" onclick="switchNewTab('paste', this)">Write Code</button>
+    </div>
+  </div>
+
+  <div id="new-upload">
+    <div class="form-row">
+      <span class="form-label">Kind</span>
+      <select id="upload-type" class="form-input">
+        <option value="tracker">Tracker</option>
+        <option value="utility">Utility</option>
+        <option value="frame_processor">Frame Processor</option>
+      </select>
+    </div>
+    <div class="upload-zone" id="upload-zone">
+      <div>Drop a .py file here or click to upload</div>
+      <input type="file" id="addon-file-input" accept=".py" style="display:none;">
+    </div>
+  </div>
+
+  <div id="new-paste" style="display:none;">
+    <div class="form-row">
+      <span class="form-label">Kind</span>
+      <select id="paste-type" class="form-input">
+        <option value="tracker">Tracker</option>
+        <option value="utility">Utility</option>
+        <option value="frame_processor">Frame Processor</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Filename</span>
+      <input id="paste-filename" class="form-input" type="text" placeholder="e.g. april_tag_tracker">
+    </div>
+    <textarea id="paste-code" class="raw-editor" style="height:36vh;" placeholder="from iSpy.plugins.bases import TrackerBase
+
+class YourTracker(TrackerBase):
+    plugin_name = &quot;my_tracker&quot;
+    def update(self, detections, robot_x, robot_y, robot_yaw, robot_z=0.0):
+        return detections"></textarea>
+    <div style="margin-top:8px;">
+      <button onclick="submitPasted()">Save Add-on</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h3>Add-ons</h3>
+    <div class="addon-toolbar">
+      <input id="addon-search" class="form-input addon-search" type="text" placeholder="Search add-ons&hellip;">
+      <select id="addon-type-filter" class="form-input addon-type-filter">
+        <option value="">All types</option>
+        <option value="tracker">Tracker</option>
+        <option value="utility">Utility</option>
+        <option value="frame_processor">Frame Processor</option>
+        <option value="vision_pipeline">Vision Pipeline</option>
+      </select>
+      <span id="addon-count" class="text-dim text-sm"></span>
+    </div>
+  </div>
+  <div id="addon-list"></div>
+</div>
+
+<div id="source-modal" class="modal-overlay" style="display:none;">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>Source: <span id="source-name"></span></h3>
+      <button class="modal-close" onclick="closeSource()">&times;</button>
+    </div>
+    <pre id="source-view" class="source-view"></pre>
+  </div>
+</div>
+
+<div id="delete-addon-modal" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <h3>Delete Add-on</h3>
+    <p>Delete <strong id="del-addon-name"></strong>? This removes the file and disables it if active.</p>
+    <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeDeleteAddonModal()">Cancel</button>
+        <button class="btn-danger" onclick="confirmDeleteAddon()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let allAddons = [];
+let loaded = {};
+let pendingDeleteAddon = null;
+let lastSnapshot = null;
+let visionRunning = false;
+let hasLoadedAddons = false;
+window._publishSources = [];
+
+const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const jsStr = s => String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+const TYPE_LABELS = { frame_processor: 'frame processor', vision_pipeline: 'vision pipeline' };
+
+function typeBadge(type) {
+  const label = TYPE_LABELS[type] || type;
+  return `<span class="plugin-pill pill-${type}">${label}</span>`;
+}
+
+function statusDot(status) {
+  if (status === 'running' || status === 'active' || status === 'idle' || status === 'ready') return 'status-dot status-ok';
+  return 'status-dot status-bad';
+}
+
+function switchNewTab(name, btn) {
+  document.querySelectorAll('#new-upload, #new-paste').forEach(el => el.style.display = 'none');
+  document.getElementById('new-' + name).style.display = '';
+  btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function matchesFilter(p) {
+  const q = document.getElementById('addon-search').value.trim().toLowerCase();
+  const t = document.getElementById('addon-type-filter').value;
+  if (t && p.type !== t) return false;
+  if (!q) return true;
+  return `${p.name} ${p.type} ${p.doc || ''}`.toLowerCase().includes(q);
+}
+
+// one switch for a whole group - turns em all on/off at once
+function groupSwitchHtml(gname, addons) {
+  const toggles = addons.filter(p => p.type !== 'vision_pipeline');
+  const allOn = toggles.length > 0 && toggles.every(p => p.enabled);
+  const anyOn = toggles.some(p => p.enabled);
+  const indeterminate = anyOn && !allOn;
+  return `<label class="switch addon-group-switch" title="${allOn ? 'Disable all in this group' : 'Enable all in this group'}">
+    <input type="checkbox" ${allOn ? 'checked' : ''} data-indet="${indeterminate ? '1' : '0'}" onchange="toggleGroup('${jsStr(gname)}', this.checked)">
+    <span class="slider"></span>
+  </label>`;
+}
+
+function settingsFields(schema, current) {
+  const keys = Object.keys(schema);
+  if (keys.length === 0) {
+    return '<p class="text-dim text-sm">This add-on has no settings beyond being enabled.</p>';
+  }
+  return keys.map(key => {
+    const def = schema[key] || {};
+    const label = esc(def.label || key);
+    const hint = def.hint ? `<small class="text-dim">${esc(def.hint)}</small>` : '';
+    const value = (key in current) ? current[key] : def.default;
+
+    if (def.type === 'list') {
+      return renderListField(key, def, value || []);
+    }
+
+    if (def.type === 'toggle') {
+      return `<label class="form-row settings-toggle-row">
+        <input type="checkbox" class="toggle-input" data-key="${key}" data-type="toggle" ${value ? 'checked' : ''}>
+        <span><strong>${label}</strong> ${hint}</span>
+      </label>`;
+    }
+    const inputType = def.type === 'number' ? 'number' : 'text';
+    return `<div class="form-row">
+      <span class="form-label">${label}</span>
+      <input class="form-input" type="${inputType}" data-key="${key}" data-type="${def.type || 'text'}"
+        value="${esc(value == null ? '' : String(value))}" step="any">
+      ${hint}
+    </div>`;
+  }).join('');
+}
+
+// select options come from the schema, or from the live publish-sources API
+// for fields marked options_source (declared utility outputs + core sources)
+function fieldOptions(fdef, val) {
+  let opts;
+  if (fdef.options_source === 'publish_sources') {
+    opts = (window._publishSources || []).map(s => ({
+      v: s.source,
+      t: (s.duplicate ? '\u26a0 ' : '') + (s.label || s.source),
+    }));
+  } else {
+    opts = (fdef.options || []).map(o => ({ v: o, t: o }));
+  }
+  if (val && !opts.some(o => o.v === val)) {
+    opts.push({ v: val, t: val + ' (saved)' });
+  }
+  return opts;
+}
+
+function listRowHtml(key, fields, row, ri) {
+  const cells = Object.keys(fields).map(fk => {
+    const fdef = fields[fk] || {};
+    const val = row[fk] != null ? row[fk] : (fdef.default || '');
+    if (fdef.type === 'select') {
+      const opts = fieldOptions(fdef, val).map(o =>
+        `<option value="${esc(o.v)}" ${o.v === val ? 'selected' : ''}>${esc(o.t)}</option>`
+      ).join('');
+      return `<td><select class="form-input list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="select">${opts}</select></td>`;
+    }
+    if (fdef.type === 'toggle') {
+      return `<td><input type="checkbox" class="list-cell" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="toggle" ${val ? 'checked' : ''}></td>`;
+    }
+    const inputType = fdef.type === 'number' ? 'number' : 'text';
+    return `<td><input class="form-input list-cell" type="${inputType}" data-key="${key}" data-row="${ri}" data-field="${fk}" data-field-type="${fdef.type || 'text'}" value="${esc(val == null ? '' : String(val))}" step="any"></td>`;
+  }).join('');
+  return `<tr>${cells}<td><button class="btn-sm btn-bad" onclick="removeListRow(this)" title="Remove">&times;</button></td></tr>`;
+}
+
+function renderListField(key, def, rows) {
+  const fields = def.fields || {};
+  const fieldKeys = Object.keys(fields);
+  if (fieldKeys.length === 0) return '';
+
+  const headerCells = fieldKeys.map(fk => {
+    const fdef = fields[fk] || {};
+    return `<th>${esc(fdef.label || fk)}</th>`;
+  }).join('');
+
+  const rowsHtml = rows.map((row, ri) => listRowHtml(key, fields, row, ri)).join('');
+
+  return `<div class="form-row" style="flex-direction:column;gap:4px;">
+    <span class="form-label">${esc(def.label || key)}</span>
+    ${def.hint ? `<small class="text-dim">${esc(def.hint)}</small>` : ''}
+    <div style="overflow-x:auto;">
+      <table class="list-table" data-list-key="${key}">
+        <thead><tr>${headerCells}<th></th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    <button class="btn-sm" onclick="addListRow('${jsStr(key)}')" type="button">+ Add</button>
+  </div>`;
+}
+
+window.addListRow = function(key) {
+  const table = document.querySelector(`.list-table[data-list-key="${CSS.escape(key)}"]`);
+  if (!table) return;
+  // find schema from the parent panel's addon data
+  const panel = table.closest('.addon-settings-panel');
+  const addonKey = panel ? panel.dataset.addon : '';
+  const parts = addonKey.split('::');
+  const addonName = parts[1] || '';
+  const addonType = parts[0] || '';
+  const addon = allAddons.find(a => a.name === addonName && a.type === addonType);
+  if (!addon) return;
+  const def = (addon.config_schema || {})[key];
+  if (!def || !def.fields) return;
+  const fields = def.fields;
+  const fieldKeys = Object.keys(fields);
+  const newRow = {};
+  for (const fk of fieldKeys) {
+    newRow[fk] = fields[fk].default != null ? fields[fk].default : '';
+  }
+  const tbody = table.querySelector('tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = listRowHtml(key, fields, newRow, tbody.rows.length);
+  tbody.appendChild(tr);
+};
+
+window.removeListRow = function(btn) {
+  btn.closest('tr').remove();
+};
+
+function renderRow(p) {
+  const key = `${p.type}::${p.name}`;
+  const isPipeline = p.type === 'vision_pipeline';
+  const schema = p.config_schema || {};
+  const hasSettings = !isPipeline && !p.template && Object.keys(schema).length > 0;
+  const status = isPipeline ? null : (loaded[`${p.type}/${p.name}`] || null);
+
+  let statusHtml = '';
+  if (status) {
+    statusHtml = `<span class="addon-status"><span class="${statusDot(status)}"></span><span>${esc(status)}</span></span>`;
+  } else if (p.enabled && !isPipeline && visionRunning && hasLoadedAddons) {
+    statusHtml = `<span class="addon-status"><span class="status-dot status-warn"></span><span title="Enabled in config - loads after a vision restart">pending restart</span></span>`;
+  }
+
+  const builtinPill = p.builtin
+    ? `<span class="builtin-pill" title="${isPipeline ? 'Bundled with iSpy - selected per camera in Camera settings' : 'Bundled with iSpy'}">built-in</span>`
+    : '';
+
+  const betaPill = p.beta
+    ? `<span class="builtin-pill beta-pill" title="Experimental - may change or misbehave">beta</span>`
+    : '';
+
+  const warnPill = (p.pipeline_warning && p.pipeline_warning.length)
+    ? `<span class="builtin-pill beta-pill" title="This add-on declares support for: ${(p.supported_pipelines || []).join(', ') || '(none)'}. Camera(s) currently run: ${p.pipeline_warning.join(', ')}.">pipeline mismatch</span>`
+    : '';
+
+  const net = p.network || {};
+  let netPill = '';
+  if (net.skipped) {
+    netPill = `<span class="builtin-pill beta-pill" title="Offline mode skipped this add-on: ${esc((net.critical || []).join(' '))}">skipped: offline</span>`;
+  } else if (net.degraded) {
+    netPill = `<span class="builtin-pill beta-pill" title="Offline mode disabled a feature: ${esc((net.optional || []).join(' '))}">partially offline</span>`;
+  } else if (net.needs_internet) {
+    const why = esc((net.critical || []).concat(net.optional || []).join(' '));
+    netPill = `<span class="builtin-pill beta-pill" title="Needs the internet: ${why}">needs internet</span>`;
+  }
+
+  const toggle = isPipeline ? '' : `
+    <label class="switch" title="${p.enabled ? 'Disable' : 'Enable'}">
+      <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlugin('${jsStr(p.name)}','${p.type}',this.checked)">
+      <span class="slider"></span>
+    </label>`;
+
+  const actions = [];
+  if (p.enabled && hasSettings) {
+    actions.push(`<button class="btn-sm" onclick="toggleSettings('${jsStr(p.name)}','${p.type}')" title="Edit settings">Settings</button>`);
+  }
+  if (!isPipeline) {
+    actions.push(`<button class="btn-sm" onclick="viewSource('${p.type}','${jsStr(p.name)}')" title="View source">Code</button>`);
+  }
+  if (!p.builtin && !isPipeline) {
+    actions.push(`<button class="btn-sm btn-bad" onclick="openDeleteAddonModal('${p.type}','${jsStr(p.filename || p.name)}','${jsStr(p.name)}')" title="Delete">Delete</button>`);
+  }
+
+  const panel = (p.enabled && hasSettings) ? `
+    <div class="addon-settings-panel" data-addon="${key}" style="display:none;">
+      <div class="addon-settings-inner">
+        <div class="addon-settings-title">Settings &mdash; ${esc(p.name)}</div>
+        ${settingsFields(schema, p.settings || {})}
+        <div class="addon-settings-actions">
+          <button class="btn-ok" onclick="saveSettings('${jsStr(p.name)}','${p.type}')">Save Settings</button>
+          <button onclick="closeSettings('${key}')">Cancel</button>
+        </div>
+      </div>
+    </div>` : '';
+
+  return `
+  <div class="addon-row ${p.enabled ? 'is-enabled' : ''}">
+    <div class="addon-row-main ${toggle ? '' : 'no-toggle'}">
+      ${toggle}
+      <div class="addon-info">
+        <div class="addon-title">
+          <strong class="addon-name">${esc(p.name)}</strong>
+          ${typeBadge(p.type)}
+          ${builtinPill}
+          ${betaPill}
+          ${warnPill}
+          ${netPill}
+        </div>
+        ${p.doc && !p.template ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
+      </div>
+      <div class="addon-right">
+        ${statusHtml}
+        <div class="addon-actions">${actions.join('')}</div>
+      </div>
+    </div>
+    ${panel}
+  </div>`;
+}
+
+function stashOpenPanels() {
+  const open = {};
+  document.querySelectorAll('.addon-settings-panel').forEach(panel => {
+    if (panel.style.display === 'none') return;
+    const vals = {};
+    panel.querySelectorAll('[data-key]').forEach(el => {
+      vals[el.dataset.key] = el.type === 'checkbox' ? el.checked : el.value;
+    });
+    // stash list-type settings as JSON strings for round-trip preservation
+    panel.querySelectorAll('.list-table').forEach(table => {
+      const listKey = table.dataset.listKey;
+      if (!listKey) return;
+      const rows = [];
+      table.querySelectorAll('tbody tr').forEach(tr => {
+        const row = {};
+        tr.querySelectorAll('.list-cell').forEach(cell => {
+          const fk = cell.dataset.field;
+          const ft = cell.dataset.fieldType;
+          row[fk] = ft === 'toggle' ? cell.checked : cell.value;
+        });
+        rows.push(row);
+      });
+      vals[listKey] = rows;
+    });
+    open[panel.dataset.addon] = vals;
+  });
+  return open;
+}
+
+function restoreOpenPanels(open) {
+  Object.entries(open).forEach(([key, vals]) => {
+    const panel = document.querySelector(`.addon-settings-panel[data-addon="${CSS.escape(key)}"]`);
+    if (!panel) return;
+    panel.style.display = '';
+    Object.entries(vals).forEach(([k, v]) => {
+      if (Array.isArray(v)) {
+        restoreListSetting(panel, k, v);
+        return;
+      }
+      const el = panel.querySelector(`[data-key="${k}"]`);
+      if (!el) return;
+      if (el.type === 'checkbox') el.checked = !!v;
+      else el.value = String(v);
+    });
+  });
+}
+
+function restoreListSetting(panel, key, rowsData) {
+  const table = panel.querySelector(`.list-table[data-list-key="${CSS.escape(key)}"]`);
+  if (!table) return;
+  const parts = (panel.dataset.addon || '').split('::');
+  const addon = allAddons.find(a => a.name === parts[1] && a.type === parts[0]);
+  if (!addon) return;
+  const def = (addon.config_schema || {})[key];
+  if (!def || !def.fields) return;
+  const tbody = table.querySelector('tbody');
+  const existing = Array.from(tbody.rows);
+  for (let r = 0; r < rowsData.length; r++) {
+    const rowData = rowsData[r] || {};
+    const tr = existing[r] || document.createElement('tr');
+    if (!existing[r]) {
+      tr.innerHTML = listRowHtml(key, def.fields, rowData, r);
+      tbody.appendChild(tr);
+    } else {
+      tr.querySelectorAll('.list-cell').forEach(cell => {
+        const fk = cell.dataset.field;
+        if (!(fk in rowData)) return;
+        if (cell.type === 'checkbox') cell.checked = !!rowData[fk];
+        else cell.value = rowData[fk] == null ? '' : String(rowData[fk]);
+      });
+    }
+  }
+  while (tbody.rows.length > rowsData.length) tbody.deleteRow(-1);
+}
+
+function renderList() {
+  const list = allAddons.filter(matchesFilter);
+  const container = document.getElementById('addon-list');
+  const count = document.getElementById('addon-count');
+  count.textContent = `${list.length} of ${allAddons.length}`;
+  const openVals = stashOpenPanels();
+  if (list.length === 0) {
+    container.innerHTML = '<div class="empty-state">No add-ons found.</div>';
+    restoreOpenPanels(openVals);
+    return;
+  }
+  const groups = {};
+  const ungrouped = [];
+  list.forEach(p => {
+    if (p.group) {
+      groups[p.group] = groups[p.group] || [];
+      groups[p.group].push(p);
+    } else {
+      ungrouped.push(p);
+    }
+  });
+  const parts = [];
+  Object.keys(groups).sort().forEach(gname => {
+    const addons = groups[gname];
+    const enabledCount = addons.filter(p => p.enabled).length;
+    parts.push(`<details class="addon-group" open>
+  <summary class="addon-group-summary">${esc(gname)} <span class="text-dim text-sm">${enabledCount}/${addons.length} enabled</span> ${groupSwitchHtml(gname, addons)}</summary>
+  <div class="addon-group-body">${addons.map(renderRow).join('')}</div>
+</details>`);
+  });
+  parts.push(ungrouped.map(renderRow).join(''));
+  container.innerHTML = parts.join('');
+  // mark partial sections (some on, some off) as halfway
+  container.querySelectorAll('.addon-group-switch input[data-indet="1"]').forEach(el => {
+    el.indeterminate = true;
+  });
+  restoreOpenPanels(openVals);
+}
+
+// avoid clobbering the user's in-flight focus/caret during a background poll
+function userIsTyping() {
+  const el = document.activeElement;
+  if (!el) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+}
+
+async function loadStatus(force) {
+  try {
+    const [statusResp, availResp, sourcesResp] = await Promise.all([
+      fetch('/api/plugins/status').then(r => r.json()),
+      fetch('/api/plugins/available').then(r => r.json()),
+      fetch('/api/plugins/publish-sources').then(r => r.json()).catch(() => ({ sources: [] })),
+    ]);
+    window._publishSources = sourcesResp.sources || [];
+    const snapshot = JSON.stringify([
+      statusResp.plugins || [], availResp.available || [], window._publishSources,
+    ]);
+    if (!force && snapshot === lastSnapshot) return;
+    lastSnapshot = snapshot;
+    loaded = {};
+    const pluginsResp = statusResp.plugins || [];
+    pluginsResp.forEach(p => { loaded[`${p.type}/${p.name}`] = p.status; });
+    visionRunning = (statusResp.vision_running !== undefined)
+      ? !!statusResp.vision_running
+      : pluginsResp.length > 0;
+    hasLoadedAddons = pluginsResp.length > 0;
+    allAddons = availResp.available || [];
+    if (!force && userIsTyping()) return; // keep focus during background tick
+    renderList();
+  } catch (e) {
+    console.error('Failed to load add-ons', e);
+  }
+}
+
+function toggleSettings(name, type) {
+  const key = `${type}::${name}`;
+  const panel = document.querySelector(`.addon-settings-panel[data-addon="${CSS.escape(key)}"]`);
+  if (!panel) return;
+  const opening = panel.style.display === 'none';
+  closeAllSettings();
+  if (opening) {
+    panel.style.display = '';
+    panel.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function closeAllSettings() {
+  document.querySelectorAll('.addon-settings-panel').forEach(p => p.style.display = 'none');
+}
+
+function closeSettings(key) {
+  const panel = document.querySelector(`.addon-settings-panel[data-addon="${CSS.escape(key)}"]`);
+  if (panel) panel.style.display = 'none';
+}
+
+async function saveSettings(name, type) {
+  const key = `${type}::${name}`;
+  const panel = document.querySelector(`.addon-settings-panel[data-addon="${CSS.escape(key)}"]`);
+  if (!panel) return;
+  const settings = {};
+  let invalid = false;
+  panel.querySelectorAll('[data-key]').forEach(el => {
+    const k = el.dataset.key;
+    const stype = el.dataset.type;
+    if (stype === 'toggle') {
+      settings[k] = el.checked;
+    } else if (stype === 'number') {
+      const v = el.value.trim();
+      if (v !== '') {
+        const n = Number(v);
+        if (!Number.isFinite(n)) {
+          invalid = true;
+          showToast(`'${k}' must be a number`, 'error');
+          return;
+        }
+        settings[k] = n;
+      } else {
+        settings[k] = el.value;
+      }
+    } else if (stype !== 'list') {
+      settings[k] = el.value;
+    }
+  });
+  // collect list-type settings from their tables
+  panel.querySelectorAll('.list-table').forEach(table => {
+    const listKey = table.dataset.listKey;
+    if (!listKey) return;
+    const rows = [];
+    table.querySelectorAll('tbody tr').forEach(tr => {
+      const row = {};
+      tr.querySelectorAll('.list-cell').forEach(cell => {
+        const fk = cell.dataset.field;
+        const ft = cell.dataset.fieldType;
+        if (ft === 'toggle') {
+          row[fk] = cell.checked;
+        } else if (ft === 'number') {
+          const v = cell.value.trim();
+          row[fk] = v !== '' ? Number(v) : '';
+        } else {
+          row[fk] = cell.value;
+        }
+      });
+      rows.push(row);
+    });
+    settings[listKey] = rows;
+  });
+  if (invalid) return;
+  try {
+    const r = await fetch('/api/plugins/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type, settings }),
+    });
+    const j = await r.json();
+    if (r.ok) {
+      showToast('Settings saved - takes effect after vision restarts', 'success');
+    } else {
+      showToast(j.error || 'Failed to save settings', 'error');
+    }
+  } catch (e) {
+    showToast('Request failed', 'error');
+  }
+  closeSettings(key);
+  loadStatus(true);
+}
+
+async function togglePlugin(name, type, enable) {
+  try {
+    const r = await fetch('/api/plugins/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type, enable }),
+    });
+    const j = await r.json();
+    if (r.ok) {
+      showToast(`${name} ${enable ? 'enabled' : 'disabled'} - takes effect after vision restarts`, 'success');
+    } else {
+      showToast(j.error || 'Toggle failed', 'error');
+    }
+  } catch (e) {
+    showToast('Request failed', 'error');
+  }
+  loadStatus(true);
+}
+
+// flip every addon in a group at once (the group switch in the header)
+async function toggleGroup(gname, enable) {
+  const targets = allAddons.filter(p => p.group === gname && p.type !== 'vision_pipeline');
+  let failed = false;
+  for (const p of targets) {
+    try {
+      const r = await fetch('/api/plugins/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: p.name, type: p.type, enable }),
+      });
+      if (!r.ok) failed = true;
+    } catch (e) {
+      failed = true;
+    }
+  }
+  if (failed) showToast('Some add-ons failed to toggle', 'error');
+  loadStatus(true);
+}
+
+async function viewSource(type, filename) {
+  const modal = document.getElementById('source-modal');
+  const pre = document.getElementById('source-view');
+  pre.textContent = 'Loading\u2026';
+  document.getElementById('source-name').textContent = filename;
+  modal.style.display = 'flex';
+  try {
+    const r = await fetch(`/api/plugins/${encodeURIComponent(type)}/${encodeURIComponent(filename)}/source`);
+    const j = await r.json();
+    if (r.ok) {
+      pre.textContent = j.source;
+      document.getElementById('source-name').textContent = j.filename;
+    } else {
+      modal.style.display = 'none';
+      showToast(j.error || 'Failed to load source', 'error');
+    }
+  } catch (e) {
+    modal.style.display = 'none';
+    showToast('Failed to load source', 'error');
+  }
+}
+
+function closeSource() {
+  document.getElementById('source-modal').style.display = 'none';
+}
+
+document.getElementById('source-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeSource();
+});
+
+async function submitPasted() {
+  const type = document.getElementById('paste-type').value;
+  const filename = document.getElementById('paste-filename').value.trim();
+  const code = document.getElementById('paste-code').value;
+  if (!filename) { showToast('Filename required', 'error'); return; }
+  if (!code.trim()) { showToast('Code cannot be empty', 'error'); return; }
+
+  const r = await fetch('/api/plugins/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, filename, code }),
+  });
+  const j = await r.json();
+  if (r.ok) {
+    showToast('Add-on saved - restart vision to detect it', 'success');
+    if (j.warning) showToast(j.warning, 'warn');
+    document.getElementById('paste-filename').value = '';
+    document.getElementById('paste-code').value = '';
+  } else {
+    showToast(j.error || 'Save failed', 'error');
+  }
+  loadStatus(true);
+}
+
+const uploadZone = document.getElementById('upload-zone');
+const addonFileInput = document.getElementById('addon-file-input');
+uploadZone.addEventListener('click', () => addonFileInput.click());
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  handleAddonUpload(e.dataTransfer.files[0]);
+});
+addonFileInput.addEventListener('change', () => handleAddonUpload(addonFileInput.files[0]));
+
+async function handleAddonUpload(file) {
+  if (!file) return;
+  const type = document.getElementById('upload-type').value;
+  const form = new FormData();
+  form.append('file', file);
+  form.append('type', type);
+  try {
+    const r = await fetch('/api/plugins/upload', { method: 'POST', body: form });
+    const j = await r.json();
+    if (r.ok) {
+      showToast('Add-on uploaded - restart vision to detect it', 'success');
+      if (j.warning) showToast(j.warning, 'warn');
+    } else {
+      showToast(j.error || 'Upload failed', 'error');
+    }
+  } catch (e) {
+    showToast('Upload failed', 'error');
+  }
+  addonFileInput.value = '';
+  loadStatus(true);
+}
+
+function openDeleteAddonModal(type, filename, name) {
+  pendingDeleteAddon = { type, filename, name };
+  document.getElementById('del-addon-name').textContent = name;
+  document.getElementById('delete-addon-modal').style.display = 'flex';
+}
+
+function closeDeleteAddonModal() {
+  pendingDeleteAddon = null;
+  document.getElementById('delete-addon-modal').style.display = 'none';
+}
+
+async function confirmDeleteAddon() {
+  if (!pendingDeleteAddon) return;
+  const { type, filename } = pendingDeleteAddon;
+  try {
+    const r = await fetch(`/api/plugins/${encodeURIComponent(type)}/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    const j = await r.json();
+    showToast(r.ok ? 'Add-on deleted - takes effect after vision restarts' : (j.error || 'Delete failed'), r.ok ? 'success' : 'error');
+  } catch (e) {
+    showToast('Delete failed', 'error');
+  }
+  closeDeleteAddonModal();
+  loadStatus(true);
+}
+
+document.getElementById('delete-addon-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeDeleteAddonModal();
+});
+
+document.getElementById('addon-search').addEventListener('input', renderList);
+document.getElementById('addon-type-filter').addEventListener('change', renderList);
+document.getElementById('addon-search').addEventListener('blur', () => {
+  if (lastSnapshot) renderList(); // flush any skipped background poll
+});
+document.getElementById('addon-type-filter').addEventListener('blur', () => {
+  if (lastSnapshot) renderList();
+});
+
+loadStatus(true);
+// ispyPoll fires once immediately - skip that tick so it doesn't repeat the
+// forced load above, then keep polling when the snapshot can skip renders
+let addonsPollPrimed = false;
+ispyPoll(() => {
+  if (!addonsPollPrimed) { addonsPollPrimed = true; return; }
+  loadStatus(false);
+}, 5000);
+</script>
+{% endblock %}

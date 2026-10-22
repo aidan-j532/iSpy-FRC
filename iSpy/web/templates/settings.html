@@ -1,0 +1,1249 @@
+{% extends "base.html" %} {% block title %}Settings - iSpy{% endblock %} {%
+block content %}
+
+<h1>Settings</h1>
+
+<div class="settings-tabs" id="tabs">
+  <button class="settings-tab active" onclick="switchTab('general', this)">
+    General
+  </button>
+
+  <button class="settings-tab" onclick="switchTab('camera', this)">
+    Camera
+  </button>
+
+  <button class="settings-tab" onclick="switchTab('advanced', this)">
+    Advanced
+  </button>
+
+  <button class="settings-tab" onclick="switchTab('about', this)">About</button>
+
+  <button class="settings-tab" onclick="switchTab('raw', this)">
+    Raw JSON
+  </button>
+</div>
+
+<div class="settings-actions">
+  <button class="btn btn-ok" id="settings-save-btn" onclick="saveSettings()">
+    Save Settings
+  </button>
+
+  <span id="msg" class="settings-msg"></span>
+</div>
+
+<div
+  class="settings-auto-note"
+  style="
+    display: none;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    margin-top: 4px;
+  "
+>
+  Auto-saving&hellip;
+</div>
+
+<div id="tab-general" class="settings-tab-content">
+  <div class="settings-section">
+    <h3>Performance profile</h3>
+
+    <div class="perf-wrap">
+      <div class="perf-head">
+        <span id="perf-level-label" class="perf-level-label">Full Features</span>
+        <span
+          id="perf-restart-badge"
+          class="restart-badge"
+          style="display: none"
+          >restart required</span
+        >
+      </div>
+
+      <input
+        id="perf-slider"
+        class="perf-slider"
+        type="range"
+        min="0"
+        max="4"
+        step="1"
+        value="4"
+        aria-label="Performance profile"
+      />
+
+      <div class="perf-ticks" aria-hidden="true">
+        <span>Max FPS</span>
+        <span>Performance</span>
+        <span>Balanced</span>
+        <span>Smooth</span>
+        <span>Full Features</span>
+      </div>
+
+      <div id="perf-desc" class="perf-desc"></div>
+
+      <div class="text-sm" style="color: var(--text-dim)">
+        Applies at the next restart. Detection, trackers, NetworkTables and
+        robot pose are never affected by this slider.
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Units</h3>
+
+    <div class="form-row">
+      <span class="form-label">Unit</span>
+
+      <select class="form-input" data-key="unit">
+        <option value="frc">FRC (meters)</option>
+
+        <option value="meter">Meters</option>
+
+        <option value="foot">Feet</option>
+
+        <option value="inch">Inches</option>
+
+        <option value="centimeter">Centimeters</option>
+      </select>
+
+      <span
+        id="unit-warning"
+        class="text-dim"
+        style="margin-left: 8px; font-size: 0.8rem"
+      >
+      </span>
+
+      <div class="form-row">
+        <span class="form-label">Temperature</span>
+
+        <select class="form-input" data-key="temperature_unit">
+          <option value="celsius">Celsius (°C)</option>
+          <option value="fahrenheit">Fahrenheit (°F)</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Performance</h3>
+
+    <div class="form-row">
+      <span
+        class="form-label"
+        title="Hard cap on the detection loop rate across all cameras. 0 = uncapped."
+        >Max FPS</span
+      >
+
+      <input
+        class="form-input"
+        type="number"
+        data-key="max_fps"
+        step="1"
+        min="0"
+        placeholder="0"
+      />
+
+      <span
+        id="max-fps-note"
+        class="text-dim"
+        style="margin-left: 8px; font-size: 0.8rem"
+      ></span>
+    </div>
+  </div>
+</div>
+
+<div id="tab-camera" class="settings-tab-content" style="display: none">
+  <div class="settings-section">
+    <h3>Capture</h3>
+
+    <div class="form-row">
+      <span class="form-label">Frame Sync</span>
+
+      <select class="form-input" data-key="frame_sync">
+        <option value="true">Enabled</option>
+
+        <option value="false">Disabled</option>
+      </select>
+
+      <span
+        id="frame-sync-note"
+        class="text-dim"
+        style="margin-left: 8px; font-size: 0.8rem"
+      ></span>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Camera Configs</h3>
+
+    <p class="text-dim text-sm">
+      Individual camera settings (pipeline, model, calibration) are managed via
+      the <a href="/cameras">Cameras page</a>. The raw JSON editor below
+      provides full access.
+    </p>
+  </div>
+</div>
+
+<div id="tab-advanced" class="settings-tab-content" style="display: none">
+  <div class="settings-section">
+    <h3>System</h3>
+
+    <div class="form-row">
+      <span class="form-label">Metrics</span>
+
+      <select class="form-input" data-key="metrics">
+        <option value="true">Enabled</option>
+
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+
+    <div class="form-row">
+      <span class="form-label">Debug Mode</span>
+
+      <select class="form-input" data-key="debug_mode">
+        <option value="true">Enabled</option>
+
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+
+    <div class="form-row">
+      <span class="form-label">Offline Mode</span>
+
+      <select class="form-input" data-key="offline_mode" data-restart="true">
+        <option value="true">Enabled</option>
+
+        <option value="false">Disabled</option>
+      </select>
+
+      <span class="restart-badge" style="display: none">restart required</span>
+
+      <span class="text-dim text-sm"
+        >Blocks the public internet only. NetworkTables to the robot, the
+        dashboard port, loopback, mDNS and the Tello keep working. Add-ons that
+        need the internet are skipped with a warning; one that only loses an
+        optional feature keeps running. Game Mode forces this on for its
+        one-shot run (never saved to the config).</span
+      >
+    </div>
+
+    <div class="form-row">
+      <span class="form-label">Admin Mode</span>
+
+      <select class="form-input" data-key="admin">
+        <option value="true">Enabled</option>
+
+        <option value="false">Disabled</option>
+      </select>
+
+      <span class="text-dim text-sm"
+        >Hides experimental pipelines (QR Code, optical flow) from the camera
+        pipeline dropdown unless enabled.</span
+      >
+    </div>
+
+    <div class="form-row">
+      <span class="form-label">Remote Restart</span>
+
+      <select class="form-input" data-key="allow_remote_restart" data-restart="true">
+        <option value="true">Robot LAN allowed</option>
+
+        <option value="false">Localhost / token only</option>
+      </select>
+
+      <span class="restart-badge" style="display: none">restart required</span>
+
+      <span class="text-dim text-sm"
+        >When enabled, loopback and RFC1918/link-local robot-network clients may
+        restart iSpy. Set <code>ISPY_ADMIN_TOKEN</code> to allow other remote
+        callers; "Localhost / token only" disables LAN restarts.</span
+      >
+    </div>
+
+    <div class="form-row">
+      <span class="form-label">Log Level</span>
+
+      <select class="form-input" data-key="log_level" data-restart="true">
+        <option value="DEBUG">Debug</option>
+
+        <option value="INFO">Info</option>
+
+        <option value="WARNING">Warning</option>
+
+        <option value="ERROR">Error</option>
+      </select>
+
+      <span class="restart-badge" style="display: none">restart required</span>
+    </div>
+
+    <div class="form-row">
+      <span
+        class="form-label"
+        title="Seconds without a fresh frame before /health reports degraded."
+        >Health Stale Threshold (s)</span
+      >
+
+      <input
+        class="form-input"
+        type="number"
+        data-key="health_stale_threshold"
+        step="0.1"
+        min="0"
+        placeholder="1.0"
+      />
+    </div>
+
+    <div class="form-row">
+      <span class="form-label">Game Mode</span>
+
+      <button class="btn btn-ok" onclick="armGameMode()">
+        Disable web UI for next boot
+      </button>
+
+      <span
+        class="text-dim"
+        style="margin-left: 8px; font-size: 0.8rem"
+      >
+        Web dashboard off for one boot, then back automatically. Offline mode
+        is forced on for that boot too (in memory only - it can never get stuck
+        on in the config).
+      </span>
+    </div>
+
+    <div class="form-row">
+      <span class="form-label">Share Config</span>
+      <button class="btn btn-secondary" onclick="exportConfig()">Export</button>
+      <button class="btn btn-secondary" onclick="document.getElementById('import-config-input').click()">Import</button>
+      <input type="file" id="import-config-input" accept=".json" style="display:none" onchange="importConfig(this.files[0])">
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Beta: Restart iSpy</h3>
+
+    <p class="text-dim text-sm" style="margin: 0 0 12px 0; max-width: 72ch">
+      Stops the vision process and starts it again through the process
+      supervisor. Port 5000 stays reachable with a status page while iSpy
+      restarts. Vision, trackers and the robot connection will be unavailable
+      for a few seconds - do not use this mid-match.
+    </p>
+
+    <div class="form-row">
+      <span class="form-label">Restart process</span>
+
+      <button class="btn btn-danger" id="restart-ispy-btn" onclick="restartISpy()">
+        Restart iSpy
+      </button>
+
+      <span class="text-dim" id="restart-ispy-status" style="margin-left: 8px"></span>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Help</h3>
+
+    <div class="form-row">
+      <span class="form-label">First-run tutorial</span>
+
+      <button class="btn btn-ok" onclick="startTutorial()">
+        Show tutorial
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="tab-about" class="settings-tab-content" style="display: none">
+  <div class="card" style="position: sticky; bottom: 20px">
+    <div class="settings-section">
+      <h3>About iSpy</h3>
+
+      <div class="form-row">
+        <span class="form-label">Version</span>
+
+        <span class="text-dim" id="about-version">loading&hellip;</span>
+      </div>
+
+      <div class="form-row">
+        <span class="form-label">License</span>
+
+        <span class="text-dim" id="about-license">loading&hellip;</span>
+      </div>
+
+      <div class="form-row">
+        <span class="form-label">Repository</span>
+
+        <a
+          href="https://github.com/aidan-j532/iSpy-FRC"
+          target="_blank"
+          rel="noopener"
+          class="text-dim"
+          >https://github.com/aidan-j532/iSpy-FRC</a
+        >
+      </div>
+
+      <p class="text-dim text-sm" style="margin-top: 12px">
+        iSpy is a real-time vision system for FRC robots. It provides
+        plug-and-play camera pipelines, 3D field visualization, and model-based
+        object detection.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+  const ABOUT_LICENSE = "PolyForm Noncommercial License 1.0.0";
+
+  async function loadAbout() {
+    const verEl = document.getElementById("about-version");
+
+    const licEl = document.getElementById("about-license");
+
+    // Never leave the fields stuck on "loading...": set the known values
+    // up front, then best-effort improve them.
+    if (verEl) verEl.textContent = "";
+    if (licEl) licEl.textContent = ABOUT_LICENSE;
+
+    try {
+      const r = await fetch("/api/version");
+
+      const j = await r.json();
+
+      if (verEl && j && j.version) {
+        verEl.textContent = "v" + j.version;
+      }
+    } catch (e) {
+      if (verEl && !verEl.textContent) verEl.textContent = "v?";
+    }
+
+    // Best-effort live license from PyPI, with a short timeout so an offline
+    // box never blocks (the static value above is authoritative anyway).
+    // while offline don't even fire the request, it could only fail
+    try {
+      const nr = await fetch("/api/network");
+
+      const nj = await nr.json();
+
+      if (nj && nj.offline) return;
+    } catch (e) {
+      /* no offline endpoint - fall through and try the fetch */
+    }
+    try {
+      const ctrl = new AbortController();
+
+      const to = setTimeout(() => ctrl.abort(), 4000);
+
+      const lr = await fetch("https://pypi.org/pypi/ispy-frc/json", {
+        signal: ctrl.signal,
+      });
+
+      clearTimeout(to);
+
+      const lj = await lr.json();
+
+      if (
+        licEl &&
+        lj &&
+        lj.info &&
+        typeof lj.info.license === "string" &&
+        lj.info.license.trim()
+      ) {
+        licEl.textContent = lj.info.license;
+      }
+    } catch (e) {
+      /* keep the static license */
+    }
+  }
+</script>
+
+<div id="tab-raw" class="settings-tab-content" style="display: none">
+  <div id="raw-gate" class="card">
+    <p id="raw-warn">
+      <strong>Advanced feature.</strong> Editing raw JSON can break your config
+      if done incorrectly. A single restore point is saved automatically before
+      your first edit in this session.
+    </p>
+
+    <button id="continue-risky" class="btn raw-btn" onclick="onContinueClick()">
+      Continue (Risky)
+    </button>
+  </div>
+
+  <div id="raw-editor-wrap" class="card" style="display: none">
+    <div class="controls-bar">
+      <button onclick="restoreSnapshot()" id="restore-btn">
+        Restore last snapshot
+      </button>
+    </div>
+
+    <textarea id="cfg" class="raw-editor"></textarea>
+  </div>
+</div>
+
+<script>
+  let configData = {};
+
+  let defaultsData = {};
+
+  const BOOL_KEYS = new Set([
+    "frame_sync",
+    "metrics",
+    "debug_mode",
+    "admin",
+    "offline_mode",
+    "allow_remote_restart",
+  ]);
+
+  function parseValue(el) {
+    const val = el.value;
+
+    if (val === "true") return true;
+
+    if (val === "false") return false;
+
+    if (val === "null" || val === "") return null;
+
+    if (el.type === "number") {
+      const n = Number(val);
+
+      return Number.isFinite(n) ? n : val;
+    }
+
+    return val;
+  }
+
+  // Session-persisted: survives switching tabs AND navigating away/back to the
+  // page within the same tab (sessionStorage). The sweep transition only runs
+  // once per session - after it arms, the button reads "Continue (Risky)" and a
+  // second click opens the editor. No re-doing the wait after leaving the page.
+  let rawOpened = sessionStorage.getItem("raw.opened") === "1";
+  let rawArmed = sessionStorage.getItem("raw.armed") === "1";
+
+  function setupRawGate() {
+    const btn = document.getElementById("continue-risky");
+    if (!btn) return;
+    btn.disabled = false;
+    btn.textContent = "Continue (Risky)";
+  }
+
+  function syncRawTabState() {
+    const gate = document.getElementById("raw-gate");
+    const editor = document.getElementById("raw-editor-wrap");
+    if (rawOpened) {
+      gate.style.display = "none";
+      editor.style.display = "";
+    } else {
+      gate.style.display = "";
+      editor.style.display = "none";
+    }
+  }
+
+  function openRawEditor() {
+    rawOpened = true;
+    sessionStorage.setItem("raw.opened", "1");
+    snapshotBeforeFirstEdit();
+    document.getElementById("raw-gate").style.display = "none";
+    document.getElementById("raw-editor-wrap").style.display = "";
+  }
+
+  function onContinueClick() {
+    const btn = document.getElementById("continue-risky");
+    if (!btn || btn.disabled) return;
+    // Second click (once armed this session) opens the editor directly.
+    if (rawArmed) {
+      openRawEditor();
+      return;
+    }
+    // First click: the line sweeps across the button once, then it readies
+    // as "Continue (Risky)" again for the confirming click.
+    btn.disabled = true;
+    runRawSweep(btn, 5000, () => {
+      rawArmed = true;
+      sessionStorage.setItem("raw.armed", "1");
+      setupRawGate();
+    });
+  }
+
+  function runRawSweep(btn, ms, done) {
+    const sweep = document.createElement("div");
+    sweep.className = "raw-btn-sweep";
+    btn.appendChild(sweep);
+    requestAnimationFrame(() => {
+      sweep.style.transition = `transform ${ms}ms linear`;
+      sweep.style.transform = "translateX(100%)";
+    });
+    setTimeout(() => {
+      sweep.remove();
+      done();
+    }, ms);
+  }
+
+  let snapshotTaken = false;
+
+  async function snapshotBeforeFirstEdit() {
+    if (snapshotTaken) return;
+
+    snapshotTaken = true;
+
+    await fetch("/api/settings/snapshot", { method: "POST" });
+
+    document.getElementById("restore-btn").disabled = false;
+  }
+
+  async function restoreSnapshot() {
+    if (
+      !confirm(
+        "Restore the pre-edit snapshot? This overwrites your current raw JSON edits and can only be used once.",
+      )
+    )
+      return;
+
+    const r = await fetch("/api/settings/restore", { method: "POST" });
+
+    const j = await r.json();
+
+    if (j.success) {
+      configData = j.config;
+      document.getElementById("cfg").value = JSON.stringify(
+        configData,
+        null,
+        2,
+      );
+      showToast("Restored", "success");
+    } else showToast(j.error || "No snapshot available", "error");
+  }
+
+  async function checkRestartNeeded() {
+    const { data } = collectFormValues();
+
+    try {
+      const r = await fetch("/api/settings/compare", {
+        method: "POST",
+
+        headers: { "Content-Type": "application/json" },
+
+        body: JSON.stringify({ config: data }),
+      });
+
+      const j = await r.json();
+
+      document
+        .querySelectorAll(".restart-badge")
+        .forEach((b) => (b.style.display = "none"));
+
+      // the slider manages its own badge (it isn't a [data-key] field), so put
+      // it back after the sweep above
+      if (typeof syncPerfBadge === "function") syncPerfBadge();
+
+      if (j.needs_restart) {
+        (j.changed || []).forEach((key) => {
+          const el = document.querySelector(`[data-key="${key}"]`);
+
+          const badge = el && el.parentElement.querySelector(".restart-badge");
+
+          if (badge) badge.style.display = "";
+        });
+      }
+    } catch (e) {
+      /* non-fatal */
+    }
+  }
+
+  document.querySelectorAll("[data-key]").forEach((el) => {
+    el.addEventListener("change", checkRestartNeeded);
+
+    el.addEventListener("change", autoSave);
+  });
+
+  let autoSaveTimer = null;
+
+  function autoSave() {
+    const note = document.querySelector(".settings-auto-note");
+
+    if (note) note.style.display = "";
+
+    clearTimeout(autoSaveTimer);
+
+    autoSaveTimer = setTimeout(async () => {
+      const { data, restartKeys } = collectFormValues();
+
+      try {
+        const r = await fetch("/api/settings", {
+          method: "POST",
+
+          headers: { "Content-Type": "application/json" },
+
+          body: JSON.stringify({ config: data, restart_keys: restartKeys }),
+        });
+
+        const j = await r.json();
+
+        if (r.ok) {
+          showToast("Settings saved", "success");
+
+          if (j.needs_restart) {
+            showToast("Restart required to apply some changes", "info");
+          }
+        } else {
+          showToast(j.error || "Save failed", "error");
+        }
+      } catch (e) {
+        showToast("Save failed", "error");
+      }
+
+      if (note) note.style.display = "none";
+    }, 400);
+  }
+
+  function collectFormValues() {
+    const data = {};
+
+    const restartKeys = [];
+
+    document.querySelectorAll("[data-key]").forEach((el) => {
+      const key = el.dataset.key;
+
+      let val = parseValue(el);
+
+      if (BOOL_KEYS.has(key.split(".").pop())) {
+        val = val === true || val === "true";
+      }
+
+      setNestedValue(data, key, val);
+
+      if (el.dataset.restart) {
+        restartKeys.push(key);
+      }
+    });
+
+    return { data, restartKeys };
+  }
+
+  function setNestedValue(obj, path, value) {
+    const parts = path.split(".");
+
+    let target = obj;
+
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!(parts[i] in target) || typeof target[parts[i]] !== "object") {
+        target[parts[i]] = {};
+      }
+
+      target = target[parts[i]];
+    }
+
+    target[parts[parts.length - 1]] = value;
+  }
+
+  function getNestedValue(obj, path) {
+    const parts = path.split(".");
+
+    let target = obj;
+
+    for (const p of parts) {
+      if (target == null || typeof target !== "object") return undefined;
+
+      target = target[p];
+    }
+
+    return target;
+  }
+
+  function loadFormValues() {
+    document
+      .querySelectorAll(".restart-badge")
+      .forEach((b) => (b.style.display = "none"));
+
+    document.querySelectorAll("[data-key]").forEach((el) => {
+      const key = el.dataset.key;
+
+      let val = getNestedValue(configData, key);
+
+      if (val === undefined) val = getNestedValue(defaultsData, key);
+
+      if (val === undefined) return;
+
+      if (el.tagName === "SELECT") {
+        el.value = String(val);
+      } else {
+        el.value = val;
+      }
+    });
+
+    checkRestartNeeded();
+  }
+
+  function switchTab(name, btn) {
+    document
+      .querySelectorAll(".settings-tab-content")
+      .forEach((el) => (el.style.display = "none"));
+
+    document
+      .querySelectorAll(".settings-tab")
+      .forEach((el) => el.classList.remove("active"));
+
+    document.getElementById("tab-" + name).style.display = "";
+
+    btn.classList.add("active");
+
+    const saveBtn = document.getElementById("settings-save-btn");
+
+    if (saveBtn) saveBtn.style.display = name === "about" ? "none" : "";
+
+    // Keep whatever state the raw gate/editor is in when returning to the tab
+    // (persisted across tab switches and page visits via sessionStorage).
+    if (name === "raw") {
+      syncRawTabState();
+    }
+  }
+
+  async function saveSettings() {
+    const msg = document.getElementById("msg");
+
+    const tabRaw = document.getElementById("tab-raw");
+
+    let data;
+
+    let restartKeys = [];
+
+    if (!tabRaw.style.display || tabRaw.style.display === "") {
+      try {
+        data = JSON.parse(document.getElementById("cfg").value);
+      } catch (e) {
+        msg.textContent = "Invalid JSON: " + e.message;
+
+        msg.className = "settings-msg msg-error";
+
+        return;
+      }
+    } else {
+      const result = collectFormValues();
+
+      data = result.data;
+
+      restartKeys = result.restartKeys;
+    }
+
+    try {
+      const r = await fetch("/api/settings", {
+        method: "POST",
+
+        headers: { "Content-Type": "application/json" },
+
+        body: JSON.stringify({ config: data, restart_keys: restartKeys }),
+      });
+
+      const j = await r.json();
+
+      if (r.ok) {
+        msg.textContent = j.needs_restart
+          ? "Saved. Restart required to apply changes."
+          : "Saved successfully.";
+
+        msg.className = j.needs_restart
+          ? "settings-msg msg-warn"
+          : "settings-msg msg-ok";
+
+        const unitWarn = document.getElementById("unit-warning");
+
+        if (data.unit && data.unit !== j.old_unit) {
+          unitWarn.textContent =
+            "Unit changed - you must update how your code processes measurements";
+
+          setTimeout(() => (unitWarn.textContent = ""), 8000);
+        }
+
+        updateFrameSyncNote(data.frame_sync);
+
+        showToast("Settings saved", "success");
+      } else {
+        msg.textContent = "Error: " + (j.error || "Unknown error");
+
+        msg.className = "settings-msg msg-error";
+      }
+    } catch (e) {
+      msg.textContent = "Save failed: " + e.message;
+
+      msg.className = "settings-msg msg-error";
+    }
+  }
+
+  async function load() {
+    const data = await fetch("/api/settings").then((r) => r.json());
+
+    configData = data.config || {};
+
+    defaultsData = data.defaults || {};
+
+    document.getElementById("cfg").value = JSON.stringify(configData, null, 2);
+
+    populateGpuSelect(data.gpu_count);
+
+    setupRawGate();
+
+    syncRawTabState();
+
+    // If the editor was already open from a previous page visit, make sure a
+    // restore point exists for this session's edits.
+    if (rawOpened) snapshotBeforeFirstEdit();
+
+    loadFormValues();
+
+    updateFrameSyncNote(
+      configData.frame_sync !== undefined
+        ? configData.frame_sync
+        : defaultsData.frame_sync,
+    );
+
+    updateMaxFpsNote(
+      configData.max_fps !== undefined ? configData.max_fps : defaultsData.max_fps,
+    );
+
+    fetch("/api/version")
+      .then((r) => r.json())
+      .then((j) => {
+        const el = document.getElementById("about-version");
+
+        if (el && j.version) el.textContent = "v" + j.version;
+      })
+      .catch(() => {});
+  }
+
+  function populateGpuSelect(count) {
+    const sel = document.getElementById("gpu-select");
+
+    const status = document.getElementById("gpu-status");
+
+    if (!sel) return;
+
+    const n = parseInt(count, 10);
+
+    if (!(n > 0)) {
+      sel.value = "auto";
+
+      sel.disabled = true;
+
+      status.style.display = "";
+
+      status.textContent = "No GPUs detected - running on CPU.";
+
+      return;
+    }
+
+    sel.disabled = false;
+
+    // rebuild numbered options so we never offer more than are present
+
+    sel
+      .querySelectorAll('option:not([value="auto"])')
+      .forEach((o) => o.remove());
+
+    for (let i = 1; i <= n; i++) {
+      const opt = document.createElement("option");
+
+      opt.value = String(i);
+
+      opt.textContent = String(i);
+
+      sel.appendChild(opt);
+    }
+
+    status.style.display = "none";
+  }
+
+  // Unit change warning
+
+  const unitSelect = document.querySelector('select[data-key="unit"]');
+
+  if (unitSelect) {
+    unitSelect.onchange = () => {
+      const unitWarning = document.getElementById("unit-warning");
+
+      unitWarning.textContent =
+        "Unit changed - you must update how your code processes measurements";
+
+      setTimeout(() => (unitWarning.textContent = ""), 8000);
+
+      if (typeof showTimeWarning === "function") {
+        showTimeWarning({
+          header: "Units changed",
+
+          duration: 5,
+
+          description:
+            "Changing units means you have to change how you process the data coming from iSpy.",
+
+          continueMessage: "I understand",
+        });
+      }
+    };
+  }
+
+  // Frame sync state helper
+
+  function frameSyncBool(v) {
+    return v === true || v === "true";
+  }
+
+  function updateMaxFpsNote(value) {
+    const note = document.getElementById("max-fps-note");
+
+    if (!note || value === undefined || value === null) return;
+
+    const n = Number(value);
+
+    note.textContent =
+      !(n > 0) ? "0 = uncapped" : "Detection loop capped at " + n + " FPS";
+  }
+
+  function updateFrameSyncNote(value) {
+    const note = document.getElementById("frame-sync-note");
+
+    if (!note || value === undefined || value === null) return;
+
+    note.textContent = frameSyncBool(value)
+      ? "Enabled - cameras will wait for synchronized frames"
+      : "Disabled - cameras run independently";
+  }
+
+  async function exportConfig() {
+    const r = await fetch('/api/settings/export');
+    const data = await r.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ispy_config_export.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importConfig(file) {
+    if (!file) return;
+    if (!confirm('Import this config? A one-time snapshot of your current settings is saved first.')) {
+      document.getElementById('import-config-input').value = '';
+      return;
+    }
+    try {
+      const data = JSON.parse(await file.text());
+      await fetch('/api/settings/snapshot', { method: 'POST' }); // reuses existing restore-once safety net
+      const r = await fetch('/api/settings/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const j = await r.json();
+      showToast(r.ok ? 'Imported - restart vision to apply' : (j.error || 'Import failed'), r.ok ? 'success' : 'error');
+      if (r.ok) load();
+    } catch (e) {
+      showToast('Invalid JSON file', 'error');
+    }
+    document.getElementById('import-config-input').value = '';
+  }
+
+  async function restartISpy() {
+    if (
+      !window.confirm(
+        "Restart iSpy now? Vision, trackers and the robot connection will " +
+          "drop for a few seconds. Do not do this mid-match."
+      )
+    ) {
+      return;
+    }
+    const btn = document.getElementById("restart-ispy-btn");
+    const status = document.getElementById("restart-ispy-status");
+    if (btn) btn.disabled = true;
+    if (status) status.textContent = "Restarting...";
+    try {
+      const r = await fetch("/api/supervisor/restart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      let j = {};
+      try {
+        j = await r.json();
+      } catch (e) {}
+      if (!r.ok || j.ok === false) {
+        throw new Error(j.error || "HTTP " + r.status);
+      }
+      showToast("Restarting iSpy", "info");
+      if (status) status.textContent = "Waiting for iSpy to come back...";
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      if (status) status.textContent = "";
+      showToast(e.message || String(e), "error");
+    }
+  }
+
+  async function armGameMode() {
+    if (
+      !confirm(
+        "Arm Game Mode? The web dashboard will be off for the NEXT boot after " +
+          "this one, then come back automatically.",
+      )
+    )
+      return;
+
+    try {
+      const r = await fetch("/api/settings/arm-game-mode", { method: "POST" });
+
+      const j = await r.json();
+
+      if (j.success) {
+        showToast("Armed - web UI off for the next boot, then back on", "success");
+      } else showToast(j.error || "Failed to arm Game Mode", "error");
+    } catch (e) {
+      showToast("Failed to reach the server", "error");
+    }
+  }
+
+  // not a [data-key] field on purpose, the 400ms auto-save would persist
+  // level 0 before any warning could be read. talks to /api/performance instead
+  const perfState = {
+    level: 4, // running level (what the process is doing right now)
+    configured: 4, // level saved into config.json (runs after restart)
+    restart: false, // configured != running
+    levels: {}, // level -> {label, notes}
+  };
+
+  const perfSlider = document.getElementById("perf-slider");
+
+  function perfLabel(level) {
+    const info = perfState.levels[level];
+    const label = info && info.label ? info.label : "Level " + level;
+    return label + " (" + level + ")";
+  }
+
+  function syncPerfBadge() {
+    const badge = document.getElementById("perf-restart-badge");
+    if (badge) badge.style.display = perfState.restart ? "" : "none";
+  }
+
+  function renderPerfDesc(level) {
+    const label = document.getElementById("perf-level-label");
+    const desc = document.getElementById("perf-desc");
+    if (label) label.textContent = perfLabel(level);
+    if (!desc) return;
+    const notes = (perfState.levels[level] || {}).notes || [];
+    desc.textContent = "";
+    const head = document.createElement("strong");
+    head.textContent = perfLabel(level);
+    desc.appendChild(head);
+    if (notes.length) {
+      const ul = document.createElement("ul");
+      notes.forEach((n) => {
+        const li = document.createElement("li");
+        li.textContent = n;
+        ul.appendChild(li);
+      });
+      desc.appendChild(ul);
+    }
+  }
+
+  async function perfCommit(level, confirmMax) {
+    try {
+      const r = await fetch("/api/performance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level: level, confirm_max: !!confirmMax }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        showToast(j.error || "Could not save the performance profile", "error");
+        return false;
+      }
+      perfState.configured = level;
+      perfState.restart = !!j.restart_pending;
+      if (perfSlider) perfSlider.value = String(level);
+      // keep the raw editor in step (merge only this key so unsaved raw edits
+      // survive) - else a later Save from the Raw tab writes the old level back
+      const cfgEl = document.getElementById("cfg");
+      if (cfgEl) {
+        try {
+          const cur = JSON.parse(cfgEl.value);
+          if (cur && typeof cur === "object") {
+            cur.performance_level = level;
+            cfgEl.value = JSON.stringify(cur, null, 2);
+          }
+        } catch (e) {}
+      }
+      renderPerfDesc(level);
+      syncPerfBadge();
+      showToast(
+        "Performance profile: " +
+          perfLabel(level) +
+          (perfState.restart ? " - restart to apply" : ""),
+        "success",
+      );
+      return true;
+    } catch (e) {
+      showToast("Could not save the performance profile", "error");
+      return false;
+    }
+  }
+
+  if (perfSlider) {
+    perfSlider.addEventListener("input", () => {
+      renderPerfDesc(Number(perfSlider.value));
+    });
+
+    perfSlider.addEventListener("change", () => {
+      const target = Number(perfSlider.value);
+      if (target === perfState.configured) return;
+
+      if (target === 0) {
+        // Max FPS takes the web UI away at the next restart, so the warning
+        // has to be read before it commits. The overlay has no cancel path -
+        // snap the knob back now and only commit inside onClose, which fires
+        // when the countdown actually finishes. Closing/navigating away in
+        // the meantime saves nothing.
+        perfSlider.value = String(perfState.configured);
+        renderPerfDesc(perfState.configured);
+        if (typeof showTimeWarning !== "function") return;
+        showTimeWarning({
+          header: "Switch to Max FPS?",
+          duration: 5,
+          description:
+            "At the next restart the web UI turns off. Also off: rollback " +
+            "recording, vision metrics, FPS console print and annotated " +
+            "frames. Still running: detection, trackers, NetworkTables and " +
+            "robot pose. To undo: run 'ispy performance 4' over SSH, start " +
+            "with 'ispy start --web', or set performance_level back to 4 in " +
+            "Config/config.json.",
+          continueMessage: "Switch to Max FPS",
+          onClose: () => {
+            perfCommit(0, true);
+          },
+        });
+        return;
+      }
+
+      perfCommit(target, false);
+    });
+  }
+
+  async function loadPerformance() {
+    try {
+      const j = await fetch("/api/performance").then((r) => r.json());
+      perfState.level = Number(j.level);
+      perfState.configured =
+        j.configured_level !== undefined
+          ? Number(j.configured_level)
+          : perfState.level;
+      perfState.restart = !!j.restart_pending;
+      (j.levels || []).forEach((lvl) => {
+        perfState.levels[Number(lvl.level)] = lvl;
+      });
+      if (perfSlider) perfSlider.value = String(perfState.configured);
+      renderPerfDesc(perfState.configured);
+      syncPerfBadge();
+    } catch (e) {
+      /* the rest of the page still works without the profile */
+    }
+  }
+
+  load();
+  loadAbout();
+  loadPerformance();
+</script>
+
+{% endblock %}

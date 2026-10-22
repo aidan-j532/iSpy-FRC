@@ -1,0 +1,21 @@
+from iSpy.vision.pipelines.april_tag import AprilTagPipeline
+from iSpy.vision.pipelines.depth_anything import DepthAnythingPipeline
+from iSpy.vision.pipelines.hsv_detection import HSVDetectionPipeline
+from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+from iSpy.vision.pipelines.optical_flow import OpticalFlowPipeline
+from iSpy.vision.pipelines.qr_code import QRCodePipeline
+from iSpy.vision.pipelines.yolo_world import YoloWorldPipeline
+
+PIPELINES: dict[str, type] = {
+    "april_tag": AprilTagPipeline,
+    "depth_anything": DepthAnythingPipeline,
+    "hsv_detection": HSVDetectionPipeline,
+    "object_detection": ObjectDetectionPipeline,
+    "optical_flow": OpticalFlowPipeline,
+    "qr_code": QRCodePipeline,
+    "yolo_world": YoloWorldPipeline,
+}
+
+
+def get_pipeline_classes() -> dict[str, type]:
+    return dict(PIPELINES)

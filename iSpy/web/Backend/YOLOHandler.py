@@ -1,0 +1,84 @@
+import logging
+from pathlib import Path
+from iSpy.plugins.bases import UtilityBase
+from iSpy.config.iSpyConfig import get_pipeline_settings
+from flask import jsonify, request
+
+_PROJECT_ROOT = Path.cwd()
+_YOLO_DIR = _PROJECT_ROOT / "YoloModels"
+
+
+def _model_rel_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(_PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _target_format(settings: dict) -> str:
+    fmt = str(settings.get("target_format") or "auto").strip().lower()
+    if fmt and fmt != "auto":
+        return fmt
+    try:
+        from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+
+        return ObjectDetectionPipeline.recommended_format()
+    except Exception:
+        return "onnx"
+
+
+class YOLOHandler(UtilityBase):
+    plugin_name = "yolo_handler"
+
+    def __init__(self, context: dict):
+        self.config = context["config"]
+        self.logger = logging.getLogger(__name__)
+
+    def _select(self):
+        data = request.get_json(force=True) or {}
+        file_path = data.get("file_path")
+        if not file_path:
+            return jsonify(error="file_path required"), 400
+
+        p = Path(file_path)
+        if not p.is_absolute():
+            p = _PROJECT_ROOT / p
+        if not p.exists():
+            return jsonify(error=f"Model not found: {p}"), 404
+
+        # model selection lives in each model-backed camera's pipeline
+        # settings (per-camera vision_model blocks) - never at the config
+        # root, where it gets ignored and trips the next boot. source_pt
+        # always points at the .pt; file_path points at an already-built
+        # optimized artifact for it so a stale artifact from a previous
+        # pick can't keep an old model running.
+        from iSpy.vision.optimizer import existing_artifact_for
+
+        updated = []
+        cams = self.config.get("camera_configs", {})
+        for cam in cams.values():
+            if not isinstance(cam, dict):
+                continue
+            settings = get_pipeline_settings(cam) or {}
+            model_cfg = settings.get("vision_model")
+            if not isinstance(model_cfg, dict):
+                continue
+            src = _model_rel_path(p)
+            artifact = existing_artifact_for(p, _target_format(settings))
+            settings["vision_model"] = {
+                **model_cfg,
+                "source_pt": src,
+                "file_path": artifact or src,
+            }
+            updated.append(cam.get("name", "?"))
+        if not updated:
+            return jsonify(error="No camera uses a user-selectable model"), 400
+        self.config.save()
+        return jsonify(
+            success=True,
+            note="Restart iSpy (or re-run boot.py) to convert and load this model.",
+            cameras=updated,
+        )
+
+    def stop(self):
+        pass

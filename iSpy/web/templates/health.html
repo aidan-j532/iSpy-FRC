@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Health - iSpy{% endblock %}
+{% block head %}
+<style>.stat-value.skeleton { display: inline-block; min-width: 64px; }</style>
+{% endblock %}
+{% block content %}
+<h1>System Health</h1>
+<div id="health-banner" class="vision-banner"></div>
+
+<div class="grid stats-grid">
+  <div class="card stat-card"><div class="stat-label">FPS</div><div class="stat-value skeleton" id="h-fps">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Vision</div><div class="stat-value skeleton" id="h-vis">--<span class="stat-unit">ms</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Detections</div><div class="stat-value skeleton" id="h-det">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Loop stale</div><div class="stat-value skeleton" id="h-stale">--<span class="stat-unit">s</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Loop count</div><div class="stat-value skeleton" id="h-loops">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value skeleton" id="h-up">--</div></div>
+</div>
+
+<div class="dash-columns">
+  <div class="dash-col-left">
+    <div class="card">
+      <h3>Cameras</h3>
+      <div id="h-cameras" class="camera-grid"><div class="skeleton-block"></div><div class="skeleton-block"></div></div>
+    </div>
+  </div>
+  <div class="dash-col-right">
+    <div class="card">
+      <h3>Plugins</h3>
+      <div id="h-plugins"><div class="skeleton-block"></div><div class="skeleton-block"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+  <h3>Add-on Health</h3>
+  <div id="h-addon-health"><div class="health-tbl"><div class="skeleton-block"></div></div></div>
+</div>
+
+<script>
+function fmtUptime(s) {
+  if (s == null) return '--';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function typeBadge(type) {
+  if (type === 'frame_processor') return '<span class="plugin-pill pill-frame-processor">frame processor</span>';
+  if (type === 'pipeline') return '<span class="plugin-pill pill-vision-pipeline">vision pipeline</span>';
+  return `<span class="plugin-pill pill-${type}">${type}</span>`;
+}
+
+function statusDot(status) {
+  if (status === 'running' || status === 'active') return 'status-dot status-ok';
+  if (status === 'idle') return 'status-dot status-warn';
+  return 'status-dot status-bad';
+}
+
+function healthColorClass(color) {
+  if (color === 'red') return 'status-bad';
+  if (color === 'yellow') return 'status-warn';
+  return 'status-ok';
+}
+
+// per-row cursor so each add-on's metrics cycle - advanced only on the
+// slower "status" cadence (every 5s) while state/stats update every 0.5s
+const healthCycle = {};
+function currentMetric(a) {
+  const m = a.metrics || [];
+  if (!m.length) return null;
+  const key = a.type + ':' + a.name;
+  const idx = healthCycle[key] || 0;
+  return m[idx % m.length];
+}
+function advanceHealthCycle(ah) {
+  for (const a of ah) {
+    const m = a.metrics || [];
+    if (!m.length) continue;
+    const key = a.type + ':' + a.name;
+    healthCycle[key] = ((healthCycle[key] || 0) + 1) % m.length;
+  }
+}
+
+function withPerformance(data) {
+  const ah = (data.addon_health || []).slice();
+  if (data.performance) ah.unshift(data.performance);
+  return ah;
+}
+
+function renderHealthTable(ah) {
+  const el = document.getElementById('h-addon-health');
+  if (!ah.length) {
+    el.innerHTML = '<div class="empty-state">No add-ons report health</div>';
+    return;
+  }
+  const head = `
+    <div class="health-tbl">
+      <div class="health-tbl-row health-head">
+        <span class="health-dot"></span>
+        <span>Source</span>
+        <span class="health-type">Type</span>
+        <span class="health-col-left">State</span>
+        <span class="health-col-left">Status</span>
+      </div>`;
+  const rows = ah.map(a => {
+    const metric = currentMetric(a);
+    return `
+      <div class="health-tbl-row">
+        <span class="health-dot"><span class="status-dot ${healthColorClass(a.color)}"></span></span>
+        <span class="health-name">${a.name}</span>
+        <span class="health-type">${typeBadge(a.type)}</span>
+        <span class="health-state">${a.state || '--'}</span>
+        <span class="health-metric">${metric ? `<span class="metric-label">${metric.label}</span><strong>${metric.value}</strong>` : '--'}</span>
+      </div>`;
+  }).join('');
+  el.innerHTML = head + rows + '</div>';
+}
+
+const healthConn = connTracker(2);
+
+async function refresh() {
+  try {
+    const data = await fetch('/api/health').then(r => r.json());
+    healthConn.ok();
+
+    document.querySelectorAll('.stat-value.skeleton').forEach(el => el.classList.remove('skeleton'));
+    const banner = document.getElementById('health-banner');
+    banner.className = 'vision-banner ' + (data.status === 'ok' ? 'vision-ok' : 'vision-bad');
+    banner.textContent = data.status === 'ok' ? 'System healthy' : 'System degraded';
+
+    document.getElementById('h-fps').textContent = data.fps ?? '--';
+    document.getElementById('h-vis').innerHTML = (data.vision_ms ?? '--') + '<span class="stat-unit">ms</span>';
+    document.getElementById('h-det').textContent = data.detections ?? '--';
+    document.getElementById('h-stale').textContent = data.loop_stale_s ?? '--';
+    document.getElementById('h-loops').textContent = data.loop_count ?? '--';
+    document.getElementById('h-up').textContent = fmtUptime(data.uptime_s);
+
+    const cams = data.cameras || [];
+    document.getElementById('h-cameras').innerHTML = cams.length === 0
+      ? '<div class="empty-state">No cameras configured</div>'
+      : cams.map(c => `
+        <div class="cam-item">
+          <span class="status-dot ${c.ok ? 'status-ok' : 'status-bad'}"></span>
+          <span class="cam-name">${c.name}</span>
+          <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}</span>
+        </div>`).join('');
+
+    renderHealthTable(withPerformance(data));
+
+    const plugins = data.plugins || [];
+    document.getElementById('h-plugins').innerHTML = plugins.length === 0
+      ? '<div class="empty-state">No plugins loaded</div>'
+      : plugins.map(p => `
+        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:10px 12px;margin-bottom:6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-surface);">
+          <span class="${statusDot(p.status)}"></span>
+          <strong>${p.name}</strong>
+          ${typeBadge(p.type)}
+          <span style="margin-left:auto;color:var(--text-dim);font-size:0.85rem;">${p.status}</span>
+        </div>`).join('');
+  } catch (e) {
+    console.error('Health refresh failed', e);
+    healthConn.fail();
+  }
+}
+
+async function refreshAddonStatus() {
+  try {
+    const data = await fetch('/api/health').then(r => r.json());
+    const ah = withPerformance(data);
+    advanceHealthCycle(ah);
+    renderHealthTable(ah);
+  } catch (e) {
+    console.error('Health status refresh failed', e);
+  }
+}
+ispyPoll(refresh, 500);
+ispyPoll(refreshAddonStatus, 5000);
+</script>
+{% endblock %}

@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Metrics - iSpy{% endblock %}
+{% block content %}
+<h1>Metrics</h1>
+<div class="grid metrics-grid">
+  <div class="card chart-card"><h3>FPS</h3><canvas id="chart-fps"></canvas><div class="chart-waiting">waiting for data&hellip;</div></div>
+  <div class="card chart-card"><h3>Loop Time</h3><canvas id="chart-loop_s"></canvas><div class="chart-waiting">waiting for data&hellip;</div></div>
+  <div class="card chart-card"><h3>Vision Time</h3><canvas id="chart-vision_s"></canvas><div class="chart-waiting">waiting for data&hellip;</div></div>
+  <div class="card chart-card"><h3>Camera Lag</h3><canvas id="chart-camera_lag_s"></canvas><div class="chart-waiting">waiting for data&hellip;</div></div>
+  <div class="card card-full chart-card">
+    <h3>Code Breakdown <span class="part-note"></span></h3>
+    <canvas id="chart-code-parts"></canvas>
+    <div class="chart-waiting">waiting for data&hellip;</div>
+  </div>
+</div>
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script>
+const charts = {};
+let codeChart = null;
+function ensureChart(id, label, unit) {
+  if (charts[id]) return charts[id];
+  const ctx = document.getElementById(`chart-${id}`);
+  charts[id] = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ label: `${label} (${unit})`, data: [], borderColor: '#4c8bf5', pointRadius: 0, borderWidth: 2, tension: 0.1 }] },
+    options: { animation: false, responsive: true, maintainAspectRatio: false, scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { display: false } } },
+  });
+  return charts[id];
+}
+function ensureCodeChart() {
+  if (codeChart) return codeChart;
+  const ctx = document.getElementById('chart-code-parts');
+  codeChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [] },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { stacked: true, display: false },
+        y: { stacked: true, beginAtZero: true, title: { display: true, text: 'ms' } },
+      },
+      plugins: { legend: { labels: { color: '#ccc' } } },
+    },
+  });
+  return codeChart;
+}
+function markHasData(canvasId) {
+  const canvas = document.getElementById(`chart-${canvasId}`);
+  const card = canvas && canvas.closest('.chart-card');
+  if (card) card.classList.add('has-data');
+}
+
+// The y-axis grows instantly when a part spikes, but holds its range for a few
+// seconds of small data before shrinking - a single heavy frame (e.g. an RKNN
+// build on the optimization thread) no longer makes every normal tick jump.
+const Y_HOLD_MS = 4000;
+
+function applySustainedScale(chart, stacked) {
+  const st = chart._ySustain || (chart._ySustain = { lastMax: 0.0001, shrinkAfter: 0 });
+  let dataMax = 0;
+  if (stacked) {
+    chart.data.labels.forEach((_, li) => {
+      let col = 0;
+      for (const ds of chart.data.datasets) {
+        const v = ds.data[li];
+        if (isFinite(v)) col += v;
+      }
+      if (col > dataMax) dataMax = col;
+    });
+  } else {
+    for (const ds of chart.data.datasets) {
+      for (const v of ds.data || []) {
+        if (isFinite(v) && v > dataMax) dataMax = v;
+      }
+    }
+  }
+  const now = Date.now();
+  if (dataMax > st.lastMax) {
+    st.shrinkAfter = now + Y_HOLD_MS;
+    st.lastMax = dataMax;
+  } else if (now >= st.shrinkAfter) {
+    st.lastMax = dataMax;
+  }
+  chart.options.scales.y.suggestedMax = st.lastMax;
+}
+
+function renderCodeParts(cp) {
+  const s = cp.series;
+  const series = Object.values(s);
+  if (!series.length) return;
+  markHasData('code-parts');
+  const chart = ensureCodeChart();
+  const names = series.map(part => part.label).join('|');
+  if (chart.data.datasets.length !== series.length || chart._partNames !== names) {
+    chart._partNames = names;
+    chart.data.datasets = series.map(part => ({
+      label: part.label,
+      data: [],
+      borderColor: part.color,
+      backgroundColor: part.color,
+      borderWidth: 1,
+      pointRadius: 0,
+      fill: true,
+      tension: 0.1,
+      stack: 'code',
+    }));
+  }
+  chart.data.labels = series[0].x.map(v => v.toFixed(1));
+  series.forEach((part, i) => { chart.data.datasets[i].data = part.y; });
+  applySustainedScale(chart, true);
+  chart.update('none');
+}
+const metricsConn = connTracker(2);
+
+async function refresh() {
+  try {
+    const data = await fetch('/api/metrics').then(r => r.json());
+    metricsConn.ok();
+    for (const key in data) {
+      if (key === 'code_parts') { renderCodeParts(data[key]); continue; }
+      const s = data[key];
+      const c = ensureChart(key, s.label, s.unit);
+      c.data.labels = s.x.map(v => v.toFixed(1));
+      c.data.datasets[0].data = s.y;
+      applySustainedScale(c, false);
+      c.update('none');
+      if ((s.y || []).length > 0) markHasData(key);
+    }
+  } catch(e) { console.error('Metrics refresh failed:', e); metricsConn.fail(); }
+}
+ispyPoll(refresh, 1000);
+
+window.addEventListener('beforeunload', () => {
+  navigator.sendBeacon('/api/metrics/save');
+});
+</script>
+{% endblock %}

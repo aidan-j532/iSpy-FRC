@@ -1,0 +1,332 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - iSpy{% endblock %}
+{% block head %}
+<style>
+.stat-value.skeleton { display: inline-block; min-width: 64px; }
+.plugin-group { width: 100%; }
+.plugin-group-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); transition: border-color 0.15s; }
+.plugin-group-head:hover { border-color: var(--accent); }
+.plugin-group-name { font-weight: 600; text-transform: capitalize; }
+.plugin-group-caret { margin-left: auto; color: var(--text-dim); }
+.plugin-group-body { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
+.plugin-group-body .plugin-item { padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+</style>
+{% endblock %}
+{% block content %}
+<h1>Mission Control</h1>
+
+<div class="grid stats-grid" id="stats">
+  <div class="card stat-card"><div class="stat-label">FPS</div><div class="stat-value skeleton" id="s-fps">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Vision</div><div class="stat-value skeleton" id="s-vis">--<span class="stat-unit">ms</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Loop</div><div class="stat-value skeleton" id="s-loop">--<span class="stat-unit">ms</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Detections</div><div class="stat-value skeleton" id="s-det">--</div></div>
+  <div class="card stat-card"><div class="stat-label">Camera Lag</div><div class="stat-value skeleton" id="s-lag">--<span class="stat-unit">ms</span></div></div>
+  <div class="card stat-card"><div class="stat-label">Uptime</div><div class="stat-value skeleton" id="s-up">--</div></div>
+</div>
+<div id="vision-status" class="vision-banner">Connecting&hellip;</div>
+
+<div class="dash-columns">
+  <div class="dash-col-left">
+    <div class="card">
+      <h3>Cameras</h3>
+      <div id="camera-list" class="camera-grid"></div>
+    </div>
+
+    <div class="card">
+      <h3>System</h3>
+      <div class="sys-grid" id="sys-grid">
+        <div class="sys-item"><span class="sys-label">CPU</span><span class="sys-val" id="sys-cpu">--</span></div>
+        <div class="sys-item"><span class="sys-label">Memory</span><span class="sys-val" id="sys-mem">--</span></div>
+        <div class="sys-item"><span class="sys-label">Temp</span><span class="sys-val" id="sys-temp">--</span></div>
+      </div>
+      <div class="progress-bar-wrap" id="cpu-bar-wrap" style="display:none;">
+        <div class="progress-bar" id="cpu-bar"></div>
+      </div>
+      <div class="progress-bar-wrap" id="mem-bar-wrap" style="display:none;">
+        <div class="progress-bar" id="mem-bar"></div>
+      </div>
+      <div class="hw-list" id="hw-list"></div>
+    </div>
+  </div>
+
+  <div class="dash-col-right">
+    <div class="card">
+      <h3>Current Model</h3>
+      <div id="model-info" class="model-info">No model loaded</div>
+    </div>
+
+    <div class="card">
+      <h3>Detection Breakdown</h3>
+      <div id="det-breakdown" class="det-breakdown"></div>
+    </div>
+
+    <div class="card">
+      <h3>Plugins</h3>
+      <div id="plugin-list" class="plugin-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function serviceCmd(cmd) {
+  const btn = event.target;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`http://${location.hostname}:5050/service/${cmd}`, { method: 'POST' });
+    const j = await r.json();
+    showToast(j.ok ? `Service ${cmd} sent` : (j.error || 'Failed'), j.ok ? 'success' : 'error');
+  } catch (e) {
+    showToast('Could not reach service daemon on port 5050', 'error');
+  }
+  setTimeout(() => btn.disabled = false, 1000);
+}
+
+function formatUptime(s) {
+  if (s == null) return '--';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function clearStatSkeletons() {
+  document.querySelectorAll('#stats .stat-value.skeleton').forEach(el => el.classList.remove('skeleton'));
+}
+
+function applyTick(data) {
+  document.getElementById('s-fps').textContent = data.fps ?? '--';
+  document.getElementById('s-vis').innerHTML = (data.vision_ms ?? '--') + '<span class="stat-unit">ms</span>';
+  document.getElementById('s-loop').innerHTML = (data.loop_s ?? '--') + '<span class="stat-unit">ms</span>';
+  document.getElementById('s-det').textContent = data.detections ?? '--';
+  document.getElementById('s-lag').innerHTML = (data.camera_lag_ms ?? '--') + '<span class="stat-unit">ms</span>';
+  if (data.uptime_s != null) document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
+  clearStatSkeletons();
+  if (data.vision_running != null) applyVisionBanner(!!data.vision_running);
+
+  const classes = data.detection_classes || {};
+  const clsEntries = Object.entries(classes);
+  document.getElementById('det-breakdown').innerHTML = clsEntries.length === 0
+    ? '<div class="empty-state">No detections</div>'
+    : clsEntries.map(([name, count]) =>
+      `<div class="det-item"><span class="det-class">${name}</span><span class="det-count">${count}</span></div>`
+    ).join('');
+
+  if (data.cameras) {
+    const cams = data.cameras;
+    const camHtml = cams.length === 0
+      ? '<div class="empty-state">No cameras configured</div>'
+      : cams.map(c => `
+        <div class="cam-item">
+          <span class="status-dot ${c.ok ? 'status-ok' : c.stale ? 'status-warn' : 'status-bad'}"></span>
+          <span class="cam-name">${c.name}</span>
+          <span class="cam-meta">${c.frame_age_ms != null ? c.frame_age_ms + 'ms' : '--'}${c.resolution ? ' | ' + c.resolution : ''}</span>
+        </div>`).join('');
+    document.getElementById('camera-list').innerHTML = camHtml;
+  }
+
+  if (data.system) applySystem(data.system);
+}
+
+function applyVisionBanner(running) {
+  const visionBanner = document.getElementById('vision-status');
+  visionBanner.className = 'vision-banner ' + (running ? 'vision-ok' : 'vision-bad');
+  visionBanner.textContent = running ? 'Vision is running' : 'Vision is not running, data will be stale';
+}
+
+// Group plugins by their section prefix, e.g. "FRC/object_tracker" -> "FRC",
+// "example/example_tracker" -> "example". Plugins with no section stay flat.
+function getPluginGroup(pluginName) {
+  const slash = String(pluginName).indexOf('/');
+  return slash > 0 ? String(pluginName).slice(0, slash) : null;
+}
+
+function pluginGroupLabel(groupName) {
+  return groupName.charAt(0).toUpperCase() + groupName.slice(1);
+}
+
+let lastAllPlugins = [];
+let lastGroupOrder = [];
+
+function togglePluginGroup(gi) {
+  const name = lastGroupOrder[gi];
+  if (name === undefined) return;
+  if (expandedGroups.has(name)) expandedGroups.delete(name);
+  else expandedGroups.add(name);
+  renderPluginList(lastAllPlugins);
+}
+
+const expandedGroups = new Set();
+
+function renderPluginList(allPlugins) {
+  lastAllPlugins = allPlugins;
+  const groups = {};
+  const ungrouped = [];
+
+  allPlugins.forEach(plugin => {
+    const groupName = getPluginGroup(plugin.name);
+    if (groupName) {
+      if (!groups[groupName]) groups[groupName] = [];
+      groups[groupName].push(plugin);
+    } else {
+      ungrouped.push(plugin);
+    }
+  });
+
+  lastGroupOrder = Object.keys(groups);
+
+  // collapsed by default, click to expand and reveal the individual plugins
+  const groupHtml = lastGroupOrder.map((groupName, gi) => {
+    const items = groups[groupName];
+    const open = expandedGroups.has(groupName);
+    return `
+      <div class="plugin-group">
+        <div class="plugin-item plugin-group-head" onclick="togglePluginGroup(${gi})">
+          <span class="plugin-pill">${items.length} enabled</span>
+          <span class="plugin-group-name">${pluginGroupLabel(groupName)}</span>
+          <span class="plugin-group-caret">${open ? '▾' : '▸'}</span>
+        </div>
+        ${open ? `<div class="plugin-group-body">${items.map(p =>
+          `<div class="plugin-item"><span class="plugin-pill">${p.type}</span> ${p.name}</div>`
+        ).join('')}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  const ungroupedHtml = ungrouped.map(plugin =>
+    `<div class="plugin-item"><span class="plugin-pill">${plugin.type}</span> ${plugin.name}</div>`
+  ).join('');
+
+  const finalHtml = [...groupHtml, ...ungroupedHtml].join('');
+
+  const pluginListElement = document.getElementById('plugin-list');
+  if (pluginListElement) {
+    pluginListElement.innerHTML = finalHtml || '<div class="empty-state">No plugins loaded</div>';
+  }
+}
+
+function applyFull(data) {
+  applyTick(data);
+
+  document.getElementById('s-up').textContent = formatUptime(data.uptime_s);
+
+  applyVisionBanner(!!data.vision_running);
+
+  const model = data.model || {};
+  document.getElementById('model-info').innerHTML = model.name
+    ? `<div class="model-name">${model.name}</div><div class="model-meta">${model.format ? model.format.toUpperCase() : ''} ${model.size_mb ? model.size_mb + ' MB' : ''}</div>`
+    : 'No model loaded';
+
+  const plugins = data.plugins || {};
+  const allPlugins = [
+    ...((plugins.trackers || []).map(n => ({name: n, type: 'tracker'}))),
+    ...((plugins.utilities || []).map(n => ({name: n, type: 'utility'}))),
+    ...((plugins.frame_processors || []).map(n => ({name: n, type: 'frame processor'}))),
+  ];
+
+  renderPluginList(allPlugins);
+
+  applySystem(data.system || {});
+}
+
+function applySystem(sys) {
+  document.getElementById('sys-cpu').textContent = sys.cpu_percent != null ? sys.cpu_percent + '%' : '--';
+  document.getElementById('sys-mem').textContent = sys.memory_percent != null ? `${sys.memory_percent}% (${sys.memory_used_mb}/${sys.memory_total_mb} MB)` : '--';
+  const tempUnit = sys.temperature_unit === 'fahrenheit' ? '°F' : '°C';
+
+  document.getElementById('sys-temp').textContent =
+      sys.temperature != null
+          ? sys.temperature + tempUnit
+          : '--';
+  const tempItem = document.getElementById('sys-temp').parentElement;
+
+  if (sys.temperature >= sys.temperature_warning) {
+      tempItem.classList.add('overheating');
+  } else {
+      tempItem.classList.remove('overheating');
+  }
+
+  const cpuBarWrap = document.getElementById('cpu-bar-wrap');
+  const memBarWrap = document.getElementById('mem-bar-wrap');
+  if (sys.cpu_percent != null) {
+    cpuBarWrap.style.display = 'block';
+    const cpuBar = document.getElementById('cpu-bar');
+    cpuBar.style.width = sys.cpu_percent + '%';
+    cpuBar.className = 'progress-bar' + (sys.cpu_percent > 90 ? ' bar-bad' : sys.cpu_percent > 70 ? ' bar-warn' : '');
+  }
+  if (sys.memory_percent != null) {
+    memBarWrap.style.display = 'block';
+    const memBar = document.getElementById('mem-bar');
+    memBar.style.width = sys.memory_percent + '%';
+    memBar.className = 'progress-bar' + (sys.memory_percent > 90 ? ' bar-bad' : sys.memory_percent > 70 ? ' bar-warn' : '');
+  }
+  applyHardware(sys.hardware);
+}
+
+const HW_LABELS = { cpu: 'CPU', gpu: 'GPU', npu: 'NPU', tpu: 'TPU' };
+
+function applyHardware(hwList) {
+  const list = document.getElementById('hw-list');
+  if (!list) return;
+  const hw = Array.isArray(hwList) ? hwList.filter(h => h && h.hardware) : [];
+  if (hw.length === 0) {
+    list.innerHTML = '<div class="empty-state">No dedicated accelerator in use</div>';
+    return;
+  }
+  list.innerHTML = hw.map(h => {
+    const hwType = HW_LABELS[(h.hardware || '').toLowerCase()] || h.hardware;
+    const load = h.load_percent;
+    const cams = (h.cameras || []).join(', ');
+    return `
+      <div class="hw-row" data-hw="${h.hardware}">
+        <div class="hw-head">
+          <span class="hw-name">${hwType}</span>
+          ${cams ? `<span class="hw-cams">${cams}</span>` : ''}
+          <span class="hw-val">${load != null ? load + '%' : '--'}</span>
+        </div>
+        <div class="progress-bar-wrap hw-track"><div class="progress-bar hw-bar" style="width:${load != null ? load : 0}%"></div></div>
+      </div>`;
+  }).join('');
+  // hover a chip's name -> the other accelerator rows recede so it's obvious
+  // which resource you're looking at
+  const rows = Array.from(list.querySelectorAll('.hw-row'));
+  rows.forEach(row => {
+    const name = row.querySelector('.hw-name');
+    name.addEventListener('mouseenter', () => {
+      rows.forEach(r => { if (r !== row) r.style.opacity = '0.25'; });
+    });
+    name.addEventListener('mouseleave', () => {
+      rows.forEach(r => r.style.opacity = '');
+    });
+  });
+}
+
+function connectSSE() {
+  const es = new EventSource('/api/events');
+  es.onmessage = (e) => {
+    connOk();
+    try {
+      const data = JSON.parse(e.data);
+      if (data.type === 'tick') applyTick(data);
+      else applyFull(data);
+    } catch(err) { console.error('SSE parse error:', err); }
+  };
+  es.onerror = () => {
+    connLost();
+    es.close();
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+connectSSE();
+
+async function pollVisionStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const j = await r.json();
+    applyVisionBanner(!!j.vision_running);
+  } catch (e) {}
+}
+ispyPoll(pollVisionStatus, 5000);
+</script>
+{% endblock %}

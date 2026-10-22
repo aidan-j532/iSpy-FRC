@@ -1,0 +1,919 @@
+import ast
+import functools
+import logging
+import os
+import re
+from functools import wraps
+from pathlib import Path
+
+from flask import jsonify, render_template, request
+
+import iSpy.plugins as _plugins_pkg
+from iSpy.core import network_policy
+from iSpy.plugins._loader import load_plugins
+from iSpy.plugins.bases import (
+    FrameProcessorBase,
+    TrackerBase,
+    UtilityBase,
+    VisionBase,
+    validate_output_key,
+)
+from iSpy.web.Backend.WebModule import WebModule
+
+logger = logging.getLogger(__name__)
+
+
+def _is_local_request() -> bool:
+    return request.remote_addr in ("127.0.0.1", "::1", "localhost")
+
+
+def require_local_or_token(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if _is_local_request():
+            return f(*args, **kwargs)
+        admin_token = os.environ.get("ISPY_ADMIN_TOKEN")
+        if not admin_token:
+            return jsonify(
+                error="Admin API is local-only. Set ISPY_ADMIN_TOKEN to enable remote access."
+            ), 403
+        provided = request.headers.get("X-iSpy-Admin-Token", "")
+        if provided != admin_token:
+            return jsonify(error="Invalid or missing admin token."), 403
+        return f(*args, **kwargs)
+
+    return wrapper
+
+
+_PLUGIN_ROOT = Path(_plugins_pkg.__file__).resolve().parent
+
+# vision pipelines are imported directly + registered in a static dict
+# (iSpy/vision/pipelines/__init__.py), not scanned via load_plugins(). The
+# _TYPE_MAP entry below shows them in /addons as read-only built-ins.
+_TYPE_MAP = {
+    "tracker": ("trackers", TrackerBase, "TrackerBase", "update"),
+    "utility": ("utilities", UtilityBase, "UtilityBase", "update"),
+    "frame_processor": (
+        "frame_processors",
+        FrameProcessorBase,
+        "FrameProcessorBase",
+        "process",
+    ),
+    "vision_pipeline": ("pipelines", VisionBase, "VisionBase", "run"),
+}
+
+_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+_ADDON_TYPES_FROM_PTYPE = {
+    "tracker": "trackers",
+    "utility": "utilities",
+    "frame_processor": "frame_processors",
+}
+
+# core frame_data keys offered as NetworkTables publish sources; detections
+# keeps its special-case struct[] handling
+_CORE_PUBLISH_SOURCES = [
+    {"source": "fps", "label": "fps"},
+    {"source": "loop_s", "label": "loop_s"},
+    {"source": "vision_s", "label": "vision_s"},
+    {"source": "camera_lag_s", "label": "camera_lag_s"},
+    {"source": "detection_count", "label": "detection_count"},
+    {"source": "detections", "label": "detections (struct[])"},
+    {"source": "robot_pose.x", "label": "robot_pose.x"},
+    {"source": "robot_pose.y", "label": "robot_pose.y"},
+    {"source": "robot_pose.heading", "label": "robot_pose.heading"},
+]
+
+
+def _coerce_setting_value(value, defn: dict):
+    if not isinstance(defn, dict):
+        return value
+    stype = defn.get("type")
+    if stype == "number":
+        if isinstance(value, bool):
+            raise ValueError(f"'{defn.get('label', 'value')}' must be a number")
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"'{defn.get('label', 'value')}' must be a number, got {value!r}"
+            ) from None
+        # numbers stay ints when the JSON payload was an int
+        return (
+            int(num) if isinstance(value, int) and not isinstance(value, bool) else num
+        )
+    if stype == "toggle":
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+    if stype == "text":
+        return str(value)
+    if stype == "range":
+        label = defn.get("label", "value")
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError(f"'{label}' must be a two number range")
+        lo_bound = defn.get("min", 0)
+        hi_bound = defn.get("max", 255)
+        nums = []
+        for part in value:
+            if isinstance(part, bool):
+                raise ValueError(f"'{label}' must contain numbers")
+            try:
+                nums.append(float(part))
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"'{label}' must contain numbers, got {part!r}"
+                ) from None
+        lo = min(max(nums[0], lo_bound), hi_bound)
+        hi = min(max(nums[1], lo_bound), hi_bound)
+        # a wrapped range (hue) is allowed to run lo > hi, it just means the
+        # band wraps through 0
+        if lo > hi and not defn.get("wrap"):
+            raise ValueError(f"'{label}' low end must not be above the high end")
+        if isinstance(defn.get("step", 1), int):
+            return [int(round(lo)), int(round(hi))]
+        return [lo, hi]
+    if stype == "list":
+        if not isinstance(value, list):
+            raise ValueError(f"'{defn.get('label', 'value')}' must be a list")
+        fields = defn.get("fields", {})
+        clean = []
+        for idx, row in enumerate(value):
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"Row {idx + 1} of '{defn.get('label', 'value')}' must be an object"
+                )
+            clean_row = {}
+            for fkey, fdefn in fields.items():
+                if fkey in row:
+                    clean_row[fkey] = _coerce_setting_value(row[fkey], fdefn)
+            clean.append(clean_row)
+        return clean
+    return value
+
+
+@functools.lru_cache(maxsize=3)
+def _build_vision_pipeline_payloads(admin=None):
+    from iSpy.vision.pipelines import get_pipeline_classes
+
+    # Experimental pipelines that are only offered to admins.
+    # admin=True shows exactly these; admin=False hides them; admin=None (no
+    # admin setting, i.e. existing callers/tests) shows everything.
+    _ADMIN_ONLY_PIPELINES = ("qr_code", "optical_flow")
+
+    pipelines = []
+    try:
+        vision_classes = get_pipeline_classes()
+    except Exception:
+        logger.exception("Failed to load vision pipelines")
+        return pipelines
+
+    for name, cls in sorted(vision_classes.items()):
+        if admin is not None:
+            is_admin_pipeline = name in _ADMIN_ONLY_PIPELINES
+            if not admin and is_admin_pipeline:
+                continue
+        try:
+            schema = cls.config_schema()
+        except Exception:
+            logger.warning(
+                "Failed to load config schema for vision pipeline '%s'", name
+            )
+            continue
+        if schema is None:
+            schema = {}
+        payload = {
+            "name": name,
+            "class_name": cls.__name__,
+            "label": getattr(cls, "display_name", None),
+            "config_schema": schema,
+            "show_common_fields": bool(
+                getattr(cls, "show_common_fields", lambda: True)()
+            ),
+            "show_calibration": bool(getattr(cls, "show_calibration", lambda: True)()),
+            "calibration_sections": getattr(cls, "calibration_sections", ["charuco"]),
+            "requires_calibration": bool(cls.requires_calibration()),
+            "beta": bool(getattr(cls, "beta", False)),
+            "hardware": list(getattr(cls, "hardware_options", lambda: ())()),
+            "uses_model_profile": bool(
+                getattr(cls, "uses_model_profile", lambda: False)()
+            ),
+        }
+        if hasattr(cls, "recommended_format"):
+            try:
+                payload["recommended_format"] = cls.recommended_format()
+            except Exception:
+                pass
+        pipelines.append(payload)
+    return pipelines
+
+
+def _active_pipeline_names(config) -> set:
+    names = set()
+    try:
+        cameras = getattr(config, "camera_configs", None) or {}
+        for cam in cameras.values():
+            name = getattr(cam, "pipeline_name", None)
+            if callable(name):
+                name = name()
+            if name:
+                names.add(str(name))
+    except Exception:
+        logger.warning("Failed to read active camera pipelines")
+    return names
+
+
+# evaluate an add-on's declared internet needs for the addons page. one entry
+# per camera; settings-aware, so a cached model needs nothing
+def _network_info(cls, settings_list: list[dict]) -> dict:
+    critical: list[str] = []
+    optional: list[str] = []
+    for settings in settings_list or [{}]:
+        try:
+            reqs = list(cls.network_requirements(settings or {}) or [])
+        except Exception:
+            reqs = []
+        for req in reqs:
+            bucket = critical if req.critical else optional
+            if req.reason not in bucket:
+                bucket.append(req.reason)
+    offline = network_policy.is_offline()
+    return {
+        "needs_internet": bool(critical or optional),
+        "critical": critical,
+        "optional": optional,
+        # the loader skips critical add-ons while offline, optional needs only
+        # turn one feature off
+        "skipped": offline and bool(critical),
+        "degraded": offline and not critical and bool(optional),
+    }
+
+
+def _pipeline_settings_list(config, name: str) -> list[dict]:
+    out: list[dict] = []
+    try:
+        for cam in (getattr(config, "camera_configs", None) or {}).values():
+            if cam.pipeline_name() == name:
+                out.append(dict(cam.pipeline_settings() or {}))
+    except Exception:
+        out = []
+    return out or [{}]
+
+
+# libraries that only ever exist to talk to the internet - uploaded add-on
+# code importing one of these with no offline declaration gets a warning
+_NETWORK_IMPORT_ROOTS = ("requests", "urllib", "httpx", "aiohttp")
+
+
+# best-effort AST scan for a networked add-on with no offline declaration. a
+# warning, never a rejection - worst case the socket guard stops it anyway
+def _offline_declaration_warning(code: str) -> str | None:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+
+    imports_network = False
+    for node in ast.walk(tree):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        for full in names:
+            root = full.split(".")[0]
+            if root in _NETWORK_IMPORT_ROOTS or full.startswith("http."):
+                imports_network = True
+
+    if not imports_network:
+        return None
+
+    declares = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "network_requirements":
+            declares = True
+            break
+        if isinstance(node, ast.Assign):
+            if any(
+                isinstance(target, ast.Name) and target.id == "needs_internet"
+                for target in node.targets
+            ):
+                declares = True
+                break
+
+    if declares:
+        return None
+    return (
+        "This add-on imports network libraries but declares no offline "
+        "behavior - set needs_internet = True or implement "
+        "network_requirements() so offline mode can gate it."
+    )
+
+
+class PluginStatusModule(WebModule):
+    plugin_name = "plugin_status"
+
+    def register_routes(self, flask_app):
+        flask_app.add_url_rule(
+            "/addons", "addons_page", lambda: render_template("addons.html")
+        )
+        # Back-compat alias
+        flask_app.add_url_rule(
+            "/plugins", "plugins_page", lambda: render_template("addons.html")
+        )
+
+        flask_app.add_url_rule(
+            "/api/plugins/status", "api_plugins_status", self._status
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/available", "api_plugins_available", self._available
+        )
+        flask_app.add_url_rule(
+            "/api/network", "api_network", self._network
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/toggle", "api_plugins_toggle", self._toggle, methods=["POST"]
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/settings",
+            "api_plugins_settings",
+            self._save_settings,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/upload",
+            "api_plugins_upload",
+            require_local_or_token(self._upload),
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/create",
+            "api_plugins_create",
+            require_local_or_token(self._create),
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/<ptype>/<name>",
+            "api_plugins_delete",
+            require_local_or_token(self._delete),
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/<ptype>/<name>/source",
+            "api_plugins_source",
+            self._source,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/plugins/publish-sources",
+            "api_plugins_publish_sources",
+            self._publish_sources,
+        )
+
+    # read
+
+    def _status(self):
+        vision = self.context.get("vision_instance")
+        if not vision:
+            return jsonify(plugins=[], vision_running=False)
+        out = []
+        for group, items in (
+            ("tracker", vision.trackers),
+            ("utility", vision.utilities),
+            ("frame_processor", vision.frame_processors),
+        ):
+            for name, inst in items.items():
+                out.append(
+                    {
+                        "name": name,
+                        "type": group,
+                        "status": inst.get_status()
+                        if hasattr(inst, "get_status")
+                        else "unknown",
+                    }
+                )
+        return jsonify(plugins=out, vision_running=True)
+
+    def _vision_pipelines(self):
+        return jsonify(pipelines=_build_vision_pipeline_payloads())
+
+    def _network(self):
+        # base.html polls this for the offline banner, skipped/degraded grow as
+        # boot and the run loop record them
+        return jsonify(network_policy.get_report())
+
+    def _available(self):
+        config = self.context.get("config")
+        active_pipelines = _active_pipeline_names(config)
+
+        available = []
+        for ptype, (subdir, base_cls, _, _) in _TYPE_MAP.items():
+            if ptype == "vision_pipeline":
+                # built-in pipelines are core code, listed from the static
+                # registry instead of a dir scan - shown read-only
+                from iSpy.vision.pipelines import get_pipeline_classes
+
+                for name, cls in sorted(get_pipeline_classes().items()):
+                    group = name.rsplit("/", 1)[0] if "/" in name else None
+                    available.append(
+                        {
+                            "name": name,
+                            "group": group,
+                            "type": ptype,
+                            "enabled": False,
+                            "builtin": True,
+                            "beta": bool(getattr(cls, "beta", False)),
+                            "doc": (cls.__doc__ or "").strip()[:200],
+                            "filename": f"{name}.py",
+                            "network": _network_info(
+                                cls, _pipeline_settings_list(config, name)
+                            ),
+                        }
+                    )
+                continue
+            discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
+            for name, cls in discovered.items():
+                settings = {}
+                enabled = False
+                if config:
+                    addon_settings = config.get_addon_settings(
+                        _TYPE_MAP[ptype][0], name
+                    )
+                    if addon_settings is not None:
+                        enabled = True
+                        settings = addon_settings
+                try:
+                    schema = cls.config_schema()
+                except Exception:
+                    logger.warning("Failed to load config schema for add-on '%s'", name)
+                    schema = {}
+                filename = self._filename_for(subdir, name)
+                # files under <subdir>/BuiltIn/ are iSpy's bundled add-ons:
+                # toggleable/configureable but not deletable. Template add-ons
+                # (example_*) also ship with iSpy, so they get the same
+                # built-in treatment instead of reading as user-authored.
+                is_builtin = bool(filename and filename.startswith("BuiltIn/")) or bool(
+                    getattr(cls, "template", False)
+                )
+                supported = getattr(cls, "supported_pipelines", None)
+                supported = list(supported) if supported else []
+                group = name.rsplit("/", 1)[0] if "/" in name else None
+                available.append(
+                    {
+                        "name": name,
+                        "group": group,
+                        "type": ptype,
+                        "enabled": enabled,
+                        "builtin": is_builtin,
+                        "template": bool(getattr(cls, "template", False)),
+                        "doc": (cls.__doc__ or "").strip()[:200],
+                        "filename": filename,
+                        "config_schema": schema if isinstance(schema, dict) else {},
+                        "settings": settings,
+                        "supported_pipelines": supported,
+                        "pipeline_warning": sorted(active_pipelines - set(supported))
+                        if supported
+                        else [],
+                        "network": _network_info(
+                            cls, [settings if isinstance(settings, dict) else {}]
+                        ),
+                    }
+                )
+        return jsonify(available=available)
+
+    def _publish_sources(self):
+        config = self.context.get("config")
+        addon_sources = []
+        try:
+            discovered = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
+        except Exception:
+            logger.exception("Failed to load utility plugins for publish sources")
+            discovered = {}
+        for name, cls in sorted(discovered.items()):
+            settings = config.get_addon_settings("utilities", name) if config else None
+            if settings is None:
+                continue  # only enabled utilities expose outputs
+            schema = {}
+            try:
+                schema = cls.config_schema() or {}
+            except Exception:
+                logger.warning("Failed to load config schema for add-on '%s'", name)
+            raw = settings.get(
+                "output_key", schema.get("output_key", {}).get("default")
+            )
+            key, _err = validate_output_key(raw)
+            if not key:
+                continue
+            addon_sources.append(
+                {
+                    "source": f"addon_data.{key}",
+                    "label": f"{key} ({name})",
+                    "utility": name,
+                }
+            )
+        by_source: dict[str, list[dict]] = {}
+        for entry in addon_sources:
+            by_source.setdefault(entry["source"], []).append(entry)
+        for group in by_source.values():
+            if len(group) > 1:
+                for entry in group:
+                    entry["duplicate"] = True
+        return jsonify(
+            sources=_CORE_PUBLISH_SOURCES
+            + sorted(addon_sources, key=lambda e: e["source"])
+        )
+
+    def _filename_for(self, subdir: str, plugin_name: str) -> str | None:
+        # best-effort: find the file whose plugin_name matches so the UI
+        # can offer delete/edit without re-parsing modules itself
+        base_cls_map = {v[0]: v[1] for v in _TYPE_MAP.values()}
+        base_cls = base_cls_map.get(subdir)
+        if not base_cls:
+            return None
+        d = _PLUGIN_ROOT / subdir
+        for path in sorted(d.rglob("*.py")):
+            if path.name.startswith("_"):
+                continue
+            try:
+                text = path.read_text(errors="ignore")
+                if f'"{plugin_name}"' in text or f"'{plugin_name}'" in text:
+                    return path.relative_to(d).as_posix()
+            except Exception:
+                continue
+        return None
+
+    def _source(self, ptype, name):
+        info = _TYPE_MAP.get(ptype)
+        if not info:
+            return jsonify(error="Unknown addon type"), 400
+        if ptype == "vision_pipeline":
+            return jsonify(
+                error="Built-in vision pipelines are bundled with iSpy - "
+                "their source is not viewable from the web UI."
+            ), 403
+        subdir = info[0]
+        # resolve the real file by plugin name - handles both custom
+        # add-ons in <subdir>/ and bundled ones under <subdir>/BuiltIn/
+        rel = self._filename_for(subdir, name)
+        if not rel:
+            return jsonify(error="Not found"), 404
+        base = (_PLUGIN_ROOT / subdir).resolve()
+        path = (base / rel).resolve()
+        try:
+            path.relative_to(base)
+        except ValueError:
+            return jsonify(error="Invalid filename"), 400
+        if not path.exists():
+            return jsonify(error="Not found"), 404
+        return jsonify(source=path.read_text(errors="ignore"), filename=rel)
+
+    # toggle (enable/disable in config)
+
+    def _toggle(self):
+        data = request.get_json(force=True)
+        name = data.get("name")
+        plugin_type = data.get("type")
+        enable = data.get("enable", True)
+
+        if not name or plugin_type not in _TYPE_MAP:
+            return jsonify(error="Missing/invalid name or type"), 400
+
+        if plugin_type == "vision_pipeline":
+            return jsonify(
+                error="Vision pipelines are selected per camera in Camera "
+                "Settings - they are not toggled here."
+            ), 400
+
+        subdir, base_cls, _, _ = _TYPE_MAP[plugin_type]
+        discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
+        if name not in discovered:
+            return jsonify(error=f"Unknown {plugin_type} addon: '{name}'"), 404
+
+        config = self.context.get("config")
+        if not config:
+            return jsonify(error="No config available"), 500
+
+        # plugins.<type> is a dict of enabled add-on -> settings; presence IS
+        # the enabled state, so toggling adds/removes the entry
+        config_type = {
+            "tracker": "trackers",
+            "utility": "utilities",
+            "frame_processor": "frame_processors",
+        }[plugin_type]
+
+        if enable:
+            # write the schema defaults into the config entry so settings
+            # show up in Config/config.json right away (not an empty {}
+            # that only fills in after a manual save)
+            defaults = {}
+            try:
+                schema = discovered[name].config_schema() or {}
+            except Exception:
+                logger.warning("Failed to load config schema for add-on '%s'", name)
+                schema = {}
+            for _key, _defn in schema.items():
+                if isinstance(_defn, dict) and "default" in _defn:
+                    defaults[_key] = _defn["default"]
+            config.enable_addon(config_type, name, settings=defaults, save=False)
+        else:
+            config.disable_addon(config_type, name, save=False)
+        config.save()
+
+        return jsonify(
+            success=True,
+            enabled=config.is_addon_enabled(config_type, name),
+            needs_restart=True,
+        )
+
+    # settings (edit an enabled add-on's settings)
+
+    def _save_settings(self):
+        data = request.get_json(force=True)
+        name = data.get("name")
+        plugin_type = data.get("type")
+        settings = data.get("settings") or {}
+
+        if not name or plugin_type not in _TYPE_MAP:
+            return jsonify(error="Missing/invalid name or type"), 400
+        if plugin_type == "vision_pipeline":
+            return jsonify(
+                error="Vision pipelines are configured per camera - their "
+                "settings are not edited here."
+            ), 400
+        if not isinstance(settings, dict):
+            return jsonify(error="settings must be a JSON object"), 400
+
+        subdir, base_cls, _, _ = _TYPE_MAP[plugin_type]
+        discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
+        cls = discovered.get(name)
+        if cls is None:
+            return jsonify(error=f"Unknown {plugin_type} addon: '{name}'"), 404
+
+        config = self.context.get("config")
+        if not config:
+            return jsonify(error="No config available"), 500
+
+        config_type = {
+            "tracker": "trackers",
+            "utility": "utilities",
+            "frame_processor": "frame_processors",
+        }[plugin_type]
+        if not config.is_addon_enabled(config_type, name):
+            return jsonify(
+                error=f"'{name}' is not enabled - enable it first, then edit "
+                f"its settings."
+            ), 409
+
+        # validate + coerce against the schema so bad values never hit config;
+        # unknown keys are rejected (typo-proof)
+        try:
+            schema = cls.config_schema() or {}
+        except Exception:
+            schema = {}
+        clean = {}
+        for key, value in settings.items():
+            defn = schema.get(key)
+            if defn is None:
+                return jsonify(
+                    error=f"Unknown setting '{key}' for add-on '{name}'"
+                ), 400
+            try:
+                clean[key] = _coerce_setting_value(value, defn)
+            except ValueError as e:
+                return jsonify(error=str(e)), 400
+
+        if config_type == "utilities" and "output_key" in clean:
+            normalized, err = validate_output_key(clean["output_key"])
+            if normalized is None:
+                return jsonify(error=err or "Invalid Output Key"), 400
+            clean["output_key"] = normalized
+
+        config.update_addon_settings(config_type, name, clean, save=False)
+        config.save()
+
+        return jsonify(
+            success=True,
+            settings=config.get_addon_settings(config_type, name),
+            needs_restart=True,
+        )
+
+    # create / upload / delete
+
+    def _resolve_safe_path(self, subdir: str, filename: str) -> Path | None:
+        base = (_PLUGIN_ROOT / subdir).resolve()
+        # never touch BuiltIn/ (reserved for iSpy's own bundled add-ons)
+        stem = Path(filename).stem
+        if not _NAME_RE.match(stem):
+            return None
+        target = (base / f"{stem}.py").resolve()
+        try:
+            target.relative_to(base)
+        except ValueError:
+            return None
+        return target
+
+    def _validate_addon_source(
+        self, ptype: str, code: str, expected_class_name: str | None
+    ) -> str | None:
+        subdir, base_cls, base_name, _ = _TYPE_MAP[ptype]
+
+        if len(code) > 200_000:
+            return "File too large."
+
+        # Reject dangerous builtins before AST parsing
+        _DANGEROUS = (
+            "eval(",
+            "exec(",
+            "__import__(",
+            "subprocess.",
+            "os.system(",
+            "pty.",
+            "socket.",
+        )
+        for pat in _DANGEROUS:
+            if pat in code:
+                return f"Add-on source contains forbidden pattern: {pat.rstrip('(')}"
+
+        # Use AST to confirm a class genuinely subclasses the expected base
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as exc:
+            return f"Add-on source has a syntax error: {exc}"
+
+        found_subclass = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for base in node.bases:
+                base_id = ""
+                if isinstance(base, ast.Name):
+                    base_id = base.id
+                elif isinstance(base, ast.Attribute):
+                    base_id = base.attr
+                if base_id == base_name:
+                    found_subclass = True
+                    break
+            if found_subclass:
+                break
+
+        if not found_subclass:
+            return (
+                f"Add-on must subclass {base_name} (import it from iSpy.plugins.bases)."
+            )
+
+        # Check plugin_name is assigned inside the subclass body
+        has_plugin_name = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for base in node.bases:
+                base_id = ""
+                if isinstance(base, ast.Name):
+                    base_id = base.id
+                elif isinstance(base, ast.Attribute):
+                    base_id = base.attr
+                if base_id == base_name:
+                    for item in node.body:
+                        if isinstance(item, ast.Assign):
+                            for target in item.targets:
+                                if (
+                                    isinstance(target, ast.Name)
+                                    and target.id == "plugin_name"
+                                ):
+                                    has_plugin_name = True
+                                    break
+                    break
+            if has_plugin_name:
+                break
+
+        if not has_plugin_name:
+            return "Add-on class must define a 'plugin_name' class attribute."
+
+        return None
+
+    def _create(self):
+        data = request.get_json(force=True) or {}
+        ptype = data.get("type")
+        code = data.get("code", "")
+        filename = data.get("filename") or data.get("name")
+
+        if ptype not in _TYPE_MAP:
+            return jsonify(
+                error="type must be tracker, utility, or frame_processor"
+            ), 400
+        if ptype == "vision_pipeline":
+            return jsonify(
+                error="Vision pipelines are built into iSpy and selected per "
+                "camera - user-authored pipelines are not supported."
+            ), 400
+        if not filename:
+            return jsonify(error="filename/name required"), 400
+        if not code.strip():
+            return jsonify(error="code is empty"), 400
+
+        err = self._validate_addon_source(ptype, code, None)
+        if err:
+            return jsonify(error=err), 400
+        warning = _offline_declaration_warning(code)
+
+        subdir = _TYPE_MAP[ptype][0]
+        path = self._resolve_safe_path(subdir, filename)
+        if path is None:
+            return jsonify(error="Invalid filename"), 400
+        if path.exists():
+            return jsonify(error=f"'{path.name}' already exists"), 409
+        from iSpy.web.Backend.WebModule import ensure_disk_space
+
+        space_err = ensure_disk_space(path, len(code.encode("utf-8")))
+        if space_err:
+            return jsonify(error=space_err), 503
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(code)
+
+        return jsonify(
+            success=True,
+            filename=path.name,
+            note="Add-on saved. Restart vision to detect and enable it.",
+            warning=warning,
+        )
+
+    def _upload(self):
+        ptype = request.form.get("type") or request.args.get("type")
+        f = request.files.get("file")
+
+        if ptype not in _TYPE_MAP:
+            return jsonify(
+                error="type must be tracker, utility, or frame_processor"
+            ), 400
+        if ptype == "vision_pipeline":
+            return jsonify(
+                error="Vision pipelines are built into iSpy and selected per "
+                "camera - user-authored pipelines are not supported."
+            ), 400
+        if not f or not f.filename.endswith(".py"):
+            return jsonify(error="Upload a .py file"), 400
+
+        code = f.read().decode("utf-8", errors="replace")
+        err = self._validate_addon_source(ptype, code, None)
+        if err:
+            return jsonify(error=err), 400
+        warning = _offline_declaration_warning(code)
+
+        subdir = _TYPE_MAP[ptype][0]
+        path = self._resolve_safe_path(subdir, f.filename)
+        if path is None:
+            return jsonify(error="Invalid filename"), 400
+        if path.exists():
+            return jsonify(
+                error=f"'{path.name}' already exists. Delete it first or rename your file."
+            ), 409
+        from iSpy.web.Backend.WebModule import ensure_disk_space
+
+        space_err = ensure_disk_space(path, len(code.encode("utf-8")))
+        if space_err:
+            return jsonify(error=space_err), 503
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(code)
+
+        return jsonify(
+            success=True,
+            filename=path.name,
+            note="Add-on uploaded. Restart vision to detect and enable it.",
+            warning=warning,
+        )
+
+    def _delete(self, ptype, name):
+        if ptype not in _TYPE_MAP:
+            return jsonify(error="Unknown addon type"), 400
+        if ptype == "vision_pipeline":
+            return jsonify(error="Cannot delete a built-in add-on."), 403
+
+        subdir, base_cls, _, _ = _TYPE_MAP[ptype]
+        path = self._resolve_safe_path(subdir, name)
+        if path is None or not path.exists():
+            return jsonify(error="Not found"), 404
+        if "BuiltIn" in path.parts:
+            return jsonify(error="Cannot delete a built-in add-on."), 403
+
+        # if its enabled in config, disable it first so we dont leave a
+        # dangling ref the loader cant resolve
+        config = self.context.get("config")
+        discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
+        plugin_name = None
+        for pname, cls in discovered.items():
+            try:
+                if Path(cls.__module__.replace(".", "/") + ".py").name == path.name:
+                    plugin_name = pname
+                    break
+            except Exception:
+                continue
+
+        if config and plugin_name:
+            config_key = _ADDON_TYPES_FROM_PTYPE[ptype]
+            config.disable_addon(config_key, plugin_name, save=False)
+            config.save()
+
+        path.unlink()
+        return jsonify(success=True, note="Add-on deleted. Restart vision to apply.")

@@ -1,0 +1,2255 @@
+import base64
+import copy
+import json
+import logging
+import os
+import threading
+from pathlib import Path
+import cv2
+import time
+from flask import Response, jsonify, render_template, request, send_file
+import numpy as np
+from iSpy.web.Backend.WebModule import WebModule
+from iSpy.core import performance
+from iSpy.web.Backend.save_store import read, write
+from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
+from iSpy.config.iSpyConfig import (
+    _CAMERA_CORE_KEYS,
+    default_vision_model,
+    is_model_backed_pipeline,
+    get_pipeline_name,
+    get_pipeline_settings,
+    ensure_camera_entries_ready,
+)
+from iSpy.vision import calibration as cam_calibration
+from iSpy.vision.Cameras import OpenCVCamera, TelloCamera
+
+COCO17_OBJECT_POINTS = [
+    [0.00, 0.62, 0.00],  # 0  nose
+    [0.02, 0.67, 0.00],  # 1  left_eye
+    [-0.02, 0.67, 0.00],  # 2  right_eye
+    [0.05, 0.65, 0.00],  # 3  left_ear
+    [-0.05, 0.65, 0.00],  # 4  right_ear
+    [0.17, 0.45, 0.00],  # 5  left_shoulder
+    [-0.17, 0.45, 0.00],  # 6  right_shoulder
+    [0.30, 0.22, 0.00],  # 7  left_elbow
+    [-0.30, 0.22, 0.00],  # 8  right_elbow
+    [0.35, 0.00, 0.00],  # 9  left_wrist
+    [-0.35, 0.00, 0.00],  # 10 right_wrist
+    [0.10, -0.05, 0.00],  # 11 left_hip
+    [-0.10, -0.05, 0.00],  # 12 right_hip
+    [0.10, -0.40, 0.00],  # 13 left_knee
+    [-0.10, -0.40, 0.00],  # 14 right_knee
+    [0.10, -0.75, 0.00],  # 15 left_ankle
+    [-0.10, -0.75, 0.00],  # 16 right_ankle
+]
+
+_STALE_EVICT_S = 10.0
+_FEED_TIMEOUT_S = 15.0
+# how long a recent MJPEG pull keeps counting as "someone is watching"
+_FEED_VIEWER_GRACE_S = 3.0
+
+# auto-capture loop: the wizard's live feed stores a board frame by itself once
+# it is complete enough and moved from every prior capture, and runs a rolling
+# solve for a live RMS readout - the user just keeps moving the board around in
+# front of the camera until they pause and calibrate intrinsics
+_AUTO_CAPTURE_MIN_SOLVE = 6
+_AUTO_COVERAGE_MIN = 0.6
+_AUTO_DIVERSITY_PX = 12.0
+
+# live calibration feed tuning: board detection is by far the most expensive
+# step, so it runs on a downscaled work copy (corners are mapped back to the
+# full-res pixel space the solve expects) and the served overlay feed is
+# capped in width so JPEG encode stays cheap. Detection runs at a higher res
+# than before (subpixel corner accuracy scales with detection resolution).
+_DETECT_MAX_DIM = 1280
+_FEED_MAX_DIM = 1280
+# overlay feeds hold their opening chunk until the detector's first tick (or
+# this deadline) so the first frame served is already annotated
+_CALIB_FEED_WARMUP_S = 1.5
+# the rolling solve is the other big periodic CPU spike - left unchecked it
+# re-runs a full bundle solve on every captured frame (every ~0.25-0.5s while
+# the board is being moved), which stutters the live feed. The native OpenCV
+# solver is ~30x faster than the scipy bundle, so the budget here is much
+# tighter than before: solve on a short cadence (RMS preview converges almost
+# as fast as captures accumulate) but still bound the number of frames.
+_AUTO_SOLVE_INTERVAL_S = 0.75
+_AUTO_SOLVE_MAX_CAPTURES = 10
+# how many captured-frame overlays to draw on each streamed frame (see
+# _draw_captured_overlays - captures never stop accumulating under auto capture)
+_MAX_OVERLAYS_DRAWN = 20
+
+logger = logging.getLogger(__name__)
+
+# legacy alias keys - dropped when the canonical key is present so old configs
+# dont carry dead twins around forever
+_SETTING_ALIASES = {"quantized": "quantize", "auto_opt": "optimize"}
+
+# image tuning knobs (sliders in the camera lightbox). these live on the cam
+# entry like the other capture keys; the live Camera applies them immediately
+_TUNING_KEYS = (
+    "brightness",
+    "contrast",
+    "saturation",
+    "white_balance",
+    "tint",
+    "gamma",
+    "exposure_time",
+    "gain",
+)
+_TUNING_DEFAULTS = {
+    "brightness": 0,
+    "contrast": 0,
+    "saturation": 0,
+    "white_balance": 0,
+    "tint": 0,
+    "gamma": 1.0,
+    "exposure_time": 100,
+    "gain": 200,
+}
+
+
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _camera_calibrated(entry: dict) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    calib = entry.get("calibration") or {}
+    return (
+        bool(calib.get("camera_matrix") and calib.get("dist_coeffs") is not None)
+        or bool(calib.get("focal_length_pixels"))
+        or _to_float(calib.get("fov")) > 0
+    )
+
+
+def _decode_base64_frame(image_b64):
+    if isinstance(image_b64, str) and image_b64.startswith("data:"):
+        image_b64 = image_b64.split(",", 1)[-1]
+    try:
+        raw = base64.b64decode(image_b64)
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
+
+def _pipeline_schema_keys(pipeline_name: str) -> set:
+    try:
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        cls = get_pipeline_classes().get(pipeline_name)
+    except Exception:
+        cls = None
+    if cls is None:
+        return set()
+    try:
+        schema = cls.config_schema() or {}
+    except Exception:
+        return set()
+    return set(schema) | {"vision_model"}
+
+
+def _prune_stale_pipeline_settings(entry: dict) -> None:
+    if not isinstance(entry, dict):
+        return
+    pipeline_name = get_pipeline_name(entry)
+    settings = get_pipeline_settings(entry)
+    if not settings:
+        return
+    try:
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        foreign = set()
+        for name, cls in get_pipeline_classes().items():
+            if name == pipeline_name:
+                continue
+            try:
+                foreign |= set((cls.config_schema() or {}).keys())
+            except Exception:
+                continue
+    except Exception:
+        foreign = set()
+    allowed = _pipeline_schema_keys(pipeline_name)
+    for key in [k for k in settings if k in foreign and k not in allowed]:
+        del settings[key]
+    for alias, canonical in _SETTING_ALIASES.items():
+        if alias in settings and canonical in settings:
+            del settings[alias]
+
+
+def _vision_model_target_format(settings: dict) -> str:
+    fmt = str(settings.get("target_format") or "auto").strip().lower()
+    if fmt and fmt != "auto":
+        return fmt
+    try:
+        from iSpy.vision.pipelines.object_detection import ObjectDetectionPipeline
+
+        return ObjectDetectionPipeline.recommended_format()
+    except Exception:
+        return "onnx"
+
+
+def _vision_model_rel_path(path) -> str:
+    p = Path(str(path or ""))
+    if p.is_absolute():
+        try:
+            return p.resolve().relative_to(Path.cwd().resolve()).as_posix()
+        except ValueError:
+            return str(p)
+    return p.as_posix()
+
+
+def _resolve_vision_model_files(settings: dict) -> None:
+    vm = settings.get("vision_model")
+    if not isinstance(vm, dict):
+        return
+    src = str(vm.get("source_pt") or vm.get("file_path") or "")
+    if not src.lower().endswith(".pt"):
+        return
+    try:
+        from iSpy.vision.optimizer import existing_artifact_for
+    except Exception:
+        return
+    pt_rel = _vision_model_rel_path(src)
+    artifact = existing_artifact_for(Path(src), _vision_model_target_format(settings))
+    vm["source_pt"] = pt_rel
+    vm["file_path"] = artifact or pt_rel
+
+
+def _profile_pipeline_class(pipeline_name: str):
+    try:
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        cls = get_pipeline_classes().get(pipeline_name)
+    except Exception:
+        return None
+    if cls is None or not getattr(cls, "uses_model_profile", lambda: False)():
+        return None
+    return cls
+
+
+def _save_model_profile(config, pipeline_name: str, settings: dict) -> None:
+    cls = _profile_pipeline_class(pipeline_name)
+    if cls is None:
+        return
+    try:
+        status = cls.check_profile(settings)
+        if status.get("valid"):
+            config.upsert_model_profile(
+                pipeline_name,
+                cls.derive_profile_name(settings),
+                settings,
+                save=False,
+            )
+    except Exception:
+        pass
+
+
+class CamerasModule(WebModule):
+    plugin_name = "cameras"
+
+    def __init__(self, context: dict):
+        super().__init__(context)
+        self.lock = threading.Lock()
+        self.frames: dict[str, "np.ndarray"] = {}
+        self.dims: dict[str, tuple[int, int]] = {}
+        self.last_seen: dict[str, float] = {}
+        self.sources: dict[str, str] = {}
+        self.live_cameras: dict[str, object] = {}
+        self._discover_cache: list = []
+        self._discover_cache_ts: float = 0.0
+        self._discover_lock = threading.Lock()
+        self.calib_sessions: dict[str, dict] = {}
+        self.calib_lock = threading.Lock()
+        self._auto_discover_stop = threading.Event()
+        self._auto_discover_thread: threading.Thread | None = None
+        self._sse_lock = threading.Lock()
+        self._sse_clients: list = []
+        # last pull time per camera's MJPEG stream - the loop uses this (plus
+        # the page's device SSE) to decide what's worth building
+        self._feed_seen: dict[str, float] = {}
+
+    def has_viewers(self, now: float = 0.0) -> bool:
+        now = now or time.monotonic()
+        if any(now - t < _FEED_VIEWER_GRACE_S for t in self._feed_seen.values()):
+            return True
+        with self._sse_lock:
+            return bool(self._sse_clients)
+
+    def register_routes(self, flask_app):
+        flask_app.add_url_rule(
+            "/cameras", "cameras_page", lambda: render_template("cameras.html")
+        )
+        flask_app.add_url_rule("/api/cameras", "api_cameras", self._api_cameras)
+        flask_app.add_url_rule(
+            "/api/cameras/discover", "api_cameras_discover", self._discover
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/sources", "api_cameras_sources", self._sources
+        )
+        flask_app.add_url_rule("/video/<camera_name>", "video_feed", self._video_feed)
+        flask_app.add_url_rule(
+            "/api/cameras/config",
+            "api_cameras_config_add",
+            self._add_camera,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/config/<cam_name>",
+            "api_cameras_config_get",
+            self._get_camera,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/config/<cam_name>",
+            "api_cameras_config_update",
+            self._update_camera,
+            methods=["PUT"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/config/<cam_name>",
+            "api_cameras_config_delete",
+            self._remove_camera,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/profile/<device_id>",
+            "api_cameras_profile",
+            self._get_profile,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/tuning/<cam_name>",
+            "api_cameras_tuning_get",
+            self._tuning_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/tuning/<cam_name>",
+            "api_cameras_tuning_set",
+            self._tuning_set,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/actions/<action_id>",
+            "api_cameras_action",
+            self._camera_action,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/pipeline_settings",
+            "api_cameras_pipeline_settings_get",
+            self._pipeline_settings_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/pipeline_settings",
+            "api_cameras_pipeline_settings_set",
+            self._pipeline_settings_set,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/sample_hsv",
+            "api_cameras_sample_hsv",
+            self._sample_hsv,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines
+        )
+        flask_app.add_url_rule(
+            "/api/camera_schemas", "api_camera_schemas", self._camera_schemas
+        )
+        flask_app.add_url_rule(
+            "/api/model_profiles/<pipeline>",
+            "api_model_profiles",
+            self._model_profiles,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/model_profiles/<pipeline>/check",
+            "api_model_profiles_check",
+            self._model_profile_check,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/model_profiles/<pipeline>/<name>",
+            "api_model_profiles_delete",
+            self._model_profile_delete,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>",
+            "api_cameras_calibration_get",
+            self._calibration_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>",
+            "api_cameras_calibration_reset",
+            self._calibration_reset,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/focal",
+            "api_cameras_calibration_focal",
+            self._calibration_focal,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/charuco/capture",
+            "api_cameras_charuco_capture",
+            self._charuco_capture,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/charuco/status",
+            "api_cameras_charuco_status",
+            self._charuco_status,
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/charuco",
+            "api_cameras_charuco_clear",
+            self._charuco_clear,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/charuco/finish",
+            "api_cameras_charuco_finish",
+            self._charuco_finish,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/feed",
+            "api_cameras_calibration_feed",
+            self._calibration_feed,
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/mode",
+            "api_cameras_calibration_mode",
+            self._calibration_mode,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/heartbeat",
+            "api_cameras_calibration_heartbeat",
+            self._calibration_heartbeat,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/auto",
+            "api_cameras_auto_set",
+            self._auto_set,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/auto/status",
+            "api_cameras_auto_status",
+            self._auto_status,
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/pnp",
+            "api_cameras_pnp_get",
+            self._pnp_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/pnp",
+            "api_cameras_pnp_save",
+            self._pnp_save,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/<cam_name>/pnp",
+            "api_cameras_pnp_clear",
+            self._pnp_clear,
+            methods=["DELETE"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/calibration/board",
+            "api_calibration_board_pdf",
+            self._calibration_board_pdf,
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/events", "api_cameras_events", self._sse_stream
+        )
+
+    def start(self):
+        if (
+            self._auto_discover_thread is None
+            or not self._auto_discover_thread.is_alive()
+        ):
+            self._auto_discover_stop.clear()
+            self._auto_discover_thread = threading.Thread(
+                target=self._auto_discover_loop, daemon=True, name="AutoDiscover"
+            )
+            self._auto_discover_thread.start()
+
+    def stop(self):
+        self._auto_discover_stop.set()
+        if self._auto_discover_thread and self._auto_discover_thread.is_alive():
+            self._auto_discover_thread.join(timeout=3)
+
+    def _auto_discover_loop(self):
+        last_device_ids: set = set()
+        while not self._auto_discover_stop.is_set():
+            self._auto_discover_stop.wait(10.0)
+            if self._auto_discover_stop.is_set():
+                break
+            try:
+                devices = self._probe_devices()
+                current_ids = {d.get("device_id") or d.get("path") for d in devices}
+                if current_ids != last_device_ids:
+                    new_ids = current_ids - last_device_ids
+                    removed_ids = last_device_ids - current_ids
+                    last_device_ids = current_ids
+                    self._push_sse(
+                        {
+                            "type": "cameras_changed",
+                            "devices": devices,
+                            "new": [
+                                d
+                                for d in devices
+                                if (d.get("device_id") or d.get("path")) in new_ids
+                            ],
+                            "removed_ids": list(removed_ids),
+                        }
+                    )
+            except Exception:
+                pass
+
+    def _sse_stream(self):
+        def generate():
+            q: list = []
+            with self._sse_lock:
+                self._sse_clients.append(q)
+            try:
+                while True:
+                    while q:
+                        payload = q.pop(0)
+                        yield f"data: {json.dumps(payload)}\n\n"
+                    time.sleep(0.1)
+            except GeneratorExit:
+                pass
+            finally:
+                with self._sse_lock:
+                    if q in self._sse_clients:
+                        self._sse_clients.remove(q)
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    def _push_sse(self, payload: dict):
+        with self._sse_lock:
+            for q in self._sse_clients:
+                q.append(payload)
+
+    def _camera_display_name(self, cam, fallback: str = "camera") -> str:
+        if hasattr(cam, "config") and cam.config is not None:
+            name = cam.config.get("name") if hasattr(cam.config, "get") else None
+            if name:
+                return str(name)
+        source = getattr(cam, "source", None)
+        if source is not None:
+            return str(source)
+        return fallback
+
+    def _pnp_model_info(self, entry):
+        settings = get_pipeline_settings(entry) or {}
+        vm = settings.get("vision_model")
+        if not isinstance(vm, dict) or not vm.get("file_path"):
+            return None, None, "Camera has no vision_model configured"
+        from iSpy.vision.metadata import read_metadata
+
+        model_path = Path(vm["file_path"])
+        if not model_path.is_absolute():
+            model_path = Path.cwd() / model_path
+        meta = read_metadata(model_path) or {}
+        if meta.get("task") != "pose":
+            return (
+                vm,
+                None,
+                "Model is not a pose model - PnP needs keypoints (task=pose)",
+            )
+        kpt_shape = meta.get("kpt_shape")
+        if not kpt_shape:
+            return (
+                vm,
+                None,
+                "Model metadata has no kpt_shape - re-run boot to regenerate the sidecar",
+            )
+        return vm, int(kpt_shape[0]), None
+
+    def _pnp_get(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        vm, num_kpts, err = self._pnp_model_info(entry)
+        calib = entry.get("calibration") or {}
+        has_intrinsics = bool(calib.get("camera_matrix") and calib.get("dist_coeffs"))
+        existing_pnp = vm.get("pnp") if isinstance(vm, dict) else None
+
+        # Auto-fill COCO17 defaults for shipped pose models
+        default_object_points = None
+        if num_kpts == 17 and not existing_pnp:
+            fp = (vm or {}).get("file_path", "") or ""
+            sp = (vm or {}).get("source_pt", "") or ""
+            if "_default_pose" in fp or "_default_pose" in sp:
+                default_object_points = COCO17_OBJECT_POINTS
+
+        return jsonify(
+            model_error=err,
+            num_keypoints=num_kpts,
+            has_intrinsics=has_intrinsics,
+            pnp=existing_pnp,
+            default_object_points=default_object_points,
+        )
+
+    def _pnp_save(self, cam_name):
+        data = request.get_json(force=True) or {}
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+
+        vm, num_kpts, err = self._pnp_model_info(entry)
+        if err:
+            return jsonify(error=err), 400
+
+        calib = entry.get("calibration") or {}
+        camera_matrix = calib.get("camera_matrix")
+        dist_coeffs = calib.get("dist_coeffs")
+        if not camera_matrix or dist_coeffs is None:
+            return jsonify(
+                error="No ChArUco intrinsics on this camera yet - run that calibration first"
+            ), 400
+
+        object_points = data.get("object_points")
+        if not isinstance(object_points, list) or len(object_points) != num_kpts:
+            return jsonify(
+                error=f"object_points must have exactly {num_kpts} [x,y,z] entries"
+            ), 400
+        for pt in object_points:
+            if not (
+                isinstance(pt, list)
+                and len(pt) == 3
+                and all(isinstance(v, (int, float)) for v in pt)
+            ):
+                return jsonify(
+                    error="Each object_points entry must be [x, y, z] numbers"
+                ), 400
+
+        mode = data.get("mode", "flexible")
+        if mode not in ("flexible", "rigid"):
+            return jsonify(error="mode must be 'flexible' or 'rigid'"), 400
+        try:
+            min_keypoint_conf = float(data.get("min_keypoint_conf", 0.5))
+        except (TypeError, ValueError):
+            return jsonify(error="min_keypoint_conf must be a number"), 400
+
+        settings = get_pipeline_settings(entry)
+        vm_entry = settings.get("vision_model")
+        if not isinstance(vm_entry, dict):
+            return jsonify(error="Camera has no vision_model configured"), 400
+
+        vm_entry["pnp"] = {
+            "object_points": object_points,
+            "camera_matrix": camera_matrix,
+            "dist_coeffs": dist_coeffs,
+            "min_keypoint_conf": min_keypoint_conf,
+            "mode": mode,
+        }
+
+        config = self.context["config"]
+        config.set("camera_configs", cams)
+        config.save()
+        return jsonify(
+            success=True, pnp=vm_entry["pnp"], note="Restart vision to apply."
+        )
+
+    def _pnp_clear(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        settings = get_pipeline_settings(entry)
+        vm_entry = settings.get("vision_model")
+        if isinstance(vm_entry, dict):
+            vm_entry.pop("pnp", None)
+        config = self.context["config"]
+        config.set("camera_configs", cams)
+        config.save()
+        return jsonify(success=True)
+
+    def _camera_aliases(self, cam) -> set[str]:
+        aliases = {self._camera_display_name(cam, "camera")}
+        source = getattr(cam, "source", None)
+        if source is not None:
+            aliases.add(str(source))
+        device_id = getattr(cam, "device_id", None)
+        if device_id:
+            aliases.add(str(device_id))
+        return aliases
+
+    def update(self, frame_data: dict):
+        frame = frame_data.get("frame")
+        cameras = frame_data.get("cameras") or []
+        cam_by_name = {
+            self._camera_display_name(cam, str(getattr(cam, "source", ""))): cam
+            for cam in cameras
+        }
+        self.live_cameras = cam_by_name
+        per_cam = frame_data.get("camera_frames")
+        now = time.monotonic()
+        if (
+            performance.get_profile().skip_web_without_viewers
+            and not self.has_viewers(now)
+        ):
+            # nobody has the page (or a feed) open - holding every camera frame
+            # every tick feeds zero readers
+            return
+        with self.lock:
+            if per_cam:
+                for name, f in per_cam.items():
+                    if f is None:
+                        continue
+                    matched_cams = []
+                    if name in cam_by_name:
+                        matched_cams.append(cam_by_name[name])
+                    else:
+                        for cam in cameras:
+                            if name in self._camera_aliases(cam):
+                                matched_cams.append(cam)
+                                break
+                    if not matched_cams and cameras:
+                        matched_cams = [cameras[0]]
+
+                    for cam in matched_cams:
+                        display_name = self._camera_display_name(cam, str(name))
+                        self.frames[display_name] = f
+                        self.dims[display_name] = f.shape[1], f.shape[0]
+                        self.last_seen[display_name] = now
+                        self.sources[display_name] = self._device_key(cam)
+            elif frame is None:
+                pass
+            elif cameras:
+                cam = cameras[0]
+                name = self._camera_display_name(cam, "camera_1")
+                self.frames[name] = frame
+                self.dims[name] = frame.shape[1], frame.shape[0]
+                self.last_seen[name] = now
+                self.sources[name] = self._device_key(cam)
+            else:
+                self.frames["camera_1"] = frame
+                self.dims["camera_1"] = frame.shape[1], frame.shape[0]
+                self.last_seen["camera_1"] = now
+
+            self._evict_stale(now)
+
+    def _device_key(self, cam) -> str:
+        dev_id = getattr(cam, "device_id", None)
+        if dev_id:
+            return dev_id
+        return str(getattr(cam, "source", ""))
+
+    def _get_profile(self, device_id):
+        profiles = read("camera_profiles", {})
+        return jsonify(profile=profiles.get(device_id))
+
+    # ------------------------------------------------------------------
+    # Camera image tuning (live sliders in the lightbox)
+    # ------------------------------------------------------------------
+
+    def _tuning_values(self, entry: dict) -> dict:
+        values = dict(_TUNING_DEFAULTS)
+        for key in _TUNING_KEYS:
+            if key in entry:
+                values[key] = entry[key]
+        return values
+
+    def _live_cam_for(self, key: str, cam_name: str):
+        for lookup in (key, cam_name):
+            cam = self.live_cameras.get(lookup)
+            if cam is not None:
+                return cam
+        return None
+
+    def _tuning_get(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        values = self._tuning_values(entry)
+        live = None
+        cam = self._live_cam_for(key, cam_name)
+        if cam is not None and hasattr(cam, "get_image_adjustments"):
+            try:
+                live = cam.get_image_adjustments()
+            except Exception:
+                live = None
+        return jsonify(camera=key, values=values, live=live)
+
+    def _tuning_set(self, cam_name):
+        data = request.get_json(force=True) or {}
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        cleaned = {}
+        for k in _TUNING_KEYS:
+            if k in data:
+                cleaned[k] = data[k]
+        if not cleaned:
+            return jsonify(error="No tuning values provided"), 400
+        for k, v in cleaned.items():
+            if v is None:
+                entry.pop(k, None)
+            else:
+                entry[k] = v
+        config = self.context["config"]
+        config.set("camera_configs", cams)
+        config.save()
+        cam = self._live_cam_for(key, cam_name)
+        if cam is not None and hasattr(cam, "set_image_adjustments"):
+            try:
+                applied = cam.set_image_adjustments(cleaned)
+            except Exception as exc:
+                return jsonify(error=f"Failed to apply tuning: {exc}"), 500
+        else:
+            applied = self._tuning_values(entry)
+            return jsonify(
+                success=True,
+                note="Saved to config. Restart vision to apply - camera is not live.",
+                applied=applied,
+            )
+        return jsonify(
+            success=True,
+            note="Saved - applies immediately to the live feed.",
+            applied=applied,
+        )
+
+    def _persist_live_settings(self, key: str, inst) -> dict:
+        # write settings changed by a camera action back to config
+        taker = getattr(inst, "take_pending_settings", None)
+        if not callable(taker):
+            return {}
+        try:
+            pending = taker() or {}
+        except Exception:
+            return {}
+        if not pending:
+            return {}
+        cams, _key, entry = self._find_camera_entry(key)
+        if entry is None:
+            return {}
+        settings = get_pipeline_settings(entry)
+        settings.update(pending)
+        config = self.context["config"]
+        config.set("camera_configs", cams)
+        config.save(quiet=True)
+        return pending
+
+    def _camera_action(self, cam_name, action_id):
+        _cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        inst = self._live_cam_for(key, cam_name)
+        if inst is None:
+            return jsonify(error="Camera is not live"), 404
+        get_actions = getattr(inst, "get_actions", None)
+        invoke = getattr(inst, "invoke_action", None)
+        if not callable(get_actions) or not callable(invoke):
+            return jsonify(error="Camera does not support actions"), 404
+        try:
+            declared = {
+                action.get("id")
+                for action in (get_actions() or [])
+                if isinstance(action, dict)
+            }
+        except Exception:
+            declared = set()
+        # only dispatch actions the pipeline declared
+        if action_id not in declared:
+            return jsonify(error=f"Unknown action '{action_id}'"), 404
+
+        data = request.get_json(silent=True) or {}
+        try:
+            result = invoke(action_id, data.get("value"))
+        except Exception as exc:
+            logger.exception("Camera action '%s' failed", action_id)
+            return jsonify(ok=False, error=str(exc)), 500
+
+        result = result or {"ok": False, "error": "no result"}
+        if result.get("ok"):
+            self._persist_live_settings(key, inst)
+        return jsonify(result)
+
+    def _pipeline_settings_get(self, cam_name):
+        _cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        pipeline_name = get_pipeline_name(entry)
+        cls = get_pipeline_classes().get(pipeline_name)
+        if cls is None:
+            return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 404
+        schema = cls.config_schema() or {}
+        stored = get_pipeline_settings(entry) or {}
+        settings = {
+            name: stored.get(name, defn.get("default"))
+            for name, defn in schema.items()
+        }
+        live = None
+        inst = self._live_cam_for(key, cam_name)
+        if inst is not None and hasattr(inst, "current_settings"):
+            try:
+                live = inst.current_settings()
+            except Exception:
+                live = None
+        return jsonify(
+            camera=key,
+            pipeline=pipeline_name,
+            live_tunable=bool(getattr(cls, "live_tunable", False)),
+            schema=schema,
+            settings=settings,
+            live=live,
+        )
+
+    def _pipeline_settings_set(self, cam_name):
+        data = request.get_json(force=True) or {}
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        pipeline_name = get_pipeline_name(entry)
+        cls = get_pipeline_classes().get(pipeline_name)
+        if cls is None:
+            return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 404
+        schema = cls.config_schema() or {}
+        # only allow keys that exist in the schema
+        allowed = {name: value for name, value in data.items() if name in schema}
+        if not allowed:
+            return jsonify(error="No pipeline settings provided"), 400
+
+        config = self.context["config"]
+        inst = self._live_cam_for(key, cam_name)
+        if inst is not None and hasattr(inst, "update_settings"):
+            try:
+                applied = inst.update_settings(allowed) or {}
+            except Exception as exc:
+                return jsonify(error=f"Failed to apply settings: {exc}"), 500
+            if not applied:
+                return jsonify(error="No settings were applied"), 400
+            note = "Applied live."
+        else:
+            applied = allowed
+            note = "Saved to config. Restart vision to apply - camera is not live."
+
+        settings = get_pipeline_settings(entry)
+        for name, value in applied.items():
+            settings[name] = list(value) if isinstance(value, tuple) else value
+        config.set("camera_configs", cams)
+        config.save(quiet=True)
+        return jsonify(success=True, note=note, applied=applied)
+
+    def _sample_hsv(self, cam_name):
+        _cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        inst = self._live_cam_for(key, cam_name)
+        if inst is None:
+            return jsonify(error="Camera is not live"), 404
+        getter = getattr(inst, "get_raw_frame", None)
+        if not callable(getter):
+            return jsonify(error="Camera has no raw frame"), 404
+        try:
+            frame = getter()
+        except Exception as exc:
+            return jsonify(error=f"Could not read a frame: {exc}"), 500
+        if frame is None or getattr(frame, "size", 0) == 0:
+            return jsonify(error="No frame available"), 404
+        try:
+            x = float(request.args.get("x", 0))
+            y = float(request.args.get("y", 0))
+        except (TypeError, ValueError):
+            return jsonify(error="x and y must be numbers"), 400
+
+        frame_h, frame_w = frame.shape[:2]
+        # click is in displayed pixels, map it back to the frame
+        disp_w = _to_float(request.args.get("w"), frame_w) or frame_w
+        disp_h = _to_float(request.args.get("h"), frame_h) or frame_h
+        px = int(round(x * frame_w / disp_w))
+        py = int(round(y * frame_h / disp_h))
+        px = min(max(px, 0), frame_w - 1)
+        py = min(max(py, 0), frame_h - 1)
+
+        # median of a small patch avoids hot pixels
+        patch = frame[max(0, py - 2) : min(frame_h, py + 3), max(0, px - 2) : min(frame_w, px + 3)]
+        if patch.size == 0:
+            return jsonify(error="Sample is outside the frame"), 400
+        hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        h = int(np.median(hsv[:, :, 0]))
+        s = int(np.median(hsv[:, :, 1]))
+        v = int(np.median(hsv[:, :, 2]))
+        return jsonify(x=px, y=py, w=frame_w, h=frame_h, hsv=[h, s, v])
+
+    def _vision_pipelines(self):
+        config = self.context["config"]
+        return jsonify(
+            pipelines=_build_vision_pipeline_payloads(admin=config.get("admin"))
+        )
+
+    def _camera_schemas(self):
+        # Serve each camera-source's config_schema() straight from the backend
+        # so the frontend never hardcodes a second copy that can drift (BUG 5).
+        from iSpy.vision.Cameras import get_camera_classes
+
+        schemas = {}
+        for cam_type, cls in get_camera_classes().items():
+            try:
+                schemas[cam_type] = cls.config_schema() or {}
+            except Exception:
+                schemas[cam_type] = {}
+        return jsonify(schemas=schemas)
+
+    # ------------------------------------------------------------------
+    # Model profiles (auto-saved pipeline settings, see _save_model_profile)
+    # ------------------------------------------------------------------
+
+    def _model_profiles(self, pipeline):
+        cls = _profile_pipeline_class(pipeline)
+        if cls is None:
+            return jsonify(error=f"Pipeline '{pipeline}' has no model profiles"), 404
+        items = []
+        for name, settings in self.context["config"].model_profiles(pipeline).items():
+            if not isinstance(settings, dict):
+                continue
+            try:
+                status = cls.check_profile(settings)
+            except Exception:
+                status = {
+                    "valid": False,
+                    "level": "error",
+                    "message": "Profile could not be checked",
+                    "details": {},
+                }
+            items.append({"name": name, "settings": settings, "status": status})
+        valid = sum(1 for it in items if it["status"].get("valid") is True)
+        return jsonify(profiles=items, pipeline=pipeline, valid=valid)
+
+    def _model_profile_check(self, pipeline):
+        cls = _profile_pipeline_class(pipeline)
+        if cls is None:
+            return jsonify(error=f"Pipeline '{pipeline}' has no model profiles"), 404
+        data = request.get_json(force=True) or {}
+        settings = data.get("settings")
+        if not isinstance(settings, dict):
+            return jsonify(error="settings must be an object"), 400
+        status = cls.check_profile(settings)
+        name = ""
+        if status.get("valid"):
+            name = cls.derive_profile_name(settings)
+        return jsonify(name=name, status=status)
+
+    def _model_profile_delete(self, pipeline, name):
+        cls = _profile_pipeline_class(pipeline)
+        if cls is None:
+            return jsonify(error=f"Pipeline '{pipeline}' has no model profiles"), 404
+        if not self.context["config"].delete_model_profile(pipeline, name):
+            return jsonify(error="Profile not found"), 404
+        return jsonify(success=True)
+
+    # ------------------------------------------------------------------
+    # Camera calibration (web wizard)
+    # ------------------------------------------------------------------
+
+    def _save_calibration(self, cam_name: str, calib_dict: dict):
+        config = self.context["config"]
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return None
+        merged = dict(entry.get("calibration") or {})
+        merged.update(calib_dict)
+        entry["calibration"] = merged
+        config.set("camera_configs", cams)
+        config.save()
+        # the running pipeline holds a snapshot of its camera config from
+        # vision start, so the config-only save above leaves it reporting
+        # "needs calibration" until a restart. poke the live copy so the
+        # status (and the detection gating) flip without one.
+        self._push_calibration_live(key, merged)
+        return merged
+
+    def _live_camera_for(self, cam_key: str):
+        # live_cameras is keyed by display name, which can differ from the
+        # config key - match on the entry's name/source too
+        cam = self.live_cameras.get(cam_key)
+        if cam is not None:
+            return cam
+        cams = self.context["config"].get("camera_configs", {})
+        entry = cams.get(cam_key)
+        if not isinstance(entry, dict):
+            return None
+        name = entry.get("name")
+        source = entry.get("source")
+        for inst in self.live_cameras.values():
+            if name is not None and self._camera_display_name(inst) == str(name):
+                return inst
+            if source is not None and str(getattr(inst, "source", "")) == str(source):
+                return inst
+        return None
+
+    def _push_calibration_live(self, cam_key: str, calibration: dict):
+        cam = self._live_camera_for(cam_key)
+        if cam is None:
+            return
+        try:
+            cam.config.data["calibration"] = calibration
+        except Exception:
+            pass
+
+    def _calibration_get(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+        return jsonify(
+            camera=key,
+            pipeline=get_pipeline_name(entry),
+            calibration=entry.get("calibration") or {},
+            charuco_captures=len(session.get("charuco_captures", [])),
+            charuco_pattern=session.get(
+                "charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)
+            ),
+            charuco_dict=session.get("charuco_dict"),
+            auto_enabled=bool(session.get("auto_enabled", True)),
+        )
+
+    def _calibration_reset(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            self.calib_sessions.pop(key, None)
+        saved = self._save_calibration(
+            key,
+            {
+                "distance": 0,
+                "game_piece_size": 0,
+                "size": 0,
+                "fov": 0,
+            },
+        )
+        for stale in (
+            "camera_matrix",
+            "dist_coeffs",
+            "resolution",
+            "rms",
+            "count",
+            "focal_length_pixels",
+        ):
+            saved.pop(stale, None)
+        config = self.context["config"]
+        entry["calibration"] = saved
+        config.set("camera_configs", cams)
+        config.save()
+        # same live-sync as the save path - a reset has to clear the running
+        # pipeline's snapshot too, or it keeps saying it's calibrated
+        self._push_calibration_live(key, saved)
+        return jsonify(success=True, calibration=saved)
+
+    def _calibration_board_pdf(self):
+        assets = Path(__file__).resolve().parent.parent.parent / "assets"
+        pdf_path = assets / "calibration_board.pdf"
+        if not pdf_path.exists():
+            cam_calibration.generate_calibration_board_pdf(str(pdf_path))
+        if not pdf_path.exists():
+            return jsonify(error="Calibration board PDF not available"), 404
+        return send_file(
+            str(pdf_path),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name="calibration_board.pdf",
+        )
+
+    def _calibration_focal(self, cam_name):
+        data = request.get_json(force=True) or {}
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        real_size = _to_float(data.get("real_size"))
+        distance = _to_float(data.get("distance"))
+        pixel_height = _to_float(data.get("pixel_height"))
+        frame_width = int(_to_float(data.get("frame_width")))
+        if real_size <= 0 or distance <= 0 or pixel_height <= 0 or frame_width <= 0:
+            return jsonify(
+                error="Object size, distance, measured pixel height and frame width must all be positive"
+            ), 400
+        focal_px = cam_calibration.focal_from_object(real_size, distance, pixel_height)
+        fov_deg = cam_calibration.fov_from_focal(focal_px, frame_width)
+        saved = self._save_calibration(
+            key,
+            {
+                "distance": round(distance, 4),
+                "game_piece_size": round(real_size, 4),
+                "size": round(pixel_height, 2),
+                "fov": round(fov_deg, 3),
+                "focal_length_pixels": round(focal_px, 2),
+            },
+        )
+        return jsonify(
+            success=True,
+            focal_length_px=round(focal_px, 2),
+            fov_deg=round(fov_deg, 3),
+            calibration=saved,
+        )
+
+    def _calibration_mode(self, cam_name):
+        data = request.get_json(force=True) or {}
+        active = bool(data.get("active", True))
+        cam = self.live_cameras.get(cam_name)
+        if cam is not None and hasattr(cam, "set_calibration"):
+            cam.set_calibration(active)
+        return jsonify(success=True)
+
+    def _calibration_heartbeat(self, cam_name):
+        cam = self.live_cameras.get(cam_name)
+        if cam is not None and hasattr(cam, "calibration_heartbeat"):
+            cam.calibration_heartbeat()
+        return jsonify(success=True)
+
+    # ------------------------------------------------------------------
+    # Auto capture: the live feed stores diverse board frames by itself and
+    # runs a rolling solve for a live RMS readout. It never stops or saves on
+    # its own - it keeps going until the user pauses, then the wizard's
+    # "Calibrate intrinsics" button saves over the captured frames.
+    # ------------------------------------------------------------------
+
+    def _auto_set(self, cam_name):
+        data = request.get_json(force=True) or {}
+        _, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        key = key or cam_name
+        enabled = bool(data.get("enabled", True))
+        with self.calib_lock:
+            session = self.calib_sessions.setdefault(key, {})
+            session["auto_enabled"] = enabled
+            if enabled:
+                session["auto_state"] = "capturing"
+                session["auto_msg"] = ""
+                session["auto_rms"] = None
+        return jsonify(success=True, enabled=enabled)
+
+    def _auto_status(self, cam_name):
+        _, key, _ = self._find_camera_entry(cam_name)
+        key = key or cam_name
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+            payload = {
+                "enabled": bool(session.get("auto_enabled", False)),
+                "state": session.get("auto_state", "idle"),
+                "rms": session.get("auto_rms"),
+                "message": session.get("auto_msg", ""),
+                "captured": {
+                    "charuco": len(session.get("charuco_captures") or []),
+                },
+            }
+        return jsonify(**payload)
+
+    def _auto_hint(self, cam_name, msg):
+        _, key, _ = self._find_camera_entry(cam_name)
+        key = key or cam_name
+        with self.calib_lock:
+            session = self.calib_sessions.get(key)
+            if session and session.get("auto_enabled"):
+                session["auto_msg"] = msg
+
+    def _auto_consider(
+        self,
+        key,
+        kind,
+        gray,
+        corners,
+        ids=None,
+        pattern=None,
+        dict_id=None,
+        _synchronous=True,
+    ):
+        need_solve = False
+        now = time.monotonic()
+        with self.calib_lock:
+            session = self.calib_sessions.get(key)
+            if not session or not session.get("auto_enabled"):
+                return
+            if pattern is None:
+                pattern = tuple(
+                    session.get(
+                        "charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)
+                    )
+                )
+            pattern = tuple(int(x) for x in pattern[:2])
+            expected = cam_calibration.expected_charuco_corners(pattern)
+            if cam_calibration.capture_coverage(corners, expected) < _AUTO_COVERAGE_MIN:
+                session["auto_msg"] = (
+                    "Board too small or partly out of frame - fill more of the view"
+                )
+                return
+            captures = session.setdefault("charuco_captures", [])
+            if not cam_calibration.frame_diverse(corners, captures, _AUTO_DIVERSITY_PX):
+                session["auto_msg"] = (
+                    f"Same pose as a captured frame - keep moving the board ({len(captures)} frames)"
+                )
+                return
+            if ids is None or len(corners) < 4:
+                return
+            captures.append((gray, corners, ids))
+            session.setdefault("charuco_overlays", []).append(
+                (corners, ids, None, None, cam_calibration.random_overlay_color())
+            )
+            session["charuco_pattern"] = list(pattern)
+            session["auto_rms"] = None
+            session["auto_state"] = "capturing"
+            session["auto_msg"] = (
+                f"Auto-captured {len(captures)} frames - keep moving the board"
+            )
+            if len(captures) >= _AUTO_CAPTURE_MIN_SOLVE:
+                if not session.get("auto_solving") and (
+                    now - session.get("last_solve_at", 0.0) >= _AUTO_SOLVE_INTERVAL_S
+                ):
+                    session["auto_solving"] = True
+                    session["last_solve_at"] = now
+                    need_solve = True
+        if not need_solve:
+            return
+        if _synchronous:
+            self._auto_solve_and_finalize(key, kind, pattern, dict_id)
+        else:
+            threading.Thread(
+                target=self._auto_solve_and_finalize,
+                args=(key, kind, pattern, dict_id),
+                daemon=True,
+            ).start()
+
+    def _auto_solve_and_finalize(self, key, kind, pattern, dict_id):
+        try:
+            result = self._auto_solve(key, kind, pattern, dict_id)
+        except Exception as exc:
+            logger.warning("Auto calibration solve failed: %s", exc)
+            result = None
+        finally:
+            with self.calib_lock:
+                session = self.calib_sessions.get(key)
+                if session:
+                    session["auto_solving"] = False
+        if result is None:
+            with self.calib_lock:
+                session = self.calib_sessions.get(key)
+                if session:
+                    session["auto_state"] = "capturing"
+                    session["auto_msg"] = (
+                        "Captured frames solve poorly - keep moving the board through more angles"
+                    )
+
+    def _auto_solve(self, key, kind, pattern, dict_id):
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+            captures = list(session.get("charuco_captures") or [])
+            kwargs = {}
+            if dict_id is not None:
+                kwargs["dictionary_id"] = dict_id
+        if len(captures) < 3:
+            return None
+        captures = captures[-_AUTO_SOLVE_MAX_CAPTURES:]
+        try:
+            result = cam_calibration.calibrate_charuco(captures, pattern, **kwargs)
+        except cv2.error as exc:
+            logger.warning("Auto calibration failed: %s", exc)
+            return None
+        if result is None:
+            return None
+        with self.calib_lock:
+            session = self.calib_sessions.get(key)
+            if session:
+                session["auto_rms"] = result.get("rms")
+        return result
+
+    def _calibration_feed(self, cam_name):
+        overlay = request.args.get("overlay", "")
+        pattern_arg = request.args.get("pattern")
+        dict_arg = request.args.get("dict")
+        pattern = None
+        if pattern_arg:
+            try:
+                pattern = tuple(int(p) for p in pattern_arg.split(",")[:2])
+            except ValueError:
+                pattern = None
+        dict_id = None
+        if dict_arg:
+            try:
+                dict_id = int(dict_arg)
+            except (TypeError, ValueError):
+                dict_id = None
+        return Response(
+            self._generate_calibration(
+                cam_name, overlay=overlay, pattern=pattern, dict_id=dict_id
+            ),
+            mimetype="multipart/x-mixed-replace; boundary=frame",
+        )
+
+    def _charuco_session_layout(self, cam_name):
+        _, key, _ = self._find_camera_entry(cam_name)
+        key = key or cam_name
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+            p = session.get("charuco_pattern")
+            d = session.get("charuco_dict")
+        return tuple(p) if p else None, d
+
+    def _remember_charuco_layout(self, cam_name, pattern, dictionary_id):
+        if pattern is None:
+            return
+        _, key, _ = self._find_camera_entry(cam_name)
+        key = key or cam_name
+        with self.calib_lock:
+            session = self.calib_sessions.setdefault(key, {})
+            session["charuco_pattern"] = [int(pattern[0]), int(pattern[1])]
+            if dictionary_id is not None:
+                session["charuco_dict"] = int(dictionary_id)
+
+    def _draw_captured_overlays(self, frame, cam_name, overlay):
+        _, key, _ = self._find_camera_entry(cam_name)
+        key = key or cam_name
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+            layers = session.get("charuco_overlays", [])
+            # captures accumulate for as long as auto capture is enabled, so
+            # cap what gets drawn per streamed frame - drawing every capture
+            # ever made would eventually starve the feed thread
+            layers = list(layers[-_MAX_OVERLAYS_DRAWN:])
+        if not layers:
+            return frame
+        out = (
+            frame.copy()
+            if len(frame.shape) == 3
+            else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        )
+        for layer in layers:
+            corners, ids, mc, mi, color = layer
+            cam_calibration.draw_charuco_into(out, corners, ids, mc, mi, color=color)
+        return out
+
+    def _detect_workframe(self, frame, max_dim=_DETECT_MAX_DIM):
+        h, w = frame.shape[:2]
+        largest = max(w, h)
+        if largest <= max_dim:
+            return frame, 1.0
+        scale = max_dim / float(largest)
+        work = cv2.resize(
+            frame,
+            (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+        )
+        return work, scale
+
+    def _rescale_corners(self, corners, factor):
+        if corners is None:
+            return None
+        return (np.asarray(corners, dtype=np.float32) * factor).astype(np.float32)
+
+    def _generate_calibration(self, cam_name, overlay="", pattern=None, dict_id=None):
+        last_frame_time = time.monotonic()
+        result_lock = threading.Lock()
+        latest = {"detect": None}
+        stop_evt = threading.Event()
+
+        def detection_worker():
+            last_detect = 0.0
+            corners, ids, marker_corners, marker_ids = None, None, None, None
+            while not stop_evt.is_set():
+                cam = self.live_cameras.get(cam_name)
+                frame = None
+                if cam is not None and hasattr(cam, "get_raw_frame"):
+                    frame = cam.get_raw_frame()
+                if frame is None:
+                    stop_evt.wait(0.05)
+                    continue
+                now = time.monotonic()
+                result = None
+                if overlay == "charuco" and now - last_detect >= 0.1:
+                    last_detect = now
+                    work, scale = self._detect_workframe(frame)
+                    session_pattern, session_dict = self._charuco_session_layout(
+                        cam_name
+                    )
+                    effective_dict = dict_id if dict_id is not None else session_dict
+                    candidates = []
+                    if session_pattern is not None:
+                        candidates.append(tuple(session_pattern))
+                    if (
+                        pattern is not None
+                        and len(pattern) == 2
+                        and tuple(pattern) not in candidates
+                    ):
+                        candidates.append(tuple(pattern))
+                    found = False
+                    matched_pattern = None
+                    matched_dict = effective_dict
+                    for cand in candidates:
+                        kwargs = {}
+                        if effective_dict is not None:
+                            kwargs["dictionary_id"] = effective_dict
+                        found, corners, ids, marker_corners, marker_ids, _ = (
+                            cam_calibration.detect_charuco(
+                                work, cand[0], cand[1], **kwargs
+                            )
+                        )
+                        if found:
+                            matched_pattern = cand
+                            break
+                    if not found:
+                        # nothing matched the session/requested layout - sweep
+                        # common layouts and dictionaries so a board printed
+                        # outside the defaults is still picked up live
+                        afound, acorners, aids, amc, ami, _, apat, adict = (
+                            cam_calibration.detect_charuco_auto(
+                                work,
+                                preferred_pattern=candidates[0] if candidates else None,
+                                preferred_dict=effective_dict,
+                            )
+                        )
+                        if afound:
+                            found = True
+                            corners, ids = acorners, aids
+                            marker_corners, marker_ids = amc, ami
+                            matched_pattern = tuple(apat)
+                            matched_dict = adict
+                            self._remember_charuco_layout(
+                                cam_name, matched_pattern, adict
+                            )
+                    if scale != 1.0:
+                        corners = self._rescale_corners(corners, 1.0 / scale)
+                        marker_corners = self._rescale_corners(
+                            marker_corners, 1.0 / scale
+                        )
+                    if found and matched_pattern is not None:
+                        gray_full = (
+                            frame
+                            if len(frame.shape) == 2
+                            else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        )
+                        _, key, _ = self._find_camera_entry(cam_name)
+                        key = key or cam_name
+                        self._auto_consider(
+                            key,
+                            "charuco",
+                            gray_full,
+                            corners,
+                            ids,
+                            pattern=matched_pattern,
+                            dict_id=matched_dict,
+                            _synchronous=False,
+                        )
+                    if not found:
+                        corners, ids, marker_corners, marker_ids = (
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                        self._auto_hint(
+                            cam_name,
+                            "Move the ChArUco board into view - auto capture waits for a detection",
+                        )
+                    result = {
+                        "found": found and matched_pattern is not None,
+                        "corners": corners,
+                        "ids": ids,
+                        "marker_corners": marker_corners,
+                        "marker_ids": marker_ids,
+                    }
+                if result is not None:
+                    result["ts"] = time.monotonic()
+                    with result_lock:
+                        latest["detect"] = result
+                else:
+                    stop_evt.wait(0.02)
+
+        worker = None
+        if overlay == "charuco":
+            worker = threading.Thread(target=detection_worker, daemon=True)
+            worker.start()
+        try:
+            warmup_deadline = (
+                (time.monotonic() + _CALIB_FEED_WARMUP_S) if overlay == "charuco" else 0
+            )
+            # hold chunks until the detector's first tick so the opening frame
+            # of an overlay feed is already annotated rather than raw
+            while overlay == "charuco" and time.monotonic() < warmup_deadline:
+                with result_lock:
+                    ready = latest["detect"] is not None
+                if ready:
+                    break
+                stop_evt.wait(0.02)
+            while True:
+                cam = self.live_cameras.get(cam_name)
+                frame = None
+                if cam is not None and hasattr(cam, "get_raw_frame"):
+                    frame = cam.get_raw_frame()
+                if frame is None:
+                    if time.monotonic() - last_frame_time > _FEED_TIMEOUT_S:
+                        break
+                    time.sleep(0.05)
+                    continue
+                last_frame_time = time.monotonic()
+                to_serve = frame
+                if overlay == "charuco":
+                    with result_lock:
+                        res = latest.get("detect")
+                    if res is not None and time.monotonic() - res.get("ts", 0.0) < 0.5:
+                        if res.get("found"):
+                            to_serve = cam_calibration.draw_charuco(
+                                to_serve,
+                                res["corners"],
+                                res["ids"],
+                                res["marker_corners"],
+                                res["marker_ids"],
+                            )
+                    to_serve = self._draw_captured_overlays(
+                        to_serve, cam_name, "charuco"
+                    )
+                # overlay feeds are diagnostic - serve them capped in width so
+                # JPEG encode stays cheap. The plain feed (focal measurement)
+                # keeps full resolution: the UI reads the frame width from it.
+                serve_frame = to_serve
+                if overlay and _FEED_MAX_DIM:
+                    w = to_serve.shape[1]
+                    if w > _FEED_MAX_DIM:
+                        f = _FEED_MAX_DIM / float(w)
+                        serve_frame = cv2.resize(
+                            to_serve,
+                            (int(round(w * f)), int(round(to_serve.shape[0] * f))),
+                        )
+                ok, buf = cv2.imencode(
+                    ".jpg", serve_frame, [cv2.IMWRITE_JPEG_QUALITY, 70]
+                )
+                if not ok:
+                    continue
+                yield (
+                    b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                    + buf.tobytes()
+                    + b"\r\n"
+                )
+                time.sleep(1.0 / 30)
+        except GeneratorExit:
+            pass
+        finally:
+            stop_evt.set()
+
+    def _charuco_status(self, cam_name):
+        cam = self.live_cameras.get(cam_name)
+        if cam is None or not hasattr(cam, "get_raw_frame"):
+            return jsonify(found=False, message="Camera not live")
+        frame = cam.get_raw_frame()
+        if frame is None:
+            return jsonify(found=False, message="No frame yet")
+        session_pattern, session_dict = self._charuco_session_layout(cam_name)
+        preferred_pattern = session_pattern or tuple(
+            cam_calibration.DEFAULT_CHARUCO_PATTERN
+        )
+        # always sweep: a compatible-but-wrong grid can match the visible
+        # corners, so let the scan rank candidates instead of trusting the
+        # preferred layout blindly
+        found, corners, ids, marker_corners, marker_ids, _, apat, adict = (
+            cam_calibration.detect_charuco_auto(
+                frame,
+                preferred_pattern=preferred_pattern,
+                preferred_dict=session_dict,
+            )
+        )
+        matched_pattern = tuple(apat) if found else preferred_pattern
+        matched_dict = adict if found else session_dict
+        if found:
+            self._remember_charuco_layout(cam_name, matched_pattern, adict)
+        payload = {
+            "found": bool(found),
+            "corners": int(len(corners)) if found else 0,
+            "markers": int(len(marker_corners)) if found else 0,
+            "pattern": list(matched_pattern),
+            "dictionary": matched_dict,
+        }
+        if not found:
+            payload["message"] = (
+                "Board not visible - show the whole board in frame, even lighting helps."
+            )
+        else:
+            payload["message"] = (
+                f"Board detected as {matched_pattern[0]}x{matched_pattern[1]} "
+                f"(dictionary {matched_dict}). Move it around and capture."
+            )
+        return jsonify(**payload)
+
+    def _charuco_capture(self, cam_name):
+        data = request.get_json(force=True) or {}
+        image_b64 = data.get("image")
+        cols = int(
+            _to_float(data.get("cols"), cam_calibration.DEFAULT_CHARUCO_PATTERN[0])
+        )
+        rows = int(
+            _to_float(data.get("rows"), cam_calibration.DEFAULT_CHARUCO_PATTERN[1])
+        )
+        if cols < 2 or rows < 2 or cols > 30 or rows > 30:
+            return jsonify(error="Invalid ChArUco board pattern"), 400
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        if image_b64:
+            frame = _decode_base64_frame(image_b64)
+            if frame is None:
+                return jsonify(error="Could not decode image"), 400
+        else:
+            # no image posted - detect on the live camera's raw frame so the
+            # board detection runs on a clean frame instead of the overlaid
+            # one shown in the wizard feed
+            cam = self.live_cameras.get(cam_name)
+            if cam is None or not hasattr(cam, "get_raw_frame"):
+                return jsonify(error="Camera not live - start vision first"), 400
+            frame = cam.get_raw_frame()
+            if frame is None:
+                return jsonify(error="Camera has no frame yet"), 400
+        session_pattern, session_dict = self._charuco_session_layout(cam_name)
+        matched_dict = session_dict
+        kwargs = {}
+        if matched_dict is not None:
+            kwargs["dictionary_id"] = matched_dict
+        found, corners, ids, marker_corners, marker_ids, gray = (
+            cam_calibration.detect_charuco(frame, cols, rows, **kwargs)
+        )
+        if not found:
+            return jsonify(
+                success=False,
+                board_found=False,
+                message="ChArUco board not detected in that frame. Show the whole board, use even lighting, or try another pattern.",
+            )
+        color = cam_calibration.random_overlay_color()
+        with self.calib_lock:
+            session = self.calib_sessions.setdefault(key, {})
+            session["charuco_pattern"] = [cols, rows]
+            if matched_dict is not None:
+                session["charuco_dict"] = matched_dict
+            session.setdefault("charuco_captures", []).append((gray, corners, ids))
+            session.setdefault("charuco_overlays", []).append(
+                (corners, ids, marker_corners, marker_ids, color)
+            )
+            count = len(session["charuco_captures"])
+        return jsonify(
+            success=True, board_found=True, captured=count, color=list(color)
+        )
+
+    def _charuco_clear(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            session = self.calib_sessions.get(key)
+            if session:
+                session.pop("charuco_captures", None)
+                session.pop("charuco_overlays", None)
+                session.pop("charuco_pattern", None)
+                session.pop("charuco_dict", None)
+                session.pop("auto_rms", None)
+                session.pop("auto_state", None)
+        return jsonify(success=True)
+
+    def _charuco_finish(self, cam_name):
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        with self.calib_lock:
+            session = self.calib_sessions.get(key) or {}
+            captures = list(session.get("charuco_captures", []))
+            pattern = tuple(
+                session.get(
+                    "charuco_pattern", list(cam_calibration.DEFAULT_CHARUCO_PATTERN)
+                )
+            )
+            dict_id = session.get("charuco_dict")
+        if len(captures) < 3:
+            return jsonify(
+                error=f"Need at least 3 captured ChArUco frames, have {len(captures)}"
+            ), 400
+        kwargs = {}
+        if dict_id is not None:
+            kwargs["dictionary_id"] = dict_id
+        result = cam_calibration.calibrate_charuco(captures, pattern, **kwargs)
+        if result is None:
+            return jsonify(
+                error="Calibration failed - try capturing more varied frames"
+            ), 500
+        derived = cam_calibration.derive_fov_from_intrinsics(result)
+        saved = self._save_calibration(key, {**result, **derived})
+        with self.calib_lock:
+            session = self.calib_sessions.get(key)
+            if session:
+                session.pop("charuco_captures", None)
+                session.pop("charuco_pattern", None)
+                session.pop("auto_rms", None)
+                session.pop("auto_state", None)
+        return jsonify(
+            success=True,
+            result=result,
+            fov=saved.get("fov"),
+            focal_length_pixels=saved.get("focal_length_pixels"),
+            calibration=saved,
+        )
+
+    def _add_camera(self):
+        data = request.get_json(force=True) or {}
+        name = data.get("name")
+        device_id = data.get("device_id")
+        source = data.get("source")
+        camera_type = data.get("camera_type", "opencv")
+
+        # Auto-fill source for Tello cameras
+        if camera_type == "tello" and (source is None or source == ""):
+            video_port = data.get("tello_video_port", 11111)
+            source = f"udp://0.0.0.0:{video_port}"
+
+        if not name or source is None:
+            return jsonify(error="name and source required"), 400
+
+        config = self.context["config"]
+        cams = dict(config.get("camera_configs", {}))
+        if name in cams:
+            return jsonify(error=f"Camera '{name}' already exists"), 409
+
+        # refuse to add a device already claimed by another configured cam
+        if device_id:
+            for existing in cams.values():
+                if existing.get("device_id") == device_id:
+                    return jsonify(
+                        error=f"Device already in use by camera '{existing.get('name')}'"
+                    ), 409
+
+        raw_pipeline = data.get("pipeline", "object_detection")
+        if isinstance(raw_pipeline, dict):
+            pipeline_name = raw_pipeline.get("name") or "object_detection"
+            pipeline_settings = dict(raw_pipeline.get("settings") or {})
+        else:
+            pipeline_name = str(raw_pipeline or "object_detection")
+            pipeline_settings = {}
+
+        # calibration is edited through the dedicated wizard, not the add/edit
+        # form anymore - when re-adding a device that was removed before,
+        # carry its last saved calibration over from the profile
+        calibration = data.get("calibration")
+        if not calibration and device_id:
+            profile = (read("camera_profiles", {}) or {}).get(device_id)
+            if isinstance(profile, dict) and isinstance(
+                profile.get("calibration"), dict
+            ):
+                calibration = profile["calibration"]
+
+        # Build cam_entry from ALL core keys provided in data
+        cam_entry = {
+            "name": name,
+            "source": source,
+            "camera_type": camera_type,
+            "device_id": device_id,
+            "calibration": calibration
+            or {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
+            "pipeline": {"name": pipeline_name, "settings": pipeline_settings},
+        }
+        # Copy all _CAMERA_CORE_KEYS from data if present (explicitly provided)
+        for k in _CAMERA_CORE_KEYS:
+            if k in data and data[k] is not None:
+                cam_entry[k] = data[k]
+
+        # model-backed pipelines crash at construction without a vision_model
+        # block - accept the picker dict, a raw path, or let ensure_camera_entries_ready drop one in
+        vm = data.get("vision_model")
+        if isinstance(vm, dict) and vm.get("file_path"):
+            pipeline_settings["vision_model"] = vm
+        elif isinstance(vm, str) and vm:
+            pipeline_settings["vision_model"] = {"file_path": vm, "source_pt": vm}
+
+        # Anything not in core keys goes to pipeline settings
+        handled = _CAMERA_CORE_KEYS | {"pipeline", "vision_model", "camera_type"}
+        for k, v in data.items():
+            if k not in handled:
+                pipeline_settings[k] = v
+
+        if is_model_backed_pipeline(pipeline_name) and isinstance(
+            pipeline_settings.get("vision_model"), dict
+        ):
+            _resolve_vision_model_files(pipeline_settings)
+
+        ensure_camera_entries_ready({name: cam_entry})
+        _prune_stale_pipeline_settings(cam_entry)
+        cams[name] = cam_entry
+        # validated model settings are remembered as a profile so another
+        # camera can re-use them verbatim from the Load Profile tab
+        _save_model_profile(config, pipeline_name, get_pipeline_settings(cam_entry))
+        config.set("camera_configs", cams)
+        config.save()
+
+        if device_id:
+            profiles = read("camera_profiles", {})
+            profiles[device_id] = cam_entry
+            write("camera_profiles", profiles)
+
+        return jsonify(success=True, note="Restart vision to apply.")
+
+    def _find_camera_entry(self, cam_name):
+        cams = self.context["config"].get("camera_configs", {})
+        entry = cams.get(cam_name)
+        if entry is not None:
+            return cams, cam_name, entry
+        for key, existing in cams.items():
+            if (
+                existing.get("name") == cam_name
+                or str(existing.get("source")) == cam_name
+            ):
+                return cams, key, existing
+        return None, None, None
+
+    def _get_camera(self, cam_name):
+        cams, entry_key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        return jsonify(camera=entry)
+
+    def _update_camera(self, cam_name):
+        data = request.get_json(force=True) or {}
+        config = self.context["config"]
+        cams, entry_key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+
+        new_entry = copy.deepcopy(entry)
+        model_picked = False
+        pipeline_entry = new_entry.get("pipeline")
+        if not isinstance(pipeline_entry, dict):
+            pipeline_entry = {
+                "name": get_pipeline_name(new_entry),
+                "settings": dict(get_pipeline_settings(new_entry) or {}),
+            }
+            new_entry["pipeline"] = pipeline_entry
+
+        for key, value in data.items():
+            if value is None:
+                settings = pipeline_entry.get("settings", {})
+                if key in settings:
+                    del settings[key]
+                new_entry.pop(key, None)
+                continue
+            if key == "pipeline":
+                if isinstance(value, str):
+                    pipeline_entry["name"] = value
+                elif isinstance(value, dict):
+                    if value.get("name"):
+                        pipeline_entry["name"] = value["name"]
+                    if isinstance(value.get("settings"), dict):
+                        if "vision_model" in value["settings"]:
+                            model_picked = True
+                        pipeline_entry.setdefault("settings", {}).update(
+                            value["settings"]
+                        )
+                continue
+            if key == "name":
+                new_entry[key] = value
+                continue
+            if key in _CAMERA_CORE_KEYS:
+                if isinstance(value, dict) and isinstance(new_entry.get(key), dict):
+                    merged = dict(new_entry[key])
+                    merged.update(value)
+                    new_entry[key] = merged
+                else:
+                    new_entry[key] = value
+                continue
+            # everything else is a pipeline settings-field - route it into
+            # pipeline.settings so stale top-level keys cant reappear
+            pipeline_entry.setdefault("settings", {})[key] = value
+
+        new_name = str(new_entry.get("name") or "").strip()
+        if not new_name:
+            return jsonify(error="Camera name is required"), 400
+        if new_entry.get("source") is None:
+            return jsonify(error="Camera source is required"), 400
+        if new_name != entry_key and new_name in cams:
+            return jsonify(error=f"Camera '{new_name}' already exists"), 409
+
+        pipeline_name = str(pipeline_entry.get("name") or "object_detection")
+        try:
+            from iSpy.vision.pipelines import get_pipeline_classes
+
+            if pipeline_name not in get_pipeline_classes():
+                return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 400
+        except Exception:
+            pass
+
+        # switching onto a model-backed pipeline needs a vision_model block
+        # or the new pipeline instance crashes at construction
+        if is_model_backed_pipeline(pipeline_name) and not isinstance(
+            pipeline_entry.get("settings", {}).get("vision_model"), dict
+        ):
+            pipeline_entry.setdefault("settings", {})["vision_model"] = (
+                default_vision_model()
+            )
+
+        # a model pick must move both source_pt and file_path together, or the
+        # camera keeps running the old model (stale artifact from a previous pick)
+        if model_picked and is_model_backed_pipeline(pipeline_name):
+            _resolve_vision_model_files(pipeline_entry.setdefault("settings", {}))
+
+        ensure_camera_entries_ready({new_name: new_entry})
+        _prune_stale_pipeline_settings(new_entry)
+
+        cams.pop(entry_key)
+        cams[new_name] = new_entry
+        _save_model_profile(config, pipeline_name, get_pipeline_settings(new_entry))
+        config.set("camera_configs", cams)
+        config.save()
+
+        # settings apply on the next vision start - never rebuild the running pipeline mid-run
+        return jsonify(
+            success=True,
+            note="Settings saved - restart vision to apply.",
+            camera=new_entry,
+        )
+
+    def _remove_camera(self, cam_name):
+        config = self.context["config"]
+        cams = dict(config.get("camera_configs", {}))
+        if cam_name not in cams:
+            return jsonify(error="Camera not found"), 404
+        if len(cams) <= 1:
+            return jsonify(
+                error="Cannot remove the last camera - at least one is required."
+            ), 400
+
+        removed = cams.pop(cam_name)
+        config.set("camera_configs", cams)
+        config.save()
+
+        device_id = removed.get("device_id")
+        if device_id:
+            profiles = read("camera_profiles", {})
+            profiles[device_id] = removed  # remember full params for autofill next time
+            write("camera_profiles", profiles)
+
+        return jsonify(success=True, note="Restart vision to apply.")
+
+    def _evict_stale(self, now: float):
+        stale = [n for n, ts in self.last_seen.items() if now - ts > _STALE_EVICT_S]
+        for n in stale:
+            self.frames.pop(n, None)
+            self.dims.pop(n, None)
+            self.last_seen.pop(n, None)
+            self.sources.pop(n, None)
+
+    def _api_cameras(self):
+        now = time.monotonic()
+        config = self.context.get("config")
+        configured = {}
+        if config:
+            for name, entry in (config.get("camera_configs") or {}).items():
+                if isinstance(entry, dict):
+                    configured.setdefault(name, entry)
+        with self.lock:
+            self._evict_stale(now)
+            cameras = []
+            streamed = set()
+            for n, d in self.dims.items():
+                streamed.add(n)
+                payload = {
+                    "name": n,
+                    "w": d[0],
+                    "h": d[1],
+                    "age_ms": round((now - self.last_seen.get(n, now)) * 1000, 1),
+                    "source": self.sources.get(n),
+                }
+                _, _, entry = self._find_camera_entry(n)
+                payload["calibrated"] = _camera_calibrated(entry)
+                payload["pipeline"] = (
+                    get_pipeline_name(entry)
+                    if isinstance(entry, dict)
+                    else "object_detection"
+                )
+                inst = self.live_cameras.get(n)
+                if inst is not None and hasattr(inst, "is_ready"):
+                    try:
+                        ready, _ = inst.is_ready()
+                    except Exception:
+                        ready = False
+                    payload["ready"] = bool(ready)
+                    status = getattr(inst, "get_status", None)
+                    payload["status"] = status() if callable(status) else None
+                    state = getattr(inst, "get_state", None)
+                    payload["state"] = state() if callable(state) else None
+                else:
+                    payload["ready"] = None
+                    payload["status"] = None
+                    payload["state"] = None
+                actions = []
+                if inst is not None:
+                    getter = getattr(inst, "get_actions", None)
+                    if callable(getter):
+                        try:
+                            actions = getter() or []
+                        except Exception:
+                            actions = []
+                payload["actions"] = actions
+                payload["streaming"] = True
+                cameras.append(payload)
+
+            # configured-but-idle cameras would otherwise vanish from the grid
+            # (they only ever appear while frames are flowing), which reads as
+            # "no cameras" on a machine whose camera is simply not streaming -
+            # list them so the page shows a card even before vision starts.
+            for name, entry in configured.items():
+                # a camera streams under its display name, which can differ
+                # from the config key (name "Front Camera" under key "front") -
+                # don't list it twice (once live, once "Not streaming")
+                if name in streamed or (entry.get("name") and entry.get("name") in streamed):
+                    continue
+                payload = {
+                    "name": name,
+                    "w": None,
+                    "h": None,
+                    "age_ms": None,
+                    "source": entry.get("source"),
+                    "ready": None,
+                    "status": None,
+                    "state": None,
+                    "calibrated": _camera_calibrated(entry),
+                    "pipeline": (
+                        get_pipeline_name(entry)
+                        if isinstance(entry, dict)
+                        else "object_detection"
+                    ),
+                    "actions": [],
+                    "streaming": False,
+                }
+                cameras.append(payload)
+        return jsonify(cameras=cameras)
+
+    def _discover(self):
+        now = time.monotonic()
+        with self._discover_lock:
+            if self._discover_cache and (now - self._discover_cache_ts) < 5.0:
+                devices = self._discover_cache
+            else:
+                devices = self._probe_devices()
+                self._discover_cache = devices
+                self._discover_cache_ts = now
+
+        # a discovered device is active when its device_id (or raw source if
+        # resolution failed) matches a configured cam
+        config = self.context.get("config")
+        configured_device_ids = set()
+        configured_sources = set()
+        if config:
+            for cam_cfg in config.get("camera_configs", {}).values():
+                dev_id = cam_cfg.get("device_id")
+                if dev_id:
+                    configured_device_ids.add(dev_id)
+                source = cam_cfg.get("source")
+                if source is not None:
+                    configured_sources.add(str(source))
+                if source is None and cam_cfg.get("path") is not None:
+                    configured_sources.add(str(cam_cfg.get("path")))
+
+        for dev in devices:
+            dev_id = dev.get("device_id")
+            source = dev.get("path")
+            dev["active"] = (
+                bool(dev_id and dev_id in configured_device_ids)
+                or str(source) in configured_sources
+            )
+
+        return jsonify(devices=devices)
+
+    def _sources(self):
+        claimed = set()
+        config = self.context.get("config")
+        if config:
+            for cam_cfg in config.get("camera_configs", {}).values():
+                source = cam_cfg.get("source")
+                if source is not None:
+                    claimed.add(str(source))
+                if source is None and cam_cfg.get("path") is not None:
+                    claimed.add(str(cam_cfg.get("path")))
+
+        opencv_sources = OpenCVCamera.discover(claimed_sources=claimed)
+        tello_sources = TelloCamera.discover(claimed_sources=claimed)
+
+        return jsonify(
+            sources={
+                "opencv": opencv_sources,
+                "tello": tello_sources,
+            }
+        )
+
+    def _probe_devices(self):
+        with self.lock:
+            claimed = {s for s in self.sources.values() if s}
+        return OpenCVCamera.discover(claimed_sources=claimed)
+
+    def _video_feed(self, camera_name):
+        return Response(
+            self._generate(camera_name),
+            mimetype="multipart/x-mixed-replace; boundary=frame",
+        )
+
+    def _generate(self, camera_name):
+        # the profile owns the preview pace: fps, quality and an optional width
+        # cap, all shrinking the encode+network cost per open viewer
+        profile = performance.get_profile()
+        target_interval = 1.0 / max(profile.mjpeg_fps, 0.1)
+        quality = int(profile.mjpeg_quality)
+        max_width = profile.mjpeg_max_width
+        last_frame_time = time.monotonic()
+        # count the pull now, or the frame store keeps skipping writes (nobody
+        # watching) while this generator waits for one
+        self._feed_seen[camera_name] = time.monotonic()
+        try:
+            while True:
+                t0 = time.perf_counter()
+                with self.lock:
+                    frame = self.frames.get(camera_name)
+                if frame is None:
+                    if time.monotonic() - last_frame_time > _FEED_TIMEOUT_S:
+                        break
+                    time.sleep(0.05)
+                    continue
+                last_frame_time = time.monotonic()
+                self._feed_seen[camera_name] = last_frame_time
+                if max_width and frame.shape[1] > max_width:
+                    scale = max_width / float(frame.shape[1])
+                    frame = cv2.resize(
+                        frame,
+                        (int(max_width), max(1, int(round(frame.shape[0] * scale)))),
+                    )
+                ok, buf = cv2.imencode(
+                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality]
+                )
+                if not ok:
+                    continue
+                yield (
+                    b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                    + buf.tobytes()
+                    + b"\r\n"
+                )
+                elapsed = time.perf_counter() - t0
+                sleep_time = target_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+        except GeneratorExit:
+            pass

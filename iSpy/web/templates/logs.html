@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Logs - iSpy{% endblock %}
+{% block head %}
+<style>
+  .log-toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:10px 16px; }
+  .log-live {
+    display:inline-flex; align-items:center; gap:7px;
+    color:var(--text-dim); font-size:0.78rem; font-weight:600;
+    letter-spacing:0.05em; text-transform:uppercase;
+  }
+  .log-live::before {
+    content:''; width:8px; height:8px; border-radius:50%;
+    background:var(--ok); animation:log-pulse 2s infinite;
+  }
+  @keyframes log-pulse {
+    0% { box-shadow:0 0 0 0 rgba(63,185,80,0.45); }
+    70% { box-shadow:0 0 0 7px rgba(63,185,80,0); }
+    100% { box-shadow:0 0 0 0 rgba(63,185,80,0); }
+  }
+  .log-toggle { position:relative; }
+  .log-toggle input { position:absolute; opacity:0; pointer-events:none; }
+  .log-toggle span {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:6px 12px; border-radius:999px;
+    background:var(--bg); border:1px solid var(--border);
+    color:var(--text-dim); font-size:0.8rem; font-weight:500;
+    cursor:pointer; user-select:none; transition:all var(--transition);
+  }
+  .log-toggle span::before {
+    content:''; width:8px; height:8px; border-radius:50%;
+    background:var(--text-muted); transition:background var(--transition);
+  }
+  .log-toggle input:checked + span {
+    background:var(--accent-dim); border-color:rgba(47,129,247,0.4); color:var(--accent);
+  }
+  .log-toggle input:checked + span::before { background:var(--accent); }
+  .log-lines {
+    display:inline-flex; align-items:center; gap:7px;
+    color:var(--text-dim); font-size:0.8rem;
+  }
+  .log-lines select { padding:5px 10px; border-radius:999px; font-size:0.8rem; }
+  .log-clear { margin-left:0; }
+  @media (min-width:640px) { .log-clear { margin-left:auto; } }
+</style>
+{% endblock %}
+{% block content %}
+<h1>Logs</h1>
+<div class="card controls-bar log-toolbar">
+  <span class="log-live">Live logs</span>
+  <label class="log-toggle">
+    <input type="checkbox" id="autoscroll" checked>
+    <span>Auto-scroll</span>
+  </label>
+  <label class="log-toggle">
+    <input type="checkbox" id="paused">
+    <span>Pause</span>
+  </label>
+  <label class="log-lines">
+    Lines
+    <select id="line-count" onchange="refresh()">
+      <option value="100">100</option>
+      <option value="200" selected>200</option>
+      <option value="500">500</option>
+      <option value="1000">1000</option>
+    </select>
+  </label>
+  <button class="btn-secondary log-clear" onclick="clearView()">Clear view</button>
+</div>
+<pre id="log-view" class="card log-view"></pre>
+<script>
+const view = document.getElementById('log-view');
+const autoscroll = document.getElementById('autoscroll');
+const paused = document.getElementById('paused');
+let lastContent = '';
+
+function colorize(line) {
+  const esc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (/\bERROR\b|\bCRITICAL\b/.test(line)) return `<span class="log-error">${esc}</span>`;
+  if (/\bWARNING\b/.test(line)) return `<span class="log-warn">${esc}</span>`;
+  if (/\bINFO\b/.test(line)) return `<span class="log-info">${esc}</span>`;
+  return `<span class="log-dim">${esc}</span>`;
+}
+
+function clearView() {
+  view.innerHTML = '';
+  lastContent = '';
+}
+
+const logsConn = connTracker(2);
+
+async function refresh() {
+  if (paused.checked) return;
+  try {
+    const n = document.getElementById('line-count').value;
+    const data = await fetch(`/api/logs?n_lines=${n}`).then(r => r.json());
+    logsConn.ok();
+    const content = data.lines.map(colorize).join('');
+    if (content !== lastContent) {
+      view.innerHTML = content;
+      lastContent = content;
+      if (autoscroll.checked) view.scrollTop = view.scrollHeight;
+    }
+  } catch (e) {
+    console.error('Log refresh failed', e);
+    logsConn.fail();
+  }
+}
+ispyPoll(refresh, 2000);
+</script>
+{% endblock %}

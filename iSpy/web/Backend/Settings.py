@@ -1,0 +1,321 @@
+import copy
+import logging
+
+from flask import jsonify, render_template, request
+from iSpy.web.Backend.WebModule import WebModule
+from iSpy.validations.recommendations import get_structured_recommendations
+
+logger = logging.getLogger(__name__)
+
+_RESTART_REQUIRED_KEYS = {
+    "unit",
+    "debug_mode",
+    "frame_sync",
+    "log_level",
+    "metrics",
+    "plugins",
+    "camera_configs",
+    "device",
+    "num_gpus",
+    # add-ons are constructed at boot, so the offline gate only re-evaluates
+    # after a restart
+    "offline_mode",
+    # the web-enable decision, the module scheduler and the loop knobs are
+    # all set up at boot
+    "performance_level",
+    # the child reads this when it starts; the supervisor re-reads it when it
+    # owns the port, so a restart keeps both sides in sync
+    "allow_remote_restart",
+}
+
+
+def _detect_gpu_count() -> int:
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return int(torch.cuda.device_count())
+        return 0
+    except Exception:
+        return 0
+
+
+class SettingsModule(WebModule):
+    plugin_name = "settings"
+
+    def register_routes(self, flask_app):
+        flask_app.add_url_rule(
+            "/settings", "settings_page", lambda: render_template("settings.html")
+        )
+        flask_app.add_url_rule(
+            "/api/settings", "api_settings_get", self._get, methods=["GET"]
+        )
+        flask_app.add_url_rule(
+            "/api/settings", "api_settings_post", self._post, methods=["POST"]
+        )
+        flask_app.add_url_rule(
+            "/api/settings/compare",
+            "api_settings_compare",
+            self._compare,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/settings/snapshot",
+            "api_settings_snapshot",
+            self._snapshot,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/settings/restore",
+            "api_settings_restore",
+            self._restore,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/settings/raw-unlock",
+            "api_settings_raw_unlock",
+            self._raw_unlock,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/settings/arm-game-mode",
+            "api_settings_arm_game_mode",
+            self._arm_game_mode,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/settings/export", "api_settings_export", self._export, methods=["GET"]
+        )
+        flask_app.add_url_rule(
+            "/api/settings/import", "api_settings_import", self._import, methods=["POST"]
+        )
+        # get the running level and the whole table, set the configured level
+        # (a restart applies it)
+        flask_app.add_url_rule(
+            "/api/performance",
+            "api_performance_get",
+            self._performance_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/performance",
+            "api_performance_post",
+            self._performance_post,
+            methods=["POST"],
+        )
+
+    def _performance_get(self):
+        from iSpy.core import performance
+
+        running = performance.get_level()
+        configured = performance.configured_level(self.context["config"])
+        return jsonify(
+            level=running,
+            configured_level=running if configured is None else configured,
+            label=performance.PROFILES[running].label,
+            restart_pending=performance.restart_pending(self.context["config"]),
+            web_enabled=performance.PROFILES[running].web_enabled,
+            levels=performance.levels_payload(),
+            recovery=performance.recovery_help(),
+        )
+
+    def _performance_post(self):
+        from iSpy.core import performance
+
+        config = self.context["config"]
+        data = request.get_json(force=True, silent=True) or {}
+        level = performance.clamp(data.get("level"))
+        if level is None:
+            return jsonify(error="level must be an integer 0-4"), 400
+        # the UI handles the level-0 countdown, but the raw JSON editor and
+        # curl can still reach this route - require the explicit flag
+        if level == 0 and not data.get("confirm_max"):
+            return jsonify(
+                error=(
+                    "level 0 turns the web UI off for the next run - pass "
+                    "confirm_max: true to confirm"
+                )
+            ), 400
+
+        config.set("performance_level", level)
+        config.save(quiet=True)
+        if level == 0:
+            logger.warning(
+                "Performance profile set to 0 (Max FPS) - the web UI, rollback "
+                "recording, metrics and FPS console print will be off after the "
+                "next restart. %s",
+                performance.recovery_help(),
+            )
+        return jsonify(
+            success=True,
+            level=level,
+            restart_pending=performance.restart_pending(config),
+        )
+
+    def _export(self):
+        config = self.context["config"]
+        export_data = copy.deepcopy(config.config)
+        for cam in export_data.get("camera_configs", {}).values():
+            if isinstance(cam, dict):
+                cam.pop("device_id", None)
+        return jsonify(export_data)
+
+    def _import(self):
+        try:
+            data = request.get_json(force=True)
+            if not isinstance(data, dict) or "camera_configs" not in data:
+                return jsonify(error="Not an iSpy config export (missing camera_configs)"), 400
+            config = self.context["config"]
+            old_offline = bool(config.get("offline_mode", False))
+            config._update_config(data)
+            config.save()
+            # the imported file owns offline_mode - not ours to silently drop
+            # or flip - but say so, or it reads as the internet randomly breaking
+            new_offline = bool(config.get("offline_mode", False))
+            if old_offline != new_offline:
+                logger.warning(
+                    "Imported config changed offline_mode: %s -> %s (effective "
+                    "after the next vision restart).",
+                    old_offline,
+                    new_offline,
+                )
+            return jsonify(success=True, config=config.config)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
+    def _get(self):
+        from iSpy.web.Backend.save_store import read
+
+        config = self.context["config"]
+        return jsonify(
+            config=config.config,
+            defaults=config.default_config,
+            gpu_count=_detect_gpu_count(),
+            raw_json_unlocked=bool(
+                (read("raw_json_unlocked") or {}).get("unlocked", False)
+            ),
+        )
+
+    def _raw_unlock(self):
+        from iSpy.web.Backend.save_store import write
+
+        write("raw_json_unlocked", {"unlocked": True})
+        return jsonify(success=True)
+
+    def _arm_game_mode(self):
+        from iSpy.web.Backend.save_store import write
+
+        config = self.context["config"]
+        config.set("game_mode_web_off_next_run", True)
+        config.save(quiet=True)
+        write("game_mode_armed", {"armed": True})
+        return jsonify(
+            success=True,
+            game_mode_web_off_next_run=True,
+            note=(
+                "Armed - the web dashboard will be off for the NEXT boot after "
+                "this one, then come back automatically."
+            ),
+        )
+
+    def _snapshot(self):
+        from iSpy.web.Backend.save_store import write
+
+        config = self.context["config"]
+        write("config_snapshot", {"config": config.config, "taken": True})
+        return jsonify(success=True)
+
+    def _restore(self):
+        from iSpy.web.Backend.save_store import read, write
+
+        snap = read("config_snapshot")
+        if not snap or not snap.get("taken"):
+            return jsonify(
+                error="No snapshot available (already used, or none was taken)"
+            ), 404
+        config = self.context["config"]
+        config.config = snap["config"]
+        # whole config dict was swapped underneath the camera wrappers -
+        # normalize + rebuild them like _update_config does
+        from iSpy.config.iSpyConfig import ensure_camera_entries_ready
+
+        ensure_camera_entries_ready(config.config.get("camera_configs", {}))
+        config._rebuild_camera_configs()
+        config.save()
+        write(
+            "config_snapshot", {"config": None, "taken": False}
+        )  # one-shot: consume it
+        return jsonify(success=True, config=config.config)
+
+    def _post(self):
+        try:
+            data = request.get_json(force=True)
+            config = self.context["config"]
+
+            config_data = data.get("config", data)
+            frontend_restart_keys = set(data.get("restart_keys", []))
+
+            old_config = copy.deepcopy(config.config)
+            config._update_config(config_data)
+            config.save()
+
+            changed_keys = self._find_changed_keys(old_config, config.config)
+            needs_restart = bool(
+                changed_keys & (_RESTART_REQUIRED_KEYS | frontend_restart_keys)
+            )
+
+            # push critical post-save recommendations to the dashboard via SSE so
+            # they show up in real time, not only when someone visits
+            # /recommendations
+            recs = get_structured_recommendations(config.config)
+            critical = [r for r in recs if r["severity"] == "critical"]
+            dash = self.context.get("dashboard_module")
+            if critical and dash:
+                dash._push_sse(
+                    {
+                        "type": "config_warning",
+                        "messages": [r["message"] for r in critical],
+                    }
+                )
+
+            return jsonify(
+                success=True, needs_restart=needs_restart, changed=list(changed_keys)
+            )
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
+    def _compare(self):
+        try:
+            data = request.get_json(force=True)
+            new_data = data.get("config", {})
+            config = self.context["config"]
+
+            old_config = copy.deepcopy(config.config)
+            temp = copy.deepcopy(old_config)
+            config._update_config(new_data, temp)
+
+            changed_keys = self._find_changed_keys(old_config, temp)
+            needs_restart = bool(changed_keys & _RESTART_REQUIRED_KEYS)
+
+            return jsonify(needs_restart=needs_restart, changed=list(changed_keys))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
+    def _find_changed_keys(self, old: dict, new: dict, prefix="") -> set:
+        changed = set()
+        all_keys = set(old.keys()) | set(new.keys())
+        for key in all_keys:
+            full_key = f"{prefix}.{key}" if prefix else key
+            old_val = old.get(key)
+            new_val = new.get(key)
+            if isinstance(old_val, dict) and isinstance(new_val, dict):
+                changed |= self._find_changed_keys(old_val, new_val, full_key)
+            elif old_val != new_val:
+                changed.add(full_key)
+        return changed

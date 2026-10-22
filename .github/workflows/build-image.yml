@@ -1,0 +1,32 @@
+name: Build Orange Pi Image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # lets you trigger it manually from GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            debootstrap qemu-user-static \
+            parted kpartx binfmt-support
+
+      - name: Build image
+        run: |
+          chmod +x Image/build-image.sh
+          sudo ./Image/build-image.sh
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iSpy-orangepi
+          path: "*.img"
+          retention-days: 30

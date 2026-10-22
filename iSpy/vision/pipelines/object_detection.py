@@ -1,0 +1,1456 @@
+import json
+import logging
+import math
+import queue
+import threading
+import time
+from collections import deque
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from iSpy.config.iSpyConfig import (
+    get_pipeline_settings,
+    iSpyCameraConfig,
+    iSpyConfig,
+    unit_to_inches,
+)
+from iSpy.vision import calibration as cam_calibration
+from iSpy.vision import triangulation
+from iSpy.vision.genericYolo import Box, GenericYolo, ModelFileError, Results
+from iSpy.vision.Object import Object
+from iSpy.vision.pipelines.base import VisionPipeline
+from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
+from iSpy.vision._safe_imports import ensure_torch_imported
+
+# pipeline-settings keys that sit as siblings of vision_model in the config but
+# have to be visible on every read. a ui save strips them out of the sub-dict on
+# purpose (_normalize_vision_model_settings), so the raw block alone stops
+# reflecting the users optimize/quantize/format choices - merge them back in
+_VM_PIPELINE_SETTING_KEYS = (
+    "quantize",
+    "min_conf",
+    "target_format",
+    "input_size",
+    "quantization_dataset",
+    "optimize",
+    "batch_size",
+    "tpu_dtype",
+)
+# legacy aliases, consulted when the canonical key is unset
+_VM_PIPELINE_SETTING_LEGACY = {"quantize": "quantized", "optimize": "auto_opt"}
+
+
+def _put_latest(target: queue.Queue, item) -> None:
+    try:
+        target.put_nowait(item)
+        return
+    except queue.Full:
+        pass
+    try:
+        target.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        target.put_nowait(item)
+    except queue.Full:
+        pass
+
+
+def _merge_vm_pipeline_settings(vm: dict, camera_config: iSpyCameraConfig) -> dict:
+    merged = dict(vm)
+    for key in _VM_PIPELINE_SETTING_KEYS:
+        value = camera_config.get_pipeline_setting(key)
+        if value is None:
+            legacy = _VM_PIPELINE_SETTING_LEGACY.get(key)
+            if legacy is not None:
+                value = camera_config.get_pipeline_setting(legacy)
+        if value is not None:
+            merged[key] = value
+    return merged
+
+
+class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
+    plugin_name = "object_detection"
+    # detector models get the known-object focal/FOV wizard (freeze a frame,
+    # drag to measure a known-size object) on top of the universal ChArUco
+    # intrinsics. Pose models instead get the "pnp" keypoint tab: the frontend
+    # swaps the "focal" tab for "pnp" (3D xyz per keypoint) when the configured
+    # model reports pose keypoints - see cameras.html openCalibrationWizardFor.
+    calibration_sections = ["charuco", "focal"]
+
+    @classmethod
+    def uses_model_profile(cls) -> bool:
+        return True
+
+    @classmethod
+    def derive_profile_name(cls, settings: dict) -> str:
+        vm = settings.get("vision_model")
+        if isinstance(vm, dict):
+            src = vm.get("source_pt") or vm.get("file_path") or ""
+            if src:
+                return Path(str(src)).stem
+        return "model profile"
+
+    @classmethod
+    def check_profile(cls, settings: dict) -> dict:
+        # profile status = can this saved model config actually load on this
+        # machine? touches only files on disk (stat + metadata sidecar) and
+        # never builds anything. a missing artifact for a requested format
+        # warns (the .pt still runs) but a missing model/sidecar errors.
+        vm = settings.get("vision_model")
+        if not isinstance(vm, dict):
+            return {
+                "valid": False,
+                "level": "error",
+                "message": "No vision_model configured.",
+                "details": {},
+            }
+        src = vm.get("source_pt") or vm.get("file_path") or ""
+        pt = Path(str(src))
+        if not pt.is_absolute():
+            pt = Path.cwd() / pt
+        details = {
+            "file_path": src,
+            "task": "unknown",
+            "nc": None,
+            "input_size": None,
+            "size_mb": None,
+            "active_format": "pytorch",
+        }
+        if not pt.exists():
+            return {
+                "valid": False,
+                "level": "error",
+                "message": f"Model file missing: {src}",
+                "details": details,
+            }
+        try:
+            details["size_mb"] = round(pt.stat().st_size / (1024 * 1024), 2)
+        except OSError:
+            details["size_mb"] = None
+        try:
+            from iSpy.vision.metadata import read_metadata
+        except Exception:
+            read_metadata = None
+        meta = read_metadata(pt) if read_metadata is not None else None
+        if meta is None:
+            return {
+                "valid": False,
+                "level": "error",
+                "message": f"Missing metadata sidecar for {pt.name}",
+                "details": details,
+            }
+        details.update(
+            {
+                "task": meta.get("task", "unknown"),
+                "nc": meta.get("nc"),
+                "input_size": meta.get("input_size"),
+            }
+        )
+        fmt = str(settings.get("target_format") or "auto").strip().lower()
+        active = cls.recommended_format() if fmt == "auto" else fmt
+        details["active_format"] = active
+        if fmt and fmt != "auto":
+            try:
+                from iSpy.vision.optimizer import existing_artifact_for
+            except Exception:
+                return {
+                    "valid": True,
+                    "level": "ok",
+                    "message": "ready",
+                    "details": details,
+                }
+            artifact = existing_artifact_for(pt, fmt)
+            if artifact:
+                details["file_path"] = artifact
+            else:
+                return {
+                    "valid": True,
+                    "level": "warn",
+                    "message": (
+                        f"{active} artifact not built yet - falls back to the .pt."
+                    ),
+                    "details": details,
+                }
+        return {"valid": True, "level": "ok", "message": "ready", "details": details}
+
+    @classmethod
+    def network_requirements(cls, settings: dict) -> list:
+        # weights load from local disk; only an optimize/quantize build with
+        # missing deps could need the internet (pip install / RKNN converter)
+        from iSpy.vision.pipelines.optimizable import offline_build_requirements
+
+        return offline_build_requirements(settings)
+
+    def __init__(
+        self,
+        camera_config: iSpyCameraConfig,
+        config: iSpyConfig,
+        core_mask=None,
+        use_tpu_pipeline: bool = True,
+        benchmark_frames: list[np.ndarray] | None = None,
+    ):
+        self.logger = logging.getLogger(__name__)
+
+        self.config = camera_config
+        self._ispy_config = config
+        self._cam_name = camera_config.get("name", "?")
+        self._preproc_thread: threading.Thread | None = None
+        self._tpu_device_thread: threading.Thread | None = None
+        self._tpu_post_thread: threading.Thread | None = None
+        self._enable_tpu_pipeline = bool(use_tpu_pipeline)
+        self._benchmark_frames = benchmark_frames
+        self._benchmark_frame_index = 0
+        self._benchmark_pause = False
+        self._tpu_stop = threading.Event()
+        self._metrics_lock = threading.Lock()
+        self._timing_samples = deque(maxlen=4096)
+        self._timing_samples_seen = 0
+        self._next_frame_sequence = 0
+
+        try:
+            self.known_calibration_distance = camera_config["calibration"]["distance"]
+            self.ball_d_inches = camera_config["calibration"]["game_piece_size"]
+            self.known_calibration_pixel_height = camera_config["calibration"]["size"]
+            self.fov = camera_config["calibration"]["fov"]
+            self.grayscale = camera_config.get("grayscale", False)
+            self.subsystem = camera_config["subsystem"]
+
+            self.camera_bot_relative_yaw = camera_config["yaw"]
+            self.camera_pitch_angle = camera_config["pitch"]
+
+            _pos_unit = config.get("unit", "frc")
+            # single source of truth for ray-origin/triangulation height:
+            # the user-facing "height" field (Mount height in the UI)
+            self.camera_height = unit_to_inches(camera_config["height"], _pos_unit)
+            self.camera_x = unit_to_inches(camera_config["x"], _pos_unit)
+            self.camera_y = unit_to_inches(camera_config["y"], _pos_unit)
+            _legacy_z = camera_config.get("z")
+            if _legacy_z not in (None, 0, 0.0):
+                self.logger.warning(
+                    "Camera '%s': config key 'z' (%s) is deprecated and ignored - "
+                    "'height' is the single mount-height field feeding "
+                    "triangulation.",
+                    self._cam_name,
+                    _legacy_z,
+                )
+        except KeyError as e:
+            raise ValueError(f"Missing camera config key: {e}")
+
+        # Model architecture fields come only from metadata sidecars, not config.
+        # Config holds user-preference fields; vision_model is per-camera
+        # pipeline settings (migrated from the old top-level key).
+        self.object_heights = self._parse_object_heights(
+            camera_config.get_pipeline_setting("object_heights")
+        )
+        from iSpy.vision.ModelInspector import fill_missing_config
+
+        vm_cfg = camera_config.get_pipeline_setting("vision_model")
+        if not isinstance(vm_cfg, dict) or not vm_cfg:
+            raise RuntimeError(
+                f"Camera '{self._cam_name}' uses pipeline 'object_detection' "
+                "but has no vision_model block in its pipeline settings."
+            )
+        # schema fields set via the config UI live in pipeline settings; merge
+        # them into the model config. Merge on a copy so the persisted
+        # vision_model keeps only model identity - otherwise every setting
+        # gets duplicated on the next save.
+        vm_cfg = _merge_vm_pipeline_settings(vm_cfg, camera_config)
+        # Malformed metadata sidecars (e.g. a non-integer nc) make
+        # fill_missing_config raise ValueError instead of degrading. Keep the
+        # camera alive: fall back to the raw config so the pipeline can still
+        # boot, and let the GenericYolo block below report / disable the model
+        # if it cannot be built at all.
+        try:
+            vm_filled = fill_missing_config(dict(vm_cfg))
+        except (ModelFileError, ValueError, TypeError, OSError) as e:
+            self.logger.error(
+                "Camera '%s': could not normalize model config %s - using raw "
+                "config; this camera will run without detection until fixed.",
+                camera_config.get("name", "?"),
+                e,
+            )
+            vm_filled = dict(vm_cfg)
+        self.margin = vm_filled.get("margin", vm_cfg.get("margin", 0))
+        raw_min_conf = vm_filled.get("min_conf", vm_cfg.get("min_conf", 0.5))
+        self.min_confidence = float(raw_min_conf) if raw_min_conf is not None else 0.5
+        # "size_based" | "ground_plane". Schema field lives in pipeline
+        # settings; fall back to the legacy vision_model dict value.
+        self.z_mode = str(
+            camera_config.get_pipeline_setting(
+                "z_mode", vm_cfg.get("z_mode", "ground_plane")
+            )
+        )
+        self.z_mode = "ground_plane" if self.z_mode != "size_based" else "size_based"
+        self.yolo_model_file = vm_filled.get("file_path", vm_cfg.get("file_path", ""))
+        self.input_size = tuple(vm_filled.get("input_size", (640, 640)))
+        raw_quantize = vm_filled.get("quantize", vm_cfg.get("quantize"))
+        if raw_quantize is None:
+            raw_quantize = vm_filled.get("quantized", vm_cfg.get("quantized"))
+        if raw_quantize is None:
+            raw_quantize = False
+        self.quantize = bool(raw_quantize)
+        cam_auto_opt = vm_cfg.get("optimize")
+        if cam_auto_opt is None:
+            cam_auto_opt = vm_cfg.get("auto_opt")  # legacy key
+        if cam_auto_opt is None:
+            cam_auto_opt = False
+        self._auto_opt = self._normalize_auto_opt(cam_auto_opt)
+        self._requested_format = str(vm_cfg.get("target_format") or "auto")
+        self.quantization_dataset = vm_cfg.get("quantization_dataset") or None
+        self._target_format: str | None = None
+        self.frame_sync = config.get("frame_sync", False)
+        if self.frame_sync:
+            self.logger.warning(
+                "Frame sync is enabled. This may introduce latency in detection (you probaly don't want this)."
+            )
+
+        self.core_mask = core_mask
+        self.unit = config["unit"]
+        self.debug_mode = config["debug_mode"]
+        self.gui_available = False
+
+        self.conversions = {
+            "meter": 0.0254,
+            "meters": 0.0254,
+            "inch": 1.0,
+            "inches": 1.0,
+            "foot": 1 / 12,
+            "feet": 1 / 12,
+            "centimeter": 2.54,
+            "centimeters": 2.54,
+            # FRC/WPILib convention: meters out (robot code), calibration in inches
+            "frc": 0.0254,
+        }
+
+        try:
+            if (
+                self.known_calibration_pixel_height <= 0
+                or self.known_calibration_distance <= 0
+            ):
+                self.logger.info(
+                    "Calibration values must be positive, defaulting focal length to 1"
+                )
+                self.focal_length_pixels = 1.0
+            else:
+                self.focal_length_pixels = (
+                    self.known_calibration_pixel_height
+                    * self.known_calibration_distance
+                ) / self.ball_d_inches
+        except ZeroDivisionError:
+            self.logger.warning(
+                "Calibration game_piece_size is 0, defaulting focal length to 1"
+            )
+            self.focal_length_pixels = 1.0
+
+        super().__init__(camera_config, self.input_size, self.grayscale)
+
+        # file_path can drift from source_pt when the model was re-picked in
+        # the UI (see OptimizableModelPipeline._resync_stale_model_file_path)
+        if self._optimization_requested():
+            self._resync_stale_model_file_path(config)
+        try:
+            self.model = GenericYolo(vm_filled, self.core_mask, iSpy_config=config)
+        except (ModelFileError, ValueError) as e:
+            self.logger.error(
+                "Camera '%s': %s — this camera will run without detection until fixed.",
+                camera_config.get("name", "?"),
+                e,
+            )
+            self.model = None
+
+        self._class_names: dict[int, str] = {0: "object"}
+        try:
+            from iSpy.vision.metadata import read_metadata
+
+            meta = read_metadata(Path(self.yolo_model_file))
+            if meta and isinstance(meta.get("names"), dict):
+                self._class_names = {int(k): str(v) for k, v in meta["names"].items()}
+        except Exception:
+            pass
+
+        self._tpu_pipeline = bool(
+            self._enable_tpu_pipeline
+            and self.model is not None
+            and self.model.model_type == "tpu"
+        )
+        self._preproc_q: queue.Queue = queue.Queue(
+            maxsize=2 if self._tpu_pipeline else 1
+        )
+        self._tpu_device_q: queue.Queue = queue.Queue(maxsize=2)
+        self._tpu_result_q: queue.Queue = queue.Queue(maxsize=2)
+        self.inference_count = 0
+        self.detections_seen = 0
+        self._use_pipeline = bool(
+            self.model is not None
+            and self.model.model_type in ("rknn", "onnx", "tflite", "engine")
+        ) or self._tpu_pipeline
+
+        self._last_result: Results | None = None
+        self._last_frame: np.ndarray | None = None
+        self.last_time = time.perf_counter()
+        self._pipeline_timeout = 0.1
+        self._last_objects: list[Object] = []
+
+        if self._use_pipeline:
+            self._preproc_thread = threading.Thread(
+                target=self._preprocess_worker,
+                daemon=True,
+                name=f"PreProc-{self.source}",
+            )
+            self._preproc_thread.start()
+        if self._tpu_pipeline:
+            self._start_tpu_workers()
+
+        # optimization requested + no active artifact yet -> kick off the
+        # build on a bg thread so the app keeps running
+        self._optimizing = False
+        self._optimize_error: str | None = None
+        if self._optimization_requested() and not self._optimized_active():
+            self.logger.info(
+                "Camera '%s': optimization requested - building %s artifact",
+                self._cam_name,
+                self._target_format_cached(),
+            )
+            # import torch now so the bg thread doesn't race the main thread's
+            # scipy.stats -> torch import (partial module / clobbered logging)
+            ensure_torch_imported()
+            threading.Thread(
+                target=self._optimize_runner,
+                daemon=True,
+                name=f"Optimize-{self._cam_name}",
+            ).start()
+
+    def _persist_file_path(self, file_path: str, config: iSpyConfig | None):
+        vm_out = self.config.get_pipeline_setting("vision_model")
+        if isinstance(vm_out, dict):
+            vm_out["file_path"] = file_path
+        if config is None:
+            return
+        try:
+            cams = config.config.get("camera_configs", {})
+            for key, entry in cams.items():
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("name") == self._cam_name or key == self._cam_name:
+                    entry_vm = get_pipeline_settings(entry).get("vision_model")
+                    if isinstance(entry_vm, dict):
+                        entry_vm["file_path"] = file_path
+            config.save(quiet=True)
+        except Exception:
+            self.logger.exception("Failed to persist corrected vision_model.file_path")
+
+    @staticmethod
+    def _parse_object_heights(raw) -> dict[str, float]:
+        if not raw:
+            return {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (ValueError, TypeError):
+                return {}
+        if isinstance(raw, dict):
+            out = {}
+            for name, height in raw.items():
+                try:
+                    height = float(height or 0)
+                except (TypeError, ValueError):
+                    continue
+                if str(name).strip() and height > 0:
+                    out[str(name).strip()] = height
+            return out
+        if not isinstance(raw, list):
+            return {}
+        out = {}
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("class_name", "") or "").strip()
+            if not name:
+                continue
+            try:
+                height = float(row.get("height_in", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if height > 0:
+                out[name] = height
+        return out
+
+    @classmethod
+    def config_schema(cls) -> dict:
+        schema = {
+            "vision_model": {
+                "type": "model",
+                "label": "YOLO Model (.pt)",
+                "default": "",
+                "help": "Pick a .pt model from the Yolo Models library. The "
+                "chosen file is used for detection and as the source "
+                "for optimization builds.",
+            },
+            "min_conf": {
+                "type": "number",
+                "label": "Min confidence",
+                "default": 0.5,
+                "step": 0.05,
+            },
+            "z_mode": {
+                "type": "select",
+                "label": "Depth estimation",
+                "default": "size_based",
+                "options": ["size_based", "ground_plane"],
+                "help": "How distance to a detected object is computed.\n"
+                "size_based: uses the known object size + calibration "
+                "distance to go from pixel height to distance.\n"
+                "ground_plane: casts the detection ray and intersects "
+                "it with the plane the object sits on (Object heights "
+                "above ground). If the primary method fails, the other "
+                "is used as a fallback.",
+            },
+            "object_heights": {
+                "type": "list",
+                "label": "Object heights above ground",
+                "help": "Per-class flat height (inches) above the ground "
+                "plane. Distance is found by intersecting the "
+                "detection ray with a plane at this height instead of "
+                "the floor. Classes without an entry are assumed to "
+                "sit on the ground. This is a flat per-class height "
+                "assumption, not a full 3D size-based fallback.",
+                "default": [],
+                "fields": {
+                    "class_name": {"type": "text", "label": "Class"},
+                    "height_in": {
+                        "type": "number",
+                        "label": "Height (in)",
+                        "default": 0,
+                        "step": 0.5,
+                    },
+                },
+            },
+        }
+        # input_size comes from the model metadata sidecar here, not config
+        schema.update(cls._optimization_schema(target_formats=("auto", "onnx")))
+        return schema
+
+    @classmethod
+    def uses_user_model(cls) -> bool:
+        return True
+
+    def _resolve_model_path(self, path: str) -> Path | None:
+        if not path:
+            return None
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(__file__).resolve().parents[3] / p
+        return p
+
+    def _source_model_path(self) -> Path | None:
+        vm = self._current_vm_config()
+        source = vm.get("source_pt") or vm.get("file_path")
+        p = self._resolve_model_path(str(source or ""))
+        if p is not None and p.exists() and p.suffix.lower() == ".pt":
+            return p
+        return None
+
+    def _optimized_artifact_path(self) -> Path | None:
+        src = self._source_model_path()
+        if src is None:
+            return None
+        from iSpy.vision.optimizer import _desired_output_path
+
+        try:
+            p = _desired_output_path(src, self._target_format_cached())
+        except Exception:
+            return None
+        if p.exists():
+            return p
+        return None
+
+    def _optimized_active(self) -> bool:
+        if getattr(self, "model", None) is None:
+            return False
+        if getattr(self.model, "model_type", "") == "tpu":
+            return True
+        path = str(getattr(self, "yolo_model_file", "") or "")
+        if not path or self._path_format(path) != self._target_format_cached():
+            return False
+        expected = self._optimized_artifact_path()
+        if expected is not None:
+            return self._resolve_model_path(path) == expected
+        # artifact for this source not built yet (or built under a name that
+        # no longer matches). A leftover artifact from an older model must be
+        # rejected, not trusted, or an old model silently keeps running.
+        src = self._source_model_path()
+        if src is not None:
+            from iSpy.vision.optimizer import _artifact_name
+
+            return Path(path).name == _artifact_name(src, self._target_format_cached())
+        return True
+
+    def needs_calibration_to_run(self) -> bool:
+        vm_cfg = self.config.get_pipeline_setting("vision_model")
+        task = "detect"
+        if isinstance(vm_cfg, dict):
+            task = vm_cfg.get("task", "detect")
+        return task == "pose"
+
+    def is_ready(self) -> tuple[bool, str]:
+        # pure status report - never triggers/blocks on optimization
+        cal_level, cal_msg = self.calibration_status()
+        if not self._optimization_requested():
+            model_ok = self.model is not None
+            if cal_level == "red":
+                self._set_status(cal_msg)
+                return False, cal_msg
+            if cal_level == "yellow":
+                self._set_status(cal_msg)
+                return model_ok, cal_msg
+            status = "ready" if model_ok else "error: no model configured/found"
+            self._set_status(status)
+            return model_ok, status
+
+        if self._optimizing:
+            self._set_status("optimizing")
+            return False, "optimizing"
+
+        if not self._optimized_active():
+            status = self._optimize_error or "optimizing"
+            self._set_status(status)
+            return False, status
+
+        if cal_level == "red":
+            self._set_status(cal_msg)
+            return False, cal_msg
+        if cal_level == "yellow":
+            self._set_status(cal_msg)
+            return True, cal_msg
+        self._set_status("ready")
+        return True, "ready"
+
+    def optimize(self, **kwargs) -> str:
+        if self._optimizing:
+            return "optimizing"
+
+        artifact = self._optimized_artifact_path()
+        if artifact is not None:
+            try:
+                self._activate_optimized_model(str(artifact))
+                return "ready"
+            except Exception:
+                pass  # stale/broken artifact - rebuild below
+
+        source_pt = self._source_model_path()
+        if source_pt is None:
+            return "error: optimize failed - source .pt not found"
+
+        self._optimizing = True
+        try:
+            target = self._target_format_cached()
+            if target == "tpu":
+                # TPU runs the .pt directly via torch_xla, no conversion
+                self.logger.info(
+                    "Camera '%s': TPU backend - keeping .pt, no conversion.",
+                    self._cam_name,
+                )
+                self._activate_optimized_model(
+                    str(source_pt), vm_extra={"device": "tpu"}
+                )
+                return "ready"
+
+            from iSpy.vision.optimizer import _convert_model_subprocess
+
+            # self.quantize is the authoritative value computed in __init__ from
+            # the merged pipeline settings and is kept in sync by
+            # _activate_optimized_model(). _current_vm_config() merges the
+            # sibling settings for status/format reads, but the instance
+            # value must not be clobbered here on a rebuild.
+            converted = _convert_model_subprocess(
+                str(source_pt),
+                target,
+                list(self.input_size),
+                quantize=bool(self.quantize),
+                force=True,
+                dataset_path=self.quantization_dataset,
+            )
+            converted_path = self._resolve_model_path(str(converted or ""))
+            if (
+                converted_path is None
+                or not converted_path.exists()
+                or converted_path.suffix.lower() == ".pt"
+            ):
+                raise RuntimeError(
+                    f"{target} build produced no artifact (got '{converted}')"
+                )
+            self._activate_optimized_model(str(converted_path))
+            return "ready"
+        except Exception as exc:
+            self.logger.exception(
+                "Optimization failed for camera '%s': %s", self._cam_name, exc
+            )
+            return f"error: optimize failed - {exc}"
+        finally:
+            self._optimizing = False
+
+    def _current_vm_config(self) -> dict:
+        vm = self.config.get_pipeline_setting("vision_model")
+        if isinstance(vm, dict):
+            vm = json.loads(json.dumps(vm))
+        else:
+            vm = {
+                "file_path": getattr(self, "yolo_model_file", ""),
+                "input_size": list(getattr(self, "input_size", (640, 640))),
+            }
+        # the persisted vision_model block alone no longer carries the
+        # optimize/quantize/target_format/... keys (a UI save strips them -
+        # see _normalize_vision_model_settings), so merge the sibling pipeline
+        # settings back in or _optimization_requested()/_target_format_cached()
+        # would always read the off/default values and the optimize thread
+        # would never start.
+        return _merge_vm_pipeline_settings(vm, self.config)
+
+    def _activate_optimized_model(
+        self, artifact_path: str, vm_extra: dict | None = None
+    ):
+        vm = self._current_vm_config()
+        vm["file_path"] = artifact_path
+        # prefer the already-normalized self.quantize (merged from pipeline
+        # settings in __init__) - the raw vision_model block may lack the key
+        # after a UI save and must not clobber the user's setting with False.
+        quantize = bool(
+            getattr(
+                self,
+                "quantize",
+                vm.get("quantize", vm.get("quantized", False)),
+            )
+        )
+        vm["quantize"] = quantize
+        if vm_extra:
+            vm.update(vm_extra)
+
+        from iSpy.vision.ModelInspector import fill_missing_config
+
+        new_model = GenericYolo(
+            fill_missing_config(vm),
+            self.core_mask,
+            iSpy_config=self._ispy_config,
+        )
+        if getattr(self, "_tpu_pipeline", False):
+            self._stop_tpu_workers()
+        self.model = new_model
+        self.yolo_model_file = artifact_path
+        self.quantize = quantize
+        self._tpu_pipeline = bool(
+            getattr(self, "_enable_tpu_pipeline", True)
+            and getattr(new_model, "model_type", None) == "tpu"
+        )
+        model_type = getattr(new_model, "model_type", None)
+        self._use_pipeline = model_type in (
+            "rknn",
+            "onnx",
+            "tflite",
+            "engine",
+        ) or self._tpu_pipeline
+        if self._tpu_pipeline:
+            self._preproc_q = queue.Queue(maxsize=2)
+            self._tpu_device_q = queue.Queue(maxsize=2)
+            self._tpu_result_q = queue.Queue(maxsize=2)
+        if self._use_pipeline and (
+            self._preproc_thread is None or not self._preproc_thread.is_alive()
+        ):
+            self._preproc_thread = threading.Thread(
+                target=self._preprocess_worker,
+                daemon=True,
+                name=f"PreProc-{self.source}",
+            )
+            self._preproc_thread.start()
+        if self._tpu_pipeline:
+            self._start_tpu_workers()
+
+        try:
+            from iSpy.vision.metadata import read_metadata
+
+            meta = read_metadata(Path(artifact_path))
+            if meta and isinstance(meta.get("names"), dict):
+                self._class_names = {int(k): str(v) for k, v in meta["names"].items()}
+        except Exception:
+            pass
+
+        vm_out = self.config.get_pipeline_setting("vision_model")
+        if isinstance(vm_out, dict):
+            vm_out["file_path"] = artifact_path
+            vm_out["quantize"] = quantize
+            if vm_extra:
+                vm_out.update(vm_extra)
+        if self._ispy_config is not None:
+            cams = self._ispy_config.config.get("camera_configs", {})
+            for key, entry in cams.items():
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("name") == self._cam_name or key == self._cam_name:
+                    entry_vm = get_pipeline_settings(entry).get("vision_model")
+                    if isinstance(entry_vm, dict):
+                        entry_vm["file_path"] = artifact_path
+                        entry_vm["quantize"] = quantize
+                        if vm_extra:
+                            entry_vm.update(vm_extra)
+            try:
+                self._ispy_config.save(quiet=True)
+            except Exception:
+                pass
+        self.logger.info(
+            "Camera '%s': optimized model active at %s", self._cam_name, artifact_path
+        )
+
+    def _letterbox(self, img: np.ndarray, target_size: tuple) -> tuple:
+        h, w = img.shape[:2]
+        target_w, target_h = target_size
+        scale = min(target_w / w, target_h / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        resized = cv2.resize(img, (new_w, new_h))
+        pad_w = target_w - new_w
+        pad_h = target_h - new_h
+        top = pad_h // 2
+        left = pad_w // 2
+        padded = cv2.copyMakeBorder(
+            resized,
+            top,
+            pad_h - top,
+            left,
+            pad_w - left,
+            cv2.BORDER_CONSTANT,
+            value=(114, 114, 114),
+        )
+        return padded, scale, left, top
+
+    def _letterbox_into(
+        self, img: np.ndarray, dst: np.ndarray, target_size: tuple
+    ) -> None:
+        h, w = img.shape[:2]
+        target_w, target_h = target_size
+        scale = min(target_w / w, target_h / h)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        top = (target_h - new_h) // 2
+        left = (target_w - new_w) // 2
+        resized = cv2.resize(img, (new_w, new_h))
+        dst[:] = 114
+        dst[top : top + new_h, left : left + new_w] = resized
+
+    def _next_input_frame(self):
+        frames = getattr(self, "_benchmark_frames", None)
+        if frames:
+            index = getattr(self, "_benchmark_frame_index", 0)
+            self._benchmark_frame_index = (index + 1) % len(frames)
+            return frames[index].copy()
+        return self.get_frame()
+
+    def _preprocess_worker(self):
+        last_ts = None
+        while not self.stopped:
+            if self._benchmark_pause:
+                time.sleep(0.001)
+                continue
+            if self.is_image:
+                frame = self._next_input_frame()
+                ts = 0
+
+                time.sleep(1 / 100)  # Simulate a 100 fps camera
+            else:
+                with self.frame_lock:
+                    frame = self.frame
+                    ts = self.frame_timestamp
+                if frame is None or ts == last_ts:
+                    self._frame_event.wait(timeout=0.05)
+                    self._frame_event.clear()
+                    continue
+
+            last_ts = ts
+            orig_shape = frame.shape
+            frame_started = time.perf_counter()
+            start = time.perf_counter()
+            if self._tpu_pipeline:
+                preprocessed = self.model._preprocess_tpu_frame(frame)
+            else:
+                preprocessed = self.model._preprocess_frame(frame)
+            item = {
+                "sequence": self._next_frame_sequence,
+                "preprocessed": preprocessed,
+                "frame": frame.copy(),
+                "orig_shape": orig_shape,
+                "queued_at": frame_started,
+                "preprocess_ms": (time.perf_counter() - start) * 1000,
+            }
+            self._next_frame_sequence += 1
+            if self._tpu_pipeline:
+                _put_latest(self._preproc_q, item)
+            else:
+                self._preproc_q.put((preprocessed, frame, orig_shape))
+
+    def _start_tpu_workers(self) -> None:
+        if self._tpu_device_thread and self._tpu_device_thread.is_alive():
+            return
+        self._tpu_stop.clear()
+        self._tpu_device_thread = threading.Thread(
+            target=self._tpu_device_worker,
+            daemon=True,
+            name=f"TPUDevice-{self.source}",
+        )
+        self._tpu_post_thread = threading.Thread(
+            target=self._tpu_postprocess_worker,
+            daemon=True,
+            name=f"TPUPost-{self.source}",
+        )
+        self._tpu_device_thread.start()
+        self._tpu_post_thread.start()
+
+    def _stop_tpu_workers(self) -> None:
+        self._tpu_stop.set()
+        for thread in (self._tpu_device_thread, self._tpu_post_thread):
+            if thread and thread.is_alive():
+                thread.join(timeout=5)
+        self._tpu_device_thread = None
+        self._tpu_post_thread = None
+
+    def _tpu_device_worker(self) -> None:
+        while not self.stopped and not self._tpu_stop.is_set():
+            try:
+                first = self._preproc_q.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if not isinstance(first, dict):
+                continue
+
+            model = self.model
+            batch_size = max(1, int(getattr(model, "batch_size", 1)))
+            items = [first]
+            target_fps = 100 if self.is_image else self.config.get("fps_cap", 30)
+            batch_wait = min(0.25, (batch_size - 1) / max(float(target_fps), 1.0))
+            deadline = time.perf_counter() + batch_wait
+            while len(items) < batch_size:
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    break
+                try:
+                    items.append(self._preproc_q.get(timeout=remaining))
+                except queue.Empty:
+                    break
+
+            try:
+                device_start = time.perf_counter()
+                outputs = model.forward_tpu_batch(
+                    [item["preprocessed"] for item in items]
+                )
+                if len(outputs) != len(items):
+                    raise RuntimeError(
+                        f"TPU returned {len(outputs)} outputs for {len(items)} frames"
+                    )
+                device_ms = (time.perf_counter() - device_start) * 1000 / len(items)
+                with self._metrics_lock:
+                    self.inference_count += len(items)
+                _put_latest(self._tpu_device_q, (items, outputs, device_ms))
+            except Exception:
+                self.logger.exception("Camera '%s': TPU inference failed", self._cam_name)
+
+    def _tpu_postprocess_worker(self) -> None:
+        while not self.stopped and not self._tpu_stop.is_set():
+            try:
+                items, outputs, device_ms = self._tpu_device_q.get(timeout=0.05)
+            except queue.Empty:
+                continue
+
+            model = self.model
+            for item, output in zip(items, outputs):
+                post_start = time.perf_counter()
+                try:
+                    result = model.postprocess_tpu_output(output, item["orig_shape"])
+                except Exception:
+                    self.logger.exception(
+                        "Camera '%s': TPU postprocessing failed", self._cam_name
+                    )
+                    continue
+                postprocess_ms = (time.perf_counter() - post_start) * 1000
+                stage_ms = {
+                    "preprocess": item["preprocess_ms"],
+                    "device": device_ms,
+                    "postprocess": postprocess_ms,
+                }
+                self._record_inference(
+                    result, item["queued_at"], stage_ms, count_inference=False
+                )
+                _put_latest(
+                    self._tpu_result_q,
+                    (
+                        item["sequence"],
+                        result,
+                        item["frame"],
+                        item["orig_shape"],
+                    ),
+                )
+
+    def _record_inference(
+        self,
+        result: Results,
+        started: float,
+        stage_ms: dict,
+        count_inference: bool = True,
+    ) -> None:
+        sample = dict(stage_ms)
+        sample["latency"] = (time.perf_counter() - started) * 1000
+        with self._metrics_lock:
+            if count_inference:
+                self.inference_count += 1
+            self.detections_seen += len(result.boxes)
+            self._timing_samples.append(sample)
+            self._timing_samples_seen += 1
+
+    def benchmark_metrics(self, since_count: int = 0) -> dict:
+        with self._metrics_lock:
+            samples = list(self._timing_samples)
+            sample_start = max(0, self._timing_samples_seen - len(samples))
+            samples = samples[max(0, since_count - sample_start) :]
+            detections = self.detections_seen
+        if not samples:
+            return {"samples": [], "detections": detections}
+        stages = ("preprocess", "device", "postprocess")
+        return {
+            "samples": samples,
+            "detections": detections,
+            "stage_ms": {
+                stage: sum(sample.get(stage, 0.0) for sample in samples) / len(samples)
+                for stage in stages
+            },
+        }
+
+    def _focal_length_px_fov(self, img_w: int) -> float:
+        # FOV-derived intrinsic - doesnt rely on a game piece's known size.
+        # A ChArUco-calibrated camera matrix is the most accurate source.
+        intr = cam_calibration.intrinsics_for_frame(
+            self.config.get("calibration", {}), img_w, 1
+        )
+        if intr is not None:
+            return float(intr[0][0, 0])
+        if self.fov and self.fov > 0:
+            return (img_w / 2.0) / math.tan(math.radians(self.fov / 2.0))
+        return self.focal_length_pixels  # fallback when FOV isnt calibrated
+
+    def _pixel_ray(
+        self, pixel_x: float, pixel_y: float, img_w: int, img_h: int
+    ) -> triangulation.Ray:
+        f = self._focal_length_px_fov(img_w)
+        return triangulation.pixel_to_ray(
+            pixel_x,
+            pixel_y,
+            img_w,
+            img_h,
+            f,
+            self.camera_x,
+            self.camera_y,
+            self.camera_height,
+            self.camera_bot_relative_yaw,
+            self.camera_pitch_angle,
+        )
+
+    def _filter_box(self, box: Box, img_w: int, img_h: int) -> bool:
+        x1, y1, x2, y2 = box.xyxy
+        h_px = y2 - y1
+        if (
+            x1 < self.margin
+            or y1 < self.margin
+            or x2 > (img_w - self.margin)
+            or y2 > (img_h - self.margin)
+        ):
+            return False
+        if h_px == 0:
+            return False
+        # no aspect filter on purpose, partial objects/rectangles still count
+        return True
+
+    def _box_to_robot_point(
+        self,
+        box: Box,
+        img_w: int,
+        img_h: int,
+        ground_z: float = 0.0,
+        *,
+        return_source: bool = False,
+    ):
+        # unified depth model: cast the bottom-center ray and intersect it with
+        # the horizontal plane the object is assumed to sit on. ground_z=0
+        # (ground plane) is the default; per-class heights come from the
+        # object_heights pipeline setting (inches). size-based heuristic is
+        # only a fallback for when the ray runs parallel to that plane.
+        x1, y1, x2, y2 = box.xyxy
+        ray = self._pixel_ray((x1 + x2) / 2.0, y2, img_w, img_h)
+        gp = triangulation.ground_plane_intersection(ray, ground_z=ground_z)
+        sb = self._size_based_point(box, img_w, img_h, ground_z=ground_z)
+        scale = self.conversions.get(self.unit, self.conversions["meter"])
+
+        # z_mode picks which method is primary; the other is the fallback.
+        # method string is surfaced as the Object's depth_source.
+        if self.z_mode == "ground_plane":
+            if gp is not None:
+                result = (gp * scale, "ground_plane")
+                return result if return_source else result[0]
+            if sb is not None:
+                result = (sb, "size_based")
+                return result if return_source else result[0]
+            return (None, "none") if return_source else None
+        if sb is not None:
+            result = (sb, "size_based")
+            return result if return_source else result[0]
+        if gp is not None:
+            result = (gp * scale, "ground_plane")
+            return result if return_source else result[0]
+        return (None, "none") if return_source else None
+
+    def _size_based_point(
+        self, box: Box, img_w: int, img_h: int, ground_z: float = 0.0
+    ) -> np.ndarray | None:
+        x1, y1, x2, y2 = box.xyxy
+        avg_px = ((x2 - x1) + (y2 - y1)) / 2.0
+        if avg_px <= 0:
+            return None
+        cx = (x1 + x2) / 2.0
+        distance_los = (self.ball_d_inches * self.focal_length_pixels) / avg_px
+        base = self._pixel_to_robot_coordinates(
+            cx,
+            (y1 + y2) / 2.0,
+            distance_los,
+            img_w,
+            img_h,
+            obj_height_z=ground_z,
+        )
+        scale = self.conversions.get(self.unit, self.conversions["meter"])
+        return np.array([base[0], base[1], ground_z * scale], dtype=np.float64)
+
+    def _pixel_to_robot_coordinates(
+        self,
+        pixel_x: float,
+        pixel_y: float,
+        distance_los: float,
+        img_w: int,
+        img_h: int,
+        obj_height_z: float = 0.0,
+    ) -> np.ndarray:
+        pixel_offset_x = pixel_x - img_w / 2.0
+        horizontal_angle_rad = math.atan(pixel_offset_x / self.focal_length_pixels)
+
+        # vertical offset between the camera and the assumed object plane;
+        # an elevated object shrinks this triangle leg vs the ground plane
+        vertical_delta = max(self.camera_height - obj_height_z, 0.0)
+        if vertical_delta > 0 and distance_los > vertical_delta:
+            true_horiz = math.sqrt(distance_los**2 - vertical_delta**2)
+        else:
+            true_horiz = distance_los * math.cos(math.radians(self.camera_pitch_angle))
+
+        left_right = true_horiz * math.sin(horizontal_angle_rad)
+        forward = true_horiz * math.cos(horizontal_angle_rad)
+
+        # +X right, +Y forward, +Z up; yaw 0 = facing +Y, positive yaw turns right.
+        yaw_rad = math.radians(self.camera_bot_relative_yaw)
+        cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
+        x_rot = left_right * cos_y + forward * sin_y
+        y_rot = forward * cos_y - left_right * sin_y
+
+        scale = self.conversions.get(self.unit, self.conversions["meter"])
+        return np.array(
+            [(x_rot + self.camera_x) * scale, (y_rot + self.camera_y) * scale],
+            dtype=np.float32,
+        )
+
+    def get_yolo_data(self) -> tuple[Results | None, np.ndarray | None]:
+        if self.model is None:
+            frame = self.get_frame()
+            return None, frame
+
+        if self._tpu_pipeline:
+            try:
+                _sequence, results, annotated_frame, _orig_shape = (
+                    self._tpu_result_q.get(
+                        timeout=None if self.frame_sync else self._pipeline_timeout
+                    )
+                )
+            except queue.Empty:
+                return self._last_result, self._last_frame
+            self._last_result = results
+            self._last_frame = annotated_frame
+        elif self._use_pipeline:
+            try:
+                preprocessed, orig_frame, orig_shape = self._preproc_q.get(
+                    timeout=None if self.frame_sync else self._pipeline_timeout
+                )
+            except queue.Empty:
+                return self._last_result, self._last_frame
+
+            inference_start = time.perf_counter()
+            results = self.model.predict_preprocessed(preprocessed, orig_shape)
+            annotated_frame = orig_frame.copy()
+            self._last_result = results
+            self._last_frame = annotated_frame
+            stage_ms = getattr(self.model, "last_tpu_stage_ms", None) or {
+                "preprocess": 0.0,
+                "device": (time.perf_counter() - inference_start) * 1000,
+                "postprocess": 0.0,
+            }
+            self._record_inference(
+                results,
+                inference_start,
+                stage_ms,
+            )
+        else:
+            frame = self.get_frame()
+            if frame is None:
+                self.logger.warning("No frame available.")
+                return None, None
+            clean_frame = frame.copy()  # keep clean copy before prediction
+            inference_start = time.perf_counter()
+            results = self.model.predict(frame, orig_shape=frame.shape)
+            annotated_frame = clean_frame  # use untouched frame
+            self._last_result = results
+            self._last_frame = annotated_frame
+            self._record_inference(
+                results,
+                inference_start,
+                {
+                    "preprocess": 0.0,
+                    "device": (time.perf_counter() - inference_start) * 1000,
+                    "postprocess": 0.0,
+                },
+            )
+
+        if annotated_frame is not None:
+            annotated_frame = results.plot(annotated_frame.copy())
+            if self.debug_mode:
+                new_time = time.perf_counter()
+                fps = 1 / max(new_time - self.last_time, 1e-6)
+                self.last_time = new_time
+                cv2.putText(
+                    annotated_frame,
+                    f"FPS: {int(fps)}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 0, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                if self.gui_available:
+                    cv2.imshow("YOLO Detections", annotated_frame)
+                    cv2.waitKey(1)
+            self._last_frame = annotated_frame
+
+        return results, annotated_frame
+
+    def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
+        scale = self.conversions.get(self.unit, self.conversions["meter"])
+        return (
+            triangulation.camera_point_to_robot(
+                pt,
+                self.camera_x,
+                self.camera_y,
+                self.camera_height,
+                self.camera_bot_relative_yaw,
+                self.camera_pitch_angle,
+            )
+            * scale
+        )
+
+    def _pnp_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
+        # solvePnP output is in the units of pnp.object_points (meters, ~1.8m
+        # tall COCO skeleton), but the rest of the pipeline works in inches -
+        # without this conversion things render ~39x too small
+        meters_to_inches = 1.0 / self.conversions["meter"]
+        return self._camera_point_to_robot(
+            (
+                pt[0] * meters_to_inches,
+                pt[1] * meters_to_inches,
+                pt[2] * meters_to_inches,
+            )
+        )
+
+    def _pnp_to_robot_coordinates(self, tvec: tuple[float, float, float]) -> np.ndarray:
+        return self._pnp_point_to_robot(tvec)
+
+    def _euler_to_matrix(self, roll: float, pitch: float, yaw: float) -> np.ndarray:
+        cr, sr = math.cos(roll), math.sin(roll)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+        ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+        rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+        return rz @ ry @ rx
+
+    def _matrix_to_euler(self, R: np.ndarray) -> tuple[float, float, float]:
+        sy = math.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
+        if sy > 1e-6:
+            roll = math.atan2(R[2, 1], R[2, 2])
+            pitch = math.atan2(-R[2, 0], sy)
+            yaw = math.atan2(R[1, 0], R[0, 0])
+        else:
+            roll = math.atan2(-R[1, 2], R[1, 1])
+            pitch = math.atan2(-R[2, 0], sy)
+            yaw = 0.0
+        return roll, pitch, yaw
+
+    def _euler_to_robot_frame(
+        self, roll: float, pitch: float, yaw: float
+    ) -> tuple[float, float, float]:
+        # solvePnP euler comes out in the camera frame; convert it the same way
+        # the april_tag pipeline does so every Object ships robot-frame eulers.
+        R_cam = self._euler_to_matrix(roll, pitch, yaw)
+        R_robot = triangulation.camera_rotation_to_robot(
+            R_cam, self.camera_bot_relative_yaw, self.camera_pitch_angle
+        )
+        return self._matrix_to_euler(R_robot)
+
+    def _box_to_object(
+        self, box: Box, img_w: int, img_h: int, keypoints_2d: np.ndarray | None = None
+    ) -> Object | None:
+        bottom_x = (box.xyxy[0] + box.xyxy[2]) / 2.0
+        bottom_y = box.xyxy[3]
+        ray = self._pixel_ray(bottom_x, bottom_y, img_w, img_h)
+        class_name = self._class_names.get(box.cls_id, f"class_{box.cls_id}")
+        # per-class assumed plane height (inches, ray frame); 0 = ground plane
+        obj_plane_z = float(self.object_heights.get(class_name, 0.0))
+        scale = self.conversions.get(self.unit, self.conversions["meter"])
+
+        depth_source = "monocular"
+        if box.translation is not None:
+            pt = self._pnp_to_robot_coordinates(box.translation)
+        else:
+            pt, depth_source = self._box_to_robot_point(
+                box, img_w, img_h, ground_z=obj_plane_z, return_source=True
+            )
+            if pt is None:
+                return None
+            # depth model assumes the object sits on its configured plane,
+            # so z is that plane's height
+            pt = np.array([pt[0], pt[1], obj_plane_z * scale])
+
+        roll, pitch, yaw = 0.0, 0.0, 0.0
+        if box.rotation is not None:
+            roll, pitch, yaw = self._euler_to_robot_frame(*box.rotation)
+        z = float(pt[2]) if len(pt) > 2 else 0.0
+
+        kpts_3d_robot = None
+        if box.keypoints_3d is not None:
+            kpts_3d_robot = [
+                self._pnp_point_to_robot(tuple(kpt)).tolist()
+                for kpt in box.keypoints_3d
+            ]
+        elif keypoints_2d is not None:
+            x1, y1, x2, y2 = box.xyxy
+            avg_px = ((x2 - x1) + (y2 - y1)) / 2.0
+            if avg_px > 0:
+                distance_los = (self.ball_d_inches * self.focal_length_pixels) / avg_px
+                f = self._focal_length_px_fov(img_w)
+                cx = img_w / 2.0
+                cy = img_h / 2.0
+                kpts_3d_robot = []
+                for kp in keypoints_2d:
+                    kp_x, kp_y = kp[0], kp[1]
+                    fx_cam = (kp_x - cx) * distance_los / f
+                    fy_cam = (kp_y - cy) * distance_los / f
+                    fz_cam = distance_los
+                    rpt = self._camera_point_to_robot((fx_cam, fy_cam, fz_cam))
+                    kpts_3d_robot.append(rpt.tolist())
+
+        return Object(
+            float(pt[0]),
+            float(pt[1]),
+            z=z,
+            roll=roll,
+            pitch=pitch,
+            yaw=yaw,
+            name=class_name,
+            confidence=box.conf,
+            keypoints_3d=kpts_3d_robot,
+            ray_origin=ray.origin,
+            ray_direction=ray.direction,
+            depth_source=depth_source,
+        )
+
+    def run(self):
+        frame = self._next_input_frame()
+        if frame is None:
+            return [], None
+
+        gated = self._gate_uncalibrated(frame)
+        if gated is not None:
+            return gated
+
+        if not self._is_processable():
+            return [], frame
+
+        data, annotated = self.get_yolo_data()
+        if data is None or annotated is None:
+            return [], frame
+
+        img_h, img_w = data.orig_shape[:2]
+        objects: list[Object] = []
+        kp_iter = iter(data.keypoints) if data.keypoints else None
+        for box in data.boxes:
+            if not self._filter_box(box, img_w, img_h):
+                if kp_iter:
+                    next(kp_iter, None)
+                continue
+            kp = next(kp_iter) if kp_iter else None
+            obj = self._box_to_object(box, img_w, img_h, keypoints_2d=kp)
+            if obj is not None:
+                objects.append(obj)
+        self._last_objects = objects
+        return objects, annotated
+
+    def run_with_supplied_data(self, data: Results) -> list[Object]:
+        if not self._is_processable():
+            return []
+        img_h, img_w = data.orig_shape[:2]
+        objects: list[Object] = []
+        kp_iter = iter(data.keypoints) if data.keypoints else None
+        for box in data.boxes:
+            if not self._filter_box(box, img_w, img_h):
+                if kp_iter:
+                    next(kp_iter, None)
+                continue
+            kp = next(kp_iter) if kp_iter else None
+            obj = self._box_to_object(box, img_w, img_h, keypoints_2d=kp)
+            if obj is not None:
+                objects.append(obj)
+        return objects
+
+    def plot(self, frame):
+        if frame is None:
+            return None
+        result = getattr(self, "_last_result", None)
+        if result is None:
+            return frame
+        try:
+            return result.plot(frame.copy())
+        except Exception:
+            return frame
+
+    def get_data_for_subsystem(self, target: str):
+        if self.subsystem != target:
+            return None
+        positions = self._last_objects
+        if self.subsystem == "hopper":
+            return len(positions) > 0
+        return positions
+
+    def get_subsystem(self) -> str:
+        return self.subsystem
+
+    def destroy(self):
+        super().destroy()
+        self._tpu_stop.set()
+        for thread in (
+            self._preproc_thread,
+            self._tpu_device_thread,
+            self._tpu_post_thread,
+        ):
+            if thread and thread.is_alive():
+                thread.join(timeout=5)
+
+    def release(self):
+        self.destroy()

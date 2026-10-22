@@ -1,0 +1,15 @@
+[Unit]
+Description=iSpy First Boot Provisioner
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/iSpy-firstboot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/first-boot.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,908 @@
+import logging
+import os
+import signal
+import threading
+import time
+from pathlib import Path
+
+from wpimath.geometry import Pose2d, Rotation2d
+
+from iSpy.config.iSpyConfig import iSpyAddonConfig, iSpyConfig
+from iSpy.core import network_policy, performance
+from iSpy.core.control_channel import ControlServer, update_service_state
+from iSpy.core.rollback import RollBack
+from iSpy.plugins._loader import load_plugins
+from iSpy.plugins.bases import (
+    FrameProcessorBase,
+    TrackerBase,
+    UtilityBase,
+    find_duplicate_output_keys,
+)
+from iSpy.utilities.MultipleCameraHandler import MultipleCameraHandler
+from iSpy.validations.model_validator import (
+    enforce_model_organization,
+    validate_model_organization,
+)
+from iSpy.vision.pipelines.base import OfflineUnavailablePipeline, VisionPipeline
+from iSpy.web.Backend.WebApp import create_app
+
+PROJECT_ROOT = Path(__file__).resolve()
+while not (PROJECT_ROOT / "plugins").exists():
+    if PROJECT_ROOT.parent == PROJECT_ROOT:
+        raise RuntimeError("Could not locate 'plugins' directory above iSpy.py")
+    PROJECT_ROOT = PROJECT_ROOT.parent
+
+_PLUGIN_ROOT = PROJECT_ROOT / "plugins"
+
+
+class iSpy:
+    def __init__(
+        self,
+        config: iSpyConfig,
+        cameras: list[VisionPipeline] | None = None,
+        web_app=None,
+    ):
+        self.config = config
+        self.logger = logging.getLogger(__name__)
+        update_service_state(phase="initializing vision")
+
+        # bring the web app up FIRST!! so the UI is reachable
+        self.web_app = web_app
+        if self.web_app is None and performance.effective_app_mode(config):
+            update_service_state(phase="starting web UI", web_enabled=True)
+            if performance.web_forced_on() and not performance.get_profile().web_enabled:
+                self.logger.warning(
+                    "ISPY_FORCE_WEB: web UI forced on for this run despite "
+                    "performance profile %s (%d) - nothing is saved.",
+                    performance.get_profile().label,
+                    performance.get_level(),
+                )
+            self.web_app = create_app(cameras=[], config=config)
+            threading.Thread(
+                target=self.web_app.run, daemon=True, name="iSpyWebServer"
+            ).start()
+
+        if cameras is None:
+            cameras = self._build_cameras_from_config(config)
+        self.cameras = cameras
+
+        self.shutdown_event = threading.Event()
+        self.pause_event = threading.Event()
+        os.makedirs("Outputs", exist_ok=True)
+
+        signal.signal(signal.SIGINT, lambda *_: self._handle_shutdown())
+        signal.signal(signal.SIGTERM, lambda *_: self._handle_shutdown())
+
+        if len(cameras) == 0:
+            self.logger.warning("No cameras provided - vision will not run.")
+            self.camera_handler = None
+        elif len(cameras) == 1:
+            self.logger.info("Single camera mode.")
+            self.camera_handler = None
+        else:
+            self.logger.info("%d cameras - multi mode.", len(cameras))
+            self.camera_handler = MultipleCameraHandler(cameras, config)
+        if self.web_app is not None:
+            self.web_app.set_cameras(self.cameras)
+
+        # shared "what object is currently selected (for tracking)"
+        from iSpy.plugins.selection import SelectionState
+
+        self.selection = SelectionState()
+
+        # shared context for every add-on; each one gets its OWN settings view
+        self._base_context = {
+            "config": config,
+            "global_config": config,
+            "cameras": self.cameras,
+            "flask_app": self.web_app.flask_app if self.web_app else None,
+            "vision_instance": self,
+            "viewer3d": self.web_app.modules.get("viewer3d") if self.web_app else None,
+            "selection": self.selection,
+        }
+
+        tracker_classes = load_plugins(_PLUGIN_ROOT / "trackers", TrackerBase)
+        self.trackers = {}  # No default trackers
+        for name, settings in self._enabled_addons("trackers"):
+            if name in tracker_classes:
+                if not self._gate_addon("tracker", name, tracker_classes[name], settings):
+                    continue
+                self.trackers[name] = tracker_classes[name](
+                    self._addon_context(tracker_classes[name], settings)
+                )
+            else:
+                self.logger.warning("Unknown tracker: %s", name)
+
+        utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
+        self.utilities = {}
+
+        # RollBack is core code, not an add-on: it is built from the top-level
+        # "rollback" config block whether or not anything is enabled, so it
+        # lives in self.utilities (the health check and shutdown paths iterate
+        # that dict) but never shows up in /addons
+        try:
+            self.utilities["rollback"] = RollBack(
+                self._addon_context(RollBack, config.get("rollback", {}))
+            )
+        except Exception:
+            self.logger.exception("Failed to initialize the rollback recorder")
+
+        for name, settings in self._enabled_addons("utilities"):
+            if name == "rollback":
+                # stale entry from before rollback was core - the instance
+                # above is the only recorder, do not build a second one
+                continue
+            if self.replay_mode and name == "FRC/network_table_handler":
+                continue
+            if name in utility_classes:
+                if not self._gate_addon(
+                    "utility", name, utility_classes[name], settings
+                ):
+                    continue
+                try:
+                    self.utilities[name] = utility_classes[name](
+                        self._addon_context(utility_classes[name], settings)
+                    )
+                except Exception:
+                    self.logger.exception(
+                        "Failed to initialize utility plugin: %s", name
+                    )
+            else:
+                self.logger.warning("Unknown utility plugin: %s", name)
+
+        for key, names in find_duplicate_output_keys(self.utilities).items():
+            self.logger.warning(
+                "Enabled utilities %s declare the same output_key '%s' - "
+                "they will overwrite each other's addon_data value each tick "
+                "(update order decides the winner).",
+                ", ".join(names),
+                key,
+            )
+
+        frame_processor_classes = load_plugins(
+            _PLUGIN_ROOT / "frame_processors", FrameProcessorBase
+        )
+        self.frame_processors = {}
+        for name, settings in self._enabled_addons("frame_processors"):
+            if name in frame_processor_classes:
+                if not self._gate_addon(
+                    "frame_processor", name, frame_processor_classes[name], settings
+                ):
+                    continue
+                try:
+                    self.frame_processors[name] = frame_processor_classes[name](
+                        self._addon_context(frame_processor_classes[name], settings)
+                    )
+                except Exception:
+                    self.logger.exception(
+                        "Failed to initialize frame processor: %s", name
+                    )
+            else:
+                self.logger.warning("Unknown frame processor: %s", name)
+
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+        if self.web_app:
+            # server thread already started above, just wire in what loaded since then
+            dash = self.web_app.modules.get("dashboard")
+            if dash and hasattr(dash, "set_plugins"):
+                dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
+            self._register_code_parts()
+            self.web_app.set_vision_instance(self)
+
+        self._silence_external_loggers()
+
+        if self.frame_processors:
+            for camera in self.cameras:
+                for name, processor in self.frame_processors.items():
+                    camera.add_frame_processor(processor)
+
+        # I think this has to be at very bottom
+        if self.web_app:
+            self.web_app.set_vision_instance(self)
+
+    @staticmethod
+    def _build_cameras_from_config(config: iSpyConfig) -> list[VisionPipeline]:
+        repo_root = Path.cwd()
+        from iSpy.config.iSpyConfig import get_pipeline_settings
+        from iSpy.validations.model_validator import enforce_model_organization
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        is_valid, corrected_model_path = enforce_model_organization(
+            repo_root, config.config
+        )
+        if corrected_model_path:
+            for cam_cfg in config.config["camera_configs"].values():
+                if not isinstance(cam_cfg, dict):
+                    continue
+                vm = get_pipeline_settings(cam_cfg).get("vision_model")
+                if isinstance(vm, dict):
+                    vm["file_path"] = corrected_model_path
+
+        pipeline_classes = get_pipeline_classes()
+        cameras = []
+        for cam_name in config.camera_configs:
+            cam_config = config.camera_config(cam_name)
+            pipeline = cam_config.pipeline_name()
+            cls = pipeline_classes.get(pipeline)
+            if cls is None:
+                logging.getLogger(__name__).warning(
+                    "Unknown pipeline '%s' for camera '%s'", pipeline, cam_name
+                )
+                continue
+            if network_policy.is_offline():
+                try:
+                    settings = dict(cam_config.pipeline_settings() or {})
+                    reqs = list(cls.network_requirements(settings) or [])
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "network_requirements() failed for pipeline '%s' - "
+                        "assuming no internet needs.",
+                        pipeline,
+                    )
+                    reqs = []
+                critical = [r for r in reqs if r.critical]
+                if critical:
+                    reason = "; ".join(f"{r.name}: {r.reason}" for r in critical)
+                    network_policy.record_skip("pipeline", cam_name, reason)
+                    logging.getLogger(__name__).warning(
+                        "Offline mode: camera '%s' pipeline '%s' needs the "
+                        "internet - %s. Camera kept with an error status.",
+                        cam_name,
+                        pipeline,
+                        reason,
+                    )
+                    try:
+                        cameras.append(
+                            OfflineUnavailablePipeline(cam_config, config, reason)
+                        )
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "Camera '%s': offline placeholder failed to "
+                            "initialize - skipping it.",
+                            cam_name,
+                        )
+                    continue
+                optional = [r for r in reqs if not r.critical]
+                if optional:
+                    feature = ", ".join(r.name for r in optional)
+                    reason = "; ".join(r.reason for r in optional)
+                    network_policy.record_degraded("pipeline", cam_name, feature, reason)
+                    logging.getLogger(__name__).warning(
+                        "Offline mode: camera '%s' pipeline '%s' runs with "
+                        "reduced features - %s",
+                        cam_name,
+                        pipeline,
+                        reason,
+                    )
+            try:
+                cameras.append(cls(cam_config, config))
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Camera '%s' (pipeline '%s') failed to initialize - "
+                    "skipping it. Fix its config or model, then restart. "
+                    "The remaining cameras are still starting.",
+                    cam_name,
+                    pipeline,
+                )
+
+        if not cameras:
+            logging.getLogger(__name__).error("No cameras configured or detected.")
+        return cameras
+
+    def _enabled_addons(self, addon_type: str) -> list[tuple[str, dict]]:
+        raw = self.config.get_nested("plugins", addon_type, default={})
+        if not isinstance(raw, dict):
+            return []
+        out = []
+        for name, settings in raw.items():
+            if not isinstance(name, str):
+                continue
+            out.append((name, settings if isinstance(settings, dict) else {}))
+        return out
+
+    # false when offline mode means this add-on must not be constructed. critical
+    # unmet need = skipped + reported, non-critical = loads degraded. never raises
+    def _gate_addon(self, group: str, name: str, cls, settings: dict) -> bool:
+        if not network_policy.is_offline():
+            return True
+        try:
+            reqs = list(cls.network_requirements(settings) or [])
+        except Exception:
+            self.logger.exception(
+                "network_requirements() failed for %s '%s' - assuming no "
+                "internet needs.",
+                group,
+                name,
+            )
+            return True
+        critical = [r for r in reqs if r.critical]
+        if critical:
+            reason = "; ".join(f"{r.name}: {r.reason}" for r in critical)
+            network_policy.record_skip(group, name, reason)
+            self.logger.warning(
+                "Offline mode: skipping %s '%s' - %s", group, name, reason
+            )
+            return False
+        optional = [r for r in reqs if not r.critical]
+        if optional:
+            feature = ", ".join(r.name for r in optional)
+            reason = "; ".join(r.reason for r in optional)
+            network_policy.record_degraded(group, name, feature, reason)
+            self.logger.warning(
+                "Offline mode: %s '%s' runs with reduced features - %s",
+                group,
+                name,
+                reason,
+            )
+        return True
+
+    def _register_code_parts(self):
+        metrics = self.web_app.modules.get("metrics") if self.web_app else None
+        if metrics is None or not hasattr(metrics, "set_code_parts"):
+            return
+        parts = {}
+        for group in (self.trackers, self.utilities, self.frame_processors):
+            for name, inst in group.items():
+                get_parts = getattr(inst, "get_breakdown_parts", None)
+                if get_parts is None:
+                    continue
+                try:
+                    addon_parts = get_parts() or {}
+                except Exception:
+                    addon_parts = {}
+                for key, value in addon_parts.items():
+                    if isinstance(value, (tuple, list)) and len(value) == 2:
+                        parts.setdefault(key, tuple(value))
+        for camera in self.cameras:
+            try:
+                pipeline_parts = camera.get_code_parts() or {}
+            except Exception:
+                pipeline_parts = {}
+            for key, (label, color) in pipeline_parts.items():
+                parts.setdefault(key, (label, color))
+        metrics.set_code_parts(parts)
+
+    def _reset_frame_processor_times(self):
+        for processor in self.frame_processors.values():
+            if self._addon_breakdown_parts(processor):
+                processor._last_code_seconds = 0.0
+
+    @staticmethod
+    def _addon_breakdown_parts(addon) -> dict:
+        get_parts = getattr(addon, "get_breakdown_parts", None)
+        if get_parts is None:
+            return {}
+        try:
+            parts = get_parts() or {}
+        except Exception:
+            return {}
+        return parts if isinstance(parts, dict) else {}
+
+    def _merge_frame_processor_times(self, code_times: dict) -> float:
+        total = 0.0
+        for name, processor in self.frame_processors.items():
+            parts = self._addon_breakdown_parts(processor)
+            if not parts:
+                continue
+            seconds = getattr(processor, "_last_code_seconds", None)
+            if seconds is None:
+                continue
+            key = getattr(processor, "plugin_name", name)
+            if key in parts:
+                code_times[key] = seconds
+            total += seconds
+        return total
+
+    def _addon_context(self, addon_cls, settings: dict) -> dict:
+        ctx = dict(self._base_context)
+        ctx["config"] = iSpyAddonConfig(settings, defaults=addon_cls.default_settings())
+        return ctx
+
+    def _silence_external_loggers(self):
+        for name in logging.root.manager.loggerDict:
+            if not name.startswith("iSpy"):
+                logging.getLogger(name).setLevel(logging.WARNING)
+
+    def reload_camera(self, cam_key: str, new_config: dict):
+        raise RuntimeError(
+            "reload_camera was removed - camera settings require a vision "
+            "restart to take effect."
+        )
+
+    def _handle_shutdown(self):
+        if self.shutdown_event.is_set():
+            return
+        self.logger.info("Shutdown signal received.")
+        self.shutdown_event.set()
+
+    def _stop_all_plugins(self):
+        for name, plugin in {**self.trackers, **self.utilities}.items():
+            if plugin is None:
+                continue
+            if hasattr(plugin, "stop"):
+                try:
+                    plugin.stop()
+                except Exception:
+                    self.logger.exception("Error stopping plugin '%s'", name)
+
+
+
+    @property
+    def replay_mode(self) -> bool:
+        return bool(self.cameras) and all(
+            callable(getattr(camera, "replay_pose", None)) for camera in self.cameras
+        )
+
+    def _get_pose(self, code_times: dict | None = None) -> Pose2d:
+        for camera in self.cameras:
+            replay_pose = getattr(camera, "replay_pose", None)
+            if callable(replay_pose):
+                pose = replay_pose()
+                if isinstance(pose, dict):
+                    return Pose2d(
+                        float(pose.get("x", 0) or 0),
+                        float(pose.get("y", 0) or 0),
+                        Rotation2d(float(pose.get("heading", 0) or 0)),
+                    )
+                if pose is not None:
+                    return pose
+
+        for name, util in self.utilities.items():
+            if hasattr(util, "get_robot_pose"):
+                t_pose = time.perf_counter()
+                pose = util.get_robot_pose()
+                addon_parts = self._addon_breakdown_parts(util)
+                if code_times is not None and addon_parts:
+                    pose_key = f"{getattr(util, 'plugin_name', name)}_pose"
+                    if pose_key in addon_parts:
+                        code_times[pose_key] = time.perf_counter() - t_pose
+                if pose is not None:
+                    return pose
+        return Pose2d()
+
+    def _update_utilities(self, frame_data: dict):
+        code_times = frame_data.setdefault("code_times", {})
+        t_util = time.perf_counter()
+        opted_utilities_s = 0.0
+        for name, util in self.utilities.items():
+            t0 = time.perf_counter()
+            try:
+                util.update(frame_data)
+            except Exception:
+                self.logger.exception("Utility update failed")
+            if self._addon_breakdown_parts(util):
+                key = getattr(util, "plugin_name", name)
+                code_times[key] = time.perf_counter() - t0
+                opted_utilities_s += code_times[key]
+        code_times["utilities"] = max(
+            0.0, time.perf_counter() - t_util - opted_utilities_s
+        )
+
+    def _update_web(self, frame_data: dict):
+        if self.web_app:
+            self.web_app.update(frame_data)
+
+    def run_multi_vision(self, handler):
+        try:
+            objects = handler.predict()
+            return objects, handler.get_combined_frame()
+        except Exception:
+            self.logger.exception("Multi-vision exception")
+            return [], None
+
+    def run_solo_vision(self, camera):
+        try:
+            if camera.in_calibration_mode():
+                return [], camera.get_raw_frame()
+            objects, frame = camera.run()
+            return objects, frame
+        except Exception:
+            self.logger.exception("Solo-vision exception")
+            # never kill the loop on one pipeline error, fall back to the raw frame so the feed keeps flowing
+            return [], camera.get_frame() if hasattr(camera, "get_frame") else None
+
+    def validate_vision_model(self, repo_root: Path | None = None):
+        if repo_root is None:
+            repo_root = Path(__file__).resolve().parents[1]
+        validation_result = validate_model_organization(repo_root)
+        if validation_result.orphan_models:
+            for p, r in validation_result.orphan_models.items():
+                self.logger.warning("Orphan model %s: %s", p, r)
+        return enforce_model_organization(repo_root, self.config.config)
+
+    def get_default_config(self):
+        return self.config.get_default_config()
+
+    def _control_server(self) -> ControlServer:
+        return ControlServer(
+            {
+                "PAUSE": self.pause_event.set,
+                "RESUME": self.pause_event.clear,
+                "SHUTDOWN": self._handle_shutdown,
+            }
+        )
+
+    def run(self, duration_s: float | None = None):
+        if not self.cameras:
+            self.logger.error("No cameras provided.")
+            return
+
+        # The supervisory status page upgrades booting -> running from this.
+        update_service_state(status="running", phase="running")
+
+        control = self._control_server()
+        try:
+            control.start()
+        except OSError:
+            self.logger.exception(
+                "Control channel failed to start - service pause/resume unavailable."
+            )
+            control = None
+
+        if duration_s is not None:
+
+            def _stop():
+                time.sleep(duration_s)
+                self._handle_shutdown()
+
+            threading.Thread(target=_stop, daemon=True).start()
+
+        try:
+            if len(self.cameras) == 1:
+                self.run_solo_mode()
+            else:
+                self.run_multi_mode()
+        finally:
+            if control is not None:
+                control.stop()
+
+    @staticmethod
+    def _camera_label(cam, index: int) -> str:
+        # same naming MultipleCameraHandler.get_camera_frames() uses, so the
+        # rollback sidecar, session.json and camera_frames all agree
+        cfg = getattr(cam, "config", None)
+        if cfg is not None:
+            try:
+                name = cfg.get("name")
+            except Exception:
+                name = None
+            if name:
+                return str(name)
+        return f"Camera {index + 1}"
+
+    # does the rollback recorder actually want raw frames? the copies cost a full
+    # frame copy per camera per tick, so ask first. probe failure = assume wanted
+    def _recorder_wants_frames(self) -> bool:
+        recorder = self.utilities.get("rollback")
+        wants = getattr(recorder, "wants_raw_frames", None)
+        if not callable(wants):
+            return False
+        try:
+            return bool(wants())
+        except Exception:
+            return True
+
+    # does this tick's plot()/debug-frame work have a consumer? levels 2-0
+    # skip when no feed, lightbox, viewer or dashboard SSE is watching
+    def _annotations_wanted(self) -> bool:
+        if not performance.get_profile().annotate_only_when_watched:
+            return True
+        web = self.web_app
+        if web is None:
+            return False
+        try:
+            return web.anyone_watching()
+        except Exception:
+            return True
+
+    def _raw_frames(self, cams) -> dict:
+        # raw (pre-processor, pre-plot) frames for the rollback recorder. a
+        # camera that is disconnected or serving a stale frame is skipped rather
+        # than writing its placeholder "camera not found" image to disk
+        if not self._recorder_wants_frames():
+            return {}
+        frames = {}
+        for i, cam in enumerate(cams):
+            try:
+                # a still-image source never sets _connected, and a replay
+                # camera reports a live feed of its own - neither is a fault
+                live = getattr(cam, "is_image", False) or cam._connected
+                if not live or cam.get_frame_age() > 1.0:
+                    continue
+                frame = cam.get_raw_frame()
+            except Exception:
+                continue
+            if frame is None:
+                continue
+            frames[self._camera_label(cam, i)] = frame
+        return frames
+
+    def _run_loop_body_solo(self, camera) -> dict:
+        t0 = time.perf_counter()
+        code_times = {}
+        camera_lag_s = camera.get_frame_age()
+
+        # grab the raw frames up front, before any processor or plot touches
+        # the camera, so the recorded pixels are the ones this tick consumed
+        raw_frames = self._raw_frames([camera])
+
+        t_vis = time.perf_counter()
+        self._reset_frame_processor_times()
+        detections, frame = self.run_solo_vision(camera)
+        vision_s = time.perf_counter() - t_vis
+        vision_s -= self._merge_frame_processor_times(code_times)
+        code_times["vision"] = max(0.0, vision_s)
+
+        pose = self._get_pose(code_times)
+
+        t_track = time.perf_counter()
+        opted_trackers_s = 0.0
+        for name, tracker in self.trackers.items():
+            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so change
+            t_one = time.perf_counter()
+            detections = tracker.update(
+                detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
+            )
+            if self._addon_breakdown_parts(tracker):
+                key = getattr(tracker, "plugin_name", name)
+                code_times[key] = time.perf_counter() - t_one
+                opted_trackers_s += code_times[key]
+        code_times["trackers"] = max(
+            0.0, time.perf_counter() - t_track - opted_trackers_s
+        )
+
+
+
+        if hasattr(camera, "get_code_times"):
+            try:
+                for key, val in (camera.get_code_times() or {}).items():
+                    code_times[key] = val
+            except Exception:
+                pass
+
+        loop_s = time.perf_counter() - t0
+
+        pipeline_name = getattr(camera, "plugin_name", "unknown")
+        pipeline_settings = {}
+        camera_config_dict = {}
+        try:
+            from iSpy.config.iSpyConfig import get_pipeline_settings
+
+            camera_config_dict = dict(getattr(camera, "_camera_config", {}) or {})
+            pipeline_settings = dict(get_pipeline_settings(camera_config_dict) or {})
+        except Exception:
+            pass
+
+        frame_data = {
+            "detections": detections,
+            "detection_count": len(detections),
+            "frame": frame,
+            "fps": round(1 / loop_s, 1) if loop_s > 0 else 0,
+            "loop_s": loop_s,
+            "vision_s": vision_s,
+            "camera_lag_s": camera_lag_s,
+            "cameras": self.cameras,
+            "raw_frames": raw_frames,
+            "code_times": code_times,
+            "debug_data": {},
+            "pipeline_name": pipeline_name,
+            "pipeline_settings": pipeline_settings,
+            "camera_config": camera_config_dict,
+            "robot_pose": {
+                "x": pose.X(),
+                "y": pose.Y(),
+                "heading": pose.rotation().radians(),
+            },
+        }
+        if hasattr(camera, "get_debug_data"):
+            frame_data["debug_data"] = camera.get_debug_data() or {}
+        if not camera.in_calibration_mode():
+            # plot()/debug drawing is the expensive part here - skip it when
+            # nothing is streaming or viewing (levels 2-0)
+            annotate = self._annotations_wanted()
+            if annotate and hasattr(camera, "get_debug_frame"):
+                debug_frame = camera.get_debug_frame(frame)
+                if debug_frame is not None:
+                    frame_data["debug_frame"] = debug_frame
+            if annotate and hasattr(camera, "plot"):
+                plotted_frame = camera.plot(frame)
+                if plotted_frame is not None:
+                    frame_data["frame"] = plotted_frame
+                    frame_data["debug_frame"] = plotted_frame
+        return frame_data
+
+    def _run_loop_body_multi(self, handler) -> dict:
+        t0 = time.perf_counter()
+        code_times = {}
+        ages = [cam.get_frame_age() for cam in handler.cameras]
+        camera_lag_s = sum(ages) / len(ages) if ages else 0.0
+
+        # grab the raw frames up front, before any processor or plot touches
+        # the cameras, so the recorded pixels are the ones this tick consumed
+        raw_frames = self._raw_frames(handler.cameras)
+
+        t_vis = time.perf_counter()
+        self._reset_frame_processor_times()
+        detections, frame = self.run_multi_vision(handler)
+        vision_s = time.perf_counter() - t_vis
+        vision_s -= self._merge_frame_processor_times(code_times)
+        code_times["vision"] = max(0.0, vision_s)
+
+        pose = self._get_pose(code_times)
+
+        t_track = time.perf_counter()
+        opted_trackers_s = 0.0
+        for name, tracker in self.trackers.items():
+            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so change
+            t_one = time.perf_counter()
+            detections = tracker.update(
+                detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
+            )
+            if self._addon_breakdown_parts(tracker):
+                key = getattr(tracker, "plugin_name", name)
+                code_times[key] = time.perf_counter() - t_one
+                opted_trackers_s += code_times[key]
+        code_times["trackers"] = max(
+            0.0, time.perf_counter() - t_track - opted_trackers_s
+        )
+
+
+
+        for cam in handler.cameras:
+            if hasattr(cam, "get_code_times"):
+                try:
+                    for key, val in (cam.get_code_times() or {}).items():
+                        code_times[key] = val
+                except Exception:
+                    pass
+
+        loop_s = time.perf_counter() - t0
+
+        pipeline_names = set()
+        for cam in handler.cameras:
+            pipeline_names.add(getattr(cam, "plugin_name", "unknown"))
+
+        frame_data = {
+            "detections": detections,
+            "detection_count": len(detections),
+            "frame": frame,
+            "fps": round(1 / loop_s, 1) if loop_s > 0 else 0,
+            "loop_s": loop_s,
+            "vision_s": vision_s,
+            "camera_lag_s": camera_lag_s,
+            "cameras": self.cameras,
+            "camera_frames": handler.get_camera_frames(),
+            "raw_frames": raw_frames,
+            "code_times": code_times,
+            "debug_data": {},
+            "pipeline_name": ",".join(sorted(pipeline_names)),
+            "pipeline_settings": {},
+            "camera_config": {},
+            "robot_pose": {
+                "x": pose.X(),
+                "y": pose.Y(),
+                "heading": pose.rotation().radians(),
+            },
+        }
+        if hasattr(handler, "get_camera_debug_data"):
+            frame_data["debug_data"] = handler.get_camera_debug_data() or {}
+        if self._annotations_wanted() and hasattr(handler, "get_camera_debug_frame"):
+            debug_frame = handler.get_camera_debug_frame(frame)
+            if debug_frame is not None:
+                frame_data["debug_frame"] = debug_frame
+
+        return frame_data
+
+    def run_solo_mode(self):
+        max_fps = self.config.get("max_fps", 0)
+        print_fps = performance.get_profile().fps_console_print
+        last_frame_data = None
+        try:
+            camera = self.cameras[0]
+            self.run_solo_vision(camera)
+            while not self.shutdown_event.is_set():
+                camera = self.cameras[0]
+                if self._replay_at_end():
+                    break
+                if self.pause_event.is_set():
+                    if last_frame_data is not None:
+                        # raw_frames is cleared: the recorder consumes them on
+                        # every update() tick, and re-feeding the held frame
+                        # would write the same picture 20 times a second
+                        frozen = {**last_frame_data, "fps": 0, "raw_frames": {}}
+                        self._update_utilities(frozen)
+                        self._update_web(frozen)
+                    time.sleep(0.05)
+                    continue
+
+                t_start = time.perf_counter()
+                frame_data = self._run_loop_body_solo(camera)
+                last_frame_data = frame_data
+
+                self._update_utilities(frame_data)
+
+                t_web = time.perf_counter()
+                self._update_web(frame_data)
+                frame_data["code_times"]["web"] = time.perf_counter() - t_web
+
+                if max_fps > 0:
+                    elapsed = time.perf_counter() - t_start
+                    sleep_time = max(0, 1.0 / max_fps - elapsed)
+                    time.sleep(sleep_time)
+
+                actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
+                if print_fps:
+                    print(f"\rFPS: {actual_fps:.1f}   ", end="")
+
+        finally:
+            if print_fps:
+                print()
+            self._stop_all_plugins()
+            if self.web_app:
+                self.web_app.stop()
+            if self.cameras:
+                self.cameras[0].destroy()
+
+    def run_multi_mode(self):
+        handler = self.camera_handler
+        if handler is None:
+            self.logger.error("Multi-camera handler not initialized.")
+            return
+        max_fps = self.config.get("max_fps", 0)
+        print_fps = performance.get_profile().fps_console_print
+        try:
+            self.logger.info("Multi mode - warming up...")
+            self.run_multi_vision(handler)
+            self.logger.info("Warm-up complete.")
+
+            last_frame_data = None
+            while not self.shutdown_event.is_set():
+                if self._replay_at_end():
+                    break
+                if self.pause_event.is_set():
+                    if last_frame_data is not None:
+                        frozen = {**last_frame_data, "fps": 0, "raw_frames": {}}
+                        self._update_utilities(frozen)
+                        self._update_web(frozen)
+                    time.sleep(0.05)
+                    continue
+
+                t_start = time.perf_counter()
+                frame_data = self._run_loop_body_multi(handler)
+                last_frame_data = frame_data
+
+                self._update_utilities(frame_data)
+
+                t_web = time.perf_counter()
+                self._update_web(frame_data)
+                frame_data["code_times"]["web"] = time.perf_counter() - t_web
+
+                if max_fps > 0:
+                    elapsed = time.perf_counter() - t_start
+                    sleep_time = max(0, 1.0 / max_fps - elapsed)
+                    time.sleep(sleep_time)
+
+                actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
+                if print_fps:
+                    print(f"\rFPS: {actual_fps:.1f}   ", end="")
+
+        finally:
+            if print_fps:
+                print()
+            self._stop_all_plugins()
+            if self.web_app:
+                self.web_app.stop()
+            handler.destroy()
+
+    def _replay_at_end(self) -> bool:
+        sources = [getattr(camera, "_delegate", camera) for camera in self.cameras]
+        if not sources or not all(
+            getattr(source, "camera_type", None) == "replay" for source in sources
+        ):
+            return False
+        finished = []
+        for source in sources:
+            status = getattr(source, "replay_finished", False)
+            finished.append(bool(status() if callable(status) else status))
+        return all(finished)

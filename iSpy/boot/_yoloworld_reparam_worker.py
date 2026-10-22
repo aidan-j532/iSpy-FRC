@@ -1,0 +1,57 @@
+import sys
+import json
+from pathlib import Path
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(
+            "Usage: python -m iSpy.boot._yoloworld_reparam_worker <args.json>",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    with open(sys.argv[1], encoding="utf-8") as f:
+        args = json.load(f)
+
+    weights = args["weights"]
+    classes = args["classes"]
+    output_path = Path(args["output_path"])
+
+    out_path = Path(sys.argv[1] + ".result.json")
+    try:
+        # import torch first (also repairs the logging tables rknn tools clobber)
+        from iSpy.vision._safe_imports import ensure_torch_imported
+
+        ensure_torch_imported()
+
+        # ISPY_OFFLINE=1 arms the socket guard here too, so ultralytics fails
+        # fast instead of trying to download anything
+        from iSpy.core import network_policy  # noqa: F401
+
+        from ultralytics import YOLO, YOLOWorld
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        model = YOLOWorld(weights, verbose=False)
+        model.set_classes(classes)
+        model.save(str(output_path))
+
+        try:
+            model = YOLO(
+                str(output_path), task="detect", verbose=False, weights_only=True
+            )
+        except TypeError:
+            model = YOLO(str(output_path), task="detect", verbose=False)
+
+        out_path.write_text(json.dumps({"result": str(output_path)}), encoding="utf-8")
+    except Exception as exc: # clear error on failure, never a silent 0-exit
+        try:
+            out_path.write_text(json.dumps({"error": str(exc)}), encoding="utf-8")
+        except OSError:
+            pass
+        print(f"YOLO World reparameterization failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
