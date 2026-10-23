@@ -4,14 +4,14 @@ This folder contains the Docusaurus site for iSpy. The Python runtime is in the 
 
 ## Run locally
 
-Use Node.js 20 or newer, then install the exact dependencies from the lockfile and start the development server:
+Use Node.js 24 or newer, then install the exact dependencies from the lockfile and start the development server:
 
 ```powershell
 npm ci
 npm start
 ```
 
-Open `http://localhost:3000/`. Most page and style changes reload in the browser. Stop the server with `Ctrl+C`.
+Open `http://localhost:3000/iSpy-FRC`. Most page and style changes reload in the browser. Stop the server with `Ctrl+C`.
 
 ## Edit the docs
 
@@ -23,16 +23,6 @@ Open `http://localhost:3000/`. Most page and style changes reload in the browser
 
 Use relative doc links such as `./calibration` between pages. Docusaurus applies the correct local or deployed base path for internal links.
 
-## Check a change
-
-Build the site from this directory:
-
-```powershell
-npm run build
-```
-
-The output is written to `build/`. A successful production build also checks internal links because `onBrokenLinks` is set to `throw`.
-
 ## Deployment
 
-The configured production site is hosted on GitHub Pages under `/iSpy-FRC/`. Local development uses `/`. Deployment is normally handled by the repository's GitHub workflow; do not run `npm run deploy` unless you are intentionally using the Docusaurus CLI deployment flow for this repository.
+The configured production site is hosted on GitHub Pages under `/iSpy-FRC/`.Deployment is normally handled by the repository's GitHub workflow; do not run `npm run deploy`
