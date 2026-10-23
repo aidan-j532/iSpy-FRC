@@ -505,6 +505,7 @@ When the pipeline is running, open a browser and go to `http://<board-ip>:5000`.
 | Endpoint | What you get |
 |---|---|
 | `/` | Dashboard |
+| `/editor` | Visual pipeline editor (additive; all existing pages stay available) |
 | `/health` | System health dashboard (browser) or JSON (API) |
 | `/api/cameras` | List of connected cameras |
 | `/video/<name>` | Live annotated stream for a specific camera |
@@ -512,8 +513,139 @@ When the pipeline is running, open a browser and go to `http://<board-ip>:5000`.
 | `/api/cameras/<name>/pipeline_settings` | GET or POST live-tunable pipeline settings |
 | `/api/cameras/<name>/sample_hsv` | Sample HSV at a clicked frame pixel |
 | `/api/cameras/<name>/actions/<action_id>` | POST a per-camera action button |
+| `/api/editor/graph` | GET the canonical graph; POST a validated save (local/token) |
+| `/api/editor/validate` | POST graph validation without saving (local/token) |
+| `/api/plugins/available` | Discovered add-ons, enabled state, and saved settings |
 
-The health endpoint returns `200 OK` when everything is healthy, `503` when degraded. Useful for robot code that wants to know if vision is alive.
+The health endpoint returns `200 OK` when everything is healthy, `503` when
+degraded. Useful for robot code that wants to know if vision is alive.
+
+### Pipeline Editor
+
+Open `/editor` (the **Editor** link in the web UI) for a visual view of the
+same executable config used by the Cameras and Add-ons pages. The editor is
+**additive**: it never replaces those pages, and it never changes a running
+pipeline in place. Save validates the graph, writes the normal config keys, and
+shows a **restart required** banner. Restart iSpy from the Health page (or the
+service manager) to apply the change.
+
+#### Flow and node rules
+
+Nodes live in fixed rows and read top to bottom:
+
+| Row | Node | Rules |
+|---|---|---|
+| 1 | **Camera** | Starts every chain. At least one camera is required. Camera source/type settings stay in sync with the Cameras page. |
+| 2 | **Frame Processors** | Optional. A camera can have several; their assignment order is execution order. Settings are shared by every camera that uses the same processor. |
+| 3 | **Pipeline** | Exactly one per camera. The required settings come from the real pipeline schema; calibration-requiring pipelines show a warning until the camera is calibrated. |
+| 4 | **Trackers** | Global, not per camera. Horizontal order is execution order; every pipeline feeds the first tracker. |
+| 5 | **Utilities** | Global. Run after trackers; horizontal order is execution order. |
+
+Each category has a distinct shape and colour on the canvas. RollBack is a core
+service, not a node, so it is deliberately absent from the palette and graph;
+legacy `rollback`/`roll_back` entries in an old config are preserved untouched.
+Camera removal cascades that camera's pipeline and frame-processor nodes. The
+last camera cannot be removed. Removing a pipeline is allowed, but **Save** is
+blocked until that camera has a replacement pipeline.
+
+#### Editing and validation
+
+- Click a palette item, or use an **Add ...** ghost node, to add a node. The
+  palette and context menu explain why an item is locked when the preceding row
+  is incomplete.
+- Select a node to edit its schema-driven inspector. Browse, source, model,
+  select, range, list, nullable, conditional (`gated_by`), and dynamic publish
+  source fields all use the same schema/coercion paths as the rest of the web UI.
+- Drag output ports to connect nodes. Connections are type-aware: camera and
+  frame-processor outputs can feed pipelines, pipeline/tracker outputs can feed
+  trackers/utilities, cycles are rejected, cross-camera edges are rejected, and a
+  frame processor must support the pipeline it feeds. Rejected connections show
+  the reason instead of silently succeeding.
+- Edges use animated dashed strokes: red while an endpoint is not ready, amber
+  for a half-complete link, and green when both ends are complete. Invalid edges
+  pulse red.
+- The progress ring and corner badge use only **required** settings: red dashed
+  with **×** when incomplete, solid green with **✓** when complete, and a
+  partial solid fill when some required fields are filled. A node with zero
+  required fields is complete immediately.
+- **Validate** checks the graph without writing config. **Save** validates first
+  and either writes the complete change or leaves the config untouched. The
+  inspector shows node-specific server errors and warnings.
+- The Add-ons and Cameras pages share the same config. **Reload** discards
+  unsaved editor state and re-reads changes made there; returning to the tab
+  refreshes automatically when there are no unsaved edits. Because **Save**
+  writes the complete graph, reload after editing the other pages before saving.
+  Reloading or leaving with unsaved edits asks for confirmation first.
+
+#### Required-field rule
+
+The backend helper in `iSpy/config/schema_fields.py` is the source of truth; the
+browser mirrors it live for progress/gating. Unless a schema explicitly sets
+`required`:
+
+- `nullable: true` fields are optional.
+- `model`, `source`, and `browse` fields are required even when their default is
+  an empty value, because they point at a real artifact.
+- Any other field without a `default` is required; a field with a default is
+  optional.
+- A field behind an inactive `gated_by` controller is not counted.
+- Empty `source`/`browse`/`text`/`number`/`select` strings, empty `list` values,
+  and malformed `range` values do not satisfy a required field. `toggle: false`
+  is a real value.
+- `required: true` can make an otherwise optional field count; `required: false`
+  can exempt a field. `required: null` is treated as if the rule were absent.
+- Zero active required fields means `100%` complete.
+
+The same Python result is used by `GET /api/editor/graph`, `Validate`, and
+`Save`. The browser recomputes the same rule after every edit so the canvas does
+not wait for a server round trip.
+
+#### Config persistence
+
+The editor writes the existing executable structures, not a parallel model:
+
+- Camera assignment and order are stored in
+  `camera_configs.<name>.frame_processors` as an ordered list. Saving always
+  writes an explicit list, including `[]`, so removing every frame processor
+  survives reload. A config from before the editor that omits the key keeps the
+  legacy "all globally enabled processors apply to every camera" behaviour until
+  it is saved from the editor.
+- Pipeline settings stay in
+  `camera_configs.<name>.pipeline.settings`; tracker/utility settings stay under
+  `plugins.trackers.<name>` and `plugins.utilities.<name>`. Presence in those
+  buckets means enabled, matching the Add-ons page.
+- Unassigned frame-processor settings stay under
+  `plugins.frame_processors.<name>` so the Add-ons page and palette keep them.
+- Only canvas metadata lives under `editor_graph`: version, snap grid, viewport,
+  and per-node x/y. Rows are fixed; x is clamped and y is restored to the row.
+  Edges are reconstructed from executable config on load, not stored separately.
+- Saves use the normal atomic `iSpyConfig.save()` path. Add-ons and Cameras edits
+  and editor edits therefore read/write the same config, and the existing
+  local/admin-token guard protects editor write routes.
+
+#### Keyboard and mouse
+
+| Input | Action |
+|---|---|
+| `Ctrl`/`Cmd` + `S` | Validate and save |
+| `Ctrl`/`Cmd` + `Z` | Undo |
+| `Ctrl`/`Cmd` + `Shift` + `Z` or `Ctrl` + `Y` | Redo |
+| `Ctrl`/`Cmd` + `A` | Select all nodes |
+| `Ctrl`/`Cmd` + `D` | Duplicate the selected camera |
+| `Shift`/`Ctrl`/`Cmd` + click node | Toggle multi-select |
+| `Shift` + drag empty canvas | Marquee-select nodes |
+| `Delete` / `Backspace` | Remove selected nodes (confirmation when needed) |
+| Arrow keys | Nudge selected nodes horizontally by the snap grid; `Shift` moves 5× |
+| `F` | Fit graph |
+| `+` / `-` | Zoom |
+| `0` | Reset viewport |
+| `?` | Show shortcuts |
+| Wheel/trackpad | Pan horizontally and vertically |
+| `Ctrl`/`Cmd` + wheel | Zoom at the pointer |
+| `Shift` + wheel | Pan horizontally |
+| Drag empty canvas | Pan |
+| Drag node body | Move row-locked, grid-snapped nodes |
+| Drag output port | Create a validated connection |
 
 ---
 
