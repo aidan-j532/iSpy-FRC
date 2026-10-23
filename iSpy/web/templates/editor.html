@@ -1,25 +1,82 @@
 {% extends "base.html" %}
 {% block title %}Pipeline Editor · iSpy{% endblock %}
 {% block head %}
-<style>
-  .editor-shell { min-height: 60vh; display: grid; place-items: center; }
-  .editor-placeholder { max-width: 620px; text-align: center; }
-  .editor-placeholder code { color: var(--accent); }
-</style>
+<link rel="stylesheet" href="/static/css/editor.css" />
 {% endblock %}
 {% block content %}
-<div class="page-head">
-  <div>
-    <h1>Pipeline Editor</h1>
-    <p class="page-sub">Visual camera → frame processors → pipeline → trackers → utilities graph.</p>
+<div id="editor-page">
+  <div class="restart-banner" id="restart-banner">
+    <span>Restart required — changes are saved but not live yet.</span>
+    <a href="/health-page">Restart from Health</a>
   </div>
-</div>
-<div class="card editor-shell">
-  <div class="editor-placeholder">
-    <h2>Loading editor…</h2>
-    <p class="muted">The canvas is being wired to the live config. If this message stays visible, the
-      editor frontend failed to load.</p>
-    <p class="muted">API: <code>/api/editor/graph</code></p>
+
+  <div class="editor-toolbar">
+    <div class="editor-title">
+      <strong>Pipeline Editor</strong>
+      <span id="editor-dirty">Loading live config…</span>
+    </div>
+
+    <button id="btn-undo" class="ghost" title="Undo (Ctrl+Z)">↶ Undo</button>
+    <button id="btn-redo" class="ghost" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+    <button id="btn-fit" class="ghost" title="Fit graph (F)">Fit</button>
+    <button id="btn-reload" class="ghost" title="Reload from config">Reload</button>
+    <div class="zoom-control" aria-label="Zoom controls">
+      <button id="btn-zoom-out" class="ghost" title="Zoom out">−</button>
+      <span id="zoom-label">100%</span>
+      <button id="btn-zoom-in" class="ghost" title="Zoom in">+</button>
+    </div>
+
+    <div class="toolbar-spacer"></div>
+
+    <button id="btn-validate" title="Validate graph">Validate</button>
+    <button id="btn-save" class="primary" title="Save graph (Ctrl+S)">Save</button>
+    <a class="editor-link" href="/cameras">Cameras</a>
+    <a class="editor-link" href="/addons">Add-ons</a>
   </div>
+
+  <div class="editor-main">
+    <aside class="editor-palette" aria-label="Node palette">
+      <input
+        id="palette-search"
+        class="palette-search"
+        type="search"
+        placeholder="Search nodes…"
+        autocomplete="off"
+      />
+      <div id="palette-list"></div>
+      <div class="palette-footer">
+        <a href="/cameras">Camera &amp; calibration settings</a>
+        <a href="/addons">Plugin settings</a>
+      </div>
+    </aside>
+
+    <main class="editor-canvas-wrap">
+      <div class="editor-canvas" id="canvas">
+        <div class="editor-world" id="world">
+          <div class="editor-rows" id="rows"></div>
+          <svg class="editor-edges" id="edges" aria-hidden="true"></svg>
+          <div class="editor-nodes" id="nodes"></div>
+        </div>
+        <div class="marquee" id="marquee" hidden></div>
+        <div class="canvas-hint">
+          Drag to pan · Scroll to pan · Ctrl+scroll to zoom · Shift-drag to select
+        </div>
+      </div>
+    </main>
+
+    <aside class="editor-inspector" id="inspector" aria-live="polite"></aside>
+  </div>
+
+  <div class="editor-statusbar">
+    <span id="status-left">Loading…</span>
+    <span id="status-middle"></span>
+    <span id="status-right" style="margin-left: auto"></span>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="context-root"></div>
 </div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="/static/js/editor.js"></script>
 {% endblock %}

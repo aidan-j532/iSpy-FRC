@@ -48,6 +48,30 @@ class EditorApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"Pipeline Editor", response.data)
 
+    def test_palette_reuses_existing_global_plugin_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _config_file(tmp)
+            config, client = _client(path)
+            config.config["plugins"]["trackers"]["FRC/object_tracker"] = {
+                "distance_threshold": 0.77
+            }
+            data = client.get("/api/editor/graph").get_json()
+            tracker = next(
+                item
+                for item in data["palette"]["trackers"]
+                if item["name"] == "FRC/object_tracker"
+            )
+            self.assertEqual(tracker["defaults"]["distance_threshold"], 0.77)
+            self.assertFalse(data["graph"]["layout_saved"])
+
+            graph = data["graph"]
+            response = client.post(
+                "/api/editor/graph",
+                json={"nodes": graph["nodes"], "edges": graph["edges"]},
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertTrue(response.get_json()["graph"]["layout_saved"])
+
     def test_graph_contains_real_schemas_and_required_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             _config, client = _client(_config_file(tmp, pipeline="object_detection"))

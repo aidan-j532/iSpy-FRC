@@ -145,6 +145,11 @@ def _plugin_catalog() -> dict[str, dict[str, dict]]:
             classes = {}
         entries = {}
         for name, cls in sorted(classes.items()):
+            if ptype in {"tracker", "utility"} and name.lower() in {
+                "rollback",
+                "roll_back",
+            }:
+                continue
             try:
                 schema = cls.config_schema() or {}
             except Exception:
@@ -162,6 +167,7 @@ def _plugin_catalog() -> dict[str, dict[str, dict]]:
                 "defaults": _defaults_from_schema(schema),
                 "supported_pipelines": list(supported) if supported else [],
                 "template": bool(getattr(cls, "template", False)),
+                "needs_internet": bool(getattr(cls, "needs_internet", False)),
             }
         catalog[ptype] = entries
     return catalog
@@ -175,6 +181,7 @@ def _pipeline_catalog(config) -> dict[str, dict]:
     except Exception:
         logger.exception("Failed to list pipelines for editor")
         payloads = []
+    pipeline_classes = get_pipeline_classes()
     for payload in payloads:
         name = payload.get("name")
         if not name:
@@ -187,6 +194,8 @@ def _pipeline_catalog(config) -> dict[str, dict]:
         item["type"] = "pipeline"
         item["label"] = item.get("label") or name
         item["defaults"] = _defaults_from_schema(schema, pipeline_name=name)
+        cls = pipeline_classes.get(name)
+        item["needs_internet"] = bool(getattr(cls, "needs_internet", False))
         entries[name] = item
     return entries
 
@@ -215,6 +224,25 @@ def _palette(config) -> dict:
     pipelines = _pipeline_catalog(config)
     cameras = _camera_catalog()
     catalog = _plugin_catalog()
+    raw_plugins = (
+        config.get("plugins", {}) if hasattr(config, "get") else {}
+    )
+    raw_plugins = raw_plugins if isinstance(raw_plugins, dict) else {}
+    for ptype, bucket in (
+        ("frame_processor", "frame_processors"),
+        ("tracker", "trackers"),
+        ("utility", "utilities"),
+    ):
+        current_bucket = raw_plugins.get(bucket)
+        current_bucket = (
+            current_bucket if isinstance(current_bucket, dict) else {}
+        )
+        for name, item in catalog.get(ptype, {}).items():
+            current = current_bucket.get(name)
+            if isinstance(current, dict):
+                merged = _deep(item.get("defaults", {}))
+                merged.update(_deep(current))
+                item["defaults"] = merged
     return {
         "cameras": list(cameras.values()),
         "pipelines": list(pipelines.values()),
@@ -499,7 +527,10 @@ def build_graph(config) -> dict:
             default_x=80 + index * 420,
             layout=layout,
             subtitle=f"{CAMERA_TYPE_LABELS.get(cam_type, cam_type)} · {entry.get('source', '')}",
-            extra={"camera_type": cam_type},
+            extra={
+                "camera_type": cam_type,
+                "calibrated": _camera_calibrated(entry),
+            },
         )
         nodes.append(camera_node)
         camera_rows.append((cam_name, entry, camera_node))
@@ -541,6 +572,11 @@ def build_graph(config) -> dict:
                         if fp_cat is None
                         else []
                     ),
+                    extra={
+                        "needs_internet": bool(
+                            (fp_cat or {}).get("needs_internet", False)
+                        )
+                    },
                 )
             )
 
@@ -590,6 +626,9 @@ def build_graph(config) -> dict:
                     "show_common_fields": bool(
                         (pipeline_cat or {}).get("show_common_fields", True)
                     ),
+                    "needs_internet": bool(
+                        (pipeline_cat or {}).get("needs_internet", False)
+                    ),
                 },
             )
         )
@@ -621,6 +660,11 @@ def build_graph(config) -> dict:
                 supported_pipelines=(cat or {}).get("supported_pipelines"),
                 builtin=(cat or {}).get("template", False),
                 warnings=([f"Tracker '{name}' was not found."] if cat is None else []),
+                extra={
+                    "needs_internet": bool(
+                        (cat or {}).get("needs_internet", False)
+                    )
+                },
             )
         )
 
@@ -651,10 +695,18 @@ def build_graph(config) -> dict:
                 supported_pipelines=(cat or {}).get("supported_pipelines"),
                 builtin=(cat or {}).get("template", False),
                 warnings=([f"Utility '{name}' was not found."] if cat is None else []),
+                extra={
+                    "needs_internet": bool(
+                        (cat or {}).get("needs_internet", False)
+                    )
+                },
             )
         )
 
     edges = _build_edges(nodes)
+    saved_layout = (
+        config.get("editor_graph", {}) if hasattr(config, "get") else {}
+    )
     return {
         "version": 1,
         "nodes": nodes,
@@ -663,6 +715,9 @@ def build_graph(config) -> dict:
             "grid": layout["grid"],
             "viewport": layout["viewport"],
         },
+        "layout_saved": bool(
+            isinstance(saved_layout, dict) and saved_layout
+        ),
         "rows": ROW_LABELS,
     }
 
@@ -906,7 +961,11 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
             else {},
             "x": raw.get("x"),
             "y": raw.get("y"),
-            "order": index,
+            "order": (
+                raw.get("order")
+                if isinstance(raw.get("order"), int)
+                else index
+            ),
         }
         if node_type == "camera":
             name = str(raw.get("camera") or raw.get("name") or "").strip()
@@ -1163,7 +1222,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
             node["plugin"] = plugin
             node["schema"] = schema
             node["settings"] = settings
-            node["order"] = len(tracker_nodes if node_type == "tracker" else utility_nodes)
             progress = _completion(schema, settings)
             if not progress["complete"]:
                 errors.append(
@@ -1311,10 +1369,12 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
     if not isinstance(new_plugins, dict):
         new_plugins = {}
     new_plugins["trackers"] = {
-        node["plugin"]: _deep(node["settings"]) for node in tracker_nodes
+        node["plugin"]: _deep(node["settings"])
+        for node in sorted(tracker_nodes, key=lambda item: item.get("order", 0))
     }
     new_plugins["utilities"] = {
-        node["plugin"]: _deep(node["settings"]) for node in utility_nodes
+        node["plugin"]: _deep(node["settings"])
+        for node in sorted(utility_nodes, key=lambda item: item.get("order", 0))
     }
     new_plugins["frame_processors"] = {
         plugin: _deep(node["settings"]) for plugin, node in fp_plugins.items()

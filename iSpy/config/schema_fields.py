@@ -92,7 +92,7 @@ def value_is_blank(value: Any, defn: dict | None = None) -> bool:
         if isinstance(value, (list, tuple)):
             return not any(str(part or "").strip() for part in value)
         return not str(value).strip()
-    if stype in ("source", "browse", "text"):
+    if stype in ("source", "browse", "text", "number"):
         return not str(value).strip()
     if stype == "range":
         return not isinstance(value, (list, tuple)) or len(value) != 2
