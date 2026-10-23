@@ -336,6 +336,21 @@ function renderAll() {
   showRestartBanner();
 }
 
+async function reloadGraph() {
+  if (state.busy) return;
+  if (
+    state.dirty &&
+    !(await confirmDialog(
+      "Discard unsaved changes?",
+      "Reloading reads the saved config and discards unsaved node, setting, and layout changes.",
+      "Reload",
+    ))
+  ) {
+    return;
+  }
+  await loadGraph({ first: false });
+}
+
 async function loadGraph({ first = false, silent = false } = {}) {
   try {
     const response = await fetch("/api/editor/graph", {
@@ -2761,7 +2776,7 @@ async function saveGraph() {
       applyGraph(
         {
           graph: data.graph,
-          palette: state.palette,
+          palette: data.palette || state.palette,
           restart_required: true,
         },
         { first: false },
@@ -2801,7 +2816,9 @@ function restoreSnapshot(snapshotText) {
 }
 
 function undo() {
-  if (state.busy || !state.history.length) return;
+  if (state.busy) return;
+  if (state.editBefore) commitEdit();
+  if (!state.history.length) return;
   const current = snapshot();
   const previous = state.history.pop();
   state.future.push(current);
@@ -2814,7 +2831,9 @@ function undo() {
 }
 
 function redo() {
-  if (state.busy || !state.future.length) return;
+  if (state.busy) return;
+  if (state.editBefore) commitEdit();
+  if (!state.future.length) return;
   const current = snapshot();
   const next = state.future.pop();
   state.history.push(current);
@@ -3076,7 +3095,7 @@ function bindEvents() {
   el.undo.addEventListener("click", undo);
   el.redo.addEventListener("click", redo);
   el.fit.addEventListener("click", () => fitToNodes());
-  el.reload.addEventListener("click", () => loadGraph({ first: false }));
+  el.reload.addEventListener("click", reloadGraph);
   el.zoomIn.addEventListener("click", () => {
     const rect = el.canvas.getBoundingClientRect();
     zoomAt(

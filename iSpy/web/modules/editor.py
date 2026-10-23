@@ -1561,11 +1561,13 @@ class EditorModule(WebModule):
             config.save()
             _RESTART_REQUIRED = True
             graph = build_graph(config)
+            palette = _palette(config)
         return jsonify(
             ok=True,
             errors=[],
             warnings=warnings,
             graph=graph,
+            palette=palette,
             restart_required=True,
             note="Restart iSpy to apply camera, pipeline, tracker, utility, or frame-processor changes.",
         )

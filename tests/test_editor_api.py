@@ -151,7 +151,7 @@ class EditorApiTests(unittest.TestCase):
             config.config["camera_configs"]["cam2"] = second
             config.config["plugins"]["trackers"] = {
                 "FRC/object_tracker": {},
-                "example/example_tracker": {},
+                "example/example_tracker": {"count_start": 41},
             }
             config.config["plugins"]["utilities"] = {
                 "target_selector": {},
@@ -167,6 +167,13 @@ class EditorApiTests(unittest.TestCase):
             ]
             response = client.post("/api/editor/graph", json={"nodes": kept})
             self.assertEqual(response.status_code, 200, response.get_json())
+            palette = response.get_json()["palette"]
+            example_tracker = next(
+                item
+                for item in palette["trackers"]
+                if item["name"] == "example/example_tracker"
+            )
+            self.assertEqual(example_tracker["defaults"]["count_start"], 0)
 
             saved = json.loads(Path(path).read_text())
             self.assertEqual(list(saved["camera_configs"]), ["cam"])
@@ -231,6 +238,144 @@ class EditorApiTests(unittest.TestCase):
             self.assertEqual(
                 saved["camera_configs"]["cam"]["pipeline"]["name"],
                 "hsv_detection",
+            )
+
+    def test_layout_view_metadata_round_trips_without_writing_on_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _config_file(tmp)
+            _config, client = _client(path)
+            before_load = Path(path).read_text()
+            graph = client.get("/api/editor/graph").get_json()["graph"]
+            self.assertEqual(Path(path).read_text(), before_load)
+            self.assertFalse(graph["layout_saved"])
+            self.assertEqual(graph["layout"]["grid"], 20)
+
+            nodes = graph["nodes"]
+            camera = next(node for node in nodes if node["id"] == "camera:cam")
+            pipeline_node = next(
+                node for node in nodes if node["id"] == "pipeline:cam"
+            )
+            camera["x"] = 143
+            pipeline_node["x"] = 901
+            layout = {
+                "version": 99,
+                "grid": 40,
+                "viewport": {"x": -120.5, "y": 33, "zoom": 1.35},
+                "nodes": {
+                    "camera:cam": {"x": 143, "y": 999},
+                    "pipeline:cam": {"x": 901, "y": -20},
+                    "not-a-node": {"x": 5, "y": 5},
+                },
+            }
+            response = client.post(
+                "/api/editor/graph",
+                json={"nodes": nodes, "layout": layout},
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+            saved = json.loads(Path(path).read_text())
+            editor_graph = saved["editor_graph"]
+            self.assertEqual(
+                set(editor_graph), {"version", "grid", "viewport", "nodes"}
+            )
+            self.assertEqual(editor_graph["version"], 1)
+            self.assertEqual(editor_graph["grid"], 40)
+            self.assertEqual(
+                editor_graph["viewport"],
+                {"x": -120.5, "y": 33.0, "zoom": 1.35},
+            )
+            self.assertEqual(
+                editor_graph["nodes"]["camera:cam"], {"x": 143, "y": 40}
+            )
+            self.assertEqual(
+                editor_graph["nodes"]["pipeline:cam"], {"x": 901, "y": 400}
+            )
+            self.assertNotIn("not-a-node", editor_graph["nodes"])
+            self.assertEqual(
+                saved["camera_configs"]["cam"]["pipeline"]["name"],
+                "hsv_detection",
+            )
+            self.assertNotIn("nodes", saved["camera_configs"]["cam"])
+
+            reloaded = client.get("/api/editor/graph").get_json()["graph"]
+            self.assertTrue(reloaded["layout_saved"])
+            reloaded_camera = next(
+                node for node in reloaded["nodes"] if node["id"] == "camera:cam"
+            )
+            self.assertEqual(reloaded_camera["x"], 143)
+            self.assertEqual(reloaded_camera["y"], 40)
+            self.assertEqual(reloaded["layout"]["viewport"]["zoom"], 1.35)
+
+    def test_camera_page_edits_appear_in_the_editor_without_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _config_file(tmp)
+            _config, client = _client(path)
+            response = client.put(
+                "/api/cameras/config/cam",
+                json={"source": 3, "preset": "green"},
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+
+            graph = client.get("/api/editor/graph").get_json()["graph"]
+            camera = next(
+                node for node in graph["nodes"] if node["type"] == "camera"
+            )
+            self.assertEqual(camera["settings"]["source"], 3)
+            pipeline_node = next(
+                node for node in graph["nodes"] if node["type"] == "pipeline"
+            )
+            self.assertEqual(pipeline_node["settings"]["preset"], "green")
+
+    def test_addons_and_editor_share_enabled_plugin_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _config_file(tmp)
+            _config, client = _client(path)
+            response = client.post(
+                "/api/plugins/toggle",
+                json={
+                    "name": "FRC/object_tracker",
+                    "type": "tracker",
+                    "enable": True,
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+
+            graph = client.get("/api/editor/graph").get_json()["graph"]
+            tracker = next(
+                node for node in graph["nodes"] if node["type"] == "tracker"
+            )
+            self.assertEqual(tracker["plugin"], "FRC/object_tracker")
+            tracker["settings"]["distance_threshold"] = 0.91
+            response = client.post(
+                "/api/editor/graph",
+                json={"nodes": graph["nodes"]},
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+
+            available = client.get("/api/plugins/available").get_json()[
+                "available"
+            ]
+            addon = next(
+                item
+                for item in available
+                if item["type"] == "tracker"
+                and item["name"] == "FRC/object_tracker"
+            )
+            self.assertTrue(addon["enabled"])
+            self.assertEqual(addon["settings"]["distance_threshold"], 0.91)
+
+            response = client.post(
+                "/api/plugins/toggle",
+                json={
+                    "name": "FRC/object_tracker",
+                    "type": "tracker",
+                    "enable": False,
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+            graph = client.get("/api/editor/graph").get_json()["graph"]
+            self.assertNotIn(
+                "tracker:FRC/object_tracker",
+                {node["id"] for node in graph["nodes"]},
             )
 
     def test_graph_contains_real_schemas_and_required_metadata(self):
@@ -450,20 +595,24 @@ class EditorApiTests(unittest.TestCase):
                 {error["code"] for error in response.get_json()["errors"]},
             )
 
-    def test_remote_save_requires_admin_token(self):
+    def test_remote_writes_require_admin_token(self):
         with tempfile.TemporaryDirectory() as tmp:
             _config, client = _client(_config_file(tmp))
             old = os.environ.pop("ISPY_ADMIN_TOKEN", None)
             try:
-                response = client.post(
-                    "/api/editor/graph",
-                    json={"nodes": []},
-                    environ_base={"REMOTE_ADDR": "10.1.2.3"},
-                )
+                responses = [
+                    client.post(
+                        route,
+                        json={"nodes": []},
+                        environ_base={"REMOTE_ADDR": "10.1.2.3"},
+                    )
+                    for route in ("/api/editor/graph", "/api/editor/validate")
+                ]
             finally:
                 if old is not None:
                     os.environ["ISPY_ADMIN_TOKEN"] = old
-            self.assertEqual(response.status_code, 403)
+            for response in responses:
+                self.assertEqual(response.status_code, 403)
 
 
 class NullableCoercionTests(unittest.TestCase):
