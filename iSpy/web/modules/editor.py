@@ -831,6 +831,20 @@ def _validate_edges(edges, nodes_by_id: dict, active_pipelines: set) -> list[dic
                     }
                 )
                 continue
+        if source["type"] == "frame_processor" and target["type"] == "pipeline":
+            supported = source.get("supported_pipelines") or []
+            if supported and target.get("plugin") not in set(supported):
+                errors.append(
+                    {
+                        "code": "edge_pipeline_unsupported",
+                        "message": (
+                            f"Frame processor '{source['label']}' does not support "
+                            f"pipeline '{target.get('plugin')}'."
+                        ),
+                        "edge": {"from": source_id, "to": target_id},
+                    }
+                )
+                continue
         if target["type"] in ("tracker", "utility"):
             supported = target.get("supported_pipelines") or []
             if supported:
@@ -1142,6 +1156,10 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
                 node["plugin"] = plugin
                 node["schema"] = schema
                 node["settings"] = settings
+                node["supported_pipelines"] = list(
+                    cat.get("supported_pipelines") or []
+                )
+                node["needs_internet"] = bool(cat.get("needs_internet"))
                 progress = _completion(schema, settings)
                 if not progress["complete"]:
                     errors.append(
@@ -1222,6 +1240,10 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
             node["plugin"] = plugin
             node["schema"] = schema
             node["settings"] = settings
+            node["supported_pipelines"] = list(
+                cat.get("supported_pipelines") or []
+            )
+            node["needs_internet"] = bool(cat.get("needs_internet"))
             progress = _completion(schema, settings)
             if not progress["complete"]:
                 errors.append(
@@ -1359,15 +1381,30 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
             "settings": _deep(node["settings"]),
         }
 
-    for camera, fp_nodes in fp_by_camera.items():
+    # The editor graph is authoritative for camera assignment.  Writing an
+    # explicit list (including an empty one) is what makes "remove every frame
+    # processor from this camera" survive a reload; leaving the key absent
+    # would expand every global frame processor again.
+    for camera in camera_nodes:
         entry = new_cams.setdefault(camera, {})
-        names = [fp["plugin"] for fp in sorted(fp_nodes, key=lambda item: item["order"])]
-        if names or "frame_processors" in (existing_cams.get(camera) or {}):
-            entry["frame_processors"] = names
+        fp_nodes = fp_by_camera.get(camera, [])
+        entry["frame_processors"] = [
+            fp["plugin"]
+            for fp in sorted(fp_nodes, key=lambda item: item.get("order", 0))
+        ]
 
     new_plugins = _deep(existing_plugins)
     if not isinstance(new_plugins, dict):
         new_plugins = {}
+    # A frame processor can exist in plugins.frame_processors without being
+    # assigned to a camera.  The palette and Add-ons page still need its saved
+    # settings, so merge the graph's assignments over the existing bucket
+    # rather than replacing it.
+    new_fps = new_plugins.get("frame_processors")
+    new_fps = _deep(new_fps) if isinstance(new_fps, dict) else {}
+    for plugin, node in fp_plugins.items():
+        new_fps[plugin] = _deep(node["settings"])
+    new_plugins["frame_processors"] = new_fps
     new_plugins["trackers"] = {
         node["plugin"]: _deep(node["settings"])
         for node in sorted(tracker_nodes, key=lambda item: item.get("order", 0))
@@ -1376,9 +1413,18 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
         node["plugin"]: _deep(node["settings"])
         for node in sorted(utility_nodes, key=lambda item: item.get("order", 0))
     }
-    new_plugins["frame_processors"] = {
-        plugin: _deep(node["settings"]) for plugin, node in fp_plugins.items()
-    }
+    # RollBack is a core service, not a graph node.  If an older config still
+    # carries a plugin entry under either legacy name, keep it untouched.
+    for bucket_name, target in (
+        ("trackers", new_plugins["trackers"]),
+        ("utilities", new_plugins["utilities"]),
+    ):
+        existing_bucket = existing_plugins.get(bucket_name)
+        if not isinstance(existing_bucket, dict):
+            continue
+        for name, settings in existing_bucket.items():
+            if str(name).lower() in {"rollback", "roll_back"}:
+                target.setdefault(name, _deep(settings))
 
     for camera, entry in new_cams.items():
         normalize_camera_entry(entry)

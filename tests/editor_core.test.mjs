@@ -133,6 +133,16 @@ test("connection validation is type, camera, support, and cycle aware", () => {
 
   assert.equal(connectionError(cam, fp, nodes, []), "");
   assert.equal(connectionError(fp, pipe, nodes, []), "");
+  const limited = {
+    ...fp,
+    id: "frame_processor:cam:limited",
+    plugin: "limited",
+    supported_pipelines: ["other-pipeline"],
+  };
+  assert.match(
+    connectionError(limited, pipe, [...nodes, limited], []),
+    /does not support pipeline/,
+  );
   assert.equal(connectionError(cam, track, nodes, []), "Can't connect camera 'cam' to tracker 'bytetrack'.");
   assert.equal(
     connectionError(cam, otherPipe, nodes, []),

@@ -170,6 +170,12 @@ export function connectionError(source, target, nodes = [], edges = []) {
   ) {
     return "Those nodes are already connected.";
   }
+  if (source.type === "frame_processor" && target.type === "pipeline") {
+    const supported = source.supported_pipelines || [];
+    if (supported.length && !supported.includes(target.plugin)) {
+      return `Frame processor '${source.label}' does not support pipeline '${target.plugin}'.`;
+    }
+  }
   const pipelines =
     source.type === "pipeline" ? new Set([source.plugin]) : activePipelines(nodes);
   const supported = target.supported_pipelines || [];

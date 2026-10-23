@@ -51,6 +51,7 @@ const state = {
   serverWarnings: [],
   spaceDown: false,
   confirmResolve: null,
+  publishSources: [],
 };
 
 const el = {};
@@ -1450,10 +1451,18 @@ function fieldHtml(key, defn, node) {
   </div>`;
 }
 
-function optionsFor(defn) {
-  const options = defn.options;
+function optionsFor(defn, current = undefined) {
+  let options = defn.options;
+  if (defn.options_source === "publish_sources") {
+    options = (state.publishSources || []).map((source) => ({
+      value: source.source,
+      label: `${source.duplicate ? "⚠ " : ""}${
+        source.label || source.source
+      }`,
+    }));
+  }
   if (!Array.isArray(options)) return [];
-  return options.map((option) => {
+  const mapped = options.map((option) => {
     if (option && typeof option === "object") {
       return {
         value: option.value ?? option.label ?? "",
@@ -1462,6 +1471,18 @@ function optionsFor(defn) {
     }
     return { value: option, label: option };
   });
+  if (
+    current !== undefined &&
+    current !== null &&
+    String(current) !== "" &&
+    !mapped.some((option) => String(option.value) === String(current))
+  ) {
+    mapped.push({
+      value: current,
+      label: `${current} (saved)`,
+    });
+  }
+  return mapped;
 }
 
 function controlHtml(key, defn, node) {
@@ -1502,7 +1523,7 @@ function controlHtml(key, defn, node) {
     </div>`;
   }
   if (type === "select") {
-    const options = optionsFor(defn);
+    const options = optionsFor(defn, value);
     if (!options.length) {
       return `<input class="field-input" type="text" ${attrs} value="${esc(
         value ?? "",
@@ -1622,7 +1643,7 @@ function listFieldControl(
     } /><span>${value ? "Enabled" : "Disabled"}</span></label>`;
   }
   if (defn.type === "select") {
-    const options = optionsFor(defn);
+    const options = optionsFor(defn, value);
     if (!options.length) {
       return `<input class="field-input" type="text" ${attrs} value="${esc(
         value ?? "",
@@ -2411,7 +2432,7 @@ function addPipeline(item, camera) {
       builtin: Boolean(item.template),
       requires_calibration: Boolean(item.requires_calibration),
       calibration_sections: deep(item.calibration_sections || []),
-      calibrated: false,
+      calibrated: Boolean(camera.calibrated),
       show_common_fields: item.show_common_fields !== false,
       supported_pipelines: deep(item.supported_pipelines || []),
     },
@@ -2629,6 +2650,14 @@ async function validateGraph({ silent = false } = {}) {
     }
     state.serverErrors = Array.isArray(data.errors) ? data.errors : [];
     state.serverWarnings = Array.isArray(data.warnings) ? data.warnings : [];
+    if (data.completion && typeof data.completion === "object") {
+      for (const node of state.nodes) {
+        if (data.completion[node.id]) {
+          node.completion = data.completion[node.id];
+          node.required = node.completion.required || [];
+        }
+      }
+    }
     if (!state.serverErrors.length && !response.ok) {
       state.serverErrors = [
         {
@@ -3096,10 +3125,31 @@ function bindEvents() {
   });
 }
 
+async function loadPublishSources() {
+  try {
+    const response = await fetch("/api/plugins/publish-sources", {
+      cache: "no-store",
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    state.publishSources = Array.isArray(data.sources) ? data.sources : [];
+    if (
+      selectedNode() &&
+      el.inspector &&
+      !el.inspector.contains(document.activeElement)
+    ) {
+      renderInspector();
+    }
+  } catch (error) {
+    state.publishSources = [];
+  }
+}
+
 function init() {
   cacheElements();
   bindEvents();
   updateButtons();
+  loadPublishSources();
   loadGraph({ first: true });
 }
 

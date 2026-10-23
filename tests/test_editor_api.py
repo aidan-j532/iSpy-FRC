@@ -8,6 +8,7 @@ from pathlib import Path
 from iSpy.config.iSpyConfig import iSpyConfig
 from iSpy.web.Backend.PluginStatus import _coerce_setting_value
 from iSpy.web.Backend.WebApp import create_app
+from iSpy.web.modules.editor import _validate_edges
 
 
 def _config_file(tmp: str, *, pipeline="hsv_detection") -> str:
@@ -47,6 +48,8 @@ class EditorApiTests(unittest.TestCase):
             response = client.get("/editor")
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"Pipeline Editor", response.data)
+            self.assertIn(b"/static/css/editor.css", response.data)
+            self.assertIn(b"/static/js/editor.js", response.data)
 
     def test_palette_reuses_existing_global_plugin_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -72,6 +75,71 @@ class EditorApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.get_json())
             self.assertTrue(response.get_json()["graph"]["layout_saved"])
 
+    def test_edge_validation_rejects_unsupported_frame_processor_pipeline(self):
+        nodes = {
+            "frame_processor:cam:fp": {
+                "id": "frame_processor:cam:fp",
+                "type": "frame_processor",
+                "label": "fp",
+                "camera": "cam",
+                "plugin": "fp",
+                "supported_pipelines": ["allowed"],
+            },
+            "pipeline:cam": {
+                "id": "pipeline:cam",
+                "type": "pipeline",
+                "label": "pipeline",
+                "camera": "cam",
+                "plugin": "other",
+            },
+        }
+        errors = _validate_edges(
+            [{"from": "frame_processor:cam:fp", "to": "pipeline:cam"}],
+            nodes,
+            {"other"},
+        )
+        self.assertEqual(
+            [error["code"] for error in errors],
+            ["edge_pipeline_unsupported"],
+        )
+
+    def test_save_preserves_unassigned_frame_processors_and_explicit_empty_assignment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _config_file(tmp)
+            config, client = _client(path)
+            camera = config.config["camera_configs"]["cam"]
+            camera["frame_processors"] = []
+            config.config["plugins"]["frame_processors"][
+                "example/example_frame_processor"
+            ] = {"keep": "this setting"}
+            config.config["plugins"]["utilities"]["rollback"] = {"enabled": False}
+            data = client.get("/api/editor/graph").get_json()
+            node_ids = {node["id"] for node in data["graph"]["nodes"]}
+            self.assertNotIn("frame_processor:cam:example/example_frame_processor", node_ids)
+            self.assertNotIn("utility:rollback", node_ids)
+            self.assertEqual(data["graph"]["layout_saved"], False)
+
+            response = client.post(
+                "/api/editor/graph",
+                json={
+                    "nodes": data["graph"]["nodes"],
+                    "edges": data["graph"]["edges"],
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+            saved = json.loads(Path(path).read_text())
+            self.assertEqual(saved["camera_configs"]["cam"]["frame_processors"], [])
+            self.assertEqual(
+                saved["plugins"]["frame_processors"][
+                    "example/example_frame_processor"
+                ]["keep"],
+                "this setting",
+            )
+            self.assertEqual(
+                saved["plugins"]["utilities"]["rollback"],
+                {"enabled": False},
+            )
+
     def test_graph_contains_real_schemas_and_required_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             _config, client = _client(_config_file(tmp, pipeline="object_detection"))
@@ -92,6 +160,16 @@ class EditorApiTests(unittest.TestCase):
             self.assertTrue(
                 any(item["name"] == "FRC/object_tracker" for item in data["palette"]["trackers"])
             )
+            palette_names = {
+                item["name"].lower()
+                for group in (
+                    data["palette"]["trackers"],
+                    data["palette"]["utilities"],
+                )
+                for item in group
+            }
+            self.assertNotIn("rollback", palette_names)
+            self.assertNotIn("roll_back", palette_names)
 
     def test_save_updates_camera_pipeline_and_global_order(self):
         with tempfile.TemporaryDirectory() as tmp:
