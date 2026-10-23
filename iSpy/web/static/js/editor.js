@@ -20,6 +20,9 @@ import {
   uniqueCameraName,
   nextOrder,
   executionOrder,
+  chainReady as coreChainReady,
+  addGate,
+  removalPlan,
   nodePayload,
 } from "./editor_core.js";
 
@@ -161,28 +164,8 @@ function selectedCamera() {
   return cameras.length === 1 ? cameras[0] : null;
 }
 
-function cameraReady(camera) {
-  const cam =
-    typeof camera === "string" ? getCamera(camera) : camera;
-  if (!cam || !cam.completion?.complete) return false;
-  return getProcessors(cam.camera).every(
-    (node) => node.completion?.complete,
-  );
-}
-
 function chainReady() {
-  const cameras = getNodes("camera");
-  return (
-    cameras.length > 0 &&
-    cameras.every((camera) => {
-      const pipeline = getPipeline(camera.camera);
-      return (
-        cameraReady(camera) &&
-        pipeline &&
-        pipeline.completion?.complete
-      );
-    })
-  );
+  return coreChainReady(state.nodes);
 }
 
 function normalizeNodeOrder() {
@@ -411,6 +394,7 @@ function renderPalette() {
     ["Trackers", state.palette.trackers || [], "tracker"],
     ["Utilities", state.palette.utilities || [], "utility"],
   ];
+  const camera = selectedCamera();
   let html = "";
   for (const [label, items, type] of groups) {
     const filtered = items.filter((item) => {
@@ -424,7 +408,10 @@ function renderPalette() {
     for (const item of filtered) {
       const name = item.name || item.label || "";
       const dot = type === "frame_processor" ? "fp" : type;
+      const gate = addGate(state.nodes, type, { camera, plugin: name });
+      const locked = !gate.allowed;
       const badges = [
+        locked ? "locked" : "",
         item.template ? "template" : "",
         item.beta ? "beta" : "",
         item.needs_internet ? "internet" : "",
@@ -433,13 +420,18 @@ function renderPalette() {
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 80);
-      html += `<button class="palette-item" data-add-type="${esc(
-        type,
-      )}" data-add-name="${esc(name)}">
+      const detail = locked ? gate.reason : subtitle || name;
+      html += `<button class="palette-item ${
+        locked ? "locked" : ""
+      }" data-add-type="${esc(type)}" data-add-name="${esc(
+        name,
+      )}" ${locked ? 'disabled aria-disabled="true"' : ""} title="${esc(
+        detail,
+      )}">
         <span class="palette-dot ${dot}"></span>
         <span class="palette-copy"><b>${esc(
           item.label || name,
-        )}</b><small>${esc(subtitle || name)}</small></span>
+        )}</b><small>${esc(detail)}</small></span>
         ${badges
           .map((badge) => `<span class="field-badge">${esc(badge)}</span>`)
           .join("")}
@@ -535,6 +527,15 @@ function nodeHtml(node) {
     : node.warnings?.length
       ? "!"
       : "✓";
+  const progressTitle = !node.completion?.complete
+    ? `Missing required: ${(
+        node.completion?.missing_labels ||
+        node.completion?.missing ||
+        []
+      ).join(", ")}`
+    : node.completion?.total === 0
+      ? "No required fields"
+      : "All required fields complete";
   const subtitle =
     node.subtitle ||
     (node.type === "camera"
@@ -580,7 +581,7 @@ function nodeHtml(node) {
     )}" title="Node actions">⋯</button>
     <div class="node-state ${
       node.completion?.complete && node.warnings?.length ? "warn" : ""
-    }">${stateIcon}</div>
+    }" title="${esc(progressTitle)}">${stateIcon}</div>
     ${ports}
   </div>`;
 }
@@ -599,9 +600,7 @@ function ghostSpecs() {
     hint: "starts a chain",
   });
   for (const camera of cameras) {
-    if (!camera.completion?.complete) continue;
     const processors = getProcessors(camera.camera);
-    if (processors.some((node) => !node.completion?.complete)) continue;
     const pipeline = getPipeline(camera.camera);
     const active =
       state.selected.has(camera.id) ||
@@ -610,7 +609,9 @@ function ghostSpecs() {
     const lastX = processors.length
       ? Math.max(...processors.map((node) => node.x))
       : camera.x + 420;
-    if (!pipeline) {
+    if (
+      addGate(state.nodes, "pipeline", { camera }).allowed
+    ) {
       ghosts.push({
         type: "pipeline",
         camera: camera.camera,
@@ -619,7 +620,10 @@ function ghostSpecs() {
         hint: "exactly one per camera",
       });
     }
-    if (active) {
+    if (
+      active &&
+      addGate(state.nodes, "frame_processor", { camera }).allowed
+    ) {
       ghosts.push({
         type: "frame_processor",
         camera: camera.camera,
@@ -1772,6 +1776,7 @@ function refreshInspectorProgress() {
     card.replaceWith(holder.firstElementChild);
   }
   applyGates();
+  renderPalette();
 }
 
 function applyGates() {
@@ -1949,6 +1954,7 @@ function handleInspectorChange(event) {
     input.dataset.listJson
   ) {
     renderInspector();
+    renderPalette();
   } else {
     refreshInspectorProgress();
     applyGates();
@@ -2308,9 +2314,14 @@ function openContextMenu(x, y, node) {
     ["camera", "pipeline", "frame_processor"].includes(node.type) &&
     node.camera
   ) {
+    const gate = addGate(state.nodes, "frame_processor", {
+      camera: node.camera,
+    });
     actions.push({
       id: "add-frame-processor",
-      label: "Add frame processor",
+      label: gate.allowed ? "Add frame processor" : "Add frame processor (locked)",
+      disabled: !gate.allowed,
+      title: gate.reason,
     });
   }
   actions.push({ id: "remove", label: "Remove", danger: true });
@@ -2319,7 +2330,9 @@ function openContextMenu(x, y, node) {
       (action) =>
         `<button role="menuitem" data-context-action="${action.id}" class="${
           action.danger ? "danger" : ""
-        }">${esc(action.label)}</button>`,
+        }" ${action.disabled ? 'disabled aria-disabled="true"' : ""} title="${esc(
+          action.title || "",
+        )}">${esc(action.label)}</button>`,
     )
     .join("")}</div>`;
   const menu = el.contextRoot.querySelector(".context-menu");
@@ -2440,22 +2453,12 @@ function addCamera(typeName) {
 
 function addPipeline(item, camera) {
   if (!item || !camera) return;
-  if (getPipeline(camera.camera)) {
-    toast("Each camera can have exactly one pipeline.", "warning");
-    return;
-  }
-  if (!camera.completion?.complete) {
-    toast("Complete the camera settings before adding a pipeline.", "warning");
+  const gate = addGate(state.nodes, "pipeline", { camera });
+  if (!gate.allowed) {
+    toast(gate.reason, "warning");
     return;
   }
   const processors = getProcessors(camera.camera);
-  if (processors.some((node) => !node.completion?.complete)) {
-    toast(
-      "Complete every frame processor before adding the pipeline.",
-      "warning",
-    );
-    return;
-  }
   const lastX = processors.length
     ? Math.max(...processors.map((node) => node.x))
     : camera.x;
@@ -2494,12 +2497,12 @@ function addPipeline(item, camera) {
 
 function addFrameProcessor(item, camera) {
   if (!item || !camera) return;
-  if (!camera.completion?.complete) {
-    toast("Complete the camera settings before adding frame processors.", "warning");
-    return;
-  }
-  if (getProcessors(camera.camera).some((node) => node.plugin === item.name)) {
-    toast("That frame processor is already assigned to this camera.", "warning");
+  const gate = addGate(state.nodes, "frame_processor", {
+    camera,
+    plugin: item.name,
+  });
+  if (!gate.allowed) {
+    toast(gate.reason, "warning");
     return;
   }
   const processors = getProcessors(camera.camera);
@@ -2550,17 +2553,9 @@ function addFrameProcessor(item, camera) {
 function addGlobal(item, type) {
   if (!item) return;
   if (!["tracker", "utility"].includes(type)) return;
-  if (!chainReady()) {
-    toast(
-      "Complete every camera chain, including its pipeline, before adding global nodes.",
-      "warning",
-    );
-    return;
-  }
-  if (
-    getNodes(type).some((node) => node.plugin === item.name)
-  ) {
-    toast(`That ${type} is already in the graph.`, "warning");
+  const gate = addGate(state.nodes, type, { plugin: item.name });
+  if (!gate.allowed) {
+    toast(gate.reason, "warning");
     return;
   }
   const group = getNodes(type);
@@ -2598,35 +2593,30 @@ function addGlobal(item, type) {
 
 async function removeNodes(ids) {
   if (state.confirmResolve) return;
-  const unique = [...new Set(ids)].map(byId).filter(Boolean);
-  if (!unique.length) return;
-  const cameraNames = new Set(
-    unique
-      .filter((node) => node.type === "camera")
-      .map((node) => node.camera),
-  );
-  const remainingCameras = getNodes("camera").filter(
-    (node) => !cameraNames.has(node.camera),
-  );
-  if (getNodes("camera").length && remainingCameras.length === 0) {
-    toast("The editor needs at least one camera.", "warning");
+  const plan = removalPlan(state.nodes, ids);
+  if (!plan.selectedIds.length) return;
+  if (plan.blocked) {
+    toast(plan.reason, "warning");
     return;
   }
-  const removeSet = new Set(unique.map((node) => node.id));
-  for (const node of state.nodes) {
-    if (node.camera && cameraNames.has(node.camera)) {
-      removeSet.add(node.id);
-    }
+  let message = plan.cameraNames.length
+    ? `Remove ${plan.cameraNames.length} camera${
+        plan.cameraNames.length === 1 ? "" : "s"
+      } and ${plan.chainCount} node${
+        plan.chainCount === 1 ? "" : "s"
+      }? The camera config will be deleted when you save.`
+    : `Remove ${plan.chainCount} selected node${
+        plan.chainCount === 1 ? "" : "s"
+      }?`;
+  if (plan.orphanedCameras.length) {
+    message += ` Camera${
+      plan.orphanedCameras.length === 1 ? "" : "s"
+    } ${plan.orphanedCameras
+      .map((camera) => `'${camera}'`)
+      .join(", ")} will have no pipeline. The graph cannot be saved until you add one.`;
   }
-  const chainCount = state.nodes.filter((node) =>
-    removeSet.has(node.id),
-  ).length;
-  const message = cameraNames.size
-    ? `Remove ${cameraNames.size} camera${
-        cameraNames.size === 1 ? "" : "s"
-      } and ${chainCount} chain node${chainCount === 1 ? "" : "s"}? This also clears the saved camera graph entries when you save.`
-    : `Remove ${chainCount} selected node${chainCount === 1 ? "" : "s"}?`;
   if (!(await confirmDialog("Remove nodes", message))) return;
+  const removeSet = new Set(plan.removeIds);
   const before = snapshot();
   state.nodes = state.nodes.filter((node) => !removeSet.has(node.id));
   state.selected = new Set(

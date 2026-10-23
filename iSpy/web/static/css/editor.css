@@ -178,6 +178,26 @@
   border-color: var(--ed-line);
 }
 
+#editor-page .palette-item.locked,
+#editor-page .palette-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+#editor-page .palette-item.locked:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+#editor-page .palette-item.locked .palette-copy small {
+  color: #fbbf24;
+}
+
+#editor-page .palette-item.locked .field-badge {
+  border-color: rgba(251, 191, 36, 0.42);
+  color: #fbbf24;
+}
+
 #editor-page .palette-dot {
   width: 9px;
   height: 9px;
@@ -1231,6 +1251,15 @@
 
 #editor-page .context-menu button:hover {
   background: #1d2735;
+}
+
+#editor-page .context-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+#editor-page .context-menu button:disabled:hover {
+  background: transparent;
 }
 
 #editor-page .context-menu button.danger {

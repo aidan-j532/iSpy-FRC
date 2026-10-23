@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  addGate,
+  chainReady,
   completion,
   connectionError,
   deriveEdges,
@@ -12,6 +14,7 @@ import {
   gateActive,
   nextOrder,
   nodePayload,
+  removalPlan,
   ringPath,
   settingIsRequired,
   snap,
@@ -102,6 +105,17 @@ test("required fields follow the shared backend rule", () => {
   );
   assert.equal(
     completion({ a: { type: "number" } }, { a: "" }).complete,
+    false,
+  );
+  assert.equal(
+    completion(
+      { mode: { type: "select" }, regions: { type: "list" } },
+      { mode: "", regions: [] },
+    ).complete,
+    false,
+  );
+  assert.equal(
+    completion({ a: { type: "text", required: null } }, {}).complete,
     false,
   );
 });
@@ -209,6 +223,106 @@ test("execution order uses horizontal position and stays stable on ties", () => 
     tied.map((node) => node.plugin),
     ["right", "middle", "tie"],
   );
+});
+
+test("adding nodes is gated by completed predecessor rows", () => {
+  const cam = camera();
+  const fp = processor("first", 0);
+  const pipe = pipeline();
+  const nodes = [cam, fp, pipe];
+
+  assert.equal(chainReady([]), false);
+  assert.equal(chainReady([cam]), false);
+  assert.equal(chainReady(nodes), true);
+  assert.equal(
+    chainReady([cam, fp, { ...pipe, completion: { complete: false } }]),
+    false,
+  );
+  assert.equal(
+    chainReady([cam, fp, pipe, { ...pipe, id: "pipeline:cam:extra" }]),
+    false,
+  );
+
+  assert.deepEqual(addGate([], "camera"), { allowed: true, reason: "" });
+  assert.match(
+    addGate([], "pipeline", {}).reason,
+    /Select a camera/,
+  );
+  const incompleteCamera = { ...cam, completion: { complete: false } };
+  assert.match(
+    addGate([incompleteCamera], "frame_processor", {
+      camera: incompleteCamera,
+    }).reason,
+    /Complete the camera/,
+  );
+  assert.match(
+    addGate(nodes, "pipeline", { camera: cam }).reason,
+    /exactly one pipeline/,
+  );
+  assert.match(
+    addGate(
+      [cam, { ...fp, completion: { complete: false } }],
+      "pipeline",
+      { camera: cam },
+    ).reason,
+    /Complete every frame processor/,
+  );
+  assert.match(
+    addGate(nodes, "frame_processor", {
+      camera: cam,
+      plugin: "first",
+    }).reason,
+    /already assigned/,
+  );
+  assert.equal(
+    addGate(nodes, "tracker", { plugin: "bytetrack" }).allowed,
+    true,
+  );
+  assert.match(
+    addGate([cam, fp], "utility", { plugin: "annotate" }).reason,
+    /Complete every camera chain/,
+  );
+  const track = tracker("bytetrack", 0, ["yolo"]);
+  assert.match(
+    addGate([...nodes, track], "tracker", { plugin: "bytetrack" }).reason,
+    /already in the graph/,
+  );
+});
+
+test("removal plans cascade camera chains and protect the last camera", () => {
+  const cam = camera();
+  const fp = processor("first", 0);
+  const pipe = pipeline();
+  const otherCamera = {
+    ...camera(),
+    id: "camera:other",
+    label: "other",
+    camera: "other",
+  };
+  const otherPipe = {
+    ...pipeline(),
+    id: "pipeline:other",
+    camera: "other",
+  };
+  const nodes = [cam, fp, pipe, otherCamera, otherPipe];
+  const cameraPlan = removalPlan(nodes, [cam.id]);
+  assert.deepEqual(cameraPlan.removeIds, [cam.id, fp.id, pipe.id]);
+  assert.deepEqual(cameraPlan.remainingCameras, ["other"]);
+  assert.equal(cameraPlan.blocked, false);
+  assert.deepEqual(cameraPlan.orphanedCameras, []);
+
+  const pipelinePlan = removalPlan(nodes, [pipe.id]);
+  assert.deepEqual(pipelinePlan.removeIds, [pipe.id]);
+  assert.deepEqual(pipelinePlan.orphanedCameras, ["cam"]);
+  assert.equal(pipelinePlan.blocked, false);
+
+  const allCameras = removalPlan(nodes, [cam.id, otherCamera.id]);
+  assert.equal(allCameras.blocked, true);
+  assert.match(allCameras.reason, /at least one camera/);
+
+  const onlyCamera = removalPlan([cam, pipe], [cam.id]);
+  assert.equal(onlyCamera.blocked, true);
+  assert.deepEqual(removalPlan(nodes, ["missing"]).selectedIds, []);
 });
 
 test("edge states animate incomplete, half, complete, and invalid", () => {

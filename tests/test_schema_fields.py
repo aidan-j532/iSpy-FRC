@@ -42,6 +42,21 @@ class RequiredSettingRuleTests(unittest.TestCase):
             self.assertTrue(setting_is_required(schema, "target", {}))
             self.assertFalse(completion_for_schema(schema, {})["complete"])
 
+    def test_empty_required_select_and_list_are_incomplete(self):
+        schema = {
+            "mode": {"type": "select"},
+            "regions": {"type": "list"},
+        }
+        payload = completion_for_schema(schema, {"mode": "", "regions": []})
+        self.assertEqual(payload["missing"], ["mode", "regions"])
+        self.assertEqual(payload["percent"], 0)
+        self.assertFalse(payload["complete"])
+
+        complete = completion_for_schema(
+            schema, {"mode": "manual", "regions": [{"name": "field"}]}
+        )
+        self.assertTrue(complete["complete"])
+
     def test_empty_model_dict_is_incomplete(self):
         schema = {"vision_model": {"type": "model", "default": ""}}
         payload = completion_for_schema(

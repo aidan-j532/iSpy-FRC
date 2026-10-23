@@ -77,7 +77,7 @@ export function settingIsRequired(schema, settings, key) {
   const defn = schema && schema[key];
   if (!defn || typeof defn !== "object") return false;
   if (!gateActive(schema, settings, defn)) return false;
-  if (Object.prototype.hasOwnProperty.call(defn, "required")) {
+  if (defn.required !== null && defn.required !== undefined) {
     return Boolean(defn.required);
   }
   if (defn.nullable) return false;
@@ -105,8 +105,11 @@ export function valueIsBlank(value, defn = {}) {
     }
     return !String(value).trim();
   }
-  if (["source", "browse", "text", "number"].includes(defn.type)) {
+  if (["source", "browse", "text", "number", "select"].includes(defn.type)) {
     return !String(value).trim();
+  }
+  if (defn.type === "list") {
+    return Array.isArray(value) && value.length === 0;
   }
   if (defn.type === "range") {
     return !Array.isArray(value) || value.length !== 2;
@@ -406,6 +409,163 @@ export function executionOrder(nodes) {
     if (order) return order;
     return String(a.id || "").localeCompare(String(b.id || ""));
   });
+}
+
+// A global node can only be added once every camera has finished its own
+// chain: camera -> frame processors -> exactly one complete pipeline.
+export function chainReady(nodes) {
+  const cameras = nodes.filter((node) => node.type === "camera");
+  if (!cameras.length) return false;
+  return cameras.every((camera) => {
+    if (!camera.completion?.complete) return false;
+    const processors = nodes.filter(
+      (node) =>
+        node.type === "frame_processor" && node.camera === camera.camera,
+    );
+    if (processors.some((node) => !node.completion?.complete)) return false;
+    const pipelines = nodes.filter(
+      (node) =>
+        node.type === "pipeline" && node.camera === camera.camera,
+    );
+    return (
+      pipelines.length === 1 && Boolean(pipelines[0].completion?.complete)
+    );
+  });
+}
+
+function cameraNodeFor(nodes, camera) {
+  if (!camera) return null;
+  if (typeof camera === "object") {
+    return (
+      nodes.find((node) => node.type === "camera" && node.id === camera.id) ||
+      camera
+    );
+  }
+  return nodes.find(
+    (node) => node.type === "camera" && node.camera === camera,
+  );
+}
+
+// Central gating rule shared by the palette, ghost nodes, and add functions.
+// The UI can explain why an action is unavailable instead of silently doing
+// nothing or allowing an invalid graph transition.
+export function addGate(nodes, type, { camera = null, plugin = null } = {}) {
+  const blocked = (reason) => ({ allowed: false, reason });
+  const allowed = { allowed: true, reason: "" };
+  if (type === "camera") return allowed;
+  if (!["pipeline", "frame_processor", "tracker", "utility"].includes(type)) {
+    return blocked(`Unknown node type '${type}'.`);
+  }
+
+  if (type === "pipeline" || type === "frame_processor") {
+    const cameraNode = cameraNodeFor(nodes, camera);
+    if (!cameraNode) return blocked("Select a camera node first.");
+    if (!cameraNode.completion?.complete) {
+      return blocked(
+        type === "pipeline"
+          ? "Complete the camera settings before adding a pipeline."
+          : "Complete the camera settings before adding frame processors.",
+      );
+    }
+    const processors = nodes.filter(
+      (node) =>
+        node.type === "frame_processor" &&
+        node.camera === cameraNode.camera,
+    );
+    if (type === "pipeline") {
+      if (
+        nodes.some(
+          (node) =>
+            node.type === "pipeline" &&
+            node.camera === cameraNode.camera,
+        )
+      ) {
+        return blocked("Each camera can have exactly one pipeline.");
+      }
+      if (processors.some((node) => !node.completion?.complete)) {
+        return blocked(
+          "Complete every frame processor before adding the pipeline.",
+        );
+      }
+      return allowed;
+    }
+    if (
+      plugin &&
+      processors.some((node) => node.plugin === plugin)
+    ) {
+      return blocked(
+        "That frame processor is already assigned to this camera.",
+      );
+    }
+    return allowed;
+  }
+
+  if (!chainReady(nodes)) {
+    return blocked(
+      "Complete every camera chain, including its pipeline, before adding global nodes.",
+    );
+  }
+  if (
+    plugin &&
+    nodes.some((node) => node.type === type && node.plugin === plugin)
+  ) {
+    return blocked(`That ${type} is already in the graph.`);
+  }
+  return allowed;
+}
+
+// Camera removal cascades its pipeline/frame processors.  Keeping this in a
+// pure helper makes the destructive path testable and prevents a malformed
+// selection from ever removing the last camera.
+export function removalPlan(nodes, ids = []) {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const selectedIds = [
+    ...new Set((Array.isArray(ids) ? ids : []).filter((id) => byId.has(id))),
+  ];
+  const cameraNames = new Set(
+    selectedIds
+      .map((id) => byId.get(id))
+      .filter((node) => node.type === "camera")
+      .map((node) => node.camera),
+  );
+  const removeIds = new Set(selectedIds);
+  for (const node of nodes) {
+    if (node.camera && cameraNames.has(node.camera)) removeIds.add(node.id);
+  }
+  const remaining = nodes.filter((node) => !removeIds.has(node.id));
+  const hasCameras = nodes.some((node) => node.type === "camera");
+  const remainingCameras = remaining
+    .filter((node) => node.type === "camera")
+    .map((node) => node.camera);
+  const blocked = hasCameras && remainingCameras.length === 0;
+
+  const removedPipelineCameras = new Set(
+    nodes
+      .filter((node) => node.type === "pipeline" && removeIds.has(node.id))
+      .map((node) => node.camera),
+  );
+  const remainingPipelineCameras = new Set(
+    remaining
+      .filter((node) => node.type === "pipeline")
+      .map((node) => node.camera),
+  );
+  const orphanedCameras = [...removedPipelineCameras].filter(
+    (camera) =>
+      !cameraNames.has(camera) && !remainingPipelineCameras.has(camera),
+  );
+
+  return {
+    selectedIds,
+    cameraNames: [...cameraNames],
+    removeIds: nodes
+      .filter((node) => removeIds.has(node.id))
+      .map((node) => node.id),
+    chainCount: removeIds.size,
+    remainingCameras,
+    orphanedCameras,
+    blocked,
+    reason: blocked ? "The editor needs at least one camera." : "",
+  };
 }
 
 export function nodePayload(nodes, edges, viewport, grid) {

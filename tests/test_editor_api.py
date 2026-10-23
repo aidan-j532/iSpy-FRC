@@ -140,6 +140,99 @@ class EditorApiTests(unittest.TestCase):
                 {"enabled": False},
             )
 
+    def test_removing_a_camera_and_global_nodes_persists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _config_file(tmp)
+            config, client = _client(path)
+            second = json.loads(
+                json.dumps(config.config["camera_configs"]["cam"])
+            )
+            second["name"] = "cam2"
+            config.config["camera_configs"]["cam2"] = second
+            config.config["plugins"]["trackers"] = {
+                "FRC/object_tracker": {},
+                "example/example_tracker": {},
+            }
+            config.config["plugins"]["utilities"] = {
+                "target_selector": {},
+                "example/example_utility": {},
+            }
+            nodes = client.get("/api/editor/graph").get_json()["graph"]["nodes"]
+            kept = [
+                node
+                for node in nodes
+                if node.get("camera") != "cam2"
+                and node["id"] != "tracker:example/example_tracker"
+                and node["id"] != "utility:example/example_utility"
+            ]
+            response = client.post("/api/editor/graph", json={"nodes": kept})
+            self.assertEqual(response.status_code, 200, response.get_json())
+
+            saved = json.loads(Path(path).read_text())
+            self.assertEqual(list(saved["camera_configs"]), ["cam"])
+            self.assertEqual(
+                list(saved["plugins"]["trackers"]), ["FRC/object_tracker"]
+            )
+            self.assertEqual(
+                list(saved["plugins"]["utilities"]), ["target_selector"]
+            )
+            saved_ids = set(saved["editor_graph"]["nodes"])
+            self.assertNotIn("camera:cam2", saved_ids)
+            self.assertNotIn("pipeline:cam2", saved_ids)
+            self.assertNotIn("tracker:example/example_tracker", saved_ids)
+            self.assertNotIn("utility:example/example_utility", saved_ids)
+
+    def test_removing_a_frame_processor_keeps_unassigned_plugin_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _config_file(tmp)
+            config, client = _client(path)
+            config.config["camera_configs"]["cam"]["frame_processors"] = [
+                "example/example_frame_processor"
+            ]
+            config.config["plugins"]["frame_processors"][
+                "example/example_frame_processor"
+            ] = {"keep": "setting"}
+            graph = client.get("/api/editor/graph").get_json()["graph"]
+            node_id = "frame_processor:cam:example/example_frame_processor"
+            self.assertIn(node_id, {node["id"] for node in graph["nodes"]})
+            nodes = [node for node in graph["nodes"] if node["id"] != node_id]
+            response = client.post("/api/editor/graph", json={"nodes": nodes})
+            self.assertEqual(response.status_code, 200, response.get_json())
+
+            saved = json.loads(Path(path).read_text())
+            self.assertEqual(
+                saved["camera_configs"]["cam"]["frame_processors"], []
+            )
+            self.assertEqual(
+                saved["plugins"]["frame_processors"][
+                    "example/example_frame_processor"
+                ],
+                {"keep": "setting"},
+            )
+
+    def test_removing_a_pipeline_is_rejected_until_it_is_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _config_file(tmp)
+            _config, client = _client(path)
+            graph = client.get("/api/editor/graph").get_json()["graph"]
+            nodes = [
+                node
+                for node in graph["nodes"]
+                if node["id"] != "pipeline:cam"
+            ]
+            for route in ("/api/editor/validate", "/api/editor/graph"):
+                response = client.post(route, json={"nodes": nodes})
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(
+                    "pipeline_missing",
+                    {error["code"] for error in response.get_json()["errors"]},
+                )
+            saved = json.loads(Path(path).read_text())
+            self.assertEqual(
+                saved["camera_configs"]["cam"]["pipeline"]["name"],
+                "hsv_detection",
+            )
+
     def test_graph_contains_real_schemas_and_required_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             _config, client = _client(_config_file(tmp, pipeline="object_detection"))
