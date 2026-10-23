@@ -52,6 +52,7 @@ const sidebars = {
         'development-and-advanced-config',
       ],
     },
+    'about',
   ],
 };
 

@@ -253,12 +253,11 @@ export default function Home() {
             <div className={styles.sectionHeading}>
               <p className={styles.eyebrow}>About Me</p>
               <Heading as="h2">Built by a student, shared with everyone</Heading>
-              {/* TODO: replace this placeholder bio with your own */}
+              {/* Bio lives in docs/about.mdx. Keep this section short. */}
               <p>
-                Hi, I'm <strong>[your name]</strong>, a student on FRC Team 2207
-                the Bright Bears. I built iSpy because [why you built it]. This
-                project is [free/open source] and stays that way with help from
-                people who find it useful.
+                iSpy is a student-built project from FRC Team 2207, the Bright
+                Bears. The full story, licensing details, and ways to help are
+                on the About page.
               </p>
             </div>
             <div className={styles.aboutActions}>
@@ -267,6 +266,11 @@ export default function Home() {
                 className="button button--primary button--lg"
                 href="">
                 Support iSpy
+              </Link>
+              <Link
+                className="button button--secondary button--lg"
+                to="/docs/about">
+                Read more about me
               </Link>
             </div>
           </div>
