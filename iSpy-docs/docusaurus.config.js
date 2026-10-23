@@ -21,7 +21,7 @@ const config = {
 
   // Set the production url of your site here
   url: 'https://aidan-j532.github.io',
-  baseUrl: process.env.NODE_ENV === 'development' ? '/' : '/iSpy-FRC/',
+  baseUrl: '/iSpy-FRC/',
   organizationName: 'aidan-j532',
   projectName: 'iSpy-FRC',
   trailingSlash: false,
@@ -61,15 +61,16 @@ const config = {
       // Replace with your project's social card
       image: 'img/iSpyLogoTransparentWhite.png',
       colorMode: {
-        defaultMode: 'light',
-        disableSwitch: true,
-        respectPrefersColorScheme: false,
+        defaultMode: 'dark',
+        disableSwitch: false,
+        respectPrefersColorScheme: true,
       },
       navbar: {
         title: 'iSpy FRC',
         logo: {
           alt: 'iSpy FRC logo',
-          src: 'img/iSpyLogoTransparentWhite.png',
+          src: 'img/iSpyLogoTransparent.png',
+          srcDark: 'img/iSpyLogoTransparentWhite.png',
         },
         items: [
           {
@@ -144,6 +145,7 @@ const config = {
       },
       prism: {
         theme: prismThemes.github,
+        darkTheme: prismThemes.dracula,
       },
     }),
 };
