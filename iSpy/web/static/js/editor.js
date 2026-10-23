@@ -19,6 +19,7 @@ import {
   fitViewport,
   uniqueCameraName,
   nextOrder,
+  executionOrder,
   nodePayload,
 } from "./editor_core.js";
 
@@ -191,9 +192,7 @@ function normalizeNodeOrder() {
   for (const camera of cameras) {
     result.push(camera);
     used.add(camera.id);
-    const processors = getProcessors(camera.camera).sort(
-      (a, b) => a.x - b.x,
-    );
+    const processors = executionOrder(getProcessors(camera.camera));
     processors.forEach((node, index) => {
       node.order = index;
       result.push(node);
@@ -209,7 +208,7 @@ function normalizeNodeOrder() {
     });
   }
   for (const type of ["tracker", "utility"]) {
-    const group = getNodes(type).sort((a, b) => a.x - b.x);
+    const group = executionOrder(getNodes(type));
     group.forEach((node, index) => {
       node.order = index;
       result.push(node);
@@ -507,12 +506,18 @@ function nodeChips(node) {
   return chips
     .filter(Boolean)
     .map(
-      (chip) =>
-        `<span class="node-chip ${
-          ["calibrate", "calibration", "warning"].includes(chip)
-            ? "warn"
+      (chip) => {
+        const classes = ["node-chip"];
+        if (["calibrate", "calibration", "warning"].includes(chip)) {
+          classes.push("warn");
+        }
+        if (/^#\d+$/.test(chip)) classes.push("node-order");
+        return `<span class="${classes.join(" ")}" ${
+          classes.includes("node-order")
+            ? 'title="Execution order - drag horizontally to change it"'
             : ""
-        }">${esc(chip)}</span>`,
+        }>${esc(chip)}</span>`;
+      },
     )
     .join("");
 }
@@ -901,6 +906,48 @@ function startDrag(event, node) {
   }
 }
 
+function nodeAtClientPoint(clientX, clientY) {
+  const nodeEl = document
+    .elementFromPoint(clientX, clientY)
+    ?.closest("[data-node-id]");
+  return nodeEl ? byId(nodeEl.dataset.nodeId) : null;
+}
+
+function clearConnectHover() {
+  el.nodes
+    .querySelectorAll(".connect-target, .connect-invalid")
+    .forEach((node) => {
+      node.classList.remove("connect-target", "connect-invalid");
+    });
+  const temp = document.getElementById("editor-temp-edge");
+  temp?.classList.remove("edge-temp-valid", "edge-temp-invalid");
+}
+
+function updateConnectHover(clientX, clientY) {
+  if (!state.connect) return;
+  clearConnectHover();
+  const source = byId(state.connect.sourceId);
+  const target = nodeAtClientPoint(clientX, clientY);
+  const temp = document.getElementById("editor-temp-edge");
+  if (!source || !target || target.id === source.id) {
+    state.connect.hoverId = null;
+    state.connect.error = "";
+    return;
+  }
+  const error = connectionError(
+    source,
+    target,
+    state.nodes,
+    state.edges,
+  );
+  state.connect.hoverId = target.id;
+  state.connect.error = error;
+  el.nodes
+    .querySelector(`[data-node-id="${target.id}"]`)
+    ?.classList.add(error ? "connect-invalid" : "connect-target");
+  temp?.classList.add(error ? "edge-temp-invalid" : "edge-temp-valid");
+}
+
 function updateTempEdge(clientX, clientY) {
   if (!state.connect) return;
   const source = byId(state.connect.sourceId);
@@ -928,7 +975,8 @@ function startConnect(event, node) {
     return;
   }
   cancelConnect();
-  state.connect = { sourceId: node.id };
+  state.connect = { sourceId: node.id, hoverId: null, error: "" };
+  el.canvas.classList.add("connecting");
   const sourceEl = el.nodes.querySelector(
     `[data-node-id="${node.id}"] .port-out`,
   );
@@ -946,6 +994,8 @@ function startConnect(event, node) {
 function cancelConnect() {
   state.connect = null;
   document.getElementById("editor-temp-edge")?.remove();
+  el.canvas.classList.remove("connecting");
+  clearConnectHover();
   el.nodes
     .querySelectorAll(".port-out.active")
     .forEach((port) => port.classList.remove("active"));
@@ -954,25 +1004,17 @@ function cancelConnect() {
 function finishConnect(event) {
   if (!state.connect) return;
   const source = byId(state.connect.sourceId);
-  const targetEl = document
-    .elementFromPoint(event.clientX, event.clientY)
-    ?.closest("[data-node-id]");
-  const target = targetEl ? byId(targetEl.dataset.nodeId) : null;
+  const target = nodeAtClientPoint(event.clientX, event.clientY);
+  const error =
+    source && target
+      ? connectionError(source, target, state.nodes, state.edges)
+      : "";
   cancelConnect();
+  renderNodes();
   if (!source) return;
-  if (!target) {
-    renderNodes();
-    return;
-  }
-  const error = connectionError(
-    source,
-    target,
-    state.nodes,
-    state.edges,
-  );
+  if (!target) return;
   if (error) {
-    toast(error, "error");
-    renderNodes();
+    toast(`Connection rejected: ${error}`, "error");
     return;
   }
   const before = snapshot();
@@ -1095,6 +1137,7 @@ function onPointerMove(event) {
     return;
   }
   if (state.connect) {
+    updateConnectHover(event.clientX, event.clientY);
     updateTempEdge(event.clientX, event.clientY);
   }
 }

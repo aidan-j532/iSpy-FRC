@@ -7,6 +7,7 @@ import {
   deriveEdges,
   edgePath,
   edgeState,
+  executionOrder,
   fitViewport,
   gateActive,
   nextOrder,
@@ -189,6 +190,25 @@ test("derived edges preserve camera and global execution order", () => {
   assert.ok(ids.includes("e:tracker:t1->utility:u0"));
   assert.ok(ids.includes("e:tracker:t1->utility:u1"));
   assert.ok(!ids.includes("e:tracker:t1->tracker:t0"));
+});
+
+test("execution order uses horizontal position and stays stable on ties", () => {
+  const left = { ...tracker("left", 2), x: 100 };
+  const middle = { ...tracker("middle", 1), x: 300 };
+  const right = { ...tracker("right", 0), x: 300 };
+  const ordered = executionOrder([right, left, middle]);
+  assert.deepEqual(
+    ordered.map((node) => node.plugin),
+    ["left", "right", "middle"],
+  );
+
+  // Equal x positions fall back to the previous order, then id.
+  const tie = { ...tracker("tie", 1), x: 300 };
+  const tied = executionOrder([right, tie, middle]);
+  assert.deepEqual(
+    tied.map((node) => node.plugin),
+    ["right", "middle", "tie"],
+  );
 });
 
 test("edge states animate incomplete, half, complete, and invalid", () => {

@@ -232,6 +232,72 @@ class EditorApiTests(unittest.TestCase):
                 ["example/example_tracker", "FRC/object_tracker"],
             )
 
+    def test_save_preserves_tracker_and_utility_execution_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _config_file(tmp)
+            config, client = _client(path)
+            config.config["plugins"]["trackers"] = {
+                "FRC/object_tracker": {},
+                "example/example_tracker": {},
+            }
+            config.config["plugins"]["utilities"] = {
+                "target_selector": {},
+                "example/example_utility": {},
+            }
+            data = client.get("/api/editor/graph").get_json()
+            nodes = data["graph"]["nodes"]
+            tracker_nodes = [node for node in nodes if node["type"] == "tracker"]
+            utility_nodes = [node for node in nodes if node["type"] == "utility"]
+            self.assertEqual(
+                [node["plugin"] for node in tracker_nodes],
+                ["FRC/object_tracker", "example/example_tracker"],
+            )
+            self.assertEqual(
+                [node["plugin"] for node in utility_nodes],
+                ["target_selector", "example/example_utility"],
+            )
+
+            # Simulate dragging the first node past the second: the frontend
+            # rewrites x/order before saving.
+            for group in (tracker_nodes, utility_nodes):
+                for index, node in enumerate(reversed(group)):
+                    node["order"] = index
+                    node["x"] = 900 + index * 300
+            response = client.post(
+                "/api/editor/graph",
+                json={"nodes": nodes},
+            )
+            self.assertEqual(response.status_code, 200, response.get_json())
+            saved = json.loads(Path(path).read_text())
+            self.assertEqual(
+                list(saved["plugins"]["trackers"]),
+                ["example/example_tracker", "FRC/object_tracker"],
+            )
+            self.assertEqual(
+                list(saved["plugins"]["utilities"]),
+                ["example/example_utility", "target_selector"],
+            )
+
+            reloaded = client.get("/api/editor/graph").get_json()["graph"]
+            reloaded_trackers = [
+                node["plugin"]
+                for node in reloaded["nodes"]
+                if node["type"] == "tracker"
+            ]
+            reloaded_utilities = [
+                node["plugin"]
+                for node in reloaded["nodes"]
+                if node["type"] == "utility"
+            ]
+            self.assertEqual(
+                reloaded_trackers,
+                ["example/example_tracker", "FRC/object_tracker"],
+            )
+            self.assertEqual(
+                reloaded_utilities,
+                ["example/example_utility", "target_selector"],
+            )
+
     def test_invalid_connection_is_rejected_with_a_clear_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             _config, client = _client(_config_file(tmp))

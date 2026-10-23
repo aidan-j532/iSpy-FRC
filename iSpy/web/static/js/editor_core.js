@@ -395,6 +395,19 @@ export function nextOrder(nodes, predicate) {
   return orders.length ? Math.max(...orders) + 1 : 0;
 }
 
+// Horizontal position is the execution-order control for frame processors and
+// global nodes.  Tie-breaking by the previous order (and then id) keeps reloads
+// and equal columns deterministic instead of letting Array#sort shuffle items.
+export function executionOrder(nodes) {
+  return [...nodes].sort((a, b) => {
+    const x = finite(a.x, 0) - finite(b.x, 0);
+    if (x) return x;
+    const order = (Number(a.order) || 0) - (Number(b.order) || 0);
+    if (order) return order;
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  });
+}
+
 export function nodePayload(nodes, edges, viewport, grid) {
   return {
     nodes: nodes.map((node) => ({
