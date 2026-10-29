@@ -5,7 +5,7 @@ following third-party components are distributed under their own terms:
 
 ## RKNN-Toolkit2 wheels
 Mirrored from https://github.com/airockchip/rknn-toolkit2 for install
-convenience (see iSpy/vision/optimizer.py, _RKNN_FULL_WHEELS). These wheels
+convenience (see iSpy/boot/converter_envs.py, RKNN_FULL_WHEELS). These wheels
 are distributed under Rockchip's RKNN SDK License, not BSD-3-Clause. That
 license grants redistribution of modifications or derivative works solely for
 design, development, and testing of applications compatible with Rockchip
@@ -14,6 +14,26 @@ termination conditions. Review the complete terms before redistributing the
 wheels or using them outside that scope.
 © Rockchip Electronics Co., Ltd.
 Full text: https://github.com/airockchip/rknn-toolkit2/blob/master/LICENSE
+
+## TFLite converter environment (optional, downloaded on demand)
+iSpy's `tflite` conversion environment installs build-time packages into a
+cache directory; none are bundled in this repository. The principal packages
+and their licenses are:
+
+- **TensorFlow 2.19**, **Keras**, **tf-keras**, **ai-edge-litert** -
+  Apache-2.0. TensorFlow: https://github.com/tensorflow/tensorflow/blob/master/LICENSE
+- **onnx2tf** - MIT. https://github.com/PINTO0309/onnx2tf
+- **onnx**, **onnx_graphsurgeon** - Apache-2.0.
+  https://github.com/onnx/onnx
+- **onnxslim** - MIT. https://github.com/inisis/onnxslim
+- **sng4onnx** - MIT. https://github.com/PINTO0309/sng4onnx
+- **Ultralytics** - AGPL-3.0, installed only inside the build environment (and
+  the optional `[optimizer]` extra) and never imported by the runtime inference
+  process. See https://github.com/ultralytics/ultralytics/blob/main/LICENSE.
+
+TensorFlow and its transitive dependencies may carry their own notices; review
+the installed distributions' license files before redistributing the
+environment or building a product image around it.
 
 ## Ultralytics YOLO pretrained weights (optional download)
 _default_detect.pt and _default_pose.pt, when downloaded, are stock

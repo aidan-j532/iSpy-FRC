@@ -1,6 +1,8 @@
 import argparse
+import copy
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -8,10 +10,12 @@ import subprocess
 import sys
 import time
 import time as _time
+import cv2
 from pathlib import Path
 
 from PIL import Image
 
+from iSpy.boot.args import add_boot_arguments
 from iSpy.config.iSpyConfig import get_pipeline_name, iSpyConfig
 from iSpy.dataset.dataset import get_active_dataset_dir
 from iSpy.validations.validate_system import validate_system
@@ -52,20 +56,63 @@ def _remove_path_for_cleanup(path: Path) -> None:
 
 
 def _bootstrap_default_camera(config: iSpyConfig):
+    from iSpy.web.modules.cameras import CamerasModule
+    from iSpy.vision.Cameras import _discovery
+    from iSpy.vision.Cameras.OpenCVCamera import OpenCVCamera
+
     cams = config.get("camera_configs", {})
     if cams and any(c.get("source") not in (None, "") for c in cams.values()):
         return  # already has something real
-    from iSpy.web.modules.cameras import (
-        CamerasModule,
-    )  # or move probing to a shared util
 
-    devices = CamerasModule({})._probe_devices()
+    devices = _discovery.probe_opencv_devices()
     if not devices:
         logger.warning(
             "No cameras detected at first boot - leaving default placeholder config."
         )
         return
-    dev = devices[0]
+
+    # Option A: rank cameras by FPS and pick the best one
+    best_dev = None
+    best_fps = 0
+
+    for dev in devices:
+        path = dev.get("path")
+        name = dev.get("name", f"Camera {path}")
+        # Try to open and measure FPS
+        cap = cv2.VideoCapture(path, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            continue
+        # Warmup frames
+        for _ in range(3):
+            cap.read()
+        start = time.perf_counter()
+        frames = 0
+        for _ in range(20):
+            ret, frame = cap.read()
+            if ret and frame is not None and frame.size > 0:
+                frames += 1
+            else:
+                break
+        cap.release()
+        elapsed = time.perf_counter() - start
+        if elapsed > 0:
+            fps = frames / elapsed
+        else:
+            fps = 0
+
+        if fps > best_fps:
+            best_fps = fps
+            best_dev = dev
+
+    # Fallback to Option B if no camera could be opened
+    if best_dev is None:
+        logger.warning(
+            "No cameras accessible at first boot - proceeding without default camera. "
+            "Add a camera via the web UI."
+        )
+        return
+
+    dev = best_dev
     name = "camera_1"
     default_cam = config.default_config["camera_configs"]["default_cam"]
     cam_cfg = json.loads(json.dumps(default_cam))
@@ -75,11 +122,13 @@ def _bootstrap_default_camera(config: iSpyConfig):
     config.set("camera_configs", {name: cam_cfg})
     config.save()
     logger.info(
-        "First boot: auto-configured camera '%s' -> %s (pipeline=%s)",
+        "First boot: auto-configured camera '%s' -> %s (pipeline=%s, FPS=%.1f)",
         name,
         dev["path"],
         get_pipeline_name(cam_cfg),
+        best_fps,
     )
+
 
 
 _USB_ID_RE = re.compile(r"VID_[0-9A-F]+&PID_[0-9A-F]+(?:&MI_\d+)?", re.IGNORECASE)
@@ -189,6 +238,36 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
     config.save()
 
 
+# read offline_mode straight off disk before setup_files pulls the default
+# models (that runs before the full iSpyConfig exists); failures fall through
+def _arm_offline_mode_early() -> None:
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        return
+    try:
+        config_path = search_for_config()
+        if not config_path:
+            return
+        with open(config_path, "r", encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and data.get("offline_mode"):
+            network_policy.set_offline(True, "config")
+    except Exception:
+        return
+
+
+# arm the policy from the loaded config. game mode (or an inherited
+# ISPY_OFFLINE) may have turned it on already - never downgrade that
+def _apply_offline_mode(config: iSpyConfig) -> None:
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        return
+    if config.get("offline_mode", False):
+        network_policy.set_offline(True, "config")
+
+
 def _consume_game_mode_web_off(config: iSpyConfig) -> None:
     # This is the one time turn off web mode for gaem
     backup = config.get("game_mode_app_mode_backup")
@@ -206,6 +285,11 @@ def _consume_game_mode_web_off(config: iSpyConfig) -> None:
         return
 
     logger.warning("Game Mode: web UI disabled for this run only.")
+    # offline is forced for the run, in-memory only - a crash mid-run must never
+    # leave offline_mode stuck on in config.json
+    from iSpy.core import network_policy
+
+    network_policy.set_offline(True, "game_mode")
     config.set("game_mode_app_mode_backup", config.get("app_mode", True))
     config.config["app_mode"] = False
     config.set("game_mode_web_off_next_run", False)
@@ -335,66 +419,217 @@ def _wait_for_pipeline_ready(
         config.default_config.get("camera_configs", {}).get("default_cam", {})
     )
     instances: dict[str, object] = {}
-    for name, cam_cfg in cams.items():
-        pipeline = (
-            get_pipeline_name(cam_cfg)
-            if isinstance(cam_cfg, dict)
-            else default_pipeline
-        )
-        cls = pipeline_classes.get(pipeline)
-        if cls is None:
-            raise RuntimeError(
-                f"Camera '{name}' uses unknown pipeline '{pipeline}' - cannot boot."
+    try:
+        for name, cam_cfg in cams.items():
+            pipeline = (
+                get_pipeline_name(cam_cfg)
+                if isinstance(cam_cfg, dict)
+                else default_pipeline
             )
-        try:
-            inst = cls(iSpyCameraConfig(cam_cfg), config, None)
-        except Exception as e:
-            raise RuntimeError(
-                f"Camera '{name}' pipeline '{pipeline}' failed to construct: {e}"
-            )
-        instances[name] = inst
-
-    if not instances:
-        raise RuntimeError("No loadable pipelines to boot - aborting.")
-
-    deadline = _time.monotonic() + _READINESS_WAIT_TIMEOUT_S
-    logger.info(
-        "Waiting for %d camera pipeline(s) to become ready (background "
-        "preparation may still be running)...",
-        len(instances),
-    )
-    pending = set(instances)
-    last_status: dict[str, str] = {n: "" for n in instances}
-    while pending and _time.monotonic() < deadline:
-        for name in tuple(pending):
-            inst = instances[name]
-            try:
-                ready, status = inst.is_ready()
-            except Exception as e:
-                ready, status = False, f"error: {e}"
-            if status != last_status[name]:
-                logger.info("  camera %-16s -> %s", name, status)
-                last_status[name] = status
-            if "error:" in status and not ready:
+            cls = pipeline_classes.get(pipeline)
+            if cls is None:
                 raise RuntimeError(
-                    f"Camera '{name}' pipeline entered an unrecoverable error "
-                    f"state: {status}"
+                    f"Camera '{name}' uses unknown pipeline '{pipeline}' - cannot boot."
                 )
-            if ready:
-                pending.discard(name)
-        if pending:
-            _time.sleep(_READINESS_POLL_S)
+            try:
+                inst = cls(iSpyCameraConfig(cam_cfg), config, None)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Camera '{name}' pipeline '{pipeline}' failed to construct: {e}"
+                ) from e
+            instances[name] = inst
 
-    if pending:
-        detail = "; ".join(
-            f"camera '{name}' -> {instances[name].is_ready()[1]}"
-            for name in sorted(pending)
+        if not instances:
+            raise RuntimeError("No loadable pipelines to boot - aborting.")
+
+        deadline = _time.monotonic() + _READINESS_WAIT_TIMEOUT_S
+        logger.info(
+            "Waiting for %d camera pipeline(s) to become ready (background "
+            "preparation may still be running)...",
+            len(instances),
         )
-        raise RuntimeError(
-            f"Timed out waiting for pipeline readiness after "
-            f"{_READINESS_WAIT_TIMEOUT_S}s: {detail}"
+        pending = set(instances)
+        last_status: dict[str, str] = {n: "" for n in instances}
+        while pending and _time.monotonic() < deadline:
+            for name in tuple(pending):
+                inst = instances[name]
+                try:
+                    ready, status = inst.is_ready()
+                except Exception as e:
+                    ready, status = False, f"error: {e}"
+                if status != last_status[name]:
+                    logger.info("  camera %-16s -> %s", name, status)
+                    last_status[name] = status
+                if "error:" in status and not ready:
+                    raise RuntimeError(
+                        f"Camera '{name}' pipeline entered an unrecoverable error "
+                        f"state: {status}"
+                    )
+                if ready:
+                    pending.discard(name)
+            if pending:
+                _time.sleep(_READINESS_POLL_S)
+
+        if pending:
+            detail = "; ".join(
+                f"camera '{name}' -> {instances[name].is_ready()[1]}"
+                for name in sorted(pending)
+            )
+            raise RuntimeError(
+                f"Timed out waiting for pipeline readiness after "
+                f"{_READINESS_WAIT_TIMEOUT_S}s: {detail}"
+            )
+        logger.info("All camera pipelines ready.")
+    finally:
+        for name, inst in instances.items():
+            destroy = getattr(inst, "destroy", None)
+            if callable(destroy):
+                try:
+                    destroy()
+                except Exception:
+                    logger.warning(
+                        "Could not destroy readiness probe for camera '%s'.",
+                        name,
+                        exc_info=True,
+                    )
+
+
+def _recorded_cameras(session_path: str | Path) -> list[str]:
+    from iSpy.core.rollback import _iter_segments
+
+    path = Path(session_path).expanduser().resolve()
+    if path.is_file() and path.suffix.lower() in (".avi", ".mp4"):
+        return [path.stem]
+    cameras = []
+    for segment in _iter_segments(path):
+        for name in segment.get("cams") or []:
+            if name not in cameras:
+                cameras.append(name)
+    return cameras
+
+
+def build_replay_camera_configs(
+    config: iSpyConfig,
+    session_path: str | Path,
+    speed: float = 1.0,
+    loop: bool = True,
+    camera: str = "",
+) -> dict[str, dict]:
+    import copy
+
+    from iSpy.vision.Cameras.ReplayCamera import ReplayCamera
+
+    replay_path = Path(session_path).expanduser().resolve()
+    if not replay_path.exists():
+        raise FileNotFoundError(f"Replay session or clip not found: {replay_path}")
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError("--replay-speed must be greater than zero.")
+
+    available_cameras = _recorded_cameras(replay_path)
+    if not available_cameras:
+        raise RuntimeError(f"No recorded cameras found in {replay_path}.")
+    selected_cameras = available_cameras
+    if camera:
+        matched = next(
+            (
+                name
+                for name in available_cameras
+                if str(name).casefold() == str(camera).casefold()
+            ),
+            None,
         )
-    logger.info("All camera pipelines ready.")
+        if matched is None:
+            raise ValueError(
+                f"Camera {camera!r} is not recorded in {replay_path}; "
+                f"available cameras: {', '.join(available_cameras)}"
+            )
+        selected_cameras = [matched]
+
+    camera_configs = config.get("camera_configs", {})
+    template = next(
+        (value for value in camera_configs.values() if isinstance(value, dict)), None
+    )
+    if template is None:
+        template = config.default_config["camera_configs"]["default_cam"]
+
+    built = {}
+    session_meta_path = replay_path / "session.json" if replay_path.is_dir() else None
+    session_meta = {}
+    if session_meta_path is not None and session_meta_path.is_file():
+        try:
+            session_meta = json.loads(session_meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Could not read replay session metadata: {exc}") from exc
+
+    for selected_camera in selected_cameras:
+        clips = ReplayCamera._resolve_clips(
+            {"source": str(replay_path), "replay_cam": selected_camera}
+        )
+        replay_config = copy.deepcopy(template)
+        replay_config.update(
+            name=f"replay_{selected_camera}",
+            camera_type="replay",
+            source=str(replay_path),
+            replay_cam=selected_camera,
+            replay_speed=speed,
+            replay_loop=loop,
+            loop=loop,
+        )
+        recorded = (session_meta.get("cameras") or {}).get(selected_camera, {})
+        if isinstance(recorded, dict):
+            for key in ("x", "y", "height", "yaw", "pitch", "calibration"):
+                if key in recorded:
+                    replay_config[key] = copy.deepcopy(recorded[key])
+            pipeline_name = recorded.get("pipeline")
+            if (
+                isinstance(pipeline_name, str)
+                and pipeline_name
+                and isinstance(replay_config.get("pipeline"), dict)
+            ):
+                pipeline = replay_config.get("pipeline")
+                pipeline = copy.deepcopy(pipeline)
+                pipeline["name"] = pipeline_name
+                replay_config["pipeline"] = pipeline
+        if clips:
+            replay_config["replay_clips"] = [str(path) for path in clips]
+        built[f"replay_{selected_camera}"] = replay_config
+
+    return built
+
+
+def _configure_replay(
+    config: iSpyConfig,
+    source: str,
+    camera_name: str | None,
+    speed: float,
+    loop: bool,
+) -> None:
+    replay_cameras = build_replay_camera_configs(
+        config, source, speed, loop, camera_name or ""
+    )
+    config.set("camera_configs", replay_cameras)
+
+    plugins = copy.deepcopy(config.get("plugins", {}))
+    utilities = plugins.get("utilities", {})
+    if isinstance(utilities, dict):
+        utilities.pop("FRC/network_table_handler", None)
+        plugins["utilities"] = utilities
+    config.set("plugins", plugins)
+
+    rollback = copy.deepcopy(config.get("rollback", {}))
+    if isinstance(rollback, dict):
+        rollback["enabled"] = False
+        config.set("rollback", rollback)
+
+    os.environ["ISPY_REPLAY_MODE"] = "1"
+    clip_count = sum(len(entry.get("replay_clips", [])) for entry in replay_cameras.values())
+    logger.info(
+        "Replay mode: %d clip(s), cameras=%s, speed=%.2fx, loop=%s",
+        clip_count,
+        ", ".join(replay_cameras),
+        speed,
+        loop,
+    )
 
 
 def cleanup_broken_images(config: iSpyConfig) -> None:
@@ -444,13 +679,100 @@ def cleanup_broken_images(config: iSpyConfig) -> None:
 
 
 
+def _runtime_dependency_backends(config) -> list[str]:
+
+    from iSpy.boot.backend_deps import backends_for_config
+
+    data = getattr(config, "config", None)
+    if not isinstance(data, dict):
+        data = {}
+    backends = backends_for_config(data)
+    if not backends:
+        # No model-backed camera (or a config we could not inspect): keep the
+        # documented .pt baseline usable rather than silently leaving torch out.
+        backends = ["pytorch"]
+    return backends
+
+
+def _provision_runtime_dependencies(config, *, fresh: bool):
+
+
+    from iSpy.boot import backend_deps
+    from iSpy.core import network_policy
+
+    online = not network_policy.is_offline()
+    auto_install = bool(fresh and online)
+    if fresh:
+        # On a fresh install, provision inference runtimes for EVERY backend
+        # so that all backends tested by `ispy-bench --all-backends` work
+        # out of the box.  The registry's resolvers already handle platform
+        # compatibility (unsupported/manual backends are skipped, not errors).
+        backends = backend_deps.all_backend_names()
+        logger.info(
+            "Fresh install: provisioning inference runtimes for all backends: %s",
+            ", ".join(backends),
+        )
+    else:
+        backends = _runtime_dependency_backends(config)
+        logger.info("Runtime backend dependencies: %s", ", ".join(backends))
+    report = backend_deps.ensure_backends(
+        backends,
+        auto_install=auto_install,
+    )
+    for line in report.lines():
+        logger.info("%s", line)
+
+    for result in report.manual_requirements:
+        if result.status == "unsupported":
+            logger.warning(
+                "Backend %s is not supported on this platform: %s",
+                result.backend,
+                result.detail,
+            )
+        else:
+            logger.warning(
+                "Backend %s needs manual installation: %s",
+                result.backend,
+                result.detail,
+            )
+
+    if fresh and online:
+        backend_deps.raise_for_actionable_failures(report)
+    elif fresh and not online and not report.ok:
+        logger.warning(
+            "Offline mode: missing runtime dependencies were not installed. "
+            "Reconnect and rerun 'ispy-boot -f'."
+        )
+    elif report.actionable_failures:
+        logger.error(
+            "Missing runtime dependencies for: %s. Run 'ispy-boot -f' to "
+            "install/repair them.",
+            ", ".join(item.backend for item in report.actionable_failures),
+        )
+    return report
+
+
 def on_boot(
     install_service: bool = False,
     fresh: bool = False,
     wait: bool = False,
+    force_web: bool = False,
 ):
     _configure_quiet_logging()
     logger.info("ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix)
+
+    # level 0 turns the web off, so force it on for this run only (not saved)
+    # while the settings slider has to stay reachable
+    if force_web:
+        os.environ["ISPY_FORCE_WEB"] = "1"
+        logger.warning(
+            "ISPY_FORCE_WEB: forcing the web UI on for this run only "
+            "(nothing is saved)."
+        )
+
+    # offline mode must be known before setup_files downloads default models
+    # (a full iSpyConfig does not exist yet at that point)
+    _arm_offline_mode_early()
 
     if fresh:
         logger.info("boot -f: forcefully fresh installation state")
@@ -459,17 +781,10 @@ def on_boot(
         config = iSpyConfig(config_path, create=True)
         _bootstrap_default_camera(config)
 
-        # fresh install with no prior deps installed - pull in whatever backend it needs (rknn wheel, onnxruntime-gpu, etc.) so first boot doesn't fail on a missing import mid-pipeline-construction
-        try:
-            from iSpy.vision.optimizer import install_special_dependencies
-
-            logger.info("First-boot dependency install starting (auto_install=True)...")
-            install_special_dependencies(auto_install=True)
-        except Exception:
-            logger.exception(
-                "First-boot dependency install failed - continuing boot anyway; "
-                "the relevant pipeline will fall back or error clearly at runtime."
-            )
+        # The unified setup/repair path.  Mandatory/actionable failures raise
+        # DependencyProvisionError instead of being logged and forgotten.
+        logger.info("First-boot dependency provisioning starting...")
+        _provision_runtime_dependencies(config, fresh=True)
     else:
         setup_files(fresh=False)
         config_path = search_for_config()
@@ -480,8 +795,17 @@ def on_boot(
             )
         logger.info("Using existing config: %s", config_path)
         config = iSpyConfig(config_path, create=False)
+        # Verify (do not install) on ordinary boots; -f is the repair entry.
+        _provision_runtime_dependencies(config, fresh=False)
 
     _consume_game_mode_web_off(config)
+    _apply_offline_mode(config)
+
+    # resolve the performance profile once, in memory - the web-on/off
+    # decision, the vision loop and every web module read this one value.
+    from iSpy.core import performance
+
+    performance.arm_from_config(config)
 
     cleanup_missing_cameras(config)
     cleanup_broken_images(config)
@@ -519,22 +843,6 @@ def on_boot(
     return config
 
 
-def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser.add_argument(
-        "-s",
-        "--service",
-        action="store_true",
-        help="Install and start the watchdog service",
-    )
-    parser.add_argument(
-        "-w",
-        "--wait",
-        action="store_true",
-        help="Wait for all pipelines to be ready before running vision",
-    )
-    return parser
-
-
 def main():
     parser = argparse.ArgumentParser(description="iSpy boot sequence")
     parser = add_boot_arguments(parser)
@@ -547,11 +855,38 @@ def main():
         "default setup",
     )
     args = parser.parse_args()
-    config = on_boot(
-        install_service=args.service,
-        fresh=args.fresh,
-        wait=args.wait,
-    )
+    try:
+        config = on_boot(
+            install_service=args.service,
+            fresh=args.fresh,
+            wait=args.wait and not args.replay,
+            force_web=args.web,
+        )
+    except Exception as exc:
+        from iSpy.boot.backend_deps import DependencyProvisionError
+
+        if not isinstance(exc, DependencyProvisionError):
+            raise
+        logger.error("%s", exc)
+        logger.error(
+            "Fix the failure above and rerun 'ispy-boot -f'. Nothing was "
+            "reported as installed that is not importable."
+        )
+        logging.shutdown()
+        sys.stderr.flush()
+        sys.exit(1)
+
+    if args.replay:
+        _configure_replay(
+            config,
+            args.replay,
+            args.replay_cam,
+            args.replay_speed,
+            loop=not args.replay_no_loop,
+        )
+        from iSpy.core.game_loop import main as game_loop_main
+
+        game_loop_main(config)
 
     # Flush everything and hard-exit to avoid Segfualt stuff.
     logging.shutdown()

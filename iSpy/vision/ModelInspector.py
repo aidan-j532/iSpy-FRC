@@ -546,6 +546,10 @@ def _apply_metadata_to_config(sidecar: dict, model_config: dict) -> dict:
     score_mode = sidecar.get("score_mode")
     if score_mode is None:
         score_mode = "objectness" if nc == 1 else "multi_class"
+    # A sidecar that claims 'objectness' for a multi-class model is stale/wrong;
+    # the raw detect tensor has (4 + nc) feature columns, not 5.
+    if nc > 1 and score_mode == "objectness":
+        score_mode = "multi_class"
 
     output_format = sidecar.get("output_format")
     if output_format is None:

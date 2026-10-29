@@ -3,6 +3,10 @@
 # This is the automated version of install-deploy.sh used for imaging.
 set -e
 
+# Provisioning is inline and headless: never bind the supervisor status port
+# during image/first-boot setup.
+export ISPY_NO_SUPERVISOR=1
+
 REPO_URL="https://github.com/aidan-j532/iSpy-FRC"
 INSTALL_DIR="/opt/iSpy"
 SERVICE_USER="iSpy"
@@ -27,6 +31,17 @@ fi
 
 pip3 install "$INSTALL_DIR"
 
+# One unified setup/repair pass: selects CPU/CUDA torch for this board, installs
+# only the backend the generated .pt config needs, verifies imports, and writes
+# Config/config.json. ISPY_TARGET_ARCH makes the registry explicitly target the
+# board even when this script runs under an image-build chroot.
+echo "Running hardware-aware dependency setup..."
+(
+    cd "$INSTALL_DIR"
+    ISPY_TARGET_ARCH="$(uname -m)" ISPY_TARGET_OS="$(uname -s)" \
+        python3 -m iSpy.boot.boot -f
+)
+
 if ! id "$SERVICE_USER" &>/dev/null; then
     useradd -r -s /bin/false -d "$INSTALL_DIR" "$SERVICE_USER"
 fi
@@ -49,7 +64,7 @@ Wants=network.target
 Type=simple
 User=$SERVICE_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/python3 -m iSpy.boot.boot
+ExecStart=/usr/bin/python3 -m iSpy.cli start
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -69,3 +84,4 @@ echo "=== Done ==="
 echo "Status:  journalctl -u iSpy -f"
 echo "Config:  $CONFIG_DEST"
 echo "Restart: systemctl restart iSpy"
+echo "Dashboard: http://ispy.local:5000 (status page stays up while booting/restarting)"

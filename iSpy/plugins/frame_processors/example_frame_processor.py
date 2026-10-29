@@ -5,6 +5,9 @@ class YourTracker(FrameProcessorBase):
     plugin_name = "example/example_frame_processor"
     template = True
 
+    # set needs_internet = True to skip the add-on while offline, or override
+    # network_requirements() when only some settings need the internet
+
     @classmethod
     def config_schema(cls) -> dict:
         # e.g. {"darken": {"type": "toggle", "label": "Darken", "default": True}}

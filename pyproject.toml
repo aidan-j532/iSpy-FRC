@@ -19,10 +19,23 @@ maintainers = [
     { name = "iSpy FRC Maintainer", email = "aidanrjensen@gmail.com" }
 ]
 
+
 dependencies = [
+    # The runtime torch/numpy pair is resolved by `ispy setup` for the host's
+    # actual wheels.  Do not pin a platform-wide NumPy here: the converter
+    # environments own their own pins, and a board that needs NumPy 1.x gets
+    # it from the environment that needs it, not from package metadata.
     "numpy>=1.26.0",
-    "opencv-python>=4.8.0",
-    "protobuf>=3.20.2",
+
+    # OpenCV 4.12+ is built against NumPy 2.  Keep the runtime cap until the
+    # setup resolver has selected a NumPy 2-compatible torch for the host.
+    "opencv-python>=4.8.0,<4.12",
+
+    # onnx 1.16 (used by the optimizer extra) reads FieldDescriptor.label,
+    # which protobuf 5+ removed.  The converter environments pin 4.25.4
+    # themselves; this keeps the runtime's optional onnx usable too.
+    "protobuf>=3.20.2,<5",
+
     "tqdm>=4.66.0",
     "requests>=2.31.0",
     "psutil>=7.2.0",
@@ -32,23 +45,28 @@ dependencies = [
     "scikit-learn>=1.3.0",
     "pyntcore>=2026.0.0,<2027.0.0",
     "robotpy>=2026.0.0,<2027.0.0",
+    "robotpy[apriltag]>=2026.0.0,<2027.0.0",
     "plotly>=5.0",
-    "onnxruntime>=1.16.0",  # CPU ONNX fallback - works everywhere, used until boot picks a better backend
+    "onnxruntime>=1.16.0",
     "transformers",
     "scipy>=1.10.0",
-    "robotpy[apriltag]>=2026.0.0,<2027.0.0",
-    "torch>=2.0.0",  # runtime not dev, yolo_pt is the on-device .pt loader
+    # PyTorch is intentionally NOT a core dependency. A generic
+    # "pip install torch" resolves to a CUDA-enabled build (and pulls
+    # nvidia-*/triton) on Linux, which is unusable and huge on CPU-only
+    # ARM64 boards. The backend registry (iSpy.boot.backend_deps) installs
+    # CPU torch from download.pytorch.org/whl/cpu, or the matching CUDA build
+    # only when nvidia-smi proves a driver is present. `ispy-boot -f` is teh
+    # entry point; `pip install .` stays lightweight and backend-neutral.
     "PyYAML>=6.0",
     "Werkzeug>=3.0",
     "packaging>=23.0",
 ]
-#"torch==2.2.2; platform_system == 'Linux' and platform_machine == 'aarch64'",
-#"torch>=2.2.0; platform_system != 'Linux' or platform_machine != 'aarch64'",
-#"torchvision>=0.15.0",
 
 [project.optional-dependencies]
 # For model training, conversion, and development - x86 only.
-# pip install ".[dev]"   (install-dev.sh handles the rknn-toolkit2 --find-links)
+# Torch is provisioned separately by `ispy-boot -f` (or CI's explicit CPU
+# install) so that installing dev extras never silently selects a CUDA build on
+# ARM64/CPU-only machines. Install torch first, then `pip install ".[dev]"`.
 dev = [
     "torchvision>=0.15.0",  # only for training/conversion scripts
     "tensorflow>=2.13.0",
@@ -59,7 +77,8 @@ dev = [
     "snakeviz",
     "jupyter",
     "tensorboard",
-    "tensorrt>=10.0.0"
+    "tensorrt>=10.0.0",
+    "matplotlib>=3.8.0"
 ]
 
 optimizer = [
@@ -74,6 +93,7 @@ ispy-run  = "iSpy.core.game_loop:main"
 ispy-boot = "iSpy.boot.boot:main"
 ispy-bench = "iSpy.validations.benchmarking:main"
 ispy-stats = "iSpy.validations.tests.compare_models:main"
+ispy-optimize = "iSpy.validations.optimize:main"
 
 [project.urls]
 Homepage = "https://github.com/aidan-j532/iSpy-FRC"

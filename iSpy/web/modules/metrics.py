@@ -3,7 +3,9 @@ import os
 import time
 from datetime import datetime
 from collections import deque
+from pathlib import Path
 from flask import jsonify, render_template
+from iSpy.core import performance
 from iSpy.web.Backend.WebModule import WebModule
 
 
@@ -12,7 +14,7 @@ class MetricsModule(WebModule):
 
     SERIES = {
         "loop_s": ("Loop time", "ms", 1000.0),
-        "vision_s": ("Vision time", "ms", 1000.0),
+        "inference_s": ("Inference time", "ms", 1000.0),
         "camera_lag_s": ("Camera lag", "ms", 1000.0),
     }
     # built-in, always-present breakdown parts: {key: (label, color)}.
@@ -26,6 +28,10 @@ class MetricsModule(WebModule):
         "web": ("Web", "#9b5de5"),
     }
     MAX_POINTS = 600  # ring buffer, keeps memory bounded on long runs
+    # the metrics page saves on every unload (sendBeacon), so without a cap
+    # a long-lived tab left open/closed repeatedly fills Outputs with
+    # metrics_*.json forever. Keep only the most recent snapshots.
+    MAX_SAVED_FILES = 20
 
     def __init__(self, context: dict):
         super().__init__(context)
@@ -36,6 +42,8 @@ class MetricsModule(WebModule):
             k: deque(maxlen=self.MAX_POINTS) for k in self._code_parts
         }
         self._start = time.perf_counter()
+        # last accepted sample (perf_counter) for the profile's sample-rate cap
+        self._last_sample = 0.0
 
     def set_code_parts(self, parts: dict):
         for key, (label, color) in (parts or {}).items():
@@ -54,7 +62,16 @@ class MetricsModule(WebModule):
         )
 
     def update(self, frame_data: dict):
-        t = time.perf_counter() - self._start
+        profile = performance.get_profile()
+        if not profile.metrics_enabled:
+            return
+        now = time.perf_counter()
+        hz = profile.metrics_sample_hz
+        if hz > 0 and (now - self._last_sample) < (1.0 / hz):
+            return
+        self._last_sample = now
+
+        t = now - self._start
         for key in self.SERIES:
             val = frame_data.get(key)
             if val is not None:
@@ -103,16 +120,40 @@ class MetricsModule(WebModule):
         self._save_to_disk()
 
     def _save(self):
-        self._save_to_disk()
-        return jsonify({"success": True})
+        saved = self._save_to_disk()
+        return jsonify({"success": True, "saved": saved})
 
-    def _save_to_disk(self):
+    def _has_data(self) -> bool:
+        return bool(
+            self._fps_timeline
+            or any(self._timeline.values())
+            or any(self._code_timeline.values())
+        )
+
+    def _save_to_disk(self) -> bool:
+        # level 0 (and a run where nothing was ever sampled) must not drop an
+        # empty metrics_*.json into Outputs on shutdown
+        if not self._has_data():
+            return False
         os.makedirs("Outputs", exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         filepath = os.path.join("Outputs", f"metrics_{timestamp}.json")
         data = self._build_data()
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
+        self._prune_saved()
+        return True
+
+    def _prune_saved(self):
+        try:
+            saved = sorted(Path("Outputs").glob("metrics_*.json"))
+        except OSError:
+            return
+        for stale in saved[: -self.MAX_SAVED_FILES]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
     def _build_data(self):
         data = {}

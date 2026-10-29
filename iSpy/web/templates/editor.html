@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Pipeline Editor - iSpy{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/css/editor.css" />
+{% endblock %}
+{% block content %}
+<div id="editor-page">
+  <div class="restart-banner" id="restart-banner" hidden>
+    <span>Restart required - the pipeline is saved but not live yet.</span>
+    <a href="/health-page">Restart from Health</a>
+  </div>
+
+  <div class="editor-toolbar">
+    <div class="editor-title">
+      <strong>Pipeline Editor</strong>
+      <span id="editor-dirty">Loading live config...</span>
+    </div>
+
+    <div class="toolbar-group">
+      <button id="btn-undo" class="ghost" title="Undo (Ctrl+Z)" disabled>Undo</button>
+      <button id="btn-redo" class="ghost" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+      <button id="btn-fit" class="ghost" title="Fit lanes (F)">Fit</button>
+      <button id="btn-reload" class="ghost" title="Reload saved config">Reload</button>
+      <button id="btn-use-defaults-all" class="ghost" title="Write every suggested default explicitly">Use Defaults for all nodes</button>
+    </div>
+
+    <div class="zoom-control" aria-label="Zoom controls">
+      <button id="btn-zoom-out" class="ghost" title="Zoom out">-</button>
+      <span id="zoom-label">100%</span>
+      <button id="btn-zoom-in" class="ghost" title="Zoom in">+</button>
+    </div>
+
+    <div class="toolbar-spacer"></div>
+
+    <button id="btn-shortcuts" class="ghost" title="Keyboard shortcuts">?</button>
+    <button id="btn-validate" title="Validate lane graph">Validate</button>
+    <button id="btn-save" class="primary" title="Save pipeline (Ctrl+S)">Save</button>
+    <a class="editor-link" href="/cameras">Cameras</a>
+    <a class="editor-link" href="/addons">Add-ons</a>
+  </div>
+
+  <div class="editor-main">
+    <aside class="editor-palette" aria-label="Node palette">
+      <input
+        id="palette-search"
+        class="palette-search"
+        type="search"
+        placeholder="Search palette..."
+        autocomplete="off"
+      />
+      <div id="palette-list"></div>
+      <div class="palette-footer">
+        <span>Click to add &middot; drag to place</span>
+        <a href="/addons">Plugin settings</a>
+      </div>
+    </aside>
+
+    <main class="editor-canvas-wrap">
+      <div class="editor-canvas" id="canvas">
+        <div class="column-headers" id="column-headers" aria-hidden="true"></div>
+        <div class="editor-world" id="world">
+          <div class="column-bands" id="bands"></div>
+          <div class="editor-lanes" id="lanes"></div>
+          <svg class="editor-edges" id="edges" aria-hidden="true"></svg>
+          <div class="editor-nodes" id="nodes"></div>
+          <div class="drop-indicator" id="drop-indicator" hidden></div>
+        </div>
+        <div class="marquee" id="marquee" hidden></div>
+        <div class="canvas-hint">
+          Scroll to pan &middot; Shift+scroll horizontal &middot; Ctrl+scroll zoom &middot; Shift+drag select
+        </div>
+      </div>
+    </main>
+
+    <aside class="editor-inspector" id="inspector" aria-live="polite"></aside>
+  </div>
+
+  <div class="editor-statusbar">
+    <span id="status-left">Loading...</span>
+    <span id="status-middle"></span>
+    <span id="status-right"></span>
+  </div>
+
+  <div id="modal-root"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="/static/js/editor.js"></script>
+{% endblock %}

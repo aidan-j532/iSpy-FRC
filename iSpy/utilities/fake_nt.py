@@ -1,23 +1,10 @@
 import argparse
-import dataclasses
+import json
 import math
 import time
 
 import ntcore
-import wpiutil.wpistruct
 from wpimath.geometry import Pose2d, Rotation2d
-
-
-# mirrors NetworkHandler.py's FuelStruct so the subscription can decode what iSpy publishes
-@wpiutil.wpistruct.make_wpistruct(name="Fuel")
-@dataclasses.dataclass
-class FuelStruct:
-    x: float
-    y: float
-    z: float = 0.0
-    roll: float = 0.0
-    pitch: float = 0.0
-    yaw: float = 0.0
 
 
 def make_fake_pose(t: float, radius: float = 2.0, period_s: float = 20.0) -> Pose2d:
@@ -91,7 +78,7 @@ def main():
 
     # subscribers: everything NetworkTableHandler.update() publishes
     vision_table = inst.getTable("VisionData")
-    fuel_sub = vision_table.getStructArrayTopic("vision_data", FuelStruct).subscribe([])
+    fuel_sub = vision_table.getStringTopic("vision_data").subscribe("")
     fps_sub = vision_table.getDoubleTopic("fps").subscribe(0.0)
     det_sub = vision_table.getDoubleTopic("num_detections").subscribe(0.0)
     lag_sub = vision_table.getDoubleTopic("camera_lag").subscribe(0.0)
@@ -114,7 +101,14 @@ def main():
             pose_pub.set(pose)
 
             # print vision data on change, else once/sec so you know its still alive
-            fuels = fuel_sub.get()
+            try:
+                fuels = json.loads(fuel_sub.get() or "[]")
+            except (TypeError, ValueError):
+                fuels = []
+            if isinstance(fuels, dict):
+                fuels = [fuels]
+            elif not isinstance(fuels, list):
+                fuels = []
             now = time.time()
             if len(fuels) != last_fuel_count or now - last_print > 1.0:
                 last_fuel_count = len(fuels)
@@ -126,9 +120,13 @@ def main():
                     f"lag={lag_sub.get() * 1000:.0f}ms  hopper={hopper_sub.get()}"
                 )
                 for f in fuels:
+                    if not isinstance(f, dict):
+                        continue
                     print(
-                        f"    fuel: x={f.x:+.2f} y={f.y:+.2f} z={f.z:+.2f} "
-                        f"yaw={math.degrees(f.yaw):+.1f}deg"
+                        f"    fuel: x={float(f.get('x') or 0.0):+.2f} "
+                        f"y={float(f.get('y') or 0.0):+.2f} "
+                        f"z={float(f.get('z') or 0.0):+.2f} "
+                        f"yaw={math.degrees(float(f.get('yaw') or 0.0)):+.1f}deg"
                     )
 
             time.sleep(interval)

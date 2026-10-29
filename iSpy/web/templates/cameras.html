@@ -27,7 +27,7 @@
     </div>
     <div class="camera-lightbox-body">
       <div class="camera-lightbox-feed">
-        <img id="lightbox-feed" src="" alt="" onclick="toggleLightboxMax()" title="Maximize">
+        <img id="lightbox-feed" src="" alt="" onclick="lightboxFeedClick(event)" title="Maximize">
       </div>
       <div class="camera-lightbox-tuning">
         <div class="tune-header">
@@ -35,6 +35,17 @@
           <button type="button" class="btn-sm" onclick="resetTuning()">Reset</button>
         </div>
         <div id="tune-sliders"></div>
+        <div id="pipeline-tune" style="display:none;">
+          <div class="tune-header" style="margin-top:14px;">
+            <strong>HSV tuning</strong>
+            <span>
+              <button type="button" class="btn-sm" onclick="toggleEyedropper()" id="eyedropper-btn">Eyedropper</button>
+              <button type="button" class="btn-sm" onclick="resetPipelineTuning()">Reset</button>
+            </span>
+          </div>
+          <div id="hsv-sample" style="display:none;"></div>
+          <div id="pipeline-tune-sliders"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -151,7 +162,7 @@
     max-height: 300px;
     overflow-y: auto;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: 8px;
     padding: 8px;
     margin: 8px 0;
   }
@@ -163,10 +174,10 @@
     margin: 2px 0;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: 6px;
     cursor: pointer;
   }
-  .folder-picker-item:hover { border-color: var(--accent); }
+  .folder-picker-item:hover { border-color: #444; }
   .picker-hint {
     font-size: 0.8rem;
     color: var(--text-dim);
@@ -184,13 +195,14 @@
   #calibration-header h3 { margin: 0; font-size: 1rem; }
   #calibration-note { margin-left: auto; }
   .calib-pipeline-badge {
-    display: none; padding: 2px 8px; border-radius: var(--radius-sm);
-    background: var(--accent-dim); color: var(--accent);
+    display: none; padding: 2px 8px; border-radius: 4px;
+    background: var(--bg-surface); color: var(--text);
     font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+    border: 1px solid var(--border);
   }
   .calib-pipeline-badge.visible { display: inline-block; }
   .calib-stage {
-    position: relative; border-radius: var(--radius); overflow: hidden;
+    position: relative; border-radius: 8px; overflow: hidden;
     background: #000; border: 1px solid var(--border);
   }
   .calib-stage img { width: 100%; display: block; aspect-ratio: 16/9; object-fit: contain; background: #000; }
@@ -204,7 +216,7 @@
   }
   .calib-section {
     background: var(--bg-surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 14px; margin-top: 12px;
+    border-radius: 8px; padding: 14px; margin-top: 12px;
   }
   .calib-section-title {
     font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
@@ -229,7 +241,7 @@
   .calib-status.err { color: var(--bad); }
   .calib-result-card {
     background: var(--ok-dim); border: 1px solid var(--ok);
-    border-radius: var(--radius); padding: 12px 14px; margin-top: 10px;
+    border-radius: 8px; padding: 12px 14px; margin-top: 10px;
   }
   .calib-result-card.err {
     background: var(--bad-dim); border-color: var(--bad);
@@ -263,7 +275,7 @@
   .settings-section details[open] summary::before { transform: rotate(90deg); }
   .settings-section details summary:hover { color: var(--accent); }
   .settings-section.step-hidden { display: none; }
-  .settings-section.step-active { outline: 1px solid var(--accent); outline-offset: 4px; border-radius: var(--radius); }
+  .settings-section.step-active { outline: 1px solid #555; outline-offset: 4px; border-radius: 8px; }
   .form-field.field-invalid input, .form-field.field-invalid select { border-color: var(--bad); }
 
   .form-field { margin-bottom: 10px; }
@@ -297,6 +309,59 @@
   .tune-slider-value { color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .tune-slider-row input[type="range"] { width: 100%; }
   .tune-slider-row input[type="checkbox"] { width: auto; margin-left: auto; }
+
+  /* pipeline action buttons on the camera card - data comes from the pipeline */
+  .cam-actions { display: inline-flex; align-items: center; gap: 6px; }
+  .cam-action { white-space: nowrap; }
+  .cam-action.active {
+    background: var(--accent-dim); color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+  .cam-action:disabled { opacity: 0.6; cursor: default; }
+
+  /* dual thumb range field (range schema type) */
+  .range-field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+  .range-track { position: relative; height: 22px; }
+  .range-track::before {
+    content: ''; position: absolute; left: 0; right: 0; top: 9px; height: 4px;
+    border-radius: 2px; background: var(--bg-surface);
+    border: 1px solid var(--border);
+  }
+  .range-track-hue::before {
+    border: none;
+    background: linear-gradient(to right, #ff0000 0%, #ffff00 16.7%, #00ff00 33.3%,
+      #00ffff 50%, #0000ff 66.7%, #ff00ff 83.3%, #ff0000 100%);
+  }
+  .range-fill {
+    position: absolute; top: 9px; height: 6px; border-radius: 3px;
+    background: var(--accent); opacity: 0.45; pointer-events: none;
+  }
+  .range-track-hue .range-fill { background: rgba(0,0,0,0.55); opacity: 1; }
+  .range-thumb {
+    position: absolute; left: 0; top: 0; width: 100%; height: 22px; margin: 0;
+    background: transparent; pointer-events: none;
+    -webkit-appearance: none; appearance: none;
+  }
+  .range-thumb::-webkit-slider-runnable-track { background: transparent; }
+  .range-thumb::-moz-range-track { background: transparent; }
+  .range-thumb::-webkit-slider-thumb {
+    pointer-events: auto; -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; margin-top: 0; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--text);
+    box-shadow: var(--shadow); cursor: pointer;
+  }
+  .range-thumb::-moz-range-thumb {
+    pointer-events: auto; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--text); cursor: pointer;
+  }
+  .range-numbers { display: flex; align-items: center; gap: 6px; }
+  .range-num { width: 74px; }
+  .range-sep { color: var(--text-dim); }
+  .sample-tol { display: inline-flex; align-items: center; gap: 4px; font-size: 0.8rem; color: var(--text-dim); }
+  #hsv-sample { margin: 6px 0 10px; }
+  #hsv-sample .form-help { margin-left: 0; }
+  #hsv-sample .range-numbers { flex-wrap: wrap; margin: 6px 0; }
+  #eyedropper-btn.active { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent); }
   .tune-status { color: var(--text-dim); font-size: 0.8rem; }
   .tune-status.ok { color: var(--ok); }
   .tune-status.err { color: var(--bad); }
@@ -344,9 +409,36 @@
 
 let refreshTimer = null;
 let currentRate = 1000;
+// the profile scales this page's refresh dropdown and pauses it while the tab is
+// hidden - the user's interval is kept, just stretched
+function refreshMs(base) {
+  const k = (window.ispyPerf && window.ispyPerf.ui_poll_multiplier) || 1;
+  return Math.max(1, Math.round(base * k));
+}
+
+function stopRefreshTimer() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function startRefreshTimer() {
+  stopRefreshTimer();
+  refreshTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden' && window.ispyPerf.pause_poll_hidden) return;
+    refreshCameras();
+  }, refreshMs(currentRate));
+}
+
+document.addEventListener('ispy:performance', () => {
+  if (refreshTimer) startRefreshTimer();
+});
+
 let knownCameras = new Map();
 const camerasConn = connTracker(2);
 let pipelineSchemas = {};
+const CAMERA_ADMIN = {{ editor_admin|tojson }};
 let cameraSchemas = {};   // camera_type -> config_schema() from /api/camera_schemas
 
 const camModal = {
@@ -381,7 +473,7 @@ async function _syncUnit() {
 const COMMON_FIELDS = {
   device: { label: 'Device', type: 'device', required: true, help: 'A physical camera detected on this machine.' },
   source: { label: 'Source', type: 'text', required: true, help: 'Camera index (e.g. 0), a /dev/video path, or an RTSP / MJPEG URL.' },
-  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: ['opencv', 'tello'], help: 'Select the camera source type (most likely OpenCV). Replay cameras are not created here - use `ispy-boot --replay <session folder>`.' },
+  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: CAMERA_ADMIN ? ['opencv', 'tello'] : ['opencv'], help: 'Select the camera source type (most likely OpenCV). Replay cameras are not created here - use `ispy-boot --replay <session folder>`.' },
   name: { label: 'Name', type: 'text', required: true, default: '', help: 'Short unique name used on the dashboard and in code (e.g. front_cam).' },
   pipeline: { label: 'Pipeline', type: 'pipeline', required: true },
   replay_cam: { label: 'Recorded Camera', type: 'text', default: '', help: 'Which camera to replay out of a session folder. Leave blank to take the first one found.' },
@@ -568,6 +660,132 @@ function confirmResetCalibration() {
     });
 }
 
+function buildRangeControl(def, value, onChange) {
+  const min = Number(def.min ?? 0);
+  const max = Number(def.max ?? 255);
+  const step = Number(def.step ?? 1);
+  const wrap = !!def.wrap;
+  const fallback = Array.isArray(def.default) ? def.default : [min, max];
+  const source = Array.isArray(value) ? value : fallback;
+  const clamp = v => Math.min(Math.max(Number(v), min), max);
+  let lo = clamp(source[0]);
+  let hi = clamp(source[1]);
+  if (!wrap && lo > hi) { const t = lo; lo = hi; hi = t; }
+
+  const holder = document.createElement('div');
+  holder.className = 'range-field';
+
+  const track = document.createElement('div');
+  track.className = 'range-track' + (def.gradient === 'hue' ? ' range-track-hue' : '');
+  const fillA = document.createElement('div');
+  fillA.className = 'range-fill';
+  const fillB = document.createElement('div');
+  fillB.className = 'range-fill';
+
+  const loInput = document.createElement('input');
+  loInput.type = 'range';
+  loInput.className = 'range-thumb';
+  loInput.min = min; loInput.max = max; loInput.step = step;
+  loInput.value = lo;
+  const hiInput = document.createElement('input');
+  hiInput.type = 'range';
+  hiInput.className = 'range-thumb';
+  hiInput.min = min; hiInput.max = max; hiInput.step = step;
+  hiInput.value = hi;
+
+  track.appendChild(fillA);
+  track.appendChild(fillB);
+  track.appendChild(loInput);
+  track.appendChild(hiInput);
+
+  const numbers = document.createElement('div');
+  numbers.className = 'range-numbers';
+  const loNum = document.createElement('input');
+  loNum.type = 'number'; loNum.className = 'form-input range-num';
+  loNum.min = min; loNum.max = max; loNum.step = step; loNum.value = lo;
+  const sep = document.createElement('span');
+  sep.className = 'range-sep'; sep.textContent = '-';
+  const hiNum = document.createElement('input');
+  hiNum.type = 'number'; hiNum.className = 'form-input range-num';
+  hiNum.min = min; hiNum.max = max; hiNum.step = step; hiNum.value = hi;
+  numbers.appendChild(loNum);
+  numbers.appendChild(sep);
+  numbers.appendChild(hiNum);
+
+  holder.appendChild(track);
+  holder.appendChild(numbers);
+
+  const paint = () => {
+    const span = Math.max(max - min, 1);
+    const low = Number(loInput.value);
+    const high = Number(hiInput.value);
+    const pct = v => ((v - min) / span) * 100;
+    if (low <= high) {
+      fillA.style.left = pct(low) + '%';
+      fillA.style.width = Math.max(0, pct(high) - pct(low)) + '%';
+      fillB.style.width = '0%';
+    } else {
+      // wrapped band - the track is split into lo..max and min..hi
+      fillA.style.left = pct(low) + '%';
+      fillA.style.width = (100 - pct(low)) + '%';
+      fillB.style.left = '0%';
+      fillB.style.width = pct(high) + '%';
+    }
+  };
+
+  const commit = changed => {
+    let low = Number(loInput.value);
+    let high = Number(hiInput.value);
+    if (!wrap && low > high) {
+      if (changed === 'lo') { low = high; loInput.value = low; }
+      else { high = low; hiInput.value = high; }
+    }
+    loNum.value = low;
+    hiNum.value = high;
+    paint();
+    if (onChange) onChange([low, high]);
+  };
+
+  loInput.addEventListener('input', () => commit('lo'));
+  hiInput.addEventListener('input', () => commit('hi'));
+  loNum.addEventListener('change', () => {
+    loInput.value = clamp(loNum.value === '' ? min : loNum.value);
+    commit('lo');
+  });
+  hiNum.addEventListener('change', () => {
+    hiInput.value = clamp(hiNum.value === '' ? max : hiNum.value);
+    commit('hi');
+  });
+
+  holder._range = { loInput, hiInput, loNum, hiNum, paint, def };
+  paint();
+  return holder;
+}
+
+function setRangeControlValue(el, value) {
+  const parts = el && el._range;
+  if (!parts) return;
+  const min = Number(parts.def.min ?? 0);
+  const max = Number(parts.def.max ?? 255);
+  const fallback = Array.isArray(parts.def.default) ? parts.def.default : [min, max];
+  const src = Array.isArray(value) ? value : fallback;
+  const clamp = v => Math.min(Math.max(Number(v), min), max);
+  let lo = clamp(src[0]);
+  let hi = clamp(src[1]);
+  if (!parts.def.wrap && lo > hi) { const t = lo; lo = hi; hi = t; }
+  parts.loInput.value = lo;
+  parts.hiInput.value = hi;
+  parts.loNum.value = lo;
+  parts.hiNum.value = hi;
+  parts.paint();
+}
+
+function readRangeControl(el) {
+  const parts = el && el._range;
+  if (!parts) return [0, 0];
+  return [Number(parts.loInput.value), Number(parts.hiInput.value)];
+}
+
 function buildField(key, def, source) {
   const row = document.createElement('div');
   row.className = 'form-field';
@@ -624,6 +842,8 @@ function buildField(key, def, source) {
     control.className = 'form-input';
     control.type = 'number';
     if (def.step != null) control.step = def.step;
+  } else if (type === 'range') {
+    control = buildRangeControl(def, def.default);
   } else if (type === 'list') {
     control = buildSchemaList(key, def);
   } else {
@@ -706,6 +926,8 @@ function setFieldValue(key, value) {
     el.value = (value == null || value === '') ? '' : Number(value);
   } else if (def.type === 'boolean') {
     el.value = (value === true || value === 'true') ? 'true' : 'false';
+  } else if (def.type === 'range') {
+    setRangeControlValue(el, value);
   } else if (def.type === 'list') {
     const tbody = el.querySelector('tbody');
     if (tbody) {
@@ -719,8 +941,10 @@ function setFieldValue(key, value) {
   } else {
     el.value = value == null ? (def.default != null ? String(def.default) : '') : String(value);
   }
-  el.dataset.original = def.type === 'list'
-    ? JSON.stringify(Array.isArray(value) ? value : [])
+  el.dataset.original = (def.type === 'list' || def.type === 'range')
+    ? JSON.stringify(def.type === 'range'
+      ? readRangeControl(el)
+      : (Array.isArray(value) ? value : []))
     : String(value == null ? def.default ?? '' : value);
 }
 
@@ -734,6 +958,7 @@ function readField(key) {
     return Number(el.value);
   }
   if (def.type === 'boolean') return el.value === 'true';
+  if (def.type === 'range') return readRangeControl(el);
   if (def.type === 'list') return readSchemaList(el, def);
   if (el.value === '' && def.default != null) return def.default;
   return el.value;
@@ -789,6 +1014,7 @@ function populatePipelineSelect() {
   sel.innerHTML = '';
   const preferredOrder = [
     'object_detection',
+    'hsv_detection',
     'april_tag',
     'qr_code',
     'optical_flow',
@@ -878,6 +1104,7 @@ async function openCameraModal(mode, arg) {
   COMMON_FIELDS.height.unit = _posUnit();
   camModal.mode = mode;
   camModal.data = null;
+  camModal.discoverPath = arg;
   if (mode === 'edit') {
     if (!arg) return;
     const r = await fetch(`/api/cameras/config/${encodeURIComponent(arg)}`).then(r => r.json());
@@ -1025,7 +1252,14 @@ function renderSourceSection(cameraType) {
       const field = buildField('device', COMMON_FIELDS.device, 'common');
       newRow.appendChild(field);
       newRow.dataset.fieldKey = 'device';
-      populateDevices().then(() => initSettingsFlow());
+      populateDevices().then(() => {
+        if (camModal.discoverPath) {
+          const sel = $id(fieldId('device'));
+          const opt = sel.querySelector(`option[value="${camModal.discoverPath}"]`);
+          if (opt) opt.selected = true;
+        }
+        initSettingsFlow();
+      });
     }
   } else if (cameraType === 'tello') {
     // Text input for Tello UDP source
@@ -1104,7 +1338,7 @@ function validateCurrentSection() {
     if (!field) return;
     const { el, def } = field;
     let ok = true;
-    if (def.type === 'toggle' || def.type === 'boolean' || def.type === 'select' || def.type === 'list') {
+    if (def.type === 'toggle' || def.type === 'boolean' || def.type === 'select' || def.type === 'list' || def.type === 'range') {
       ok = true; // always in a valid state (list rows manage their own contents)
     } else if (def.type === 'number') {
       ok = def.nullable || el.value !== '';
@@ -1445,9 +1679,12 @@ function collectSchemaFields(payload) {
     let value = readField(key);
     if (camModal.mode === 'edit') {
       const original = field.el.dataset.original;
-      const comparable = schemaDef.type === 'list'
-        ? JSON.stringify(Array.isArray(value) ? value : [])
-        : String(value);
+      let comparable;
+      if (schemaDef.type === 'list' || schemaDef.type === 'range') {
+        comparable = JSON.stringify(Array.isArray(value) ? value : []);
+      } else {
+        comparable = String(value);
+      }
       if (original !== undefined && comparable === original) return;
     }
     settings[key] = value;
@@ -1742,6 +1979,7 @@ function buildCameraCard(name, isStreaming, ageText, cam) {
       <button class="btn-sm btn-ok" onclick="openCameraModal('edit', this.closest('.camera-card').dataset.camera)" style="margin-left:auto;">Edit</button>
       <button class="btn-sm" onclick="openCalibrationWizardFor(this.closest('.camera-card').dataset.camera)">Calibrate</button>
       <button class="btn-sm btn-bad" onclick="confirmRemoveCamera(this.closest('.camera-card').dataset.camera)">Remove</button>
+      <span class="cam-actions" style="display:none;"></span>
     </div>
     ${isStreaming
       ? `<div class="camera-feed-wrap">
@@ -1754,7 +1992,80 @@ function buildCameraCard(name, isStreaming, ageText, cam) {
     }
   `;
   updateCameraFooter(card, cam);
+  updateCameraActions(card, cam);
   return card;
+}
+
+// reconcile action buttons by id in place - refreshCameras runs every second,
+// so rebuilding the header would yank the button out from under a click
+function updateCameraActions(card, cam) {
+  const holder = card.querySelector('.cam-actions');
+  if (!holder) return;
+  const actions = (cam && Array.isArray(cam.actions)) ? cam.actions : [];
+  const seen = new Set();
+  actions.forEach(action => {
+    if (!action || !action.id) return;
+    const id = String(action.id);
+    seen.add(id);
+    let button = Array.from(holder.querySelectorAll('[data-action-id]'))
+      .find(b => b.dataset.actionId === id);
+    if (!button) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn-sm cam-action';
+      button.dataset.actionId = id;
+      button.addEventListener('click', () => runCameraAction(button, id));
+      holder.appendChild(button);
+    }
+    const isToggle = action.kind === 'toggle';
+    button.classList.toggle('cam-action-toggle', isToggle);
+    button.classList.toggle('active', isToggle && !!action.value);
+    button.dataset.kind = isToggle ? 'toggle' : 'button';
+    button.dataset.value = isToggle && action.value ? '1' : '0';
+    // plugins only get to provide text, never markup
+    button.textContent = String(action.label || action.id);
+    button.title = String(action.title || '');
+  });
+  Array.from(holder.querySelectorAll('[data-action-id]')).forEach(button => {
+    if (!seen.has(button.dataset.actionId)) button.remove();
+  });
+  holder.style.display = actions.length ? '' : 'none';
+}
+
+async function runCameraAction(button, actionId) {
+  const card = button.closest('.camera-card');
+  const name = card && card.dataset.camera;
+  if (!name) return;
+  const isToggle = button.dataset.kind === 'toggle';
+  const next = isToggle ? button.dataset.value !== '1' : null;
+
+  // optimistic flip, then settle on whatever the server reports back
+  if (isToggle) {
+    button.dataset.value = next ? '1' : '0';
+    button.classList.toggle('active', !!next);
+  }
+  button.disabled = true;
+  try {
+    const r = await fetch(
+      `/api/cameras/${encodeURIComponent(name)}/actions/${encodeURIComponent(actionId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: next }),
+      }
+    );
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || 'Action failed');
+    if (Array.isArray(j.actions) && card) updateCameraActions(card, { actions: j.actions });
+  } catch (e) {
+    if (isToggle) {
+      button.dataset.value = next ? '0' : '1';
+      button.classList.toggle('active', !next);
+    }
+    showToast(e.message || 'Action failed', 'error');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function buildDiscoverCard(device) {
@@ -1810,6 +2121,7 @@ async function refreshCameras() {
         if (meta) meta.textContent = age;
         updateCameraHeader(card, cam);
         updateCameraFooter(card, cam);
+        updateCameraActions(card, cam);
   // a feed <img> that errored never recovers, mjpeg needs a fresh element
   // (resumeCameraGridFeeds). rebuild the card, throttled so a dead camera
   // doesnt hammer the server every tick
@@ -1854,15 +2166,22 @@ function openCameraLightbox(name) {
   $id('camera-lightbox').classList.remove('camera-lightbox-max');
   $id('camera-lightbox').style.display = 'flex';
   loadTuning(name);
+  loadPipelineTuning(name);
 }
 
 function closeCameraLightbox() {
   if (tuningTimer) { clearTimeout(tuningTimer); tuningTimer = null; }
+  if (pipelineTuneTimer) { clearTimeout(pipelineTuneTimer); pipelineTuneTimer = null; }
   if (tuningState.dirty) saveTuning();
   $id('camera-lightbox').style.display = 'none';
   $id('camera-lightbox').classList.remove('camera-lightbox-max');
   $id('lightbox-feed').src = '';
   tuningState.camera = null;
+  pipelineTuning.camera = null;
+  eyedropper.active = false;
+  const button = $id('eyedropper-btn');
+  if (button) button.classList.remove('active');
+  hidePipelineTuning();
 }
 
 function toggleLightboxMax() {
@@ -2023,10 +2342,256 @@ function resetTuning() {
   scheduleTuningSave();
 }
 
+/* HSV live tuning - ranges apply to the running pipeline, no restart */
+
+let pipelineTuning = { camera: null, schema: {}, values: {} };
+let pipelineTuneTimer = null;
+let eyedropper = { active: false, tolerance: { hue: 8, sat: 40, val: 40 } };
+
+function hidePipelineTuning() {
+  const panel = $id('pipeline-tune');
+  if (panel) panel.style.display = 'none';
+  const sample = $id('hsv-sample');
+  if (sample) { sample.style.display = 'none'; sample.innerHTML = ''; }
+  const sliders = $id('pipeline-tune-sliders');
+  if (sliders) sliders.innerHTML = '';
+}
+
+async function loadPipelineTuning(camera) {
+  pipelineTuning.camera = camera;
+  pipelineTuning.schema = {};
+  pipelineTuning.values = {};
+  hidePipelineTuning();
+  try {
+    const r = await fetch(`/api/cameras/${encodeURIComponent(camera)}/pipeline_settings`);
+    const j = await r.json();
+    if (!r.ok || !j.live_tunable) return;
+    pipelineTuning.schema = j.schema || {};
+    const source = j.live || j.settings || {};
+    Object.entries(pipelineTuning.schema).forEach(([key, def]) => {
+      if (def.type !== 'range') return;
+      const fallback = Array.isArray(def.default) ? def.default : [def.min ?? 0, def.max ?? 255];
+      pipelineTuning.values[key] = Array.isArray(source[key]) ? source[key].slice() : fallback.slice();
+    });
+    if (!Object.keys(pipelineTuning.values).length) return;
+    // keep the preset visible to the payload builder, even though only ranges render
+    if (source.preset != null) pipelineTuning.values.preset = source.preset;
+    renderPipelineTuning();
+    const panel = $id('pipeline-tune');
+    if (panel) panel.style.display = '';
+  } catch (e) {
+    hidePipelineTuning();
+  }
+}
+
+function renderPipelineTuning() {
+  const wrap = $id('pipeline-tune-sliders');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  Object.entries(pipelineTuning.schema).forEach(([key, def]) => {
+    if (def.type !== 'range') return;
+    const row = document.createElement('div');
+    row.className = 'tune-slider-row';
+    const label = document.createElement('div');
+    label.className = 'tune-slider-label';
+    const name = document.createElement('span');
+    name.textContent = def.label || humanizeFieldName(key);
+    const readout = document.createElement('span');
+    readout.className = 'tune-slider-value';
+    const current = pipelineTuning.values[key] || def.default || [def.min ?? 0, def.max ?? 255];
+    readout.textContent = current.join(' - ');
+    label.appendChild(name);
+    label.appendChild(readout);
+    const control = buildRangeControl(def, current, value => {
+      readout.textContent = value.join(' - ');
+      schedulePipelineTune(key, value);
+    });
+    row.appendChild(label);
+    row.appendChild(control);
+    if (def.help) {
+      const help = document.createElement('div');
+      help.className = 'form-help';
+      help.style.marginLeft = '0';
+      help.textContent = def.help;
+      row.appendChild(help);
+    }
+    wrap.appendChild(row);
+  });
+}
+
+function schedulePipelineTune(key, value) {
+  pipelineTuning.values[key] = value;
+  const status = $id('lightbox-tune-status');
+  if (status) { status.className = 'tune-status'; status.textContent = 'Applying...'; }
+  if (pipelineTuneTimer) clearTimeout(pipelineTuneTimer);
+  pipelineTuneTimer = setTimeout(() => {
+    pipelineTuneTimer = null;
+    const payload = { [key]: pipelineTuning.values[key] };
+    // touching a range means the sliders should win over a named preset
+    if ('preset' in pipelineTuning.schema && key.endsWith('_range')) {
+      payload.preset = 'custom';
+    }
+    postPipelineSettings(payload, 'Applied', false);
+  }, 180);
+}
+
+async function postPipelineSettings(values, note, rerender) {
+  if (!pipelineTuning.camera) return;
+  const status = $id('lightbox-tune-status');
+  try {
+    const r = await fetch(`/api/cameras/${encodeURIComponent(pipelineTuning.camera)}/pipeline_settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(values),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Save failed');
+    Object.assign(pipelineTuning.values, j.applied || {});
+    if (rerender) renderPipelineTuning();
+    if (status) { status.className = 'tune-status ok'; status.textContent = note || 'Applied'; }
+  } catch (e) {
+    if (status) { status.className = 'tune-status err'; status.textContent = e.message || 'Save failed'; }
+  }
+}
+
+function resetPipelineTuning() {
+  const values = {};
+  Object.entries(pipelineTuning.schema).forEach(([key, def]) => {
+    if (def.type === 'range' && Array.isArray(def.default)) {
+      values[key] = def.default.slice();
+    }
+  });
+  if (!Object.keys(values).length) return;
+  if ('preset' in pipelineTuning.schema) values.preset = 'custom';
+  Object.assign(pipelineTuning.values, values);
+  renderPipelineTuning();
+  postPipelineSettings(values, 'Reset to defaults', false);
+}
+
+/* eyedropper - click the feed, then widen the sampled h/s/v into a range */
+
+function lightboxFeedClick(event) {
+  if (eyedropper.active) {
+    sampleFromLightbox(event);
+    return;
+  }
+  toggleLightboxMax();
+}
+
+function toggleEyedropper() {
+  eyedropper.active = !eyedropper.active;
+  const button = $id('eyedropper-btn');
+  if (button) button.classList.toggle('active', eyedropper.active);
+  const feed = $id('lightbox-feed');
+  if (feed) feed.style.cursor = eyedropper.active ? 'crosshair' : '';
+  if (!eyedropper.active) {
+    const sample = $id('hsv-sample');
+    if (sample) { sample.style.display = 'none'; sample.innerHTML = ''; }
+  }
+}
+
+async function sampleFromLightbox(event) {
+  const feed = $id('lightbox-feed');
+  if (!feed || !pipelineTuning.camera) return;
+  const rect = feed.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const dispW = feed.naturalWidth || Math.round(rect.width);
+  const dispH = feed.naturalHeight || Math.round(rect.height);
+  const x = Math.round((event.clientX - rect.left) * dispW / rect.width);
+  const y = Math.round((event.clientY - rect.top) * dispH / rect.height);
+  if (x < 0 || y < 0 || x >= dispW || y >= dispH) return;
+
+  const status = $id('lightbox-tune-status');
+  if (status) { status.className = 'tune-status'; status.textContent = 'Sampling...'; }
+  try {
+    const r = await fetch(
+      `/api/cameras/${encodeURIComponent(pipelineTuning.camera)}/sample_hsv?x=${x}&y=${y}&w=${dispW}&h=${dispH}`
+    );
+    const j = await r.json();
+    if (!r.ok || !Array.isArray(j.hsv)) throw new Error(j.error || 'Sample failed');
+    showSampleOffer(j.hsv, x, y);
+    if (status) { status.className = 'tune-status'; status.textContent = ''; }
+  } catch (e) {
+    if (status) { status.className = 'tune-status err'; status.textContent = e.message || 'Sample failed'; }
+  }
+}
+
+function sampleToleranceInput(key, max) {
+  const wrap = document.createElement('label');
+  wrap.className = 'sample-tol';
+  wrap.textContent = '\u00b1' + key;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'form-input range-num';
+  input.min = 0;
+  input.max = max;
+  input.step = 1;
+  input.value = eyedropper.tolerance[key];
+  input.onchange = () => {
+    const value = Number(input.value);
+    eyedropper.tolerance[key] = Math.max(
+      0,
+      Math.min(Number.isFinite(value) ? value : 0, max)
+    );
+    input.value = eyedropper.tolerance[key];
+  };
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function showSampleOffer(hsv, x, y) {
+  const box = $id('hsv-sample');
+  if (!box) return;
+  box.innerHTML = '';
+  box.style.display = '';
+  const info = document.createElement('div');
+  info.className = 'form-help';
+  info.textContent = `Sample H ${hsv[0]}, S ${hsv[1]}, V ${hsv[2]} at ${x},${y}`;
+  box.appendChild(info);
+  const row = document.createElement('div');
+  row.className = 'range-numbers';
+  row.appendChild(sampleToleranceInput('hue', 90));
+  row.appendChild(sampleToleranceInput('sat', 128));
+  row.appendChild(sampleToleranceInput('val', 128));
+  box.appendChild(row);
+  const apply = document.createElement('button');
+  apply.type = 'button';
+  apply.className = 'btn-sm btn-ok';
+  apply.textContent = 'Set ranges from sample';
+  apply.onclick = () => applySampledRanges(hsv);
+  box.appendChild(apply);
+}
+
+function clampChannel(value) {
+  return Math.max(0, Math.min(255, Math.round(Number(value))));
+}
+
+async function applySampledRanges(hsv) {
+  const tolerance = eyedropper.tolerance;
+  const h = Number(hsv[0]);
+  const s = Number(hsv[1]);
+  const v = Number(hsv[2]);
+  // hue lives on 0-179, so a sample next to red wraps back around
+  const hueLow = (((h - tolerance.hue) % 180) + 180) % 180;
+  const hueHigh = (((h + tolerance.hue) % 180) + 180) % 180;
+  const values = {
+    preset: 'custom',
+    hue_range: [Math.round(hueLow), Math.round(hueHigh)],
+    sat_range: [clampChannel(s - tolerance.sat), clampChannel(s + tolerance.sat)],
+    val_range: [clampChannel(v - tolerance.val), clampChannel(v + tolerance.val)],
+  };
+  Object.assign(pipelineTuning.values, values);
+  renderPipelineTuning();
+  await postPipelineSettings(
+    values,
+    hueLow > hueHigh ? 'Applied - hue wraps through 0' : 'Applied from sample',
+    false
+  );
+}
+
 function setRefreshRate() {
   currentRate = Number($id('refresh-rate').value);
-  clearInterval(refreshTimer);
-  refreshTimer = setInterval(refreshCameras, currentRate);
+  startRefreshTimer();
 }
 
 // camera calibration wizard
@@ -2374,14 +2939,13 @@ function openCalibrationWizard() {
   calibrationState.frozen = false;
 
   if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
+    stopRefreshTimer();
   }
   pauseCameraGridFeeds();
 
   $id('calibration-title').textContent = 'Calibrate ' + calibrationState.camera;
 
-  const pipelineNames = { object_detection: 'Object Detection', april_tag: 'AprilTag', qr_code: 'QR Code', optical_flow: 'Optical Flow' };
+  const pipelineNames = { object_detection: 'Object Detection', hsv_detection: 'HSV Color', april_tag: 'AprilTag', qr_code: 'QR Code', optical_flow: 'Optical Flow' };
   const badge = $id('calibration-pipeline-badge');
   badge.textContent = pipelineNames[calibrationState.pipeline] || calibrationState.pipeline;
   badge.classList.add('visible');
@@ -2459,7 +3023,7 @@ function closeCalibrationWizard() {
   stopAutoPolling();
   endCalibrationMode(camera);
   resumeCameraGridFeeds();
-  if (!refreshTimer) refreshTimer = setInterval(refreshCameras, currentRate);
+  if (!refreshTimer) startRefreshTimer();
 }
 
 function renderFocalCalibration(body) {
@@ -2873,7 +3437,7 @@ async function resetCalibration() {
 document.addEventListener('keydown', lightboxKey);
 
 refreshCameras();
-refreshTimer = setInterval(refreshCameras, currentRate);
+startRefreshTimer();
 _syncUnit();
 
 /* one timer toggles the blink class on every dot at the same instant - per-element

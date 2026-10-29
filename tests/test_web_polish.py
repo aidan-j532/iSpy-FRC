@@ -22,10 +22,13 @@ class TestGlobalChrome(unittest.TestCase):
         self.assertIn('content="#0d1117"', html)
 
     def test_favicon_exists(self):
+        # a real binary .ico now (previously an inline SVG named .ico),
+        # so validate the ICO header instead of reading it as text
         data = (STATIC / "favicon.ico").read_bytes()
-        # ICO header: reserved 0x0000, type 0x0001 (icon); non-empty payload
-        self.assertEqual(data[:4], b"\x00\x00\x01\x00")
-        self.assertGreater(len(data), 100)
+        self.assertTrue(
+            data.startswith(b"\x00\x00\x01\x00"), "favicon.ico is not a valid ICO"
+        )
+        self.assertGreater(len(data), 1000)  # contains at least one real image
 
     def test_design_css_shared_pieces(self):
         css = (STATIC / "css" / "design.css").read_text(encoding="utf-8")

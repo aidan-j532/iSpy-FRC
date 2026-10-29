@@ -4,12 +4,13 @@ import time
 
 from flask import jsonify, render_template
 
+from iSpy.core import network_policy, performance
 from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
 
-#: the only color presets a health contributor may choose. Everything else
-#: falls back to green (or red when the legacy "ok": False flag is used).
+# the only color presets a health contributor may choose. anything else falls
+# back to green (or red when the legacy "ok": False flag is used)
 COLOR_PRESETS = ("green", "yellow", "red")
 
 
@@ -23,7 +24,7 @@ class HealthModule(WebModule):
         self._lock = threading.Lock()
         self.cameras = context.get("cameras", [])
         self._fps = 0.0
-        self._vision_s = 0.0
+        self._inference_s = 0.0
         self._detections = 0
         self._loop_count = 0
         self._last_tick = time.perf_counter()
@@ -52,7 +53,7 @@ class HealthModule(WebModule):
     def update(self, frame_data: dict):
         with self._lock:
             self._fps = round(frame_data.get("fps", 0), 1)
-            self._vision_s = round(frame_data.get("vision_s", 0) * 1000, 2)
+            self._inference_s = round(frame_data.get("inference_s", 0) * 1000, 2)
             self._detections = frame_data.get("detection_count", 0)
             self._last_tick = time.perf_counter()
             self._loop_count += 1
@@ -95,7 +96,7 @@ class HealthModule(WebModule):
     def _build_payload(self):
         now = time.perf_counter()
         with self._lock:
-            fps, vision_ms, detections = self._fps, self._vision_s, self._detections
+            fps, inference_ms, detections = self._fps, self._inference_s, self._detections
             last_tick, loop_count = self._last_tick, self._loop_count
 
         stale_s = round(now - last_tick, 2)
@@ -116,7 +117,23 @@ class HealthModule(WebModule):
             "detections": detections,
             "cameras": cameras_data,
             "addon_health": addon_health,
+            "performance": self._performance_entry(),
         }, healthy
+
+    def _performance_entry(self) -> dict:
+        # always visible: at levels 0-1 it is intentionally degraded UX, so it
+        # reads yellow. own payload key so addon_health stays add-ons only
+        profile = performance.get_profile()
+        state = f"{profile.label} ({profile.level})"
+        if not profile.web_enabled:
+            state += " - web UI off for this run"
+        return {
+            "name": "Performance profile",
+            "type": "performance",
+            "color": "yellow" if profile.level <= 1 else "green",
+            "state": state,
+            "metrics": [],
+        }
 
     def _collect_addon_health(self) -> list:
         vision = self.context.get("vision_instance")
@@ -172,6 +189,21 @@ class HealthModule(WebModule):
                     "color": color,
                     "state": state,
                     "metrics": normalized,
+                }
+            )
+
+        # skipped add-ons were never constructed, no instance to ask - surface
+        # them from the report. yellow, pipelines left to their camera row
+        for skip in network_policy.get_report().get("skipped", []):
+            if str(skip.get("kind")) == "pipeline":
+                continue
+            collected.append(
+                {
+                    "name": str(skip.get("name") or "?"),
+                    "type": f"offline {skip.get('kind') or 'add-on'}",
+                    "color": "yellow",
+                    "state": f"skipped: {skip.get('reason') or 'needs internet'}",
+                    "metrics": [],
                 }
             )
         return collected

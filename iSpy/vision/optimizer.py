@@ -14,10 +14,11 @@ import tempfile
 import threading
 import time as _time
 import warnings
-from functools import lru_cache
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+from iSpy.boot.converter_envs import exporter_supported, needs_env
 
 _PROJECT_ROOT = Path.cwd().resolve()
 _PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -123,8 +124,6 @@ _MANUAL_POSTPROCESS_FORMATS = {"onnx", "tflite"}
 _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
 _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
-
-_JETSON_SYSTEM_MANAGED = {"tensorrt", "onnxruntime"}
 
 
 def _model_supports_end2end(model: object) -> bool:
@@ -319,12 +318,12 @@ def _downscale_calib_images(
 
 
 def _rknn_wheel_targets(report_missing: bool = True) -> list[tuple[str, str]]:
+    # normal runtime env only ever gets the lite *inference* wheel. the full
+    # toolkit2 is conversion-only and lives in the isolated rknn converter env
+    # (iSpy.boot._rknn_converter_env) - never here, the pinned numpy/protobuf
+    # stack would break runtime imports and the download is huge.
     key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
     targets: list[tuple[str, str]] = []
-
-    full_fn = _RKNN_FULL_WHEELS.get(key)
-    if full_fn:
-        targets.append(("rknn", f"{_RKNN_FULL_BASE}/{full_fn}"))
 
     lite_fn = _RKNN_LITE_FILENAMES.get(key)
     if lite_fn:
@@ -345,129 +344,98 @@ def _rknn_wheel_targets(report_missing: bool = True) -> list[tuple[str, str]]:
     return targets
 
 
-def _backend_dependencies() -> dict[str, list[tuple[str, str]]]:
-    from iSpy.config.AutoOpt import has_amd_gpu, has_nvidia
-
-    if has_nvidia():
-        onnx_dep = ("onnxruntime", "onnxruntime-gpu")
-    elif platform.system() == "Windows":
-        onnx_dep = (
-            "onnxruntime",
-            "onnxruntime-directml",
-        )  # covers AMD/Intel/Nvidia on Windows
-    else:
-        onnx_dep = ("onnxruntime", "onnxruntime")
-        if has_amd_gpu():
-            logger.warning(
-                "AMD GPU on Linux: the standard 'onnxruntime' wheel is CPU-only. "
-                "ROCm onnxruntime builds aren't reliably on PyPI for every ROCm "
-                "version - install one manually matching your ROCm version."
-            )
-
-    deps: dict[str, list[tuple[str, str]]] = {
-        "onnx": [onnx_dep],
-        "engine": [("tensorrt", _tensorrt_candidates()[0])],
-        "qnn": [("onnxruntime_qnn", "onnxruntime-qnn")],
-        "openvino": [("openvino", "openvino")],
-        "coreml": [("coremltools", "coremltools")],
-        "tflite": [("tflite_runtime", "tflite-runtime")],
-        "tpu": [
-            (
-                "torch_xla",
-                "torch_xla[tpu]",
-                ["-f", "https://storage.googleapis.com/libtpu-releases/index.html"],
-            )
-        ],
-    }
-    rknn_targets = _rknn_wheel_targets(report_missing=False)
-    if rknn_targets:
-        deps["rknn"] = rknn_targets + [
-            ("onnx", "onnx<1.17"),
-            ("google.protobuf", "protobuf<4.0"),
-            ("numpy", "numpy<2"),
-        ]
-    return deps
+_BACKEND_DEPS_CACHE: dict[str, list[tuple]] | None = None
 
 
-@lru_cache()
-def _cuda_major() -> int | None:
-    try:
-        out = subprocess.run(
-            ["nvidia-smi"], capture_output=True, text=True, timeout=5
-        ).stdout
-    except Exception:
-        return None
-    m = re.search(r"CUDA Version:\s*(\d+)\.", out)
-    return int(m.group(1)) if m else None
+def _backend_dependencies() -> dict[str, list[tuple]]:
+    """Backward-compatible view of the backend registry (lazy, cached)."""
+
+    global _BACKEND_DEPS_CACHE
+    if _BACKEND_DEPS_CACHE is None:
+        from iSpy.boot.backend_deps import legacy_dependencies
+
+        _BACKEND_DEPS_CACHE = legacy_dependencies()
+    return _BACKEND_DEPS_CACHE
 
 
-@lru_cache()
-def _tensorrt_candidates() -> tuple[str, ...]:
-    major = _cuda_major()
-    cands = [f"tensorrt-cu{major}"] if major in (12, 13) else []
-    return tuple(cands + ["tensorrt"])
+def __getattr__(name: str):
+    """Resolve ``BACKEND_DEPENDENCIES`` lazily.
+
+    Computing the registry at import time runs hardware probes (including a
+    torch import on some hosts), which is both slow and noisy.  Callers that
+    actually need the table still get it on first access.
+    """
+    if name == "BACKEND_DEPENDENCIES":
+        return _backend_dependencies()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _ensure_cuda_torch() -> None:
-    from iSpy.config.AutoOpt import has_jetson, has_nvidia
+# Keep the historical private names as thin delegations.  The authoritative
+# selection/provisioning logic lives in iSpy.boot.backend_deps; these wrappers
+# exist so old imports and tests do not fork the install path again.
+def _ensure_cuda_torch() -> bool:
+    from iSpy.boot.backend_deps import ensure_backend
 
-    if has_jetson() or not has_nvidia():
-        return
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            return
-    except ImportError:
-        pass
-    tag = {13: "cu130", 12: "cu126"}.get(_cuda_major())
-    if not tag:
-        return
-    logger.warning(
-        "CPU-only torch with an NVIDIA GPU - installing CUDA torch (%s).", tag
-    )
-    _pip_install(
-        "torch",
-        force_reinstall=True,
-        extra_args=["--index-url", f"https://download.pytorch.org/whl/{tag}"],
-    )
+    return ensure_backend("pytorch", auto_install=True).ok
 
 
 def _install_tensorrt() -> bool:
-    import importlib
+    from iSpy.boot.backend_deps import ensure_backend
 
-    from iSpy.config.AutoOpt import has_tensorrt
+    return ensure_backend("engine", auto_install=True).ok
 
-    if has_tensorrt():
+# Lazy handles to the converter-environment modules.  Kept as module attributes
+# so callers/tests can inject/mock the provisioning layer without importing the
+# heavy module chain eagerly.  RKNN deliberately stays on its compatibility
+# shim: existing tests and diagnostics patch that module's private helpers.
+_rknn_converter_env: object | None = None
+_converter_envs: object | None = None
+
+
+def _converter_env_module():
+    global _rknn_converter_env
+    if _rknn_converter_env is None:
+        from iSpy.boot import _rknn_converter_env as _env
+
+        _rknn_converter_env = _env
+    return _rknn_converter_env
+
+
+def _generic_converter_env_module():
+    global _converter_envs
+    if _converter_envs is None:
+        from iSpy.boot import converter_envs as _env
+
+        _converter_envs = _env
+    return _converter_envs
+
+
+def _converter_env_for(target_format: str):
+    """Return the module that can provide target_format worker Python."""
+    if target_format == "rknn":
+        return _converter_env_module()
+    return _generic_converter_env_module()
+
+
+def _in_converter_env() -> bool:
+    """True when this interpreter is a provisioned converter environment."""
+
+    if os.environ.get("ISPY_CONVERTER_ENV"):
         return True
-    nvidia_index = ["--extra-index-url", "https://pypi.nvidia.com"]
-    # prefer NVIDIA's own index: the tensorrt-cuXX wheels there carry the real
-    # libs, while the same name on PyPI can resolve to a thin meta-package.
-    attempts = [(pkg, nvidia_index) for pkg in _tensorrt_candidates()]
-    attempts += [(pkg, None) for pkg in _tensorrt_candidates()]
-    for pkg, extra in attempts:
-        if not _pip_install(pkg, extra_args=extra):
-            continue
-        importlib.invalidate_caches()
-        try:
-            importlib.import_module("tensorrt")
-        except Exception as exc:
-            logger.warning("Installed %s but import failed: %s", pkg, exc)
-            continue
-        has_tensorrt.cache_clear()  # so recommend_format() sees it this run
-        logger.info("TensorRT installed via %s.", pkg)
-        return True
-    logger.error("Could not install TensorRT - falling back to ONNX (GPU via onnxruntime-gpu).")
+    try:
+        from iSpy.boot import converter_envs
+
+        prefix = Path(sys.prefix).resolve()
+        for fmt in ("rknn", "tflite"):
+            spec = converter_envs.get_env_spec(fmt)
+            if spec is None:
+                continue
+            root = converter_envs._env_root(spec).resolve()
+            if root == prefix or root in prefix.parents:
+                return True
+    except Exception:
+        pass
     return False
-
-
-BACKEND_DEPENDENCIES = _backend_dependencies()
-
-
-def _in_virtualenv() -> bool:
-    return hasattr(sys, "real_prefix") or (
-        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
-    )
 
 
 def _is_installed(module_name: str) -> bool:
@@ -479,38 +447,6 @@ def _get_installed_version(package_name: str) -> str | None:
         return importlib.metadata.version(package_name)
     except Exception:
         return None
-
-
-def _check_version_constraint(package_name: str, constraint: str) -> bool:
-    if not constraint:
-        return True
-    installed = _get_installed_version(package_name)
-    if installed is None:
-        return False
-    try:
-        from packaging.version import Version
-
-        inst = Version(installed)
-        bound = constraint.lstrip("<>=!~")
-        if constraint.startswith("<="):
-            return inst <= Version(bound)
-        if constraint.startswith(">="):
-            return inst >= Version(bound)
-        if constraint.startswith("!="):
-            return inst != Version(bound)
-        if constraint.startswith("=="):
-            return inst == Version(bound)
-        if constraint.startswith("<"):
-            return inst < Version(bound)
-        if constraint.startswith(">"):
-            return inst > Version(bound)
-        if constraint.startswith("~="):
-            return inst.release[: len(Version(bound).release)] == Version(
-                bound
-            ).release and inst >= Version(bound)
-    except Exception:
-        pass
-    return True
 
 
 def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None:
@@ -571,179 +507,64 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
         logger.info("Optimized model %s: READY.", converted_path.name)
 
 
+def _purge_pip_cache() -> bool:
+    from iSpy.boot.backend_deps import purge_pip_cache
+
+    return purge_pip_cache()
+
+
+def _looks_out_of_space(text: str) -> bool:
+    from iSpy.boot.backend_deps import looks_out_of_space
+
+    return looks_out_of_space(text)
+
+
 def _pip_install(
     install_target: str,
     force_reinstall: bool = False,
     extra_args: list[str] | None = None,
 ) -> bool:
-    cmd = [sys.executable, "-m", "pip", "install"]
-    if install_target.startswith("http") or install_target.endswith(".whl"):
-        cmd.append("--no-deps")
-    if force_reinstall:
-        cmd.append("--force-reinstall")
-    if extra_args:
-        cmd.extend(extra_args)
-    cmd.append(install_target)
-    if not _in_virtualenv():
-        cmd.append("--break-system-packages")
-    try:
-        logger.info("Installing: %s", install_target)
-        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        return True
-    except subprocess.CalledProcessError:
-        logger.warning("pip install failed for: %s", install_target)
-        return False
+    """Compatibility wrapper for the runtime pip installer."""
 
+    from iSpy.boot.backend_deps import pip_install
 
-def _parse_pip_target(pip_target: str) -> tuple[str, str]:
-    parts = pip_target.split("[")
-    base = parts[0]
-    for sep in ("<=", ">=", "!=", "==", "<", ">", "~="):
-        if sep in base:
-            name, ver = base.split(sep, 1)
-            return name, sep + ver
-    return base, ""
-
-_ORT_VARIANTS = ("onnxruntime", "onnxruntime-gpu", "onnxruntime-directml")
-
-
-def _ensure_onnxruntime_variant() -> None:
-    from iSpy.config.AutoOpt import has_jetson, has_nvidia
-
-    if has_jetson():
-        return  # JetPack manages onnxruntime on Jetson
-    system = platform.system()
-    if has_nvidia() and system != "Darwin":
-        wanted = "onnxruntime-gpu"
-    elif system == "Windows":
-        wanted = "onnxruntime-directml"
-    else:
-        return
-    if _get_installed_version(wanted) is not None:
-        return
-
-    logger.warning("Replacing CPU onnxruntime with %s for this hardware.", wanted)
-    # variants overwrite each other's files, so remove tghem
-    for dist in _ORT_VARIANTS:
-        if _get_installed_version(dist) is not None:
-            subprocess.call(
-                [sys.executable, "-m", "pip", "uninstall", "-y", dist],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT,
-            )
-    if not _pip_install(wanted, force_reinstall=True):
-        logger.error("Failed to install %s - falling back to CPU onnxruntime.", wanted)
-        _pip_install("onnxruntime")
-
-
-def install_special_dependencies(auto_install: bool = False):
-    from iSpy.config.AutoOpt import has_jetson, recommend_format
-
-    backend = recommend_format(ignore_dependencies=True)
-    logger.info("Recommended backend: %s", backend)
-    if auto_install:
-        _ensure_onnxruntime_variant()
-        _ensure_cuda_torch()
-        if backend == "engine" and not has_jetson():
-            if not _install_tensorrt():
-                # TensorRT unavailable - make sure the documented ONNX fallback works.
-                _pip_install("onnxruntime-gpu")
-            return
-
-    deps = BACKEND_DEPENDENCIES.get(backend)
-    if not deps:
-        if backend == "rknn":
-            logger.error(
-                "No RKNN wheel available for %s (Python %s). "
-                "Supported: %s",
-                platform.machine(),
-                _PY_TAG,
-                ", ".join(
-                    sorted(
-                        f"{a} {v}"
-                        for (a, v) in _RKNN_FULL_WHEELS
-                        if a == ("aarch64" if _IS_AARCH64 else "x86_64")
-                    )
-                ),
-            )
-        else:
-            logger.info("No extra dependencies required for %s", backend)
-        return
-
-    on_jetson = has_jetson()
-    missing = []
-    for entry in deps:
-        mod, target = entry[0], entry[1]
-        extra_args = list(entry[2]) if len(entry) > 2 else None
-        pkg_name, constraint = _parse_pip_target(target)
-
-        if on_jetson and mod in _JETSON_SYSTEM_MANAGED:
-            if _is_installed(mod):
-                logger.debug("Dependency %s satisfied (JetPack system package).", mod)
-            else:
-                logger.error(
-                    "%s is not importable. On Jetson this must come from JetPack "
-                    "(apt), not pip — pip has no matching GPU-enabled build for "
-                    "this board. Verify it with the L4T-provided python3, and "
-                    "make sure your venv was created with --system-site-packages "
-                    "so it can see it.",
-                    mod,
-                )
-            continue
-
-        if not _is_installed(mod):
-            missing.append((mod, target, False, extra_args))
-        elif constraint and not _check_version_constraint(pkg_name, constraint):
-            logger.warning(
-                "Installed %s (%s) does not satisfy %s. Will reinstall.",
-                pkg_name,
-                _get_installed_version(pkg_name),
-                target,
-            )
-            missing.append((mod, target, True, extra_args))
-        else:
-            logger.debug("Dependency %s satisfied: %s", mod, target)
-
-    if not missing:
-        logger.info(
-            "All pip-installable dependencies already satisfied for %s", backend
-        )
-        return
-
-    logger.warning(
-        "Missing dependencies for %s: %s", backend, [t for _, t, _, _ in missing]
+    return pip_install(
+        install_target,
+        force_reinstall=force_reinstall,
+        extra_args=extra_args,
     )
 
-    if not auto_install:
-        logger.info("auto_install=False - skipping installation")
-        return
 
-    if backend == "rknn":
-        arch = platform.machine()
-        if not (_IS_AARCH64 or "x86_64" in arch or "amd64" in arch):
+def _ensure_onnxruntime_variant() -> bool:
+    """Select the ORT wheel for this hardware."""
+
+    from iSpy.boot.backend_deps import ensure_backend
+
+    return ensure_backend("onnx", auto_install=True).ok
+
+
+def install_special_dependencies(
+    auto_install: bool = False, backend: str | None = None
+):
+    """Provision runtime dependencies for *backend* or the recommended one."""
+
+
+    from iSpy.boot.backend_deps import ensure_backends
+    from iSpy.config.AutoOpt import recommend_format
+
+    selected = backend or recommend_format(ignore_dependencies=True)
+    logger.info("Recommended backend: %s", selected)
+    report = ensure_backends([selected], auto_install=auto_install)
+    for line in report.lines():
+        logger.info("%s", line)
+    for result in report.results:
+        if result.status in ("missing", "failed", "offline", "disk"):
             logger.error(
-                "RKNN wheels are only available for aarch64 and x86_64. "
-                "Your architecture (%s) is not supported.",
-                arch,
+                "Dependency provisioning for %s did not complete: %s",
+                result.backend,
+                result.detail or result.status,
             )
-            return
-
-    if backend in {"rknn", "engine", "hailo", "tpu"}:
-        logger.warning(
-            "%s is a hardware/vendor backend - installation may require "
-            "system-level setup and can take a few minutes.",
-            backend,
-        )
-
-    for mod, target, force, extra_args in missing:
-        if _pip_install(target, force_reinstall=force, extra_args=extra_args):
-            logger.info("Installed %s successfully.", target)
-        else:
-            logger.error(
-                "Failed to install %s. You may need to install it manually.", target
-            )
-
-    logger.info("Dependency installation complete for %s", backend)
+    return report
 
 
 _EXPORT_DEPS = (
@@ -753,10 +574,51 @@ _EXPORT_DEPS = (
 )
 
 
+# build modules an optimize/quantize would need that aren't installed locally -
+# the offline policy uses this to decide if the build could ever finish
+def _missing_build_modules(backend: str | None = None) -> list[str]:
+    missing = [mod for mod, _ in _EXPORT_DEPS if not _is_installed(mod)]
+    if backend:
+        # ``BACKEND_DEPENDENCIES`` is resolved lazily via module __getattr__;
+        # a function-local global lookup would bypass that, so ask for the
+        # table explicitly (while still honoring a test-patched attribute).
+        deps = globals().get("BACKEND_DEPENDENCIES")
+        if deps is None:
+            deps = _backend_dependencies()
+        for entry in deps.get(backend, ()):
+            mod = entry[0]
+            if mod not in missing and not _is_installed(mod):
+                missing.append(mod)
+    return missing
+
+
 def _ensure_export_deps() -> bool:
     missing = [mod for mod, _ in _EXPORT_DEPS if not _is_installed(mod)]
     if not missing:
         return True
+    if _in_converter_env():
+        # The converter env is provisioned with a pinned, verified dependency
+        # set.  Auto-installing an unpinned export dep here can pull a newer
+        # onnx/protobuf and break rknn.build() - rebuild the env instead.
+        logger.error(
+            "Converter environment %s is missing build-time export "
+            "dependencies (%s). Refusing to pip-install into the pinned "
+            "conversion environment - rebuild it with 'ispy env rebuild "
+            "<format>' and retry.",
+            sys.prefix,
+            ", ".join(missing),
+        )
+        return False
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        logger.warning(
+            "Offline mode: missing build-time export dependencies (%s) - "
+            "model export/optimization is unavailable until they are "
+            "installed; the .pt keeps running.",
+            ", ".join(missing),
+        )
+        return False
     logger.warning(
         "Missing build-time export dependencies (%s). Auto-installing "
         "ultralytics (AGPL-3.0) + onnx + onnxslim - these are only used to "
@@ -1034,7 +896,9 @@ def _engine_loads(path: Path) -> bool:
     try:
         import tensorrt as trt
 
-        data = path.read_bytes()
+        from iSpy.vision.engine_utils import read_engine_plan
+
+        data = read_engine_plan(path)
         runtime = trt.Runtime(trt.Logger(trt.Logger.ERROR))
         engine = runtime.deserialize_cuda_engine(data)
         return engine is not None
@@ -1410,6 +1274,12 @@ def _convert_rknn(
     pt_path = Path(pt_file)
 
     if not _ensure_export_deps():
+        if _in_converter_env():
+            raise ImportError(
+                "The RKNN converter environment is missing its pinned "
+                "build-time export dependencies (ultralytics/onnx/onnxslim). "
+                "Rebuild it with 'ispy env rebuild rknn' and retry."
+            )
         raise RuntimeError(
             "Unable to install the build-time export dependencies required to "
             "produce the intermediate ONNX artifact for RKNN conversion."
@@ -1456,10 +1326,19 @@ def _convert_rknn(
         # the canonical names back so a later torch import can't blow up
         repair_standard_log_levels()
         warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
-    except ImportError:
+    except ImportError as exc:
+        # Preserve the real cause (numpy/scipy ABI mismatch, missing
+        # pkg_resources, ...) instead of misreporting it as a missing toolkit.
+        # Note: plain retries do NOT rebuild anything - the converter env is
+        # provisioned once and reused; if its dependency set is broken it must
+        # be rebuilt explicitly (delete the env dir / bump the depset version).
         raise ImportError(
-            "RKNN Toolkit not found. Install it to convert to RKNN format."
-        )
+            f"Failed to import RKNN Toolkit: {exc}. "
+            "The converter environment may have been built with an "
+            "incompatible dependency set (needs numpy 1.26.4, scipy<1.15, "
+            "onnx 1.16.1, protobuf 4.25.4, setuptools<82). Rebuild it with "
+            "'ispy env rebuild rknn' and retrying once."
+        ) from exc
 
     count = calib_count_for_format("rknn")
     ds_path, _ = _resolve_calibration_dataset(dataset_path, count)
@@ -1573,7 +1452,7 @@ def _convert_rknn(
             finally:
                 rknn.release()
     finally:
-        if dataset_path is not None and calib_dir != Path(dataset_path):
+        if calib_dir != ds_path:
             shutil.rmtree(str(calib_dir), ignore_errors=True)
         if surgery_path.exists():
             surgery_path.unlink()
@@ -1969,6 +1848,21 @@ def convert_model(
                 logger.info("Cached %s model found: %s", target_format, desired)
                 return str(desired)
 
+    # A cached artifact above is still usable everywhere; only creating a new
+    # one is platform-limited.  Ultralytics 8.4.83+ uses LiteRT for TFLite and
+    # refuses Linux ARM64/Windows, so fail here instead of deep inside the
+    # exporter after provisioning a multi-GB environment.
+    if target_format == "tflite" and not exporter_supported(target_format):
+        logger.error(
+            "TFLite export is not supported on %s/%s: Ultralytics uses the "
+            "LiteRT exporter, which only runs on Linux x86_64 and macOS. "
+            "Use an existing .tflite, convert on a supported machine, or pick "
+            "another format. Falling back to .pt.",
+            platform.system() or sys.platform,
+            platform.machine(),
+        )
+        return model_file
+
     dataset_root = str(_PROJECT_ROOT / "QuantizeDataset")
     data_yaml = None
     if quantize:
@@ -2068,14 +1962,112 @@ def convert_model(
     return model_file
 
 
-def _convert_model_subprocess(
+def _is_protobuf_onnx_mismatch(error: str | None) -> bool:
+    """True for the onnx 1.16 / protobuf >= 7 ``FieldDescriptor.label`` crash."""
+    lowered = (error or "").lower()
+    return "has no attribute 'label'" in lowered and (
+        "fielddescriptor" in lowered or "strip_doc_string" in lowered
+    )
+
+
+def _classify_worker_failure(
+    returncode: int | None,
+    error: str,
+    error_type: str | None = None,
+) -> str:
+    if returncode is not None and returncode < 0:
+        return "terminated"
+    lowered = (error or "").lower()
+    # onnx 1.16 reads FieldDescriptor.label; protobuf 7 removed it.  This is a
+    # broken converter env, not a model/conversion problem.
+    if _is_protobuf_onnx_mismatch(error):
+        return "dependency"
+    if error_type in ("ImportError", "ModuleNotFoundError") or any(
+        needle in lowered
+        for needle in (
+            "cannot import name",
+            "no module named",
+            "failed to import",
+            "pkg_resources",
+        )
+    ):
+        return "dependency"
+    if error_type == "MemoryError" or "memoryerror" in lowered or any(
+        needle in lowered
+        for needle in ("cannot allocate memory", "not enough memory", "enomem")
+    ):
+        return "resource"
+    return "conversion"
+
+
+def _cached_rknn_artifact(
+    pt_path: Path,
+    quantize: bool | None = None,
+    force: bool = False,
+) -> Path | None:
+    if force:
+        return None
+    if quantize is None:
+        quantize = _RKNN_QUANTIZE
+    rknn_path = _desired_output_path(pt_path, "rknn")
+    if not rknn_path.exists() or not rknn_path.is_file():
+        return None
+    try:
+        from iSpy.vision.metadata import metadata_path_for, read_metadata
+    except Exception:
+        metadata_path_for = read_metadata = None  # type: ignore[assignment]
+    if metadata_path_for is not None:
+        meta_path = metadata_path_for(rknn_path)
+        if meta_path.exists():
+            meta = read_metadata(rknn_path) or {}
+            stored_quantize = meta.get("quantize")
+            if stored_quantize is None:
+                q = meta.get("quantization")
+                stored_quantize = q != "none" if q is not None else None
+            if stored_quantize is not None and stored_quantize != quantize:
+                logger.info(
+                    "Cached rknn model %s has quantize=%s but config says %s. "
+                    "Re-converting.",
+                    rknn_path.name,
+                    stored_quantize,
+                    quantize,
+                )
+                return None
+    logger.info("Cached rknn model found: %s", rknn_path)
+    return rknn_path
+
+
+def _cached_converter_artifact(
+    pt_path: Path,
+    target_format: str,
+    quantize: bool | None = None,
+    force: bool = False,
+) -> Path | None:
+    """Return an existing artifact for any env-backed conversion format."""
+    if force:
+        return None
+    if target_format == "rknn":
+        return _cached_rknn_artifact(pt_path, quantize, force=force)
+
+    desired = _desired_output_path(pt_path, target_format)
+    if target_format == "tflite":
+        artifact = _find_tflite_artifact(desired)
+    else:
+        artifact = desired if desired.is_file() else None
+    if artifact is None:
+        return None
+    logger.info("Cached %s model found: %s", target_format, artifact)
+    return artifact
+
+
+def _convert_model_subprocess_report(
     model_file,
     target_format,
     input_size,
     quantize=None,
     force=False,
     dataset_path=None,
-) -> Path:
+) -> tuple[Path, dict | None]:
     outputs_dir = _PROJECT_ROOT / "Outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2091,9 +2083,120 @@ def _convert_model_subprocess(
     if dataset_path:
         args["dataset_path"] = str(dataset_path)
 
-    last_code = None
+    uses_converter_env = needs_env(target_format)
 
-    def _run_once(quantize, log_failure=True) -> Path | None:
+    # A cached, config-matching artifact is used directly - no worker, no
+    # converter-env provisioning (fresh benchmarks rarely need a rebuild).
+    # This applies to every env-backed format, including manual-only Hailo: an
+    # existing .hef can be benchmarked without the vendor toolchain installed.
+    if uses_converter_env:
+        cached = _cached_converter_artifact(
+            Path(model_file), target_format, quantize, force=force
+        )
+        if cached is not None:
+            return cached, None
+
+    # Refuse before provisioning: on Linux ARM64/Windows the TFLite exporter
+    # cannot produce an artifact, so building tflite_env there only wastes
+    # several GiB and ends in an Ultralytics assertion.
+    if uses_converter_env and not exporter_supported(target_format):
+        report = {
+            "status": "dependency",
+            "error": (
+                f"{target_format} export is not supported on "
+                f"{platform.system() or sys.platform}/{platform.machine()}: "
+                "Ultralytics uses the LiteRT exporter, which only runs on "
+                "Linux x86_64 and macOS."
+            ),
+            "category": "platform",
+        }
+        logger.error(
+            "%s conversion of %s cannot run on this platform - %s",
+            target_format.upper(),
+            Path(model_file).name,
+            report["error"],
+        )
+        return Path(model_file), report
+
+    # Env-backed conversions run in their dedicated interpreter; formats whose
+    # registry entry is None continue to use the main runtime Python.
+    worker_python = sys.executable
+    worker_env = None
+    if uses_converter_env:
+        try:
+            env_mod = _converter_env_for(target_format)
+            worker_python = str(
+                env_mod.converter_python()
+                if target_format == "rknn"
+                else env_mod.converter_python(target_format)
+            )
+            worker_env = os.environ.copy()
+            # only give the worker the source root, not the runtime paths
+            worker_env["PYTHONPATH"] = str(env_mod.ispy_source_root())
+            worker_env["PYTHONNOUSERSITE"] = "1"
+            # lets the worker refuse to mutate the pinned converter env
+            worker_env["ISPY_CONVERTER_ENV"] = target_format
+            # Ultralytics calls check_requirements() during export and will
+            # pip-install into the active interpreter.  Inside the pinned
+            # converter env that can silently upgrade protobuf/onnx and break
+            # rknn.build() later, so disable its auto-installer.
+            worker_env["YOLO_AUTOINSTALL"] = "false"
+        except Exception as exc:
+            # no converter env: fall back to the .pt
+            report = {
+                "status": "dependency",
+                "error": f"converter environment unavailable: {exc}",
+                "category": "provision",
+            }
+            logger.error(
+                "%s conversion of %s cannot run - converter environment "
+                "unavailable: %s",
+                target_format.upper(),
+                Path(model_file).name,
+                exc,
+            )
+            return Path(model_file), report
+
+    last_code = None
+    env_rebuilt = False
+
+    def _rebuild_broken_env(report: dict | None) -> bool:
+        """Rebuild a drifted converter env once, then let the caller retry.
+
+        A cached env can pass its manifest check yet carry protobuf >= 7 from
+        an earlier resolver/auto-install pass.  onnx 1.16 then fails inside
+        rknn.build() with ``FieldDescriptor has no attribute 'label'``.
+        Rebuilding is the only repair; the pin lives in the env spec.
+        """
+        nonlocal env_rebuilt, worker_python
+        if env_rebuilt or not uses_converter_env or report is None:
+            return False
+        if target_format not in ("rknn", "tflite"):
+            return False
+        if not _is_protobuf_onnx_mismatch(report.get("error")):
+            return False
+        env_rebuilt = True
+        logger.warning(
+            "The %s converter environment has an onnx/protobuf mismatch "
+            "(onnx 1.16 needs protobuf 4.25.x). Rebuilding it once and "
+            "retrying the conversion.",
+            target_format,
+        )
+        try:
+            worker_python = str(
+                _generic_converter_env_module().rebuild_env(target_format)
+            )
+        except Exception as exc:
+            logger.error(
+                "Could not rebuild the %s converter environment: %s",
+                target_format,
+                exc,
+            )
+            return False
+        return True
+
+    def _run_once(quantize, log_failure=True) -> tuple[Path | None, dict | None]:
+        nonlocal last_code
         args["quantize"] = quantize
 
         with tempfile.NamedTemporaryFile(
@@ -2105,12 +2208,12 @@ def _convert_model_subprocess(
         result_path = args_path + ".result.json"
         try:
             proc = subprocess.run(
-                [sys.executable, "-m", "iSpy.boot._convert_worker", args_path],
+                [worker_python, "-m", "iSpy.boot._convert_worker", args_path],
                 cwd=str(_PROJECT_ROOT),
                 capture_output=True,
                 text=True,
+                env=worker_env,
             )
-            nonlocal last_code
             last_code = proc.returncode
 
             # surface the worker's own logging - it just runs in a subprocess,
@@ -2121,18 +2224,60 @@ def _convert_model_subprocess(
                 print(proc.stderr, file=_REAL_STDERR, end="")
 
             if proc.returncode != 0 or not os.path.exists(result_path):
+                # Prefer the worker's structured error (preserves nested
+                # import causes like numpy/scipy ABI mismatches or a missing
+                # pkg_resources) over a generic exit-code message.
+                error_text, error_type = "", None
+                if os.path.exists(result_path):
+                    try:
+                        with open(result_path) as rf:
+                            err = json.load(rf)
+                        error_text = err.get("error", "")
+                        error_type = err.get("error_type")
+                    except (OSError, ValueError):
+                        error_text = ""
+                classification = _classify_worker_failure(
+                    proc.returncode, error_text, error_type
+                )
+                report = {
+                    "status": classification,
+                    "error": error_text
+                    or f"conversion worker exited with code {proc.returncode}",
+                    "exit_code": proc.returncode,
+                    "error_type": error_type,
+                }
                 if log_failure:
                     logger.error(
-                        "Conversion subprocess for %s -> %s failed (exit code %s).",
+                        "Conversion subprocess for %s -> %s failed: %s",
                         Path(model_file).name,
                         target_format,
-                        proc.returncode,
+                        report["error"],
                     )
-                return None
+                return None, report
 
             with open(result_path) as f:
                 result_data = json.load(f)
-            return Path(result_data["result"])
+            result_out = Path(result_data["result"])
+            if result_out == Path(model_file):
+                # The worker itself degraded to the source .pt - no optimized
+                # artifact was produced.
+                report = {
+                    "status": "conversion",
+                    "error": (
+                        f"conversion worker fell back to the source model "
+                        f"({result_out.name})"
+                    ),
+                    "exit_code": 0,
+                }
+                if log_failure:
+                    logger.error(
+                        "Conversion subprocess for %s -> %s failed: %s",
+                        Path(model_file).name,
+                        target_format,
+                        report["error"],
+                    )
+                return None, report
+            return result_out, None
         finally:
             for p in (args_path, result_path):
                 try:
@@ -2140,36 +2285,77 @@ def _convert_model_subprocess(
                 except OSError:
                     pass
 
-    # a killed/failed quantized build (rknn toolkit's int8 calibration is the
+    # A killed/failed quantized build (rknn toolkit's int8 calibration is the
     # usual OOM casualty - its worker dies with a signal exit code) degrades to
     # an unquantized build before conceding to the .pt on-CPU fallback, so the
     # NPU artifact still exists instead of silently running the model in torch.
-    # Only the single coherent message below is emitted for that path - the
-    # doomed quantized attempt itself logs nothing.
+    #
+    # Only retry without quantization when the failure is a signal kill
+    # (negative return code, e.g. SIGKILL from the OOM killer) or an explicit
+    # resource error.  A dependency failure (import error, provision failure)
+    # or a plain conversion exception would fail identically on retry, so it is
+    # not retried.
     if quantize:
-        result = _run_once(quantize, log_failure=False)
+        result, report = _run_once(quantize, log_failure=False)
+        if result is None and _rebuild_broken_env(report):
+            result, report = _run_once(quantize, log_failure=False)
         if result is not None:
-            return result
-        logger.warning(
-            "Quantized conversion of %s -> %s failed (exit code %s) - the "
-            "int8 calibration phase was likely killed by the OS. Retrying "
-            "without quantization so an artifact is still produced.",
-            Path(model_file).name,
-            target_format,
-            last_code,
-        )
-        result = _run_once(False, log_failure=False)
-        if result is not None:
-            logger.info("Unquantized retry succeeded: %s", result)
-            return result
+            return result, None
+        if report is not None and report["status"] in ("terminated", "resource"):
+            logger.warning(
+                "Quantized conversion of %s -> %s failed (%s) - the int8 "
+                "calibration phase was likely killed by the OS. Retrying "
+                "without quantization so an artifact is still produced.",
+                Path(model_file).name,
+                target_format,
+                report["status"],
+            )
+            result, report = _run_once(False, log_failure=False)
+            if result is not None:
+                logger.info("Unquantized retry succeeded: %s", result)
+                return result, None
+        else:
+            logger.error(
+                "Quantized conversion of %s -> %s failed (%s) - not retrying "
+                "without quantization.",
+                Path(model_file).name,
+                target_format,
+                report["status"] if report is not None else "unknown",
+            )
     else:
-        result = _run_once(quantize, log_failure=True)
+        result, report = _run_once(quantize, log_failure=True)
+        if result is None and _rebuild_broken_env(report):
+            result, report = _run_once(quantize, log_failure=True)
         if result is not None:
-            return result
+            return result, None
 
+    if report is None:
+        report = {
+            "status": "conversion",
+            "error": f"conversion to {target_format} produced no artifact",
+        }
     logger.error(
         "Conversion subprocess for %s -> %s failed. Falling back to .pt.",
         Path(model_file).name,
         target_format,
     )
-    return Path(model_file)
+    return Path(model_file), report
+
+
+def _convert_model_subprocess(
+    model_file,
+    target_format,
+    input_size,
+    quantize=None,
+    force=False,
+    dataset_path=None,
+) -> Path:
+    result, _ = _convert_model_subprocess_report(
+        model_file,
+        target_format,
+        input_size,
+        quantize=quantize,
+        force=force,
+        dataset_path=dataset_path,
+    )
+    return result

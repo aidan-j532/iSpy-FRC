@@ -49,6 +49,35 @@ from iSpy.config.iSpyConfig import iSpyConfig
 logger = logging.getLogger("iSpy.core.game_loop")
 
 
+def _init_offline_mode(config) -> None:
+    # both launch paths (ispy start, and the service daemon running this module
+    # directly) end up here - the daemon never calls boot.on_boot
+    from iSpy.core import network_policy
+
+    if network_policy.is_offline():
+        # boot already armed it (Game Mode) or ISPY_OFFLINE came from a parent
+        return
+    try:
+        enabled = bool(config.get("offline_mode", False))
+    except Exception:
+        enabled = False
+    if enabled:
+        network_policy.set_offline(True, "config")
+
+
+def _init_performance_level(config) -> None:
+    # same reason as _init_offline_mode: the daemon path never calls on_boot,
+    # so the level has to be resolved here too
+    try:
+        from iSpy.core import performance
+
+        performance.arm_from_config(config)
+    except Exception:
+        logger.exception(
+            "Could not resolve the performance profile - running at Full Features."
+        )
+
+
 def main(config=None):
     # a replay passes the config boot already built in memory; anything else
     # loads its own from disk
@@ -57,6 +86,8 @@ def main(config=None):
         logger.info(f"Using config file: {config_path}")
 
         config = iSpyConfig(str(config_path))
+    _init_offline_mode(config)
+    _init_performance_level(config)
     vision = iSpy(config)
     vision.run()
 

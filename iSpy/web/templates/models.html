@@ -91,7 +91,7 @@ async function loadBenchmarks() {
     if (!data.available) return;
     const best = data.best || {};
     const rows = Object.entries(best).map(([model, r]) =>
-      `<div class="det-item"><span class="det-class">${model}</span><span class="det-count">${r.backend}: ${r.fps} FPS</span></div>`
+      `<div class="det-item"><span class="det-class">${model}</span><span class="det-count">${r.backend} / batch ${r.batch_size || 1} / ${r.mode || 'serial'} / ${r.fps} FPS</span></div>`
     ).join('');
     document.getElementById('benchmark-list').innerHTML = rows || '<div class="empty-state">No results yet</div>';
     document.getElementById('benchmark-ts').textContent = data.timestamp ? `Last run: ${data.timestamp}` : '';

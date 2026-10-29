@@ -7,6 +7,9 @@ class YourUtility(UtilityBase):
     plugin_name = "example/example_utility"
     template = True
 
+    # set needs_internet = True to skip the add-on while offline, or override
+    # network_requirements() when only some settings need the internet
+
     @classmethod
     def config_schema(cls) -> dict:
         return {

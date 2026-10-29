@@ -42,6 +42,14 @@ _CAMERA_CORE_KEYS = {
     "tello_ip",
     "tello_command_port",
     "tello_video_port",
+    # Optional per-camera assignment for frame processors.  The list contains
+    # enabled processor names in execution order.  When it is absent the old
+    # "every enabled processor runs on every camera" behavior is preserved.
+    "frame_processors",
+    # Optional per-camera tracker assignment.  The list contains enabled
+    # tracker plugin names in execution order.  When the key is absent the old
+    # global-tracker behavior is preserved for that camera lane.
+    "trackers",
 }
 
 # Camera-source config keys that are valid at the top level for every
@@ -59,6 +67,8 @@ _VISION_MODEL_SETTINGS_KEYS = (
     "quantization_dataset",
     "optimize",
     "target_format",
+    "batch_size",
+    "tpu_dtype",
 )
 
 _LEGACY_SETTING_ALIASES = {
@@ -118,13 +128,6 @@ def unit_to_inches(value: float, unit: str) -> float:
 
 
 def unit_to_output(value: float, unit: str) -> float:
-    """A config value in the same unit detections are reported in.
-
-    Detections are the output unit, camera geometry is entered in the config
-    unit, and the two are the same for every unit except frc (inches in, metres
-    out). Anything subtracting one from the other - the rollback player's
-    projection, for one - has to go through here.
-    """
     key = (unit or "frc").lower().strip()
     inches = _UNIT_TO_INCHES.get(key, 1.0)
     return value * inches * _INCHES_TO_OUTPUT_UNIT.get(key, _INCHES_TO_OUTPUT_UNIT["frc"])
@@ -317,11 +320,17 @@ class iSpyConfig:
             # optical flow pipelines only. On = those pipelines are offered;
             # Off (normal users) = they are hidden from the dropdown.
             "admin": False,
+            # Beta lifecycle controls: allow loopback + RFC1918/LAN restarts.
+            # False restricts them to localhost or ISPY_ADMIN_TOKEN.
+            "allow_remote_restart": True,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
             # seconds without a fresh frame before /health reports degraded
             "health_stale_threshold": 1.0,
             "metrics": True,
+            # 0 = Max FPS ... 4 = Full Features (default). one master knob trading
+            # luxury features for FPS, never detection/trackers/NetworkTables
+            "performance_level": 4,
             "app_mode": True,
             # One-shot "Game Mode" web-off: the Settings > Advanced > Game Mode
             # button arms this. The next boot skips the web dashboard for that
@@ -330,6 +339,9 @@ class iSpyConfig:
             # back so the web UI comes on again automatically.
             "game_mode_web_off_next_run": False,
             "game_mode_app_mode_backup": None,
+            # Blocks the public internet only - robot LAN, mDNS, loopback and the
+            # Tello keep working. Game Mode forces this on for its run (not saved).
+            "offline_mode": False,
             "max_fps": 0,
             # reset to False by every `boot -f` (fresh install) so the web UI
             # shows its first-run tutorial once until the user dismisses it.
@@ -410,6 +422,11 @@ class iSpyConfig:
                 "segment_minutes": 5,
                 "max_total_mb": 2048,
             },
+            # Editor/runtime routing for shared utility nodes.  Each utility
+            # maps to the camera lanes whose tracker detections it receives.
+            # An absent top-level block keeps the legacy behavior: every
+            # utility receives detections from every camera.
+            "utility_sources": {},
             "plugins": {
                 # enabled add-ons only - presence == enabled, no flag. each entry maps
                 # a name to that add-on's own settings (schema defaults apply at runtime).

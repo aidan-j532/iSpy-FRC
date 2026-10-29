@@ -367,6 +367,7 @@ pre {
 .toast-success { border-left: 3px solid var(--ok); color: var(--ok); }
 .toast-error { border-left: 3px solid var(--bad); color: var(--bad); }
 .toast-info { border-left: 3px solid var(--accent); color: var(--accent); }
+.toast-warn { border-left: 3px solid var(--warn); color: var(--warn); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 
 .modal-overlay {
@@ -437,6 +438,22 @@ pre {
   background: var(--warn-dim); color: var(--warn); font-size: 0.68rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; margin-left: 8px;
 }
+/* Performance profile slider (Settings > General) */
+.perf-wrap { display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.perf-head { display: flex; align-items: center; gap: 8px; }
+.perf-level-label { font-weight: 600; }
+.perf-slider { width: 100%; accent-color: var(--accent); cursor: pointer; }
+.perf-slider:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.perf-ticks {
+  display: flex; justify-content: space-between; color: var(--text-muted);
+  font-size: 0.72rem; letter-spacing: 0.02em;
+}
+.perf-desc {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; font-size: 0.85rem; color: var(--text-dim); line-height: 1.5;
+}
+.perf-desc strong { color: var(--text); }
+.perf-desc ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
 .settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; margin-bottom: 20px; }
 .settings-msg { font-size: 0.85rem; }
 .msg-ok { color: var(--ok); }

@@ -5,8 +5,8 @@ import sys
 from pathlib import Path
 
 # make the iSpy package importable when this file is run directly with a bare python
-if str(Path(__file__).resolve().parents[1]) not in sys.path:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+if str(Path(__file__).resolve().parents[2]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from iSpy.boot._venv import read_marked_python, resolve_launch_python
 

@@ -1,20 +1,20 @@
 import logging
 import threading
-import warnings
 from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image
 
+from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig
+from iSpy.vision._safe_imports import ensure_torch_imported, import_rknnlite
+from iSpy.vision.Object import Object
+from iSpy.vision.engine_utils import execute_engine
 from iSpy.vision.pipelines.base import BackgroundPreparedPipeline
 from iSpy.vision.pipelines.optimizable import (
     OptimizableModelPipeline,
     _profile_hardware_warning,
 )
-from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
-from iSpy.vision.Object import Object
-from iSpy.vision._safe_imports import ensure_torch_imported, import_rknnlite
 
 _DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 _DEPTH_INPUT_SIZE = 518
@@ -24,6 +24,25 @@ _YOLO_MODELS_DIR = Path(__file__).resolve().parents[3] / "YoloModels"
 
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+
+
+# are the V2 weights (or a pre-exported artifact) on disk? cached means the
+# pipeline runs fine offline, missing means it would download on first use
+def _depth_weights_cached() -> bool:
+    hub = _DEPTH_HF_CACHE_DIR / "models--depth-anything--Depth-Anything-V2-Small-hf"
+    try:
+        if hub.is_dir() and any(hub.rglob("*.safetensors")):
+            return True
+    except OSError:
+        pass
+    # a pre-exported artifact (onnx/openvino/...) runs without the HF weights
+    for parent in _YOLO_MODELS_DIR.glob("*"):
+        try:
+            if parent.is_dir() and any(parent.glob(f"{_DEPTH_ARTIFACT_STEM}*")):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
@@ -60,6 +79,32 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
     @classmethod
     def show_calibration(cls) -> bool:
         return False
+
+    @classmethod
+    def network_requirements(cls, settings: dict) -> list:
+        from iSpy.core import network_policy
+        from iSpy.vision.pipelines.optimizable import offline_build_requirements
+
+        reqs = []
+        if not _depth_weights_cached():
+            reqs.append(
+                network_policy.NetworkRequirement(
+                    name="Depth Anything V2 weights",
+                    reason=(
+                        "weights are not in the local Hugging Face cache yet - "
+                        "they download from Hugging Face on first use"
+                    ),
+                    critical=True,
+                )
+            )
+        reqs.extend(offline_build_requirements(settings))
+        return reqs
+
+    # while offline the from_pretrained paths need the weights already cached
+    def _ensure_weights_local(self) -> None:
+        if self.network_allowed or _depth_weights_cached():
+            return
+        self.require_network("downloading the Depth Anything V2 weights")
 
     def is_ready(self) -> tuple[bool, str]:
         # pure status report - never triggers/blocks on optimization
@@ -404,9 +449,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         from iSpy.vision.QuantizedModel import ensure_onnx_model
 
         def build():
-            import torch.nn as nn
-
+            from torch import nn
             from transformers import AutoModelForDepthEstimation
+
+            self._ensure_weights_local()
 
             class _DepthModule(nn.Module):
                 def __init__(self, model):
@@ -556,7 +602,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _load_tensorrt(self, force: bool = False):
         try:
-            import tensorrt as trt  # noqa: F401
+            import tensorrt as trt
         except ImportError:
             self.logger.warning(
                 "TensorRT not installed - 'engine' backend unavailable, falling back to onnx"
@@ -607,7 +653,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _load_coreml(self, force: bool = False):
         try:
-            import coremltools as ct  # noqa: F401
+            import coremltools as ct
         except ImportError:
             self.logger.warning(
                 "coremltools not installed - 'coreml' backend unavailable, falling back to onnx"
@@ -644,37 +690,30 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._load_onnx(force)
 
     def _load_tflite(self, force: bool = False):
-        try:
-            import onnx2tf  # noqa: F401
-        except ImportError:
-            self.logger.warning(
-                "onnx2tf not installed - 'tflite' backend unavailable, falling back to onnx"
-            )
-            return self._load_onnx(force)
+        tflite_path = self._artifact_path("tflite")
+        tflite_path.parent.mkdir(parents=True, exist_ok=True)
 
-        artifact, converted = self._export_onnx_source(force, quantize=False)
-        if not converted or not artifact:
-            self._session = None
-            self._load_error = "TFLite build produced no ONNX source"
-            return
-
-        out_dir = _YOLO_MODELS_DIR / "tflite"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        tflite_path = (
-            out_dir
-            / f"{_DEPTH_ARTIFACT_STEM}_{self._input_size}x{self._input_size}.tflite"
-        )
-        try:
-            if not tflite_path.exists() or force:
+        # A cached artifact loads without provisioning the multi-GB TFLite
+        # build environment (and without the ONNX source being present).
+        if not tflite_path.exists() or force:
+            artifact, converted = self._export_onnx_source(force, quantize=False)
+            if not converted or not artifact:
+                self._session = None
+                self._load_error = "TFLite build produced no ONNX source"
+                return
+            try:
                 self.logger.info("Converting %s -> TFLite ...", artifact)
-                onnx2tf.convert(
-                    input_onnx_file_path=artifact,
-                    output_folder_path=str(out_dir),
-                    non_verbose=True,
+                self._build_tflite_subprocess(artifact, tflite_path)
+            except Exception as exc:
+                self.logger.warning(
+                    "TFLite build failed (%s) - falling back to onnx",
+                    exc,
                 )
-                generated = out_dir / f"{Path(artifact).stem}_float32.tflite"
-                if generated.exists():
-                    generated.replace(tflite_path)
+                self._session = None
+                self._load_onnx(force)
+                return
+
+        try:
             interpreter = self._tflite_interpreter(tflite_path)
             interpreter.allocate_tensors()
             self._session = interpreter
@@ -685,11 +724,71 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             )
         except Exception as exc:
             self.logger.warning(
-                "TFLite build/load failed (%s) - falling back to onnx",
+                "TFLite artifact load failed (%s) - falling back to onnx",
                 exc,
             )
             self._session = None
             self._load_onnx(force)
+
+    def _build_tflite_subprocess(self, onnx_path: Path, tflite_path: Path) -> None:
+        import json
+        import os
+        import subprocess
+        import tempfile
+
+        from iSpy.boot import converter_envs
+
+        converter_py = str(converter_envs.converter_python("tflite"))
+        args = {"onnx": str(onnx_path), "output": str(tflite_path)}
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            args_path = Path(f.name)
+            json.dump(args, f)
+        result_path = Path(str(args_path) + ".result.json")
+
+        env = os.environ.copy()
+        # Replace the parent's PYTHONPATH so runtime packages cannot shadow
+        # the converter env's TensorFlow/onnx2tf stack.
+        env["PYTHONPATH"] = str(converter_envs.ispy_source_root())
+        env["PYTHONNOUSERSITE"] = "1"
+        try:
+            self.logger.info("Running TFLite ONNX build subprocess: %s", args_path)
+            proc = subprocess.run(
+                [converter_py, "-m", "iSpy.boot._tflite_onnx_worker", str(args_path)],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            if proc.stdout:
+                self.logger.debug("TFLite build stdout:\n%s", proc.stdout.rstrip())
+            if proc.stderr:
+                self.logger.debug("TFLite build stderr:\n%s", proc.stderr.rstrip())
+
+            if proc.returncode != 0 or not result_path.exists():
+                detail = ""
+                if result_path.exists():
+                    try:
+                        detail = json.loads(result_path.read_text()).get("error", "")
+                    except (OSError, ValueError):
+                        detail = ""
+                raise RuntimeError(
+                    f"TFLite build subprocess failed (exit {proc.returncode}): "
+                    f"{detail or 'no result produced'}"
+                )
+            data = json.loads(result_path.read_text())
+            if "error" in data:
+                raise RuntimeError(f"TFLite build subprocess failed: {data['error']}")
+            produced = Path(data["result"])
+            if not produced.exists():
+                raise RuntimeError(
+                    f"TFLite build subprocess reported success but produced no "
+                    f"artifact at {produced}"
+                )
+        finally:
+            for p in (args_path, result_path):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
     @staticmethod
     def _tflite_interpreter(model_path: Path):
@@ -707,18 +806,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         return tf.lite.Interpreter(model_path=str(model_path))
 
     def _load_rknn(self, force: bool = False):
-        try:
-            # rknn.api pulls in pkg_resources, which is deprecated by setuptools;
-            # that one-time module-init warning is not actionable, so hide it.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                from rknn.api import RKNN  # noqa: F401
-        except ImportError:
-            self.logger.warning(
-                "rknn-toolkit2 not installed - 'rknn' backend unavailable, falling back to onnx"
-            )
-            return self._load_onnx(force)
-
         artifact, converted = self._export_onnx_source(force, quantize=False)
         if not converted or not artifact:
             self._session = None
@@ -730,26 +817,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         try:
             if not rknn_path.exists() or force:
                 self.logger.info("Building RKNN model from %s ...", artifact)
-                from rknn.api import RKNN
-
-                rknn = RKNN(verbose=False)
-                try:
-                    # match _preprocess_depth: (u8/255 - mean)/std, expressed in
-                    # 0..255 space for the NPU's input normalization
-                    rknn.config(
-                        target_platform="rk3588",
-                        mean_values=[[123.675, 116.28, 103.53]],
-                        std_values=[[58.395, 57.12, 57.375]],
-                    )
-                    rknn.load_onnx(
-                        model=artifact,
-                        input_size_list=[[1, 3, self._input_size, self._input_size]],
-                    )
-                    dataset = self._rknn_calibration_txt()
-                    rknn.build(do_quantization=self.quantize, dataset=dataset)
-                    rknn.export_rknn(str(rknn_path))
-                finally:
-                    rknn.release()
+                self._build_rknn_subprocess(artifact, rknn_path)
 
             rknn_lite = import_rknnlite()(verbose=False)
             if rknn_lite.load_rknn(str(rknn_path)) != 0:
@@ -767,6 +835,77 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             )
             self._session = None
             self._load_onnx(force)
+
+    def _build_rknn_subprocess(self, onnx_path: Path, rknn_path: Path) -> None:
+        import json
+        import os
+        import subprocess
+        import tempfile
+
+        from iSpy.boot import _rknn_converter_env
+
+        converter_py = str(_rknn_converter_env.converter_python())
+        args = {
+            "onnx": str(onnx_path),
+            "output": str(rknn_path),
+            "quantize": bool(self.quantize),
+            # match _preprocess_depth: (u8/255 - mean)/std, expressed in the
+            # 0..255 space the NPU's input normalization expects
+            "target_platform": "rk3588",
+            "mean": [123.675, 116.28, 103.53],
+            "std": [58.395, 57.12, 57.375],
+            "input_size_list": [[1, 3, self._input_size, self._input_size]],
+            "calibration": self._rknn_calibration_txt(),
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            args_path = Path(f.name)
+            json.dump(args, f)
+        result_path = Path(str(args_path) + ".result.json")
+
+        env = os.environ.copy()
+        # Replace the parent's PYTHONPATH so runtime packages cannot shadow
+        # the converter env's pinned stack (see optimizer's worker spawn).
+        env["PYTHONPATH"] = str(_rknn_converter_env.ispy_source_root())
+        env["PYTHONNOUSERSITE"] = "1"
+        try:
+            self.logger.info("Running RKNN ONNX build subprocess: %s", args_path)
+            proc = subprocess.run(
+                [converter_py, "-m", "iSpy.boot._rknn_onnx_worker", str(args_path)],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            if proc.stdout:
+                self.logger.debug("RKNN build stdout:\n%s", proc.stdout.rstrip())
+            if proc.stderr:
+                self.logger.debug("RKNN build stderr:\n%s", proc.stderr.rstrip())
+
+            if proc.returncode != 0 or not result_path.exists():
+                detail = ""
+                if result_path.exists():
+                    try:
+                        detail = json.loads(result_path.read_text()).get("error", "")
+                    except (OSError, ValueError):
+                        detail = ""
+                raise RuntimeError(
+                    f"RKNN build subprocess failed (exit {proc.returncode}): "
+                    f"{detail or 'no result produced'}"
+                )
+            data = json.loads(result_path.read_text())
+            if "error" in data:
+                raise RuntimeError(f"RKNN build subprocess failed: {data['error']}")
+            produced = Path(data["result"])
+            if not produced.exists():
+                raise RuntimeError(
+                    f"RKNN build subprocess reported success but produced no "
+                    f"artifact at {produced}"
+                )
+        finally:
+            for p in (args_path, result_path):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
     def _rknn_calibration_txt(self) -> str | None:
         if not self._quantization_dataset:
@@ -790,7 +929,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _load_tpu(self, force: bool = False):
         try:
-            import torch_xla.core.xla_model as xm  # noqa: F401
+            import torch_xla.core.xla_model as xm
         except ImportError:
             self.logger.warning(
                 "torch_xla not installed - 'tpu' backend unavailable, falling back to onnx"
@@ -798,11 +937,10 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             return self._load_onnx(force)
 
         try:
-            import torch
+            import torch_xla.core.xla_model as xm
             from transformers import AutoModelForDepthEstimation
 
-            import torch_xla.core.xla_model as xm
-
+            self._ensure_weights_local()
             device = xm.xla_device()
             self._model = (
                 AutoModelForDepthEstimation.from_pretrained(
@@ -857,6 +995,7 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
             from transformers import pipeline
 
+            self._ensure_weights_local()
             self._model = pipeline(
                 "depth-estimation",
                 model=_DEPTH_MODEL_ID,
@@ -919,31 +1058,21 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         return self._postprocess_depth(depth, frame)
 
     def _infer_depth_engine(self, frame: np.ndarray) -> np.ndarray:
-        import numpy as np
-
         import tensorrt as trt
 
         pixel_values = self._preprocess_depth(frame)
         engine = self._session
         context = engine.create_execution_context()
+        inputs = {}
         for idx in range(engine.num_io_tensors):
             name = engine.get_tensor_name(idx)
             if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                context.set_tensor_shape(name, pixel_values.shape)
-        bindings = []
-        output = None
-        for idx in range(engine.num_io_tensors):
-            name = engine.get_tensor_name(idx)
-            shape = context.get_tensor_shape(name)
-            if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                pixel_values_contig = np.ascontiguousarray(pixel_values)
-                bindings.append(pixel_values_contig.ctypes.data)
-            else:
-                out = np.empty(tuple(shape), dtype=np.float32)
-                bindings.append(out.ctypes.data)
-                output = out
-        context.execute_v2(bindings)
-        return self._postprocess_depth(output, frame)
+                context.set_input_shape(name, pixel_values.shape)
+                inputs[name] = pixel_values
+        outputs = execute_engine(engine, context, inputs)
+        if not outputs:
+            raise RuntimeError("TensorRT depth model returned no outputs")
+        return self._postprocess_depth(outputs[0], frame)
 
     def _infer_depth_coreml(self, frame: np.ndarray) -> np.ndarray:
         pixel_values = self._preprocess_depth(frame)
@@ -970,7 +1099,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
     def _infer_depth_tpu(self, frame: np.ndarray) -> np.ndarray:
         import torch
-
         import torch_xla.core.xla_model as xm
 
         pixel_values = torch.from_numpy(self._preprocess_depth(frame))

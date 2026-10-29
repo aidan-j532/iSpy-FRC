@@ -293,6 +293,21 @@ def _is_in_organized_structure(model_path: Path, yolo_dir: Path) -> bool:
 
 
 def enforce_model_organization(repo_root: Path, config: Dict) -> Tuple[bool, str]:
+    from iSpy.config.iSpyConfig import (
+        get_pipeline_name,
+        is_model_backed_pipeline,
+    )
+
+    # a rig running only cv pipelines (hsv, april tag, qr) has no model to
+    # organize - that is a valid setup, not an error
+    has_model_backed = any(
+        is_model_backed_pipeline(get_pipeline_name(cam))
+        for cam in (config.get("camera_configs") or {}).values()
+        if isinstance(cam, dict)
+    )
+    if not has_model_backed:
+        return True, ""
+
     validation_result = validate_model_organization(repo_root)
 
     summary = validation_result.summary()

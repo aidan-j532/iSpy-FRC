@@ -45,6 +45,48 @@ block content %}
 
 <div id="tab-general" class="settings-tab-content">
   <div class="settings-section">
+    <h3>Performance profile</h3>
+
+    <div class="perf-wrap">
+      <div class="perf-head">
+        <span id="perf-level-label" class="perf-level-label">Full Features</span>
+        <span
+          id="perf-restart-badge"
+          class="restart-badge"
+          style="display: none"
+          >restart required</span
+        >
+      </div>
+
+      <input
+        id="perf-slider"
+        class="perf-slider"
+        type="range"
+        min="0"
+        max="4"
+        step="1"
+        value="4"
+        aria-label="Performance profile"
+      />
+
+      <div class="perf-ticks" aria-hidden="true">
+        <span>Max FPS</span>
+        <span>Performance</span>
+        <span>Balanced</span>
+        <span>Smooth</span>
+        <span>Full Features</span>
+      </div>
+
+      <div id="perf-desc" class="perf-desc"></div>
+
+      <div class="text-sm" style="color: var(--text-dim)">
+        Applies at the next restart. Detection, trackers, NetworkTables and
+        robot pose are never affected by this slider.
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-section">
     <h3>Units</h3>
 
     <div class="form-row">
@@ -165,6 +207,26 @@ block content %}
     </div>
 
     <div class="form-row">
+      <span class="form-label">Offline Mode</span>
+
+      <select class="form-input" data-key="offline_mode" data-restart="true">
+        <option value="true">Enabled</option>
+
+        <option value="false">Disabled</option>
+      </select>
+
+      <span class="restart-badge" style="display: none">restart required</span>
+
+      <span class="text-dim text-sm"
+        >Blocks the public internet only. NetworkTables to the robot, the
+        dashboard port, loopback, mDNS and the Tello keep working. Add-ons that
+        need the internet are skipped with a warning; one that only loses an
+        optional feature keeps running. Game Mode forces this on for its
+        one-shot run (never saved to the config).</span
+      >
+    </div>
+
+    <div class="form-row">
       <span class="form-label">Admin Mode</span>
 
       <select class="form-input" data-key="admin">
@@ -176,6 +238,24 @@ block content %}
       <span class="text-dim text-sm"
         >Hides experimental pipelines (QR Code, optical flow) from the camera
         pipeline dropdown unless enabled.</span
+      >
+    </div>
+
+    <div class="form-row">
+      <span class="form-label">Remote Restart</span>
+
+      <select class="form-input" data-key="allow_remote_restart" data-restart="true">
+        <option value="true">Robot LAN allowed</option>
+
+        <option value="false">Localhost / token only</option>
+      </select>
+
+      <span class="restart-badge" style="display: none">restart required</span>
+
+      <span class="text-dim text-sm"
+        >When enabled, loopback and RFC1918/link-local robot-network clients may
+        restart iSpy. Set <code>ISPY_ADMIN_TOKEN</code> to allow other remote
+        callers; "Localhost / token only" disables LAN restarts.</span
       >
     </div>
 
@@ -223,7 +303,9 @@ block content %}
         class="text-dim"
         style="margin-left: 8px; font-size: 0.8rem"
       >
-        Web dashboard off for one boot, then back automatically.
+        Web dashboard off for one boot, then back automatically. Offline mode
+        is forced on for that boot too (in memory only - it can never get stuck
+        on in the config).
       </span>
     </div>
 
@@ -232,6 +314,27 @@ block content %}
       <button class="btn btn-secondary" onclick="exportConfig()">Export</button>
       <button class="btn btn-secondary" onclick="document.getElementById('import-config-input').click()">Import</button>
       <input type="file" id="import-config-input" accept=".json" style="display:none" onchange="importConfig(this.files[0])">
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Beta: Restart iSpy</h3>
+
+    <p class="text-dim text-sm" style="margin: 0 0 12px 0; max-width: 72ch">
+      Stops the vision process and starts it again through the process
+      supervisor. Port 5000 stays reachable with a status page while iSpy
+      restarts. Vision, trackers and the robot connection will be unavailable
+      for a few seconds - do not use this mid-match.
+    </p>
+
+    <div class="form-row">
+      <span class="form-label">Restart process</span>
+
+      <button class="btn btn-danger" id="restart-ispy-btn" onclick="restartISpy()">
+        Restart iSpy
+      </button>
+
+      <span class="text-dim" id="restart-ispy-status" style="margin-left: 8px"></span>
     </div>
   </div>
 
@@ -313,6 +416,16 @@ block content %}
 
     // Best-effort live license from PyPI, with a short timeout so an offline
     // box never blocks (the static value above is authoritative anyway).
+    // while offline don't even fire the request, it could only fail
+    try {
+      const nr = await fetch("/api/network");
+
+      const nj = await nr.json();
+
+      if (nj && nj.offline) return;
+    } catch (e) {
+      /* no offline endpoint - fall through and try the fetch */
+    }
     try {
       const ctrl = new AbortController();
 
@@ -370,7 +483,14 @@ block content %}
 
   let defaultsData = {};
 
-  const BOOL_KEYS = new Set(["frame_sync", "metrics", "debug_mode", "admin"]);
+  const BOOL_KEYS = new Set([
+    "frame_sync",
+    "metrics",
+    "debug_mode",
+    "admin",
+    "offline_mode",
+    "allow_remote_restart",
+  ]);
 
   function parseValue(el) {
     const val = el.value;
@@ -508,6 +628,10 @@ block content %}
       document
         .querySelectorAll(".restart-badge")
         .forEach((b) => (b.style.display = "none"));
+
+      // the slider manages its own badge (it isn't a [data-key] field), so put
+      // it back after the sweep above
+      if (typeof syncPerfBadge === "function") syncPerfBadge();
 
       if (j.needs_restart) {
         (j.changed || []).forEach((key) => {
@@ -915,6 +1039,41 @@ block content %}
     document.getElementById('import-config-input').value = '';
   }
 
+  async function restartISpy() {
+    if (
+      !window.confirm(
+        "Restart iSpy now? Vision, trackers and the robot connection will " +
+          "drop for a few seconds. Do not do this mid-match."
+      )
+    ) {
+      return;
+    }
+    const btn = document.getElementById("restart-ispy-btn");
+    const status = document.getElementById("restart-ispy-status");
+    if (btn) btn.disabled = true;
+    if (status) status.textContent = "Restarting...";
+    try {
+      const r = await fetch("/api/supervisor/restart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      let j = {};
+      try {
+        j = await r.json();
+      } catch (e) {}
+      if (!r.ok || j.ok === false) {
+        throw new Error(j.error || "HTTP " + r.status);
+      }
+      showToast("Restarting iSpy", "info");
+      if (status) status.textContent = "Waiting for iSpy to come back...";
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      if (status) status.textContent = "";
+      showToast(e.message || String(e), "error");
+    }
+  }
+
   async function armGameMode() {
     if (
       !confirm(
@@ -937,8 +1096,154 @@ block content %}
     }
   }
 
+  // not a [data-key] field on purpose, the 400ms auto-save would persist
+  // level 0 before any warning could be read. talks to /api/performance instead
+  const perfState = {
+    level: 4, // running level (what the process is doing right now)
+    configured: 4, // level saved into config.json (runs after restart)
+    restart: false, // configured != running
+    levels: {}, // level -> {label, notes}
+  };
+
+  const perfSlider = document.getElementById("perf-slider");
+
+  function perfLabel(level) {
+    const info = perfState.levels[level];
+    const label = info && info.label ? info.label : "Level " + level;
+    return label + " (" + level + ")";
+  }
+
+  function syncPerfBadge() {
+    const badge = document.getElementById("perf-restart-badge");
+    if (badge) badge.style.display = perfState.restart ? "" : "none";
+  }
+
+  function renderPerfDesc(level) {
+    const label = document.getElementById("perf-level-label");
+    const desc = document.getElementById("perf-desc");
+    if (label) label.textContent = perfLabel(level);
+    if (!desc) return;
+    const notes = (perfState.levels[level] || {}).notes || [];
+    desc.textContent = "";
+    const head = document.createElement("strong");
+    head.textContent = perfLabel(level);
+    desc.appendChild(head);
+    if (notes.length) {
+      const ul = document.createElement("ul");
+      notes.forEach((n) => {
+        const li = document.createElement("li");
+        li.textContent = n;
+        ul.appendChild(li);
+      });
+      desc.appendChild(ul);
+    }
+  }
+
+  async function perfCommit(level, confirmMax) {
+    try {
+      const r = await fetch("/api/performance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level: level, confirm_max: !!confirmMax }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        showToast(j.error || "Could not save the performance profile", "error");
+        return false;
+      }
+      perfState.configured = level;
+      perfState.restart = !!j.restart_pending;
+      if (perfSlider) perfSlider.value = String(level);
+      // keep the raw editor in step (merge only this key so unsaved raw edits
+      // survive) - else a later Save from the Raw tab writes the old level back
+      const cfgEl = document.getElementById("cfg");
+      if (cfgEl) {
+        try {
+          const cur = JSON.parse(cfgEl.value);
+          if (cur && typeof cur === "object") {
+            cur.performance_level = level;
+            cfgEl.value = JSON.stringify(cur, null, 2);
+          }
+        } catch (e) {}
+      }
+      renderPerfDesc(level);
+      syncPerfBadge();
+      showToast(
+        "Performance profile: " +
+          perfLabel(level) +
+          (perfState.restart ? " - restart to apply" : ""),
+        "success",
+      );
+      return true;
+    } catch (e) {
+      showToast("Could not save the performance profile", "error");
+      return false;
+    }
+  }
+
+  if (perfSlider) {
+    perfSlider.addEventListener("input", () => {
+      renderPerfDesc(Number(perfSlider.value));
+    });
+
+    perfSlider.addEventListener("change", () => {
+      const target = Number(perfSlider.value);
+      if (target === perfState.configured) return;
+
+      if (target === 0) {
+        // Max FPS takes the web UI away at the next restart, so the warning
+        // has to be read before it commits. The overlay has no cancel path -
+        // snap the knob back now and only commit inside onClose, which fires
+        // when the countdown actually finishes. Closing/navigating away in
+        // the meantime saves nothing.
+        perfSlider.value = String(perfState.configured);
+        renderPerfDesc(perfState.configured);
+        if (typeof showTimeWarning !== "function") return;
+        showTimeWarning({
+          header: "Switch to Max FPS?",
+          duration: 5,
+          description:
+            "At the next restart the web UI turns off. Also off: rollback " +
+            "recording, vision metrics, FPS console print and annotated " +
+            "frames. Still running: detection, trackers, NetworkTables and " +
+            "robot pose. To undo: run 'ispy performance 4' over SSH, start " +
+            "with 'ispy start --web', or set performance_level back to 4 in " +
+            "Config/config.json.",
+          continueMessage: "Switch to Max FPS",
+          onClose: () => {
+            perfCommit(0, true);
+          },
+        });
+        return;
+      }
+
+      perfCommit(target, false);
+    });
+  }
+
+  async function loadPerformance() {
+    try {
+      const j = await fetch("/api/performance").then((r) => r.json());
+      perfState.level = Number(j.level);
+      perfState.configured =
+        j.configured_level !== undefined
+          ? Number(j.configured_level)
+          : perfState.level;
+      perfState.restart = !!j.restart_pending;
+      (j.levels || []).forEach((lvl) => {
+        perfState.levels[Number(lvl.level)] = lvl;
+      });
+      if (perfSlider) perfSlider.value = String(perfState.configured);
+      renderPerfDesc(perfState.configured);
+      syncPerfBadge();
+    } catch (e) {
+      /* the rest of the page still works without the profile */
+    }
+  }
+
   load();
   loadAbout();
+  loadPerformance();
 </script>
 
 {% endblock %}

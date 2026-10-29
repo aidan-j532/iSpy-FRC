@@ -232,6 +232,11 @@ async function rbLoadStatus() {
   } else if (s.disk_problem) {
     banner.className = 'vision-banner vision-bad';
     banner.textContent = 'Recorder idle: ' + s.disk_problem;
+  } else if (s.performance_off) {
+    banner.className = 'vision-banner vision-warn';
+    banner.textContent =
+      'Recording is off for this run - Max FPS performance profile. ' +
+      'Pick a higher profile in Settings and restart to record again.';
   } else if (!s.enabled) {
     banner.className = 'vision-banner vision-warn';
     banner.textContent = 'Recording is turned off - saved for the next boot';
@@ -265,9 +270,12 @@ async function rbLoadStatus() {
 
   const toggle = document.getElementById('rb-enabled');
   toggle.checked = !!s.enabled;
-  document.getElementById('rb-enabled-note').textContent = toggle.checked
-    ? 'Every run is recorded'
-    : 'Off - will take effect on the next boot';
+  toggle.disabled = !!s.performance_off;
+  document.getElementById('rb-enabled-note').textContent = s.performance_off
+    ? 'Off for this run - Max FPS performance profile'
+    : toggle.checked
+      ? 'Every run is recorded'
+      : 'Off - will take effect on the next boot';
 }
 
 // sessions
@@ -728,7 +736,9 @@ async function rbRefreshReplayCommand() {
   const wrap = document.getElementById('rb-replay-cmd-wrap');
   if (!RB.session) { wrap.style.display = 'none'; return; }
   try {
-    const d = await rbJson('/api/rollback/' + encodeURIComponent(RB.session) + '/replay');
+    const replayUrl = '/api/rollback/' + encodeURIComponent(RB.session) +
+      '/replay' + (RB.cam ? '?cam=' + encodeURIComponent(RB.cam) : '');
+    const d = await rbJson(replayUrl);
     document.getElementById('rb-replay-cmd').textContent = d.command;
     const clip = document.getElementById('rb-dl-clip');
     if (RB.stem && RB.cam) {
@@ -873,12 +883,11 @@ document.getElementById('rb-sessions').addEventListener('click', async e => {
   }
 });
 
-rbLoadStatus();
+ispyPoll(rbLoadStatus, 2000);
 rbLoadSettings().catch(() => {});
 rbLoadSessions().catch(e => {
   document.getElementById('rb-sessions').innerHTML =
     '<div class="empty-state">' + esc(e.message) + '</div>';
 });
-setInterval(rbLoadStatus, 2000);
 </script>
 {% endblock %}

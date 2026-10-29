@@ -50,6 +50,8 @@ class TestSettingsPageKeys(unittest.TestCase):
             "log_level",
             "health_stale_threshold",
             "temperature_unit",
+            "offline_mode",
+            "allow_remote_restart",
         }
         self.assertTrue(
             set(data_keys(SETTINGS_HTML)) <= valid, data_keys(SETTINGS_HTML)

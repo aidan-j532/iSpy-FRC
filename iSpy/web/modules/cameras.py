@@ -1,11 +1,8 @@
 import base64
 import copy
-import glob
 import json
 import logging
 import os
-import re
-import subprocess
 import threading
 from pathlib import Path
 import cv2
@@ -13,6 +10,7 @@ import time
 from flask import Response, jsonify, render_template, request, send_file
 import numpy as np
 from iSpy.web.Backend.WebModule import WebModule
+from iSpy.core import performance
 from iSpy.web.Backend.save_store import read, write
 from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads
 from iSpy.config.iSpyConfig import (
@@ -48,6 +46,8 @@ COCO17_OBJECT_POINTS = [
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
+# how long a recent MJPEG pull keeps counting as "someone is watching"
+_FEED_VIEWER_GRACE_S = 3.0
 
 # auto-capture loop: the wizard's live feed stores a board frame by itself once
 # it is complete enough and moved from every prior capture, and runs a rolling
@@ -234,9 +234,6 @@ def _profile_pipeline_class(pipeline_name: str):
 
 
 def _save_model_profile(config, pipeline_name: str, settings: dict) -> None:
-    """Side effect of every camera add/edit: validated model-backed settings
-    become the camera's profile snapshot. Never saves a broken config, so the
-    Load Profile tab only ever offers settings that can actually run."""
     cls = _profile_pipeline_class(pipeline_name)
     if cls is None:
         return
@@ -253,252 +250,62 @@ def _save_model_profile(config, pipeline_name: str, settings: dict) -> None:
         pass
 
 
-def _windows_cameras_from_registry():
-    devices = []
-    try:
-        import winreg
-    except ImportError:
-        return devices
-
-    class_key = r"SYSTEM\CurrentControlSet\Control\DeviceClasses\{e5323777-f976-4f5b-9b55-b94699c46e44}"
-    try:
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, class_key)
-    except OSError:
-        return devices
-
-    try:
-        subkey_pos = 0
-        camera_index = 0
-        while True:
-            try:
-                iface = winreg.EnumKey(key, subkey_pos)
-            except OSError:
-                break
-            subkey_pos += 1
-            if "#{" not in iface:
-                continue
-            raw_hw = iface[: iface.find("#{")]
-            # USB cameras expose two UVC interfaces (MI_00 video, MI_01 metadata)
-            # - strip &MI_XX so they collapse to the same physical device
-            dedup_key = re.sub(r"&MI_\w+", "", raw_hw, flags=re.IGNORECASE)
-            devices.append(
-                {
-                    "index": camera_index,
-                    "name": _windows_camera_name(iface) or f"Camera {camera_index}",
-                    "hw_id": raw_hw,
-                    "dedup_key": dedup_key,
-                }
-            )
-            camera_index += 1
-    finally:
-        winreg.CloseKey(key)
-    return devices
-
-
-def _windows_camera_name(iface):
-    try:
-        import winreg
-    except ImportError:
-        return None
-
-    end = iface.find("#{")
-    if end == -1:
-        return None
-    body = iface[:end]
-    for prefix in ("##?#", "#?#"):
-        if body.startswith(prefix):
-            body = body[len(prefix) :]
-            break
-
-    def _read_name(enum_path):
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, enum_path)
-        except OSError:
-            return None
-        try:
-            for value in ("FriendlyName", "DriverDesc", "DeviceDesc"):
-                try:
-                    name, _ = winreg.QueryValueEx(key, value)
-                except OSError:
-                    continue
-                if not isinstance(name, str):
-                    continue
-                if name.startswith("@"):
-                    # "inf_path,%desc%;Friendly Name" -> drop the locator, keep the friendly part
-                    name = name.rsplit(";", 1)[-1] if ";" in name else ""
-                name = name.strip()
-                if name:
-                    return name
-        finally:
-            winreg.CloseKey(key)
-        return None
-
-    # Each # in the interface path maps to \ in the registry Enum path:
-    #   USB#VID_xxx&PID_yyy&MI_00#instance_id -> Enum\USB\VID_xxx&PID_yyy&MI_00\instance_id
-    parts = body.split("#")
-    if len(parts) < 3:
-        return None
-    enum_path = "SYSTEM\\CurrentControlSet\\Enum\\" + "\\".join(parts)
-    hw_id = "\\".join(parts[:2])
-
-    name = _read_name(enum_path)
-    if name and name.lower() not in _GENERIC_WINDOWS_NAMES:
-        return name
-
-    # generic iface name -> real one usually lives on the parent usb node, not the uvc iface
-    m = re.match(r"^USB\\(VID_\w+&PID_\w+)(?:&MI_\w+)?$", hw_id, re.IGNORECASE)
-    if m:
-        parent_hw = f"USB\\{m.group(1)}"
-        parent_root = f"SYSTEM\\CurrentControlSet\\Enum\\{parent_hw}"
-        try:
-            parent_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, parent_root)
-        except OSError:
-            parent_key = None
-        if parent_key is not None:
-            try:
-                try:
-                    sub, _ = winreg.EnumKey(parent_key, 0)
-                except OSError:
-                    sub = None
-                if sub:
-                    parent_name = _read_name(f"{parent_root}\\{sub}")
-                    if parent_name:
-                        return parent_name
-            finally:
-                winreg.CloseKey(parent_key)
-    return name or None
-
-
-# names windows hands out when it has nothing better - treat as unknown and keep digging
-_GENERIC_WINDOWS_NAMES = {
-    "",
-    "usb video device",
-    "usb camera",
-    "camera",
-    "uvc camera",
-    "video capture device",
-    "usb2.0 camera",
+_MEDIA_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".avi",
+    ".mp4",
+    ".mov",
+    ".mkv",
 }
 
-# v4l2 capability bits (videodev2.h) - caps u32 lives at offset 84 in QUERYCAP
-_V4L2_CAP_VIDEO_CAPTURE = 0x00000001
-_V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
-_V4L2_CAP_VIDEO_M2M = 0x00004000
-_VIDIOC_QUERYCAP = 0x80685600
 
-
-def _v4l2_caps(video_path):
-    try:
-        import fcntl
-        import struct
-    except ImportError:
-        return 0
-    for mode in (os.O_RDWR, os.O_RDONLY):
-        try:
-            fd = os.open(video_path, mode | getattr(os, "O_NONBLOCK", 0))
-        except OSError:
-            continue
-        try:
-            buf = fcntl.ioctl(fd, _VIDIOC_QUERYCAP, b"\0" * 104)
-            return struct.unpack_from("<I", buf, 84)[0]
-        except OSError:
-            continue
-        finally:
-            os.close(fd)
-    return 0
-
-
-_LINUX_NON_CAMERA_KEYWORDS = {"codec", "encode", "decode", "radio", "loopback"}
-
-
-def _linux_is_known_non_camera(video_path):
-    name = _linux_sysfs_name(video_path)
-    if name:
-        lower = name.lower()
-        if any(kw in lower for kw in _LINUX_NON_CAMERA_KEYWORDS):
-            return True
-    # e.g. /dev/video-dec0, /dev/video-enc0 — the part after "video-" starts
-    # with a non-digit which real camera nodes never do
-    basename = os.path.basename(video_path).lower()
-    if (
-        basename.startswith("video-")
-        and len(basename) > 6
-        and not basename[6].isdigit()
+def _source_is_stream_or_file(source) -> bool:
+    text = str(source if source is not None else "").strip()
+    if not text:
+        return False
+    if text.lower().startswith(
+        ("rtsp://", "http://", "https://", "udp://", "tcp://")
     ):
         return True
-    return False
-
-
-def _linux_is_capture_node(video_path):
-    caps = _v4l2_caps(video_path)
-    if caps == 0:
-        return None
-    if caps & _V4L2_CAP_VIDEO_M2M:
-        # m2m codecs (bcm2835-codec-decode) claim the capture bit but aint cameras
+    if Path(text).suffix.lower() in _MEDIA_SUFFIXES:
+        return True
+    try:
+        return Path(text).expanduser().is_file()
+    except OSError:
         return False
-    return bool(caps & (_V4L2_CAP_VIDEO_CAPTURE | _V4L2_CAP_VIDEO_CAPTURE_MPLANE))
 
 
-def _linux_device_key(video_path):
-    m = re.search(r"/video(?P<num>\d+)$", video_path)
-    if not m:
-        return video_path
-    sysfs = f"/sys/class/video4linux/video{m.group('num')}/device"
+def _camera_source_available(config, source, device_id=None) -> bool:
+    """True when a new physical camera source is present right now.
+
+    Explicit streams and image/video files keep working without discovery;
+    bare device indexes and /dev/video paths must match a detected device.
+    """
+    if _source_is_stream_or_file(source):
+        return True
+    claimed = set()
+    for entry in (config.get("camera_configs", {}) or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("source") is not None:
+            claimed.add(str(entry.get("source")))
     try:
-        real = os.path.realpath(sysfs)
-    except OSError:
-        return None
-    suffix = f"video4linux/video{m.group('num')}"
-    if real.endswith(suffix):
-        real = real[: -len(suffix)]
-    return real
-
-
-def _linux_sysfs_name(video_path):
-    m = re.search(r"/video(\d+)$", video_path)
-    if not m:
-        return None
-    try:
-        with open(
-            f"/sys/class/video4linux/video{m.group(1)}/name",
-            encoding="utf-8",
-            errors="replace",
-        ) as f:
-            return f.read().strip() or None
-    except OSError:
-        return None
-
-
-def _linux_device_groups():
-    try:
-        result = subprocess.run(
-            ["v4l2-ctl", "--list-devices"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
+        devices = OpenCVCamera.discover(claimed_sources=claimed)
     except Exception:
-        result = None
-    if result is not None and result.returncode == 0:
-        groups = {}
-        current_name = None
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                current_name = None
-                continue
-            if line.endswith(":") and not line.lower().startswith("/dev/"):
-                current_name = line.rstrip(":")
-                continue
-            if line.startswith("/dev/video") and current_name:
-                groups.setdefault(current_name, []).append(line)
-        return [(name, nodes) for name, nodes in groups.items()]
-
-    groups = {}
-    for path in sorted(glob.glob("/dev/video*")):
-        key = _linux_device_key(path) or path
-        groups.setdefault(key, []).append(path)
-    return [(None, nodes) for nodes in groups.values()]
+        devices = []
+    source_text = str(source if source is not None else "").strip()
+    for device in devices:
+        if device_id and str(device.get("device_id") or "") == str(device_id):
+            return True
+        if str(device.get("path") or "").strip() == source_text:
+            return True
+    return False
 
 
 class CamerasModule(WebModule):
@@ -521,10 +328,29 @@ class CamerasModule(WebModule):
         self._auto_discover_thread: threading.Thread | None = None
         self._sse_lock = threading.Lock()
         self._sse_clients: list = []
+        # last pull time per camera's MJPEG stream - the loop uses this (plus
+        # the page's device SSE) to decide what's worth building
+        self._feed_seen: dict[str, float] = {}
+
+    def has_viewers(self, now: float = 0.0) -> bool:
+        now = now or time.monotonic()
+        if any(now - t < _FEED_VIEWER_GRACE_S for t in self._feed_seen.values()):
+            return True
+        with self._sse_lock:
+            return bool(self._sse_clients)
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule(
-            "/cameras", "cameras_page", lambda: render_template("cameras.html")
+            "/cameras",
+            "cameras_page",
+            lambda: render_template(
+                "cameras.html",
+                editor_admin=bool(
+                    (self.context.get("config").get("admin"))
+                    if self.context.get("config") is not None
+                    else False
+                ),
+            ),
         )
         flask_app.add_url_rule("/api/cameras", "api_cameras", self._api_cameras)
         flask_app.add_url_rule(
@@ -575,6 +401,30 @@ class CamerasModule(WebModule):
             "api_cameras_tuning_set",
             self._tuning_set,
             methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/actions/<action_id>",
+            "api_cameras_action",
+            self._camera_action,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/pipeline_settings",
+            "api_cameras_pipeline_settings_get",
+            self._pipeline_settings_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/pipeline_settings",
+            "api_cameras_pipeline_settings_set",
+            self._pipeline_settings_set,
+            methods=["POST"],
+        )
+        flask_app.add_url_rule(
+            "/api/cameras/<cam_name>/sample_hsv",
+            "api_cameras_sample_hsv",
+            self._sample_hsv,
+            methods=["GET"],
         )
         flask_app.add_url_rule(
             "/api/vision_pipelines", "api_vision_pipelines", self._vision_pipelines
@@ -924,6 +774,13 @@ class CamerasModule(WebModule):
         self.live_cameras = cam_by_name
         per_cam = frame_data.get("camera_frames")
         now = time.monotonic()
+        if (
+            performance.get_profile().skip_web_without_viewers
+            and not self.has_viewers(now)
+        ):
+            # nobody has the page (or a feed) open - holding every camera frame
+            # every tick feeds zero readers
+            return
         with self.lock:
             if per_cam:
                 for name, f in per_cam.items():
@@ -1041,6 +898,173 @@ class CamerasModule(WebModule):
             note="Saved - applies immediately to the live feed.",
             applied=applied,
         )
+
+    def _persist_live_settings(self, key: str, inst) -> dict:
+        # write settings changed by a camera action back to config
+        taker = getattr(inst, "take_pending_settings", None)
+        if not callable(taker):
+            return {}
+        try:
+            pending = taker() or {}
+        except Exception:
+            return {}
+        if not pending:
+            return {}
+        cams, _key, entry = self._find_camera_entry(key)
+        if entry is None:
+            return {}
+        settings = get_pipeline_settings(entry)
+        settings.update(pending)
+        config = self.context["config"]
+        config.set("camera_configs", cams)
+        config.save(quiet=True)
+        return pending
+
+    def _camera_action(self, cam_name, action_id):
+        _cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        inst = self._live_cam_for(key, cam_name)
+        if inst is None:
+            return jsonify(error="Camera is not live"), 404
+        get_actions = getattr(inst, "get_actions", None)
+        invoke = getattr(inst, "invoke_action", None)
+        if not callable(get_actions) or not callable(invoke):
+            return jsonify(error="Camera does not support actions"), 404
+        try:
+            declared = {
+                action.get("id")
+                for action in (get_actions() or [])
+                if isinstance(action, dict)
+            }
+        except Exception:
+            declared = set()
+        # only dispatch actions the pipeline declared
+        if action_id not in declared:
+            return jsonify(error=f"Unknown action '{action_id}'"), 404
+
+        data = request.get_json(silent=True) or {}
+        try:
+            result = invoke(action_id, data.get("value"))
+        except Exception as exc:
+            logger.exception("Camera action '%s' failed", action_id)
+            return jsonify(ok=False, error=str(exc)), 500
+
+        result = result or {"ok": False, "error": "no result"}
+        if result.get("ok"):
+            self._persist_live_settings(key, inst)
+        return jsonify(result)
+
+    def _pipeline_settings_get(self, cam_name):
+        _cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        pipeline_name = get_pipeline_name(entry)
+        cls = get_pipeline_classes().get(pipeline_name)
+        if cls is None:
+            return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 404
+        schema = cls.config_schema() or {}
+        stored = get_pipeline_settings(entry) or {}
+        settings = {
+            name: stored.get(name, defn.get("default"))
+            for name, defn in schema.items()
+        }
+        live = None
+        inst = self._live_cam_for(key, cam_name)
+        if inst is not None and hasattr(inst, "current_settings"):
+            try:
+                live = inst.current_settings()
+            except Exception:
+                live = None
+        return jsonify(
+            camera=key,
+            pipeline=pipeline_name,
+            live_tunable=bool(getattr(cls, "live_tunable", False)),
+            schema=schema,
+            settings=settings,
+            live=live,
+        )
+
+    def _pipeline_settings_set(self, cam_name):
+        data = request.get_json(force=True) or {}
+        cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        from iSpy.vision.pipelines import get_pipeline_classes
+
+        pipeline_name = get_pipeline_name(entry)
+        cls = get_pipeline_classes().get(pipeline_name)
+        if cls is None:
+            return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 404
+        schema = cls.config_schema() or {}
+        # only allow keys that exist in the schema
+        allowed = {name: value for name, value in data.items() if name in schema}
+        if not allowed:
+            return jsonify(error="No pipeline settings provided"), 400
+
+        config = self.context["config"]
+        inst = self._live_cam_for(key, cam_name)
+        if inst is not None and hasattr(inst, "update_settings"):
+            try:
+                applied = inst.update_settings(allowed) or {}
+            except Exception as exc:
+                return jsonify(error=f"Failed to apply settings: {exc}"), 500
+            if not applied:
+                return jsonify(error="No settings were applied"), 400
+            note = "Applied live."
+        else:
+            applied = allowed
+            note = "Saved to config. Restart vision to apply - camera is not live."
+
+        settings = get_pipeline_settings(entry)
+        for name, value in applied.items():
+            settings[name] = list(value) if isinstance(value, tuple) else value
+        config.set("camera_configs", cams)
+        config.save(quiet=True)
+        return jsonify(success=True, note=note, applied=applied)
+
+    def _sample_hsv(self, cam_name):
+        _cams, key, entry = self._find_camera_entry(cam_name)
+        if entry is None:
+            return jsonify(error="Camera not found"), 404
+        inst = self._live_cam_for(key, cam_name)
+        if inst is None:
+            return jsonify(error="Camera is not live"), 404
+        getter = getattr(inst, "get_raw_frame", None)
+        if not callable(getter):
+            return jsonify(error="Camera has no raw frame"), 404
+        try:
+            frame = getter()
+        except Exception as exc:
+            return jsonify(error=f"Could not read a frame: {exc}"), 500
+        if frame is None or getattr(frame, "size", 0) == 0:
+            return jsonify(error="No frame available"), 404
+        try:
+            x = float(request.args.get("x", 0))
+            y = float(request.args.get("y", 0))
+        except (TypeError, ValueError):
+            return jsonify(error="x and y must be numbers"), 400
+
+        frame_h, frame_w = frame.shape[:2]
+        # click is in displayed pixels, map it back to the frame
+        disp_w = _to_float(request.args.get("w"), frame_w) or frame_w
+        disp_h = _to_float(request.args.get("h"), frame_h) or frame_h
+        px = int(round(x * frame_w / disp_w))
+        py = int(round(y * frame_h / disp_h))
+        px = min(max(px, 0), frame_w - 1)
+        py = min(max(py, 0), frame_h - 1)
+
+        # median of a small patch avoids hot pixels
+        patch = frame[max(0, py - 2) : min(frame_h, py + 3), max(0, px - 2) : min(frame_w, px + 3)]
+        if patch.size == 0:
+            return jsonify(error="Sample is outside the frame"), 400
+        hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        h = int(np.median(hsv[:, :, 0]))
+        s = int(np.median(hsv[:, :, 1]))
+        v = int(np.median(hsv[:, :, 2]))
+        return jsonify(x=px, y=py, w=frame_w, h=frame_h, hsv=[h, s, v])
 
     def _vision_pipelines(self):
         config = self.context["config"]
@@ -1871,6 +1895,20 @@ class CamerasModule(WebModule):
         cams = dict(config.get("camera_configs", {}))
         if name in cams:
             return jsonify(error=f"Camera '{name}' already exists"), 409
+        if camera_type == "tello" and not bool(config.get("admin")):
+            return jsonify(
+                error="Tello EDU cameras require admin mode."
+            ), 403
+        if (
+            camera_type == "opencv"
+            and not _camera_source_available(config, source, device_id)
+        ):
+            return jsonify(
+                error=(
+                    f"Camera source '{source}' is not a detected device. "
+                    "Refresh devices and pick one from the list."
+                )
+            ), 400
 
         # refuse to add a device already claimed by another configured cam
         if device_id:
@@ -2027,6 +2065,14 @@ class CamerasModule(WebModule):
             return jsonify(error="Camera source is required"), 400
         if new_name != entry_key and new_name in cams:
             return jsonify(error=f"Camera '{new_name}' already exists"), 409
+        if (
+            str(new_entry.get("camera_type") or "opencv") == "tello"
+            and str(entry.get("camera_type") or "opencv") != "tello"
+            and not bool(config.get("admin"))
+        ):
+            return jsonify(
+                error="Tello EDU cameras require admin mode."
+            ), 403
 
         pipeline_name = str(pipeline_entry.get("name") or "object_detection")
         try:
@@ -2061,9 +2107,19 @@ class CamerasModule(WebModule):
         config.save()
 
         # settings apply on the next vision start - never rebuild the running pipeline mid-run
+        warning = None
+        if (
+            str(new_entry.get("camera_type") or "opencv") == "tello"
+            and not bool(config.get("admin"))
+        ):
+            warning = (
+                "This existing Tello camera is preserved, but Tello cameras are "
+                "hidden in normal mode. Enable admin mode to add or change one."
+            )
         return jsonify(
             success=True,
             note="Settings saved - restart vision to apply.",
+            warning=warning,
             camera=new_entry,
         )
 
@@ -2140,6 +2196,15 @@ class CamerasModule(WebModule):
                     payload["ready"] = None
                     payload["status"] = None
                     payload["state"] = None
+                actions = []
+                if inst is not None:
+                    getter = getattr(inst, "get_actions", None)
+                    if callable(getter):
+                        try:
+                            actions = getter() or []
+                        except Exception:
+                            actions = []
+                payload["actions"] = actions
                 payload["streaming"] = True
                 cameras.append(payload)
 
@@ -2168,6 +2233,7 @@ class CamerasModule(WebModule):
                         if isinstance(entry, dict)
                         else "object_detection"
                     ),
+                    "actions": [],
                     "streaming": False,
                 }
                 cameras.append(payload)
@@ -2242,8 +2308,16 @@ class CamerasModule(WebModule):
         )
 
     def _generate(self, camera_name):
-        target_interval = 1.0 / 20
+        # the profile owns the preview pace: fps, quality and an optional width
+        # cap, all shrinking the encode+network cost per open viewer
+        profile = performance.get_profile()
+        target_interval = 1.0 / max(profile.mjpeg_fps, 0.1)
+        quality = int(profile.mjpeg_quality)
+        max_width = profile.mjpeg_max_width
         last_frame_time = time.monotonic()
+        # count the pull now, or the frame store keeps skipping writes (nobody
+        # watching) while this generator waits for one
+        self._feed_seen[camera_name] = time.monotonic()
         try:
             while True:
                 t0 = time.perf_counter()
@@ -2255,7 +2329,16 @@ class CamerasModule(WebModule):
                     time.sleep(0.05)
                     continue
                 last_frame_time = time.monotonic()
-                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                self._feed_seen[camera_name] = last_frame_time
+                if max_width and frame.shape[1] > max_width:
+                    scale = max_width / float(frame.shape[1])
+                    frame = cv2.resize(
+                        frame,
+                        (int(max_width), max(1, int(round(frame.shape[0] * scale)))),
+                    )
+                ok, buf = cv2.imencode(
+                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality]
+                )
                 if not ok:
                     continue
                 yield (

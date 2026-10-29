@@ -1,7 +1,11 @@
 import copy
+import logging
+
 from flask import jsonify, render_template, request
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.validations.recommendations import get_structured_recommendations
+
+logger = logging.getLogger(__name__)
 
 _RESTART_REQUIRED_KEYS = {
     "unit",
@@ -13,6 +17,15 @@ _RESTART_REQUIRED_KEYS = {
     "camera_configs",
     "device",
     "num_gpus",
+    # add-ons are constructed at boot, so the offline gate only re-evaluates
+    # after a restart
+    "offline_mode",
+    # the web-enable decision, the module scheduler and the loop knobs are
+    # all set up at boot
+    "performance_level",
+    # the child reads this when it starts; the supervisor re-reads it when it
+    # owns the port, so a restart keeps both sides in sync
+    "allow_remote_restart",
 }
 
 
@@ -76,6 +89,68 @@ class SettingsModule(WebModule):
         flask_app.add_url_rule(
             "/api/settings/import", "api_settings_import", self._import, methods=["POST"]
         )
+        # get the running level and the whole table, set the configured level
+        # (a restart applies it)
+        flask_app.add_url_rule(
+            "/api/performance",
+            "api_performance_get",
+            self._performance_get,
+            methods=["GET"],
+        )
+        flask_app.add_url_rule(
+            "/api/performance",
+            "api_performance_post",
+            self._performance_post,
+            methods=["POST"],
+        )
+
+    def _performance_get(self):
+        from iSpy.core import performance
+
+        running = performance.get_level()
+        configured = performance.configured_level(self.context["config"])
+        return jsonify(
+            level=running,
+            configured_level=running if configured is None else configured,
+            label=performance.PROFILES[running].label,
+            restart_pending=performance.restart_pending(self.context["config"]),
+            web_enabled=performance.PROFILES[running].web_enabled,
+            levels=performance.levels_payload(),
+            recovery=performance.recovery_help(),
+        )
+
+    def _performance_post(self):
+        from iSpy.core import performance
+
+        config = self.context["config"]
+        data = request.get_json(force=True, silent=True) or {}
+        level = performance.clamp(data.get("level"))
+        if level is None:
+            return jsonify(error="level must be an integer 0-4"), 400
+        # the UI handles the level-0 countdown, but the raw JSON editor and
+        # curl can still reach this route - require the explicit flag
+        if level == 0 and not data.get("confirm_max"):
+            return jsonify(
+                error=(
+                    "level 0 turns the web UI off for the next run - pass "
+                    "confirm_max: true to confirm"
+                )
+            ), 400
+
+        config.set("performance_level", level)
+        config.save(quiet=True)
+        if level == 0:
+            logger.warning(
+                "Performance profile set to 0 (Max FPS) - the web UI, rollback "
+                "recording, metrics and FPS console print will be off after the "
+                "next restart. %s",
+                performance.recovery_help(),
+            )
+        return jsonify(
+            success=True,
+            level=level,
+            restart_pending=performance.restart_pending(config),
+        )
 
     def _export(self):
         config = self.context["config"]
@@ -91,8 +166,19 @@ class SettingsModule(WebModule):
             if not isinstance(data, dict) or "camera_configs" not in data:
                 return jsonify(error="Not an iSpy config export (missing camera_configs)"), 400
             config = self.context["config"]
+            old_offline = bool(config.get("offline_mode", False))
             config._update_config(data)
             config.save()
+            # the imported file owns offline_mode - not ours to silently drop
+            # or flip - but say so, or it reads as the internet randomly breaking
+            new_offline = bool(config.get("offline_mode", False))
+            if old_offline != new_offline:
+                logger.warning(
+                    "Imported config changed offline_mode: %s -> %s (effective "
+                    "after the next vision restart).",
+                    old_offline,
+                    new_offline,
+                )
             return jsonify(success=True, config=config.config)
         except ValueError as e:
             return jsonify(error=str(e)), 400

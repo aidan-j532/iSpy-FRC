@@ -1,8 +1,9 @@
 import logging
 from abc import ABC, abstractmethod
 from iSpy.config.iSpyConfig import iSpyAddonConfig
+from iSpy.core import network_policy
 
-_SCHEMA_TYPES = ("text", "number", "toggle", "list")
+_SCHEMA_TYPES = ("text", "number", "toggle", "list", "range")
 _SCHEMA_TYPE_FALLBACK = {
     bool: "toggle",
     int: "number",
@@ -29,7 +30,82 @@ class StatusMixin:
         return getattr(self, "_status", "unknown")
 
 
-class AddonBase(StatusMixin):
+# offline-mode plumbing shared by add-ons and pipelines: needs_internet = True
+# or network_requirements(); require_network/try_online guard online-only actions
+class NetworkMixin:
+    # shortcut for add-ons whose every feature needs the internet. a subclass
+    # that overrides network_requirements() replaces this entirely
+    needs_internet = False
+
+    # what this add-on needs the internet for, judged from its settings
+    @classmethod
+    def network_requirements(cls, settings: dict) -> list:
+        if getattr(cls, "needs_internet", False):
+            return [
+                network_policy.NetworkRequirement(
+                    name=getattr(cls, "plugin_name", cls.__name__),
+                    reason="add-on uses the internet for everything it does",
+                    critical=True,
+                )
+            ]
+        return []
+
+    @property
+    def network_allowed(self) -> bool:
+        return not network_policy.is_offline()
+
+    # raises OfflineError when the feature would need the internet - call it
+    # before an optional online action so it fails loud instead of hanging
+    def require_network(self, feature: str) -> None:
+        if network_policy.is_offline():
+            raise network_policy.OfflineError(
+                f"offline mode: {feature} needs the internet"
+            )
+
+    # runs fn when online, else records one degraded note and returns fallback.
+    # flaky connections land here too so a dead network can't kill the tick
+    def try_online(self, feature: str, fn, fallback=None):
+        if not self.network_allowed:
+            self._record_offline_feature(feature, "offline mode")
+            return fallback
+        try:
+            return fn()
+        except network_policy.network_exceptions() as exc:
+            self._record_offline_feature(feature, f"network error: {exc}")
+            return fallback
+
+    def _record_offline_feature(self, feature: str, reason: str) -> None:
+        network_policy.record_degraded(
+            type(self).__name__,
+            getattr(self, "plugin_name", type(self).__name__),
+            feature,
+            reason,
+        )
+
+    # schema fields marked requires_network get reset to their default while
+    # offline, so an online-only knob can't stay on and keep reaching out
+    def _ignore_offline_settings(self) -> None:
+        if not network_policy.is_offline():
+            return
+        try:
+            schema = self.config_schema()
+        except Exception:
+            return
+        for key, defn in schema.items():
+            if not (isinstance(defn, dict) and defn.get("requires_network")):
+                continue
+            default = defn.get("default")
+            if self.config.get(key) != default:
+                if hasattr(self.config, "set"):
+                    self.config.set(key, default)
+                else:
+                    self.config[key] = default
+                self._record_offline_feature(
+                    key, "setting needs the internet - ignored while offline"
+                )
+
+
+class AddonBase(NetworkMixin, StatusMixin):
     # a camera assigned a pipeline not listed here is flagged incompatible
     supported_pipelines: tuple | None = None
 
@@ -53,6 +129,7 @@ class AddonBase(StatusMixin):
         self.config = raw
         for key, value in default_settings_from_schema(self.config_schema()).items():
             self.config.setdefault(key, value)
+        self._ignore_offline_settings()
 
     @property
     def global_config(self):
@@ -69,6 +146,16 @@ class AddonBase(StatusMixin):
     @classmethod
     def default_settings(cls) -> dict:
         return default_settings_from_schema(cls.config_schema())
+
+    # per-camera action buttons the web UI renders on the camera card. each
+    # entry is {"id", "label", "kind": "button"|"toggle", "value", "title"}
+    def get_actions(self) -> list[dict]:
+        return []
+
+    # the route only forwards ids that get_actions() declared, so an action
+    # that is not currently offered can never be dispatched
+    def invoke_action(self, action_id: str, value=None) -> dict:
+        return {"ok": False, "error": "unsupported"}
 
 
 class TrackerBase(AddonBase):
@@ -161,7 +248,7 @@ def find_duplicate_output_keys(utilities: dict) -> dict[str, list[str]]:
     return {key: names for key, names in seen.items() if len(names) > 1}
 
 
-class VisionBase(ABC):
+class VisionBase(NetworkMixin, ABC):
     plugin_name = "base"
 
     def __init__(self, context: dict):
@@ -195,6 +282,13 @@ class VisionBase(ABC):
 
     def plot(self, frame):
         return frame
+
+    # per-camera action buttons - same contract as AddonBase.get_actions()
+    def get_actions(self) -> list[dict]:
+        return []
+
+    def invoke_action(self, action_id: str, value=None) -> dict:
+        return {"ok": False, "error": "unsupported"}
 
     @abstractmethod
     def run(self):

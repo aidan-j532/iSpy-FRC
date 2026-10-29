@@ -25,6 +25,10 @@ def main():
 
         ensure_torch_imported()
 
+        # ISPY_OFFLINE=1 arms the socket guard here too, so ultralytics fails
+        # fast instead of trying to download anything
+        from iSpy.core import network_policy  # noqa: F401
+
         from ultralytics import YOLO, YOLOWorld
 
         output_path.parent.mkdir(parents=True, exist_ok=True)

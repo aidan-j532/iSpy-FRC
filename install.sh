@@ -7,18 +7,22 @@ echo "Python: $(python3 --version)"
 
 ARCH=$(uname -m)
 
-if [[ "$ARCH" == "aarch64" ]]; then
-    echo "Detected aarch64 - deploy install (no dev extras)."
-    pip install . --break-system-packages
-elif [[ "$ARCH" == "x86_64" ]]; then
-    echo "Detected x86_64 - dev install (includes training tools)."
-    pip install ".[dev]" --break-system-packages
+# Runtime dependencies (including the CPU/CUDA-correct torch) are selected by
+# the backend registry during `ispy setup`. Do not install [dev] here: its
+# torchvision dependency can pull a CUDA torch from PyPI on Linux.
+if [[ "${ISPY_DEV:-0}" == "1" ]]; then
+    echo "ISPY_DEV=1 - installing developer extras (install torch first)."
+    pip install -e ".[dev]" --break-system-packages
 else
-    echo "Detected $ARCH - base install."
+    echo "Detected $ARCH - base install (runtime backends are provisioned by ispy setup)."
     pip install . --break-system-packages
 fi
 
 echo ""
 echo "=== Done ==="
-echo "Run: iSpy-boot    (first-time setup + auto-optimization)"
-echo "     iSpy-run     (main detection loop)"
+echo "Run: ispy setup    (first-time setup + hardware-aware backend install)"
+echo "     ispy start    (supervised vision + web UI)"
+echo ""
+echo "Dashboard: http://localhost:5000"
+echo "  The supervisor keeps this URL available while iSpy boots, restarts,"
+echo "  crashes, or runs with the web UI disabled."

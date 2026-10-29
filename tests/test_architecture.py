@@ -572,14 +572,20 @@ class BootTests(unittest.TestCase):
     def test_boot_completes_when_all_ready(self):
         from iSpy.boot.boot import _wait_for_pipeline_ready
 
+        destroyed = []
+
         class FakeReadyPipeline:
             def __init__(self, camera_config, config, core_mask=None):
-                pass
+                self.name = camera_config.get("name")
 
             def is_ready(self):
                 return True, "ready"
 
+            def destroy(self):
+                destroyed.append(self.name)
+
         _wait_for_pipeline_ready(self._fake_config(), {"fake": FakeReadyPipeline})
+        self.assertEqual(destroyed, ["cam_0"])
 
     def test_broken_camera_does_not_block_healthy_cameras(self):
         # a single camera whose pipeline fails to construct is skipped w/ a log;
@@ -842,6 +848,18 @@ class CameraOpenBoundedTests(unittest.TestCase):
                 cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
         self.assertEqual(cam_mod._open_worker_live, baseline)
 
+    def test_stopped_camera_does_not_consume_a_slot(self):
+        from iSpy.vision.Cameras import base as cam_mod
+
+        cam = self._mk_cam()
+        cam.stopped = True
+        # Regression: the old order took a slot and then raised "stopping",
+        # leaking it. One more attempt than there are slots means a leak would
+        # surface as the max-slots error instead of the stopping error.
+        for _ in range(cam_mod._OPEN_WORKER_MAX + 1):
+            with self.assertRaisesRegex(cam_mod.CameraOpenTimeout, "stopping"):
+                cam._open_capture_bounded(cam_mod.cv2.CAP_ANY)
+
     def test_cap_blocks_oversubscription_and_releases_slot(self):
         from iSpy.vision.Cameras import base as cam_mod
 
@@ -958,6 +976,7 @@ class RKNNWheelUrlTests(unittest.TestCase):
 
 class ConvertModelSubprocessTests(unittest.TestCase):
     def test_quantized_kill_retries_unquantized(self):
+        from iSpy.vision import optimizer as opt
         from iSpy.vision.optimizer import _convert_model_subprocess
 
         calls = []
@@ -979,12 +998,20 @@ class ConvertModelSubprocessTests(unittest.TestCase):
             "iSpy.vision.optimizer.subprocess.run",
             side_effect=fake_run,
         ):
-            out = _convert_model_subprocess(
-                "models/yolov8s.pt",
-                "rknn",
-                [640, 640],
-                quantize=True,
-            )
+            # RKNN routing calls converter_python() before spawning the
+            # worker - without patching it the real provisioning would run
+            # (and be intercepted by the subprocess mock above).
+            with mock.patch.object(opt, "_rknn_converter_env") as mock_env:
+                mock_env.converter_python.return_value = Path(
+                    "/fake/converter/bin/python"
+                )
+                mock_env.ispy_source_root.return_value = Path.cwd()
+                out = _convert_model_subprocess(
+                    "models/yolov8s.pt",
+                    "rknn",
+                    [640, 640],
+                    quantize=True,
+                )
 
         self.assertEqual(len(calls), 2)
         self.assertTrue(calls[0]["quantize"])
@@ -1137,6 +1164,10 @@ class PipelineCalibrationGateTests(unittest.TestCase):
         cam._optimizing = False
         cam._optimization_requested = lambda: False
         cam.model = object()
+        cam.calibration_status = lambda: ("yellow", "uncalibrated")
+        self.assertTrue(cam._is_processable())
+
+        cam.calibration_status = lambda: ("red", "calibration invalid")
         self.assertFalse(cam._is_processable())
 
         cam.config = _FakeCamConfig(
@@ -1145,7 +1176,30 @@ class PipelineCalibrationGateTests(unittest.TestCase):
                 "dist_coeffs": [0, 0, 0, 0, 0],
             }
         )
+        cam.calibration_status = lambda: ("green", "ready")
         self.assertTrue(cam._is_processable())
+
+    def test_uncalibrated_detection_runs_while_calibration_is_approximate(self):
+        import numpy as np
+
+        class DetectionData:
+            orig_shape = (64, 64)
+            boxes = []
+            keypoints = None
+
+        cam = ObjectDetectionPipeline.__new__(ObjectDetectionPipeline)
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        cam._next_input_frame = lambda: frame
+        cam._gate_uncalibrated = lambda image: None
+        cam._optimizing = False
+        cam._optimization_requested = lambda: False
+        cam.model = object()
+        cam.calibration_status = lambda: ("yellow", "uncalibrated")
+        cam.get_yolo_data = lambda: (DetectionData(), frame)
+
+        objects, output_frame = cam.run()
+        self.assertEqual(objects, [])
+        self.assertIs(output_frame, frame)
 
     def test_pipeline_payload_exposes_requires_calibration(self):
         from iSpy.web.Backend.PluginStatus import _build_vision_pipeline_payloads

@@ -7,6 +7,7 @@ import logging
 import threading
 from pathlib import Path
 from flask import jsonify, render_template, Response
+from iSpy.core import performance
 from iSpy.web.Backend.WebModule import WebModule
 
 try:
@@ -18,9 +19,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-#: camera-name tokens that say nothing useful about which pipeline owns an
-#: accelerator ("default_cam", "Camera 0", "video0", ...) - hidden from the
-#: System card's hardware rows instead of cluttering them.
+# camera-name tokens that say nothing useful about which pipeline owns an
+# accelerator ("default_cam", "Camera 0", "video0") - hidden from the hardware rows
 _GENERIC_CAMERA_TOKENS = (
     "default",
     "camera",
@@ -30,6 +30,9 @@ _GENERIC_CAMERA_TOKENS = (
     "usb",
     "unnamed",
 )
+
+# display-only cache for the per-camera resolution string
+_RESOLUTION_CACHE_S = 5.0
 
 
 def _generic_camera_name(name: str) -> bool:
@@ -51,30 +54,27 @@ def _generic_camera_name(name: str) -> bool:
     )
 
 
-#: hardware types with a real utilization reader, rendered as System-card rows.
-#: Types without one are skipped entirely - a forever "--" row is worse than
-#: no row (CPU load already lives on the top-level System card; TPU has no
-#: portable read).
+# hardware types with a real utilization reader. types without one are skipped -
+# a forever "--" row is worse than no row (cpu load is on the System card already)
 _HARDWARE_WITH_LOAD_READER = ("npu", "gpu")
 
-#: highest value that can still be a genuine 0-100 utilization percentage.
-#: Anything above it is a raw busy-clock counter from rknpu's devfreq node,
-#: which must never be clamped into a fake 100%.
+# highest value that can still be a genuine 0-100 utilization percentage.
+# above it is a raw busy-clock counter from rknpu's devfreq node, never clamp to 100
 _NPU_PERCENT_MAX = 100
 
-#: comma-separated override for where to read NPU load from, so users can
-#: point the dashboard at a custom source without code changes.
+# comma-separated override for where to read NPU load from, so users can point
+# the dashboard at a custom source without code changes
 NPU_LOAD_PATHS_ENV = "ISPY_NPU_LOAD_PATHS"
 
-#: glob patterns covering the devfreq/debugfs layouts different RKNPU boards
-#: ship with (device name varies: fdab0000.npu, fdbb0000.npu, rknpu, ...).
+# glob patterns covering the devfreq/debugfs layouts different RKNPU boards ship
+# with (device name varies: fdab0000.npu, fdbb0000.npu, rknpu, ...)
 _NPU_LOAD_GLOBS = (
     "/sys/kernel/debug/rknpu/load",
     "/sys/class/devfreq/*npu*/load",
     "/sys/devices/platform/*npu*/devfreq/*/load",
 )
 
-#: literal fallbacks for distros where the platform path isn't glob-visible.
+# literal fallbacks for distros where the platform path isn't glob-visible
 _NPU_LOAD_FALLBACKS = (
     "/sys/devices/platform/fdab0000.npu/devfreq/fdab0000.npu/load",
     "/sys/class/devfreq/fdab0000.npu/load",
@@ -150,6 +150,10 @@ class DashboardModule(WebModule):
         self._sse_lock = threading.Lock()
         self._sse_clients: list = []
         self._npu_load_cache: tuple[float, list[int] | None] | None = None
+        # display-only caches for the camera resolution and the psutil/hw/temp
+        # block. both were re-read every tick via get_frame(), a full frame copy
+        self._resolution_cache: dict[str, tuple[float, str | None]] = {}
+        self._system_cache: tuple[float, dict] | None = None
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule(
@@ -159,10 +163,16 @@ class DashboardModule(WebModule):
         flask_app.add_url_rule("/api/system", "api_system", self._api_system)
         flask_app.add_url_rule("/api/events", "api_events", self._sse_stream)
 
+    def has_viewers(self, now: float = 0.0) -> bool:
+        # the SSE stream is the only consumer of the tick payload - nobody
+        # connected means update() only keeps the cheap scalars fresh
+        with self._sse_lock:
+            return bool(self._sse_clients)
+
     def update(self, frame_data: dict):
         tick = {
             "fps": round(frame_data.get("fps", 0), 1),
-            "vision_ms": round(frame_data.get("vision_s", 0) * 1000, 1),
+            "inference_ms": round(frame_data.get("inference_s", 0) * 1000, 1),
             "camera_lag_ms": round(frame_data.get("camera_lag_s", 0) * 1000, 1),
             "detections": frame_data.get("detection_count", 0),
             "loop_s": round(frame_data.get("loop_s", 0) * 1000, 1),
@@ -180,6 +190,10 @@ class DashboardModule(WebModule):
             self._detection_classes = det_classes
             if not self._model_info:
                 self._refresh_model_info_unlocked()
+
+        profile = performance.get_profile()
+        if profile.skip_web_without_viewers and not self.has_viewers():
+            return
 
         vision_running = (
             (time.perf_counter() - self._vision_last_tick) < 5.0
@@ -241,6 +255,19 @@ class DashboardModule(WebModule):
             }
 
     def _get_system_metrics(self) -> dict:
+        # the psutil samples, temps and hardware loads are expensive, so cheaper
+        # profiles serve a cached copy (0 = no cache, today's behavior)
+        cache_s = performance.get_profile().system_metrics_cache_s
+        now = time.monotonic()
+        if cache_s > 0 and self._system_cache is not None:
+            cached_at, cached = self._system_cache
+            if now - cached_at < cache_s:
+                return cached
+        data = self._collect_system_metrics()
+        self._system_cache = (now, data)
+        return data
+
+    def _collect_system_metrics(self) -> dict:
         if not PSUTIL_AVAILABLE:
             return {
                 "cpu_percent": None,
@@ -248,6 +275,9 @@ class DashboardModule(WebModule):
                 "memory_used_mb": None,
                 "memory_total_mb": None,
                 "temperature": None,
+                "temperature_unit": (self.context.get("config") or {}).get(
+                    "temperature_unit", "celsius"
+                ),
                 "hardware": self._get_hardware(),
             }
 
@@ -297,6 +327,7 @@ class DashboardModule(WebModule):
             "memory_used_mb": mem_used,
             "memory_total_mb": mem_total,
             "temperature": display_temp,
+            "temperature_unit": temperature_unit,
             "temperature_warning": display_warning,
             "hardware": self._get_hardware(),
         }
@@ -401,6 +432,31 @@ class DashboardModule(WebModule):
         self._npu_load_cache = (now, result)
         return result
 
+    def _camera_resolution(self, cam, name: str) -> str | None:
+        # cached display string, read off the capture buffer - never get_frame(),
+        # which copies the frame and re-runs every frame processor
+        now = time.monotonic()
+        cached = self._resolution_cache.get(name)
+        if cached is not None and now - cached[0] < _RESOLUTION_CACHE_S:
+            return cached[1]
+
+        resolution = None
+        try:
+            frame = None
+            lock = getattr(cam, "frame_lock", None)
+            if lock is not None:
+                with lock:
+                    frame = getattr(cam, "frame", None)
+            else:
+                frame = getattr(cam, "frame", None)
+            if frame is not None:
+                h, w = frame.shape[:2]
+                resolution = f"{w}x{h}"
+        except Exception:
+            resolution = None
+        self._resolution_cache[name] = (now, resolution)
+        return resolution
+
     def _get_camera_status(self) -> list[dict]:
         cameras = self.context.get("cameras") or []
         cam_status = []
@@ -412,24 +468,13 @@ class DashboardModule(WebModule):
                     if hasattr(cam, "config")
                     else str(cam.source)
                 )
-                resolution = None
-                try:
-                    frame = cam.get_frame() if hasattr(cam, "get_frame") else None
-                    if frame is not None:
-                        import numpy as np
-
-                        if isinstance(frame, np.ndarray):
-                            h, w = frame.shape[:2]
-                            resolution = f"{w}x{h}"
-                except Exception:
-                    pass
                 cam_status.append(
                     {
                         "name": name,
                         "ok": age < 1.0,
                         "stale": 1.0 <= age < 3.0,
                         "frame_age_ms": round(age * 1000, 1),
-                        "resolution": resolution,
+                        "resolution": self._camera_resolution(cam, name),
                     }
                 )
             except Exception:

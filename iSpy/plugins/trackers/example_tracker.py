@@ -5,6 +5,9 @@ class YourTracker(TrackerBase):
     plugin_name = "example/example_tracker"
     template = True
 
+    # set needs_internet = True to skip the add-on while offline, or override
+    # network_requirements() when only some settings need the internet
+
     @classmethod
     def config_schema(cls) -> dict:
         # settings the web ui renders an editor for; omitted keys get defaults

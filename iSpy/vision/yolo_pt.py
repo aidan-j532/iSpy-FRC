@@ -807,20 +807,20 @@ class YoloPT:
         top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
         left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
         img = cv2_copyMakeBorder(img, top, bottom, left, right, pad)
-        self._ratio = r
-        self._pad = (left, top)
-        return img
+        return img, r, (left, top)
 
     def _preprocess(self, frames, imgsz):
         tensors = []
+        frame_meta = []
         for f in frames:
-            lb = self._letterbox(f, imgsz)
+            lb, ratio, pad = self._letterbox(f, imgsz)
+            frame_meta.append((f.shape, ratio, pad))
             rgb = np.ascontiguousarray(lb[:, :, ::-1])
             t = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0).float() / 255.0
             tensors.append(t.to(self._device))
-        return torch.cat(tensors, 0)
+        return torch.cat(tensors, 0), frame_meta
 
-    def _postprocess(self, pred, frame_shape, conf):
+    def _postprocess(self, pred, frame_meta, conf):
         # pred: [B, 4+nc(+nk), N] (decode yields xywh in input-space); convert and scale.
         if self.task == "pose":
             boxes_xywh = pred[:, :4, :].transpose(1, 2)  # [B, N, 4]
@@ -844,20 +844,26 @@ class YoloPT:
             dets = non_max_suppression(full, conf_thres=conf, nc=self.nc)
             kpts_all = [None] * len(dets)
 
+        if not frame_meta:
+            return []
+
         results = []
         for xi, det in enumerate(dets):
+            frame_shape, ratio, pad = frame_meta[
+                xi if xi < len(frame_meta) else len(frame_meta) - 1
+            ]
             kpts_i = None
             if det.numel():
                 det[:, :4] = _scale_boxes(
                     (self._input_size, self._input_size),
                     det[:, :4],
                     frame_shape,
-                    ratio_pad=(self._ratio, self._pad),
+                    ratio_pad=(ratio, pad),
                 )
                 det[:, :4].clamp_(min=0)
                 if kpts_all[xi] is not None:
                     kpts_i = _scale_keypoints(
-                        kpts_all[xi], frame_shape, self._ratio, self._pad
+                        kpts_all[xi], frame_shape, ratio, pad
                     )
             orig = (int(frame_shape[0]), int(frame_shape[1]))
             results.append(
@@ -888,11 +894,11 @@ class YoloPT:
         single = not isinstance(frames, list)
         fl = [frames] if single else frames
 
-        im_tensors = self._preprocess(fl, imgsz)
+        im_tensors, frame_meta = self._preprocess(fl, imgsz)
         with torch.no_grad():
             out = self.model(im_tensors)[0]
 
-        results = self._postprocess(out, fl[0].shape, conf)
+        results = self._postprocess(out, frame_meta, conf)
         return results if not single else results
 
 
@@ -946,7 +952,7 @@ def load_yolo_pt(path: str, task: str = "detect", verbose: bool = False) -> Yolo
         imgsz = imgsz[0]
 
     # Ensure the model's f/i metadata survives as attributes on each module.
-    model = model.float()  # some checkpoints ship half-precision weights
+    model.float()
     model.eval()
     return YoloPT(model, names, model_task, nc, imgsz=imgsz)
 

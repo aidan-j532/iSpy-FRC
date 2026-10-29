@@ -122,6 +122,9 @@
 
       (function () {
         let el = null;
+        // Reasons keep the supervisor overlay from being cleared by an
+        // unrelated successful dashboard/SSE poll (and vice versa).
+        const reasons = new Set();
         function ensure() {
           if (!el) {
             el = document.createElement("div");
@@ -130,9 +133,7 @@
 
             el.innerHTML = `
                 <div class="conn-overlay-content">
-                    <svg class="conn-overlay-icon" viewBox="0 0 64 64" aria-hidden="true">
-                        <!-- your favicon SVG -->
-                    </svg>
+                    <img class="conn-overlay-icon" src="/static/favicon.ico" alt="" />
 
                     <div class="conn-overlay-title">Connection Lost</div>
                     <div class="conn-overlay-subtitle">
@@ -146,13 +147,26 @@
           }
           return el;
         }
-        window.connLost = function () {
+        function setText(title, subtitle) {
+          if (!title && !subtitle) return;
+          const box = ensure();
+          const titleEl = box.querySelector(".conn-overlay-title");
+          const subEl = box.querySelector(".conn-overlay-subtitle");
+          if (title && titleEl) titleEl.textContent = title;
+          if (subtitle && subEl) subEl.textContent = subtitle;
+        }
+        window.connLost = function (title, subtitle, reason) {
+            reason = reason || "generic";
+            reasons.add(reason);
+            setText(title, subtitle);
             document.body.classList.add("connection-lost");
             ensure().classList.add("visible");
         };
 
-        window.connOk = function () {
-            if (el) {
+        window.connOk = function (reason) {
+            reason = reason || "generic";
+            reasons.delete(reason);
+            if (reasons.size === 0 && el) {
                 el.classList.remove("visible");
                 document.body.classList.remove("connection-lost");
             }
@@ -171,6 +185,121 @@
               }
             },
           };
+        };
+      })();
+
+      // The supervisor serves this same endpoint while the child is booting or
+      // restarting. If it ever reports anything other than running, reuse the
+      // existing full-screen overlay; reload once the service is healthy again.
+      (function () {
+        let unhealthy = false;
+        let firstPoll = true;
+        const copy = {
+          fresh_boot: ["iSpy is setting up", "First-time setup is still running."],
+          booting: ["iSpy is booting", "The vision process is starting."],
+          restarting: ["iSpy is restarting", "This page reconnects automatically."],
+          stopping: ["iSpy is stopping", "The web UI will return shortly."],
+          crashed: ["iSpy crashed", "The supervisor is restarting it automatically."],
+          crash_loop_stopped: ["iSpy stopped", "Repeated crashes stopped the auto-restart loop."],
+          idle: ["iSpy is stopped", "Start it from Settings or the status page on port 5000."],
+        };
+        async function pollSupervisor() {
+          try {
+            const r = await fetch("/api/supervisor/state", { cache: "no-store" });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            const j = await r.json();
+            if (!j || j.state !== "running") {
+              unhealthy = true;
+              const [title, subtitle] = copy[j && j.state] || [
+                "iSpy is unavailable",
+                "Waiting for the supervisor...",
+              ];
+              window.connLost(
+                title,
+                (j && j.phase) ? j.phase : subtitle,
+                "supervisor"
+              );
+              return;
+            }
+            window.connOk("supervisor");
+            if (unhealthy && !firstPoll) {
+              window.location.reload();
+              return;
+            }
+            unhealthy = false;
+          } catch (e) {
+            unhealthy = true;
+            window.connLost(
+              "Connection Lost",
+              "Waiting for iSpy to come back...",
+              "supervisor"
+            );
+          } finally {
+            firstPoll = false;
+          }
+        }
+        pollSupervisor();
+        setInterval(pollSupervisor, 2000);
+      })();
+    </script>
+    <script>
+      // /api/performance loads once onto window.ispyPerf; every page timer goes
+      // through ispyPoll so the multiplier + hidden-tab pause apply everywhere
+      (function () {
+        window.ispyPerf = {
+          level: 4,
+          label: "Full Features",
+          ui_poll_multiplier: 1,
+          pause_poll_hidden: false,
+          loaded: false,
+        };
+        const resyncs = [];
+        function resync() {
+          while (resyncs.length) {
+            try {
+              resyncs.shift()();
+            } catch (e) {}
+          }
+        }
+        fetch("/api/performance")
+          .then((r) => r.json())
+          .then((j) => {
+            window.ispyPerf = Object.assign(window.ispyPerf, j, {
+              loaded: true,
+            });
+            document.dispatchEvent(new CustomEvent("ispy:performance"));
+            resync();
+          })
+          .catch(() => {});
+
+        window.ispyPoll = function (fn, baseMs) {
+          // one shared poller: fires now, scales by the profile multiplier,
+          // pauses while hidden when asked, re-times once the profile lands
+          const state = { timer: null, stopped: false };
+          function start() {
+            const k = window.ispyPerf.ui_poll_multiplier || 1;
+            state.timer = setInterval(loop, Math.max(1, Math.round(baseMs * k)));
+          }
+          function loop() {
+            if (
+              document.visibilityState === "hidden" &&
+              window.ispyPerf.pause_poll_hidden
+            )
+              return;
+            fn();
+          }
+          fn();
+          start();
+          resyncs.push(function () {
+            if (state.stopped) return;
+            clearInterval(state.timer);
+            start();
+          });
+          state.stop = function () {
+            state.stopped = true;
+            if (state.timer) clearInterval(state.timer);
+          };
+          return state;
         };
       })();
     </script>
@@ -215,6 +344,21 @@
             <path d="M23 7l-7 5 7 5V7z"></path>
             <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg
           >Cameras</a
+        >
+        <a href="/editor"
+          ><svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="5" cy="6" r="2"></circle>
+            <circle cx="19" cy="6" r="2"></circle>
+            <circle cx="12" cy="18" r="2"></circle>
+            <path d="M7 6h10M6.5 7.7l4.3 8.6M17.5 7.7l-4.3 8.6"></path></svg
+          >Editor (Pre-Alpha)</a
         >
         <a href="/health-page"
           ><svg
@@ -352,7 +496,59 @@
           <span class="footer-version" id="ispy-version"></span>
         </div>
       </nav>
-      <main class="content">{% block content %}{% endblock %}</main>
+      <main class="content">
+        <div
+          id="offline-banner"
+          class="vision-banner vision-warn"
+          style="display: none"
+        >
+          <span id="offline-banner-text"></span>
+          <a href="/addons" style="margin-left: auto; color: inherit">add-ons</a>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            title="Hide for this session"
+            style="background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1"
+            onclick="dismissOfflineBanner('main')"
+          >
+            &times;
+          </button>
+        </div>
+        <div
+          id="offline-skip-banner"
+          class="vision-banner vision-bad"
+          style="display: none"
+        >
+          <span id="offline-skip-text"></span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            title="Hide for this session"
+            style="margin-left: auto; background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1"
+            onclick="dismissOfflineBanner('skip')"
+          >
+            &times;
+          </button>
+        </div>
+        <div
+          id="perf-banner"
+          class="vision-banner"
+          style="display: none"
+        >
+          <span id="perf-banner-text"></span>
+          <a href="/settings" style="margin-left: auto; color: inherit">settings</a>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            title="Hide for this session"
+            style="background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1"
+            onclick="dismissPerfBanner()"
+          >
+            &times;
+          </button>
+        </div>
+        {% block content %}{% endblock %}
+      </main>
     </div>
     <div class="toast-container" id="toast-container"></div>
     {% block scripts %}{% endblock %}
@@ -368,6 +564,109 @@
           if (el && j && j.version) el.textContent = "v" + j.version;
         })
         .catch(() => {});
+    </script>
+    <script>
+      // Offline mode banner: stays while offline, dismissible for the session
+      // (sessionStorage). game mode has the web off, the log is the source there
+      (function () {
+        const MAIN_KEY = "offline.banner.dismissed";
+        const SKIP_KEY = "offline.skip.dismissed";
+        const el = document.getElementById("offline-banner");
+        const skipEl = document.getElementById("offline-skip-banner");
+        if (!el || !skipEl) return;
+
+        function plural(n, word) {
+          return n + " " + word + (n === 1 ? "" : "s");
+        }
+
+        function render(j) {
+          if (!j || !j.offline) {
+            el.style.display = "none";
+            skipEl.style.display = "none";
+            return;
+          }
+          const reason = j.reason ? " (" + j.reason + ")" : "";
+          const skipped = j.skipped || [];
+          const degraded = j.degraded || [];
+          document.getElementById("offline-banner-text").textContent =
+            "Offline mode" +
+            reason +
+            ": " +
+            plural(skipped.length, "add-on") +
+            " skipped, " +
+            plural(degraded.length, "feature") +
+            " disabled";
+          el.style.display =
+            sessionStorage.getItem(MAIN_KEY) === "1" ? "none" : "";
+          if (skipped.length) {
+            document.getElementById("offline-skip-text").textContent =
+              "Skipped while offline: " +
+              skipped.map((s) => s.name || "?").join(", ") +
+              " - why?";
+            skipEl.style.display =
+              sessionStorage.getItem(SKIP_KEY) === "1" ? "none" : "";
+          } else {
+            skipEl.style.display = "none";
+          }
+        }
+
+        function poll() {
+          fetch("/api/network")
+            .then((r) => r.json())
+            .then(render)
+            .catch(() => {});
+        }
+
+        window.dismissOfflineBanner = function (which) {
+          sessionStorage.setItem(which === "skip" ? SKIP_KEY : MAIN_KEY, "1");
+          if (which === "skip") skipEl.style.display = "none";
+          else el.style.display = "none";
+        };
+
+        poll();
+        // the report grows while running (try_online degrades), so refresh it
+        setInterval(poll, 30000);
+      })();
+    </script>
+    <script>
+      // Performance banner: shows on every page whenever the active level is
+      // below Full Features, so a trimmed install is never a mystery
+      (function () {
+        const KEY = "perf.banner.dismissed";
+        const el = document.getElementById("perf-banner");
+        if (!el) return;
+
+        window.dismissPerfBanner = function () {
+          sessionStorage.setItem(KEY, "1");
+          el.style.display = "none";
+        };
+
+        function render() {
+          const p = window.ispyPerf || {};
+          if (!p.loaded || p.level >= 4) {
+            el.style.display = "none";
+            return;
+          }
+          if (sessionStorage.getItem(KEY) === "1") {
+            el.style.display = "none";
+            return;
+          }
+          el.className = "vision-banner" + (p.level <= 1 ? " vision-warn" : "");
+          document.getElementById("perf-banner-text").textContent =
+            "Performance profile: " +
+            p.label +
+            " (" +
+            p.level +
+            ") - some web features are reduced" +
+            (p.restart_pending
+              ? " (restart required to apply the configured level)"
+              : "");
+          el.style.display = "";
+        }
+
+        if (window.ispyPerf && window.ispyPerf.loaded) render();
+        else document.addEventListener("ispy:performance", render);
+      })();
     </script>
     <script>
       // showTimeWarning blocks the page behind a dark overlay until the

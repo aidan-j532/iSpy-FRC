@@ -4,60 +4,423 @@ import logging
 import os
 import sys
 
-from iSpy.boot import boot
+from iSpy.boot.args import add_boot_arguments
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ispy",
-        description="iSpy control surface (trivial wrappers around the boot sequence).",
+        description="iSpy control surface (boot, supervisor and vision process).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # -s/--service and -w/--wait come from boot.add_boot_arguments() so they
-    # can never drift from `python -m iSpy.boot.boot`.
+    # -s/--service and -w/--wait come from iSpy.boot.args so they can never
+    # drift from `python -m iSpy.boot.boot`. Importing that light module here
+    # (instead of iSpy.boot.boot) keeps `ispy start` free of torch/cv2/Flask.
     setup = subparsers.add_parser(
         "setup",
         help="Fresh first-time install (equivalent to `python -m iSpy.boot.boot -f`)",
     )
-    boot.add_boot_arguments(setup)
+    add_boot_arguments(setup)
 
     start = subparsers.add_parser(
         "start",
-        help="Normal boot against the existing Config/config.json (equivalent to `python -m iSpy.boot.boot`)",
+        help="Start the process supervisor and the vision process (normal boot)",
     )
-    boot.add_boot_arguments(start)
+    add_boot_arguments(start)
+
+    # Internal child entry point. The supervisor launches exactly this; users
+    # should keep using `ispy start` so port 5000 stays available while booting.
+    vision = subparsers.add_parser("_vision", help=argparse.SUPPRESS)
+    add_boot_arguments(vision)
+
+    # level 0 turns the web ui off, so "ispy performance 4" needs to work
+    # over ssh alone
+    perf = subparsers.add_parser(
+        "performance",
+        help="Set the performance profile (0=Max FPS .. 4=Full Features) in "
+        "Config/config.json and exit",
+    )
+    perf.add_argument(
+        "level",
+        type=int,
+        choices=range(0, 5),
+        metavar="{0,1,2,3,4}",
+        help="0 Max FPS, 1 Performance, 2 Balanced, 3 Smooth, 4 Full Features",
+    )
+
+    env = subparsers.add_parser(
+        "env",
+        help="Inspect or manage persistent model-conversion environments",
+    )
+    env_sub = env.add_subparsers(dest="env_command", required=True)
+    env_sub.add_parser(
+        "list",
+        help="Show each conversion format, whether it needs an env, and disk use",
+    )
+    env_rebuild = env_sub.add_parser(
+        "rebuild", help="Delete and rebuild one format's converter environment"
+    )
+    env_rebuild.add_argument("format", help="Conversion format (for example rknn)")
+    env_remove = env_sub.add_parser(
+        "remove", help="Delete one format's converter environment"
+    )
+    env_remove.add_argument("format", help="Conversion format (for example tflite)")
+    env_path = env_sub.add_parser(
+        "path", help="Print the cache directory for one format's environment"
+    )
+    env_path.add_argument("format", help="Conversion format (for example rknn)")
+
+    # optimize - forward all remaining args to ispy-optimize
+    optimize = subparsers.add_parser(
+        "optimize",
+        help="Convert YoloModels/pytorch .pt checkpoints into optimized backend artifacts",
+        add_help=False,
+    )
+    optimize.add_argument("optimize_args", nargs=argparse.REMAINDER)
 
     return parser
 
 
-def main(argv=None) -> int:
-    args = _build_parser().parse_args(argv)
-    config = boot.on_boot(
-        install_service=args.service,
-        fresh=args.command == "setup",
-        wait=args.wait,
+def _set_performance_level(level: int) -> int:
+    from iSpy.config.iSpyConfig import iSpyConfig
+    from iSpy.core import performance
+
+    from iSpy.boot import boot
+
+    config_path = boot.search_for_config()
+    if not config_path:
+        print(
+            "No Config/config.json found - run 'ispy setup' first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    config = iSpyConfig(str(config_path), create=False)
+    config.set("performance_level", int(level))
+    config.save()
+    profile = performance.PROFILES[int(level)]
+    print(f"Performance profile set to {profile.label} ({profile.level}).")
+    print("Restart vision (or reboot) to apply it.")
+    if profile.level == 0:
+        print(performance.recovery_help())
+    return 0
+
+
+def _format_bytes(value: int) -> str:
+    size = float(max(0, int(value or 0)))
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024 or unit == "TiB":
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TiB"
+
+
+def _run_env(args) -> int:
+    """`ispy env list|rebuild|remove|path` implementation."""
+    from iSpy.boot import converter_envs
+
+    command = args.env_command
+
+    if command == "list":
+        rows = converter_envs.list_converter_envs()
+        print(
+            "FORMAT\tNEEDS_ENV\tCURRENT\tENV_DIR\tSIZE\tLAST_VERIFIED\t"
+            "IDENTITY\tREASON"
+        )
+        for status in rows:
+            needs = "yes" if status["needs_env"] else "no"
+            current = (
+                "yes" if status["current"] else ("no" if status["needs_env"] else "-")
+            )
+            env_dir = status["env_dir"] or "-"
+            identity_parts = status.get("identity") or {}
+            identity = ",".join(f"{key}={value}" for key, value in identity_parts.items())
+            identity_hash = status["identity_hash"] or ""
+            if identity_hash:
+                identity = f"{identity} ({identity_hash})" if identity else identity_hash
+            identity = identity or "-"
+            verified = status["last_verified"] or "-"
+            print(
+                f"{status['format']}\t{needs}\t{current}\t{env_dir}\t"
+                f"{_format_bytes(status['size_bytes'])}\t{verified}\t{identity}\t"
+                f"{status['reason']}"
+            )
+        return 0
+
+    fmt = getattr(args, "format", "")
+    try:
+        if command == "path":
+            status = converter_envs.converter_env_status(fmt)
+            if not status["needs_env"]:
+                print(
+                    f"{fmt}: no converter environment is used - {status['reason']}"
+                )
+                return 0
+            print(status["env_dir"])
+            return 0
+
+        if command == "rebuild":
+            py = converter_envs.rebuild_env(fmt)
+            print(f"Rebuilt {fmt} converter environment: {py}")
+            return 0
+
+        if command == "remove":
+            removed = converter_envs.remove_env(fmt)
+            print(
+                f"Removed {fmt} converter environment."
+                if removed
+                else f"No {fmt} converter environment was present."
+            )
+            return 0
+    except converter_envs.ConverterEnvError as exc:
+        print(f"iSpy: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"iSpy: could not manage the {fmt} environment: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Unknown env command: {command}", file=sys.stderr)
+    return 2
+
+
+def _child_arguments(args) -> list[str]:
+    """Rebuild the boot flags for the supervisor-spawned `_vision` child."""
+    argv: list[str] = []
+    if getattr(args, "service", False):
+        argv.append("-s")
+    if getattr(args, "wait", False):
+        argv.append("-w")
+    if getattr(args, "web", False):
+        argv.append("--web")
+    replay = getattr(args, "replay", "") or ""
+    if replay:
+        argv.extend(["--replay", replay])
+        if getattr(args, "replay_cam", ""):
+            argv.extend(["--replay-cam", str(args.replay_cam)])
+        speed = getattr(args, "replay_speed", 1.0)
+        if speed != 1.0:
+            argv.extend(["--replay-speed", str(speed)])
+        if getattr(args, "replay_no_loop", False):
+            argv.append("--replay-no-loop")
+    return argv
+
+
+def _web_off_reason(config) -> str:
+    try:
+        from iSpy.core import performance
+
+        if performance.web_forced_on():
+            return ""
+        app_mode = config.get("app_mode", True)
+        if isinstance(app_mode, str):
+            if app_mode.strip().lower() in ("", "false", "0", "no", "off", "none"):
+                return "app_mode is disabled in the config"
+        elif app_mode is False:
+            return "app_mode is disabled in the config"
+        if not performance.get_profile().web_enabled:
+            profile = performance.get_profile()
+            return f"performance level {profile.level} ({profile.label}) has the web UI off"
+    except Exception:
+        pass
+    return "the web UI is disabled for this run"
+
+
+def _report_child(**fields) -> None:
+    try:
+        from iSpy.core.control_channel import update_service_state
+
+        # Never inherit a pid left by a previous run in Outputs/.
+        fields.setdefault("pid", os.getpid())
+        update_service_state(**fields)
+    except Exception:
+        pass
+
+
+def _run_vision(args) -> int:
+    """The old `ispy start` body, now run as the supervisor's child."""
+    # imported lazily: boot pulls in PIL/vision configuration code, and
+    # `ispy start` itself must stay cheap so it can own port 5000 immediately.
+    from iSpy.boot import boot
+
+    _report_child(status="booting", phase="running boot sequence")
+    install_service = bool(args.service and not args.replay)
+    defer_key = None
+    if install_service:
+        # The foreground supervisor owns port 5000. Enable the unit for the
+        # next boot, but do not start a second supervisor that cannot bind.
+        from iSpy.boot.setup_service import DEFER_SERVICE_START_ENV
+
+        defer_key = DEFER_SERVICE_START_ENV
+        os.environ[defer_key] = "1"
+    try:
+        config = boot.on_boot(
+            install_service=install_service,
+            fresh=False,
+            wait=args.wait and not args.replay,
+            force_web=getattr(args, "web", False),
+        )
+    finally:
+        if defer_key is not None:
+            os.environ.pop(defer_key, None)
+
+    if args.replay:
+        boot._configure_replay(
+            config,
+            args.replay,
+            args.replay_cam,
+            args.replay_speed,
+            loop=not args.replay_no_loop,
+        )
+
+    try:
+        from iSpy.core import performance
+
+        web_enabled = performance.effective_app_mode(config)
+    except Exception:
+        web_enabled = True
+    _report_child(
+        status="booting",
+        phase="loading vision pipelines",
+        web_enabled=bool(web_enabled),
+        web_off_reason="" if web_enabled else _web_off_reason(config),
     )
 
-    # boot only prepares the install - config, models, cameras, service. the
-    # vision loop is a separate step, and exiting here is why "ispy start"
-    # (what the install scripts tell people to run) brought the web UI up and
-    # then did nothing else. ispy-run is the same thing without the boot.
-    #
-    # imported here, not at module scope: importing game_loop configures
-    # logging and pulls in the whole vision stack (torch and all), which
-    # "ispy setup" has no use for
     from iSpy.core.game_loop import main as game_loop_main
 
     game_loop_main(config)
 
-    # mirror boot.py's main(): flush everything and hard-exit to dodge
-    # RKNN/OpenCV native-extension segfaults during interpreter teardown on ARM
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # mirror boot.py's main(): hard-exit to dodge RKNN/OpenCV native-extension
+    # segfaults during interpreter teardown on ARM
+    os._exit(0)
+    return 0
+
+
+def _run_setup(args) -> int:
+    """Fresh boot in-process; optionally serve the fresh-boot page while it runs.
+
+    Installers and image builders run this inline. The status page is strictly
+    best-effort: a busy port must never fail an installation.
+    """
+    from iSpy.supervisor.config import supervisor_disabled
+
+    server = None
+    state_module = None
+    # With -s the boot sequence starts the installed service at the end. Do
+    # not hold port 5000 here: that service would fail to bind, restart on a
+    # loop, and leave setup fighting its own installer.
+    serve_page = not supervisor_disabled() and not args.service
+    if serve_page:
+        try:
+            from iSpy.core.control_channel import update_supervisor_state
+            from iSpy.supervisor.state import mark_supervisor_exit
+            from iSpy.supervisor.status_server import StatusServer
+
+            state_module = mark_supervisor_exit
+            update_supervisor_state(
+                state="fresh_boot",
+                phase="fresh boot",
+                pid=None,
+                supervisor_pid=os.getpid(),
+                attempt=0,
+                max_attempts=5,
+                last_error="",
+                message="",
+                web_enabled=False,
+                web_off_reason="fresh boot in progress",
+            )
+            server = StatusServer(action_handler=None)
+            server.start(retry_s=1.0)
+        except OSError as exc:
+            print(
+                f"iSpy: could not serve the fresh-boot page on port 5000 "
+                f"({exc}); continuing setup.",
+                file=sys.stderr,
+            )
+            server = None
+        except Exception:
+            server = None
+
+    try:
+        from iSpy.boot import boot
+
+        config = boot.on_boot(
+            install_service=args.service and not args.replay,
+            fresh=True,
+            wait=args.wait and not args.replay,
+            force_web=getattr(args, "web", False),
+        )
+        if args.replay:
+            boot._configure_replay(
+                config,
+                args.replay,
+                args.replay_cam,
+                args.replay_speed,
+                loop=not args.replay_no_loop,
+            )
+    finally:
+        if server is not None:
+            server.stop()
+        if state_module is not None:
+            try:
+                state_module("idle")
+            except Exception:
+                pass
+
     logging.shutdown()
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)
     return 0
+
+
+def main(argv=None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # Bare `ispy` is a convenience for the normal boot+run path (supervisor).
+    if not argv:
+        argv = ["start"]
+
+    # optimize forwards everything after the subcommand name to its own parser
+    if argv and argv[0] == "optimize":
+        from iSpy.validations.optimize import main as optimize_main
+
+        return optimize_main(argv[1:])
+
+    args = _build_parser().parse_args(argv)
+
+    if args.command == "performance":
+        return _set_performance_level(args.level)
+
+    if args.command == "env":
+        return _run_env(args)
+
+    if args.command == "optimize":
+        from iSpy.validations.optimize import main as optimize_main
+
+        return optimize_main(args.optimize_args)
+
+    if args.command == "setup":
+        return _run_setup(args)
+
+    if args.command == "_vision":
+        return _run_vision(args)
+
+    # start
+    from iSpy.supervisor.config import supervisor_disabled
+
+    if supervisor_disabled():
+        # CI/chroot/ISPY_NO_SUPERVISOR keeps the old single-process behavior
+        # and, importantly, never tries to bind port 5000 from setup scripts.
+        return _run_vision(args)
+
+    from iSpy.supervisor.process import run_supervisor
+
+    return run_supervisor(_child_arguments(args), autostart=True)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,26 @@
+{
+  "restarting": [
+    "Get a sip of water.",
+    "Stretch your legs for a second.",
+    "Check that the robot battery is still connected.",
+    "This is a good time to make a note in the match log.",
+    "Take a breath - the field will still be there.",
+    "Look away from the screen for a moment.",
+    "Make sure nobody is standing in the robot's path.",
+    "One quick stretch, then back to it.",
+    "Tell your drive team the vision system is rebooting.",
+    "Almost there."
+  ],
+  "fresh_boot": [
+    "Fresh boots take a little longer than normal ones.",
+    "Grab a snack - first-time setup downloads models.",
+    "This is the install path, so it only happens once.",
+    "Check that the board has a network connection.",
+    "The camera configuration will be ready when this finishes.",
+    "You can watch progress in Outputs/log.txt.",
+    "Have a look at the robot while iSpy sets itself up.",
+    "Take a walk and come back in a minute.",
+    "First boot also prepares the vision models.",
+    "Thanks for waiting - the web UI will be back shortly."
+  ]
+}

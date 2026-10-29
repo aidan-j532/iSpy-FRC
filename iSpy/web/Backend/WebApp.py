@@ -1,8 +1,15 @@
 import logging
+import time
 from pathlib import Path
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 from iSpy import __version__
+from iSpy.core import performance
+from iSpy.core.control_channel import send_supervisor_command, update_service_state
+from iSpy.core.request_auth import remote_denied_message, restart_allowed
+from iSpy.supervisor.child import serve_flask
+from iSpy.supervisor.config import allow_remote_restart
+from iSpy.supervisor.state import child_snapshot
 from iSpy.web.modules.dashboard import DashboardModule
 from iSpy.web.modules.cameras import CamerasModule
 from iSpy.web.modules.models import ModelsModule
@@ -18,8 +25,13 @@ from iSpy.web.Backend.SetupWizard import SetupWizardModule
 from iSpy.web.modules.recommendations import RecommendationsModule
 from iSpy.web.Backend.PluginStatus import PluginStatusModule
 from iSpy.web.modules.health import HealthModule
+from iSpy.web.modules.editor import EditorModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
+
+# modules that must run on every vision tick regardless of the performance
+# profile: health's staleness check is how /health knows the loop is alive
+_ALWAYS_UPDATE = {"health", "rollback"}
 
 
 def _get_version() -> str:
@@ -55,6 +67,7 @@ class iSpyWebApp:
 
         self.modules: dict[str, WebModule] = {
             "cameras": CamerasModule(context),
+            "editor": EditorModule(context),
             "models": ModelsModule(context),
             "datasets": DatasetsModule(context),
             "viewer3d": Viewer3DModule(context),
@@ -79,19 +92,99 @@ class iSpyWebApp:
                 )
 
         self.context["dashboard_module"] = self.modules.get("dashboard")
+        self._last_update: dict[str, float] = {}
         self.flask_app.add_url_rule(
             "/", "root", lambda: render_template("dashboard.html")
         )
         self.flask_app.add_url_rule(
             "/api/version", "api_version", lambda: jsonify(version=_get_version())
         )
+        # The supervisor serves these same paths while the child is booting or
+        # stopped. Keeping the URL stable is what lets an already-open page
+        # notice a restart without being pointed at a second port.
+        self.flask_app.add_url_rule(
+            "/api/supervisor/state",
+            "api_supervisor_state",
+            self._supervisor_state,
+            methods=["GET"],
+        )
+        for action in ("start", "stop", "restart"):
+            self.flask_app.add_url_rule(
+                f"/api/supervisor/{action}",
+                f"api_supervisor_{action}",
+                lambda action=action: self._supervisor_action(action),
+                methods=["POST"],
+            )
+
+    def _supervisor_action_allowed(self) -> bool:
+        config = self.context.get("config")
+        return restart_allowed(
+            request.remote_addr,
+            request.headers,
+            allow_remote=allow_remote_restart(config) if config is not None else True,
+        )
+
+    def _supervisor_state(self):
+        return jsonify(child_snapshot())
+
+    def _supervisor_action(self, action: str):
+        if not self._supervisor_action_allowed():
+            config = self.context.get("config")
+            return (
+                jsonify(
+                    ok=False,
+                    error=remote_denied_message(allow_remote_restart(config)),
+                ),
+                403,
+            )
+        ok, detail = send_supervisor_command(action.upper())
+        if not ok:
+            return (
+                jsonify(
+                    ok=False,
+                    error=(
+                        "iSpy is not running under the process supervisor. "
+                        "Start it with 'ispy start' to use restart controls."
+                        if detail == "supervisor not running"
+                        else detail
+                    ),
+                ),
+                503,
+            )
+        return jsonify(ok=True)
 
     def update(self, frame_data: dict):
+        profile = performance.get_profile()
+        interval = (1.0 / profile.web_update_hz) if profile.web_update_hz > 0 else 0.0
+        now = time.perf_counter()
         for name, mod in self.modules.items():
+            # the profile caps how often the expensive modules rebuild their
+            # payloads, health and rollback stay tick-rate on purpose
+            if interval and name not in _ALWAYS_UPDATE:
+                last = self._last_update.get(name)
+                if last is not None and (now - last) < interval:
+                    continue
+            self._last_update[name] = now
             try:
                 mod.update(frame_data)
             except Exception:
                 self.logger.exception("Web module '%s' update failed", name)
+
+    # is any browser page consuming annotated frames? the loop uses this to decide
+    # if plot()/debug drawing is worth doing. rollback isn't a watcher (raw frames)
+    def anyone_watching(self) -> bool:
+        now = time.monotonic()
+        for mod in self.modules.values():
+            checker = getattr(mod, "has_viewers", None)
+            if not callable(checker):
+                continue
+            try:
+                if checker(now):
+                    return True
+            except Exception:
+                # a broken watcher must not blank the feeds
+                return True
+        return False
 
     def set_vision_instance(self, vision):
         self.context["vision_instance"] = vision
@@ -107,7 +200,11 @@ class iSpyWebApp:
 
     def run(self, host="0.0.0.0", port=5000):
         self.start()
-        self.flask_app.run(host=host, port=port, threaded=True)
+        # Under `ispy start`, ask the supervisor to close its status listener
+        # before binding. serve_flask() retries EADDRINUSE for the hand-off
+        # window and otherwise falls back to the normal direct bind.
+        update_service_state(phase="serving web UI", web_enabled=True)
+        serve_flask(self.flask_app, host=host, port=port)
 
     def start(self):
         for name, mod in self.modules.items():

@@ -9,6 +9,7 @@ from pathlib import Path
 from flask import jsonify, render_template, request
 
 import iSpy.plugins as _plugins_pkg
+from iSpy.core import network_policy
 from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import (
     FrameProcessorBase,
@@ -74,7 +75,7 @@ _ADDON_TYPES_FROM_PTYPE = {
 _CORE_PUBLISH_SOURCES = [
     {"source": "fps", "label": "fps"},
     {"source": "loop_s", "label": "loop_s"},
-    {"source": "vision_s", "label": "vision_s"},
+    {"source": "inference_s", "label": "Inference time"},
     {"source": "camera_lag_s", "label": "camera_lag_s"},
     {"source": "detection_count", "label": "detection_count"},
     {"source": "detections", "label": "detections (struct[])"},
@@ -88,6 +89,15 @@ def _coerce_setting_value(value, defn: dict):
     if not isinstance(defn, dict):
         return value
     stype = defn.get("type")
+    if value is None and defn.get("nullable"):
+        return None
+    if (
+        isinstance(value, str)
+        and not value.strip()
+        and defn.get("nullable")
+        and stype in ("number", "model", "source", "browse")
+    ):
+        return None
     if stype == "number":
         if isinstance(value, bool):
             raise ValueError(f"'{defn.get('label', 'value')}' must be a number")
@@ -107,6 +117,31 @@ def _coerce_setting_value(value, defn: dict):
         return bool(value)
     if stype == "text":
         return str(value)
+    if stype == "range":
+        label = defn.get("label", "value")
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError(f"'{label}' must be a two number range")
+        lo_bound = defn.get("min", 0)
+        hi_bound = defn.get("max", 255)
+        nums = []
+        for part in value:
+            if isinstance(part, bool):
+                raise ValueError(f"'{label}' must contain numbers")
+            try:
+                nums.append(float(part))
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"'{label}' must contain numbers, got {part!r}"
+                ) from None
+        lo = min(max(nums[0], lo_bound), hi_bound)
+        hi = min(max(nums[1], lo_bound), hi_bound)
+        # a wrapped range (hue) is allowed to run lo > hi, it just means the
+        # band wraps through 0
+        if lo > hi and not defn.get("wrap"):
+            raise ValueError(f"'{label}' low end must not be above the high end")
+        if isinstance(defn.get("step", 1), int):
+            return [int(round(lo)), int(round(hi))]
+        return [lo, hi]
     if stype == "list":
         if not isinstance(value, list):
             raise ValueError(f"'{defn.get('label', 'value')}' must be a list")
@@ -145,8 +180,6 @@ def _build_vision_pipeline_payloads(admin=None):
     for name, cls in sorted(vision_classes.items()):
         if admin is not None:
             is_admin_pipeline = name in _ADMIN_ONLY_PIPELINES
-            if admin and not is_admin_pipeline:
-                continue
             if not admin and is_admin_pipeline:
                 continue
         try:
@@ -199,6 +232,93 @@ def _active_pipeline_names(config) -> set:
     return names
 
 
+# evaluate an add-on's declared internet needs for the addons page. one entry
+# per camera; settings-aware, so a cached model needs nothing
+def _network_info(cls, settings_list: list[dict]) -> dict:
+    critical: list[str] = []
+    optional: list[str] = []
+    for settings in settings_list or [{}]:
+        try:
+            reqs = list(cls.network_requirements(settings or {}) or [])
+        except Exception:
+            reqs = []
+        for req in reqs:
+            bucket = critical if req.critical else optional
+            if req.reason not in bucket:
+                bucket.append(req.reason)
+    offline = network_policy.is_offline()
+    return {
+        "needs_internet": bool(critical or optional),
+        "critical": critical,
+        "optional": optional,
+        # the loader skips critical add-ons while offline, optional needs only
+        # turn one feature off
+        "skipped": offline and bool(critical),
+        "degraded": offline and not critical and bool(optional),
+    }
+
+
+def _pipeline_settings_list(config, name: str) -> list[dict]:
+    out: list[dict] = []
+    try:
+        for cam in (getattr(config, "camera_configs", None) or {}).values():
+            if cam.pipeline_name() == name:
+                out.append(dict(cam.pipeline_settings() or {}))
+    except Exception:
+        out = []
+    return out or [{}]
+
+
+# libraries that only ever exist to talk to the internet - uploaded add-on
+# code importing one of these with no offline declaration gets a warning
+_NETWORK_IMPORT_ROOTS = ("requests", "urllib", "httpx", "aiohttp")
+
+
+# best-effort AST scan for a networked add-on with no offline declaration. a
+# warning, never a rejection - worst case the socket guard stops it anyway
+def _offline_declaration_warning(code: str) -> str | None:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+
+    imports_network = False
+    for node in ast.walk(tree):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        for full in names:
+            root = full.split(".")[0]
+            if root in _NETWORK_IMPORT_ROOTS or full.startswith("http."):
+                imports_network = True
+
+    if not imports_network:
+        return None
+
+    declares = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "network_requirements":
+            declares = True
+            break
+        if isinstance(node, ast.Assign):
+            if any(
+                isinstance(target, ast.Name) and target.id == "needs_internet"
+                for target in node.targets
+            ):
+                declares = True
+                break
+
+    if declares:
+        return None
+    return (
+        "This add-on imports network libraries but declares no offline "
+        "behavior - set needs_internet = True or implement "
+        "network_requirements() so offline mode can gate it."
+    )
+
+
 class PluginStatusModule(WebModule):
     plugin_name = "plugin_status"
 
@@ -216,6 +336,9 @@ class PluginStatusModule(WebModule):
         )
         flask_app.add_url_rule(
             "/api/plugins/available", "api_plugins_available", self._available
+        )
+        flask_app.add_url_rule(
+            "/api/network", "api_network", self._network
         )
         flask_app.add_url_rule(
             "/api/plugins/toggle", "api_plugins_toggle", self._toggle, methods=["POST"]
@@ -283,6 +406,11 @@ class PluginStatusModule(WebModule):
     def _vision_pipelines(self):
         return jsonify(pipelines=_build_vision_pipeline_payloads())
 
+    def _network(self):
+        # base.html polls this for the offline banner, skipped/degraded grow as
+        # boot and the run loop record them
+        return jsonify(network_policy.get_report())
+
     def _available(self):
         config = self.context.get("config")
         active_pipelines = _active_pipeline_names(config)
@@ -306,6 +434,9 @@ class PluginStatusModule(WebModule):
                             "beta": bool(getattr(cls, "beta", False)),
                             "doc": (cls.__doc__ or "").strip()[:200],
                             "filename": f"{name}.py",
+                            "network": _network_info(
+                                cls, _pipeline_settings_list(config, name)
+                            ),
                         }
                     )
                 continue
@@ -352,6 +483,9 @@ class PluginStatusModule(WebModule):
                         "pipeline_warning": sorted(active_pipelines - set(supported))
                         if supported
                         else [],
+                        "network": _network_info(
+                            cls, [settings if isinstance(settings, dict) else {}]
+                        ),
                     }
                 )
         return jsonify(available=available)
@@ -689,6 +823,7 @@ class PluginStatusModule(WebModule):
         err = self._validate_addon_source(ptype, code, None)
         if err:
             return jsonify(error=err), 400
+        warning = _offline_declaration_warning(code)
 
         subdir = _TYPE_MAP[ptype][0]
         path = self._resolve_safe_path(subdir, filename)
@@ -709,6 +844,7 @@ class PluginStatusModule(WebModule):
             success=True,
             filename=path.name,
             note="Add-on saved. Restart vision to detect and enable it.",
+            warning=warning,
         )
 
     def _upload(self):
@@ -731,6 +867,7 @@ class PluginStatusModule(WebModule):
         err = self._validate_addon_source(ptype, code, None)
         if err:
             return jsonify(error=err), 400
+        warning = _offline_declaration_warning(code)
 
         subdir = _TYPE_MAP[ptype][0]
         path = self._resolve_safe_path(subdir, f.filename)
@@ -753,6 +890,7 @@ class PluginStatusModule(WebModule):
             success=True,
             filename=path.name,
             note="Add-on uploaded. Restart vision to detect and enable it.",
+            warning=warning,
         )
 
     def _delete(self, ptype, name):

@@ -1,6 +1,7 @@
 import platform
 import subprocess
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 import logging
@@ -166,14 +167,34 @@ def has_nvidia() -> bool:
     if os.name == "nt":
         # wmi name check is cheap, importing torch costs seconds for a yes/no
         return "nvidia" in _windows_video_controller_names()
+    # Do not import torch in-process just to answer this.  On some aarch64
+    # hosts the CPU wheel is built against a different NumPy ABI and importing
+    # it prints a large warning even when no NVIDIA device exists.  A CUDA
+    # driver library is the only case where a torch probe can add information.
     try:
-        import torch
+        import ctypes.util
 
-        if torch.cuda.is_available():
-            return True
-    except ImportError:
-        logger.warning("PyTorch not installed, skipping CUDA check for NVIDIA GPU.")
-    return False
+        if ctypes.util.find_library("cuda") is None:
+            return False
+    except Exception:
+        return False
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-W",
+                "ignore",
+                "-c",
+                "import torch; print(int(torch.cuda.is_available()))",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and proc.stdout.strip().endswith("1")
 
 
 @lru_cache()
@@ -219,6 +240,15 @@ def has_tpu() -> bool:
         return False
 
     try:
+        try:
+            import torch_xla.runtime as xr
+
+            if xr.device_type() != "TPU":
+                return False
+        except (ImportError, AttributeError):
+            # Older torch_xla versions do not expose runtime.device_type().
+            if not has_tpu_hardware():
+                return False
         xm.xla_device()
         return True
     except Exception as e:
@@ -404,12 +434,17 @@ def recommend_format(
         return "onnx"
 
     # desktop hardware
-    if os.name != "nt" and has_intel_vpu() and runtime_supported:
+    # OpenVINO is a runtime-loadable format (GenericYolo can load and run the IR),
+    # so it stays a valid recommendation even when `runtime_supported=False` (the
+    # build-target path used by auto-opt / ispy-optimize). Only formats that
+    # cannot actually be loaded at runtime (CoreML) or need a separate compiled
+    # runtime that may be absent (TensorRT engine) stay gated on that flag.
+    if os.name != "nt" and has_intel_vpu():
         logger.info(
             "Intel VPU detected - using OpenVINO format for hardware acceleration."
         )
         return "openvino"
-    if has_intel_gpu() and runtime_supported:
+    if has_intel_gpu():
         logger.info(
             "Intel GPU detected - using OpenVINO format for hardware acceleration."
         )

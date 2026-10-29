@@ -105,7 +105,6 @@ async function refresh() {
     logsConn.fail();
   }
 }
-setInterval(refresh, 2000);
-refresh();
+ispyPoll(refresh, 2000);
 </script>
 {% endblock %}

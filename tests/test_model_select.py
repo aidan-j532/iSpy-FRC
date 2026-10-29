@@ -367,6 +367,11 @@ class BootLoadTests(unittest.TestCase):
             ),
         ):
             cam = ObjectDetectionPipeline(cam_cfg, config)
+            # Device 99 does not exist, so the pipeline starts CamReader/PreProc
+            # threads that keep retrying. They would outlive this test and
+            # mutate the process-global _open_worker_live counter used by
+            # CameraOpenBoundedTests, making those assertions order-dependent.
+            self.addCleanup(cam.destroy)
             return cam
 
     def test_prefers_existing_artifact_over_stale_file_path(self):

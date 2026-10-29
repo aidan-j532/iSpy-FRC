@@ -88,7 +88,9 @@ IMAGE_DIR="${WORK_DIR}/image"
 
 cleanup() {
     echo "==> Cleaning up build workspace..."
-    # unmount if still mounted
+    if mountpoint -q "${MOUNT_POINT}/boot/firmware" 2>/dev/null; then
+        umount "${MOUNT_POINT}/boot/firmware" 2>/dev/null || true
+    fi
     if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
         umount "$MOUNT_POINT" 2>/dev/null || true
     fi
@@ -118,7 +120,8 @@ done
 echo "==> Downloading base image for ${BOARD} (${FAMILY})..."
 mkdir -p "$IMAGE_DIR"
 BASE_IMG_XZ="${IMAGE_DIR}/base.img.xz"
-curl -L -o "$BASE_IMG_XZ" "$BASE_URL"
+curl --fail --location --retry 3 -o "$BASE_IMG_XZ" "$BASE_URL"
+xz -t "$BASE_IMG_XZ"
 
 echo "==> Extracting base image..."
 xz -d "$BASE_IMG_XZ"
@@ -164,6 +167,10 @@ run_in_target() {
     else
         chroot "$MOUNT_POINT" /usr/bin/env \
             PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            ISPY_NO_SUPERVISOR=1 \
+            ISPY_TARGET_ARCH=aarch64 \
+            ISPY_TARGET_OS=Linux \
+            ISPY_SKIP_HARDWARE_DETECT=1 \
             "$@"
     fi
 }
@@ -222,6 +229,18 @@ run_in_target bash -c "
         'git+https://github.com/aidan-j532/iSpy-FRC.git'
 "
 
+# Provision the target-architecture runtime dependencies (CPU torch) during the
+# image build. Do not run `boot -f` here: this image has no repo checkout and no
+# camera, and boot would create /root/Config for the wrong WorkingDirectory. The
+# baked first-boot service runs the full fresh boot on the board.
+echo "==> Provisioning target-architecture runtime dependencies..."
+run_in_target python3 -c "
+from iSpy.boot.backend_deps import ensure_backends, raise_for_actionable_failures
+report = ensure_backends(['pytorch'], auto_install=True)
+print(chr(10).join(report.lines()))
+raise_for_actionable_failures(report)
+"
+
 # 4c. Systemd units (baked — enabled so they start on every boot)
 echo "==> Registering systemd services..."
 run_in_target bash -c "
@@ -262,7 +281,7 @@ After=network-online.target ispy-first-boot.service
 Requires=ispy-first-boot.service
 
 [Service]
-ExecStart=${PYTHON_BIN} -m iSpy.boot.boot
+ExecStart=${PYTHON_BIN} -m iSpy.cli start
 Restart=on-failure
 RestartSec=5
 User=${ISPY_USER}
@@ -272,7 +291,6 @@ WorkingDirectory=${WORK_DIR_RT}
 WantedBy=multi-user.target
 UNIT
 
-    run_in_target systemctl daemon-reload
     run_in_target systemctl enable ispy-first-boot.service
     run_in_target systemctl enable ispy.service
 }
@@ -280,10 +298,9 @@ UNIT
 # 4d. Hostname / mDNS (baked)
 echo "==> Setting hostname to 'ispy'..."
 run_in_target bash -c '
-    hostnamectl set-hostname ispy
+    printf "%s\n" ispy > /etc/hostname
     sed -i "s/127.0.1.1.*/127.0.1.1\tispy/" /etc/hosts
     systemctl enable avahi-daemon
-    systemctl restart avahi-daemon
 '
 
 # 4e. Enable the UDP announce service for client discovery
@@ -319,8 +336,8 @@ run_in_target bash -c '
 # ---------------------------------------------------------------------------
 echo "==> Unmounting..."
 sync
-umount "$MOUNT_POINT" 2>/dev/null || true
 [[ -d "${MOUNT_POINT}/boot/firmware" ]] && umount "${MOUNT_POINT}/boot/firmware" 2>/dev/null || true
+umount "$MOUNT_POINT" 2>/dev/null || true
 losetup -D
 
 echo "==> Shrinking image with pishrink.sh..."
