@@ -1,0 +1,65 @@
+
+name: Deploy iSpy-FRC Documentation
+
+on:
+  push:
+    branches:
+      - Docs
+    paths:
+      - 'iSpy-docs/**'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: iSpy-docs/package-lock.json
+
+      - name: Install dependencies
+        working-directory: iSpy-docs
+        run: npm ci
+
+      - name: Build Docusaurus
+        working-directory: iSpy-docs
+        run: npm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: iSpy-docs/build
+
+  deploy:
+    name: Publish documentation
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

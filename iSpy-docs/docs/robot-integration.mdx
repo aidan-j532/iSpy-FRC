@@ -1,0 +1,159 @@
+---
+title: Robot Integration
+author: iSpy FRC
+sidebar_position: 8
+---
+
+# Robot Integration
+
+This is the page the driver code needs. Everything up to this point gets a position out of a camera. This page is about getting that position into the robot and reading it correctly.
+
+The failure mode this page prevents is subtle: the vision data is published, the dashboard is happy, and the robot still sees nothing, because the topic type or the field name on the robot side does not match what iSpy sent.
+
+## How the data gets to the robot
+
+The path is short:
+
+1. A pipeline produces a list of `Object` dictionaries for the frame.
+2. Enabled utilities run. `target_selector` writes the chosen target under `addon_data.selected_target`.
+3. `FRC/network_table_handler` reads the frame data and publishes the configured entries to NetworkTables.
+4. Robot code subscribes to those topics.
+
+Publishing only happens if the utility is enabled and the NetworkTables client is connected. The client connects in the background and retries, so a robot that is off at boot does not stall iSpy; it just shows as disconnected until the robot appears.
+
+## Enabling publishing
+
+Add the utility under `plugins.utilities`. It is not enabled by default.
+
+```json
+"plugins": {
+  "utilities": {
+    "FRC/network_table_handler": {
+      "network_tables_ip": "10.0.0.2",
+      "publish": [
+        {"name": "fps", "data_type": "number", "source": "fps", "nt_topic": "fps"},
+        {"name": "num_detections", "data_type": "number", "source": "detection_count", "nt_topic": "num_detections"},
+        {"name": "camera_lag", "data_type": "number", "source": "camera_lag_s", "nt_topic": "camera_lag"},
+        {"name": "vision_data", "data_type": "json", "source": "detections", "nt_topic": "vision_data"},
+        {"name": "selected_target", "data_type": "json", "source": "addon_data.selected_target", "nt_topic": "selected_target"}
+      ]
+    }
+  }
+}
+```
+
+`network_tables_ip` defaults to `10.0.0.2`, the usual roboRIO address.
+
+## The default topics
+
+Everything lands under the `VisionData` table. The default publish list is:
+
+| Topic | Type | Contents |
+| --- | --- | --- |
+| `VisionData/fps` | double | Loop rate. |
+| `VisionData/num_detections` | double | Count of detections this frame. |
+| `VisionData/camera_lag` | double | Seconds since the newest camera frame arrived. |
+| `VisionData/vision_data` | string | The full detection list as a JSON string. |
+| `VisionData/selected_target` | string | The chosen target as JSON, or `null`. |
+
+One more topic exists but is not in the default list: when a camera's `subsystem` is set to `hopper`, the utility publishes `VisionData/hopper_sees_object` as a boolean. It is sent for every camera labeled `hopper`, separately from the publish list.
+
+## Reading it on the robot
+
+### The detection list as JSON
+
+`vision_data` is a string topic holding a JSON array. This is the default and the recommended shape, because the detection schema can grow without breaking a typed reader. Each element has the fields described in [Coordinates and Distance](./coordinates-and-distance): `id`, `name`, `confidence`, `x`, `y`, `z`, `roll`, `pitch`, `yaw`, `depth_source`, and so on.
+
+With WPILib and a JSON library on the classpath (for example Jackson via `WPILibNewCommands.json` or a vendored `ObjectMapper`):
+
+```java
+NetworkTable table = NetworkTableInstance.getDefault().getTable("VisionData");
+// Re-read the string each loop; it changes every frame.
+String raw = table.getStringTopic("vision_data").get("[]");
+```
+
+Then parse `raw` as a JSON array and read the fields you need by name. Treat the topic as "the current frame's detections." It is overwritten every tick.
+
+### The selected target
+
+If `target_selector` is enabled, `selected_target` is a JSON string holding one detection, or literal `null` when nothing is selected. This is the topic to build a lock-on behavior around.
+
+```java
+String target = table.getStringTopic("selected_target").get("null");
+if (!target.equals("null")) {
+    // parse and use target
+}
+```
+
+### The struct array
+
+If you would rather have a typed array than parse JSON, change the publish entry's `data_type` from `json` to `struct[]`:
+
+```json
+{"name": "vision_data", "data_type": "struct[]", "source": "detections", "nt_topic": "vision_data"}
+```
+
+That publishes `VisionData/vision_data` as a WPILib struct array of `Object`, with `double x, y, z, roll, pitch, yaw`. The struct is intentionally narrow: it carries only position and orientation. Class name, confidence, id, and `depth_source` are not in the struct, so if the robot needs those, use the JSON form. The struct is a compatibility path for robot code that predates the JSON topic, not a full replacement.
+
+To read it in Java, the struct has to be defined on the robot side with the same name and layout:
+
+```java
+// must match the field order and types iSpy publishes
+public struct Object {
+  public double x, y, z, roll, pitch, yaw;
+  public static final Struct<Object> struct = ...;
+}
+Object[] dets = table.getStructArrayTopic("vision_data", Object.struct).get(new Object[0]);
+```
+
+### Plain numbers
+
+`fps`, `num_detections`, and `camera_lag` are doubles and need no parsing. `camera_lag` is a good health signal: if it climbs, the camera is stale even though the loop is running.
+
+## Units
+
+Under `unit: "frc"`, every position and orientation you read from the robot's perspective is already in the units WPILib expects: meters and radians. That is the whole reason `frc` exists as a unit mode.
+
+If you use any other unit mode, `x`, `y`, and `z` come through in that unit and the robot code has to convert. Do not assume the robot sees meters unless the config says `frc`.
+
+The angles are radians in both the JSON and the struct. They arrive in the up-positive robot frame described in the coordinates page, so a `yaw` of zero points along the robot's forward axis.
+
+## Robot pose
+
+iSpy can read the robot's pose between frames and use it to express detections in the field frame. It looks for a pose in this order:
+
+1. A replay camera's recorded pose, during rollback playback.
+2. The first enabled utility with a `get_robot_pose` method. The built-in NetworkTables utility provides one, and it subscribes to `AdvantageKit/RealOutputs/Odometry/Robot` as a `Pose2d` struct.
+3. An identity pose, if neither is available.
+
+This is worth understanding because it decides which frame the robot sees, and the answer depends on whether a tracker is enabled:
+
+- **No tracker enabled.** Detections flow straight from the pipeline to the publish entries, so they stay **robot-relative**: `x` is right, `y` is forward. The robot must apply its own heading to place them in the field.
+- **A tracker enabled.** Before tracking, each detection is transformed into the **field frame** using the pose (`Object.relative_to`). The tracker then maintains tracks in the field frame, and the published detections carry field coordinates, not robot-relative ones.
+
+In other words, adding a tracker silently changes the frame of the data the robot receives. This is a common surprise. If you enable a tracker and the robot's coordinates suddenly look like field coordinates, that is why. If iSpy has no pose (no odometry, no replay), the transform uses an identity pose, so the values are unchanged and remain effectively robot-relative.
+
+The practical rule: decide which frame you want, and make sure both the presence of a tracker and the presence of odometry agree with that choice. The safest robot-side approach is to check one known target and confirm the numbers match the frame you assumed.
+
+
+## Pitfalls
+
+- **Reading a topic that is not being published.** The entry is skipped silently if its `source` does not resolve. Check the publish list against the source names in the reference page.
+- **Assuming the struct and the JSON agree.** They do not. The struct is a six-field subset. Switching types on the iSpy side without switching the reader on the robot side produces no error, just missing data.
+- **Expecting `vision_data` to be typed.** By default it is a string. A robot that calls `getStructArrayTopic` on a string topic reads an empty array with no complaint.
+- **Forgetting the utility is opt-in.** A config with no `plugins.utilities` entry publishes nothing. The dashboard still works, because the web UI does not depend on NetworkTables.
+- **Ignoring connection state.** Publishing is skipped while disconnected. Check the connection indicator before debugging a missing field.
+- **Treating `camera_lag` as loop lag.** It measures frame freshness, not loop time. A stale camera and a slow loop are different problems with different fixes.
+
+## A robot-side checklist
+
+Before a match, confirm each of these on the robot:
+
+1. The NetworkTables client shows connected on the iSpy dashboard.
+2. The expected topics exist on the robot's NetworkTable instance.
+3. `vision_data` parses as JSON and contains at least one entry when a target is in view.
+4. The units match: meters and radians, assuming `unit` is `frc`.
+5. If using `selected_target`, a selection is active and the topic is not `null`.
+6. The frame is the one you expect: robot-relative with no tracker, field-relative with a tracker enabled and odometry available.
+
+If all six hold and the robot still behaves oddly, the problem is downstream of the data, in how the robot consumes it.

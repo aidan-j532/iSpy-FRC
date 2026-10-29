@@ -1,0 +1,68 @@
+---
+title: iSpy FRC
+author: iSpy FRC
+description: What iSpy does, where it fits in an FRC robot, and where to start.
+sidebar_position: 1
+---
+
+# iSpy FRC
+
+iSpy is a camera and vision system for FIRST Robotics Competition robots. It runs camera pipelines on a coprocessor or development machine, gives you a local dashboard for working with them, and can send selected results to robot code over NetworkTables.
+
+The usual job is object detection: get a camera image, run a model, and use the result as one input to the robot. But that is not the only thing in the codebase. The pipeline registry also includes AprilTag and QR detection, monocular depth estimation, optical flow, and YOLO-World. Each camera gets a pipeline and its own settings.
+
+Teams usually run iSpy on a small Linux computer mounted on the robot. The same package can also be used from a development machine to configure a camera, test a model, or work on the code. The backend that makes sense depends on the hardware, operating system, and packages installed there.
+
+## Why have a separate vision coprocessor?
+
+Camera processing can take real time and a fair amount of compute. Running it on a separate board keeps that work away from the roboRIO's control loop, while NetworkTables gives the robot a familiar way to read the results. The dashboard is there for the people setting up the robot: camera source, model, calibration, health, logs, and recorded-session review are all close to the runtime.
+
+This separation does not make the result automatically correct. A strong detector still needs a clear image and field testing; useful positions still depend on a solid camera mount and calibration. iSpy gives you a place to see and tune those pieces, but the robot code still decides how to use a target.
+
+## What you can do with it
+
+- Run multiple cameras and choose a different pipeline for each.
+- Detect objects with a model, or use the built-in AprilTag, QR, depth, optical-flow, or YOLO-World pipeline.
+- Inspect live video, camera health, pipeline status, and runtime timing from a local web dashboard.
+- Configure calibration and camera mounting information so supported pipelines can provide more than pixel coordinates.
+- Enable a NetworkTables utility to publish chosen values to the robot.
+- Record real camera frames and their result data, then replay a session while debugging.
+- Prepare compatible optimized model artifacts and compare them with the original model.
+
+The [runtime overview](./architecture) traces the frame flow in more detail. [Vision Pipelines and Backends](./vision-pipelines) describes which pipeline to pick and what its output means.
+
+## Hardware and inference
+
+The recommended deployment board is an Orange Pi 5 or 5 Pro with its RK3588 NPU. ARM64 Linux and x86 Linux are also useful targets; macOS on Apple Silicon and Windows can work for development depending on the installed inference backend and camera support. Hardware acceleration is not a promise that every model will run on every board. A model format, native runtime package, and compatible device all have to line up.
+
+For local experimentation, it is fine to begin on CPU with a small model and one camera. Before deploying, run it on the actual robot computer: USB devices, frame rate, heat, storage, and accelerator support are all different on the target hardware. The [installation guide](./installation) covers the supported routes and their caveats.
+
+## A typical first session
+
+1. Install the package and create its generated config/model folders.
+2. Start the runtime and open the dashboard on the vision computer.
+3. Confirm the camera produces a stable live image before tuning anything else.
+4. Choose a pipeline and model, then make sure the result looks sensible.
+5. Set the camera's physical mounting values and run the calibration that pipeline uses.
+6. If the robot needs the data, enable NetworkTables and check the connection and topic types from both sides.
+
+On a new checkout, `ispy-boot -f` creates the first setup and downloads default model files. It also deletes existing generated state, so treat it as a one-time setup or an intentional reset, not a way to restart after a match. Then run `ispy-run` for normal interactive use. The [first-launch guide](./getting-started) walks through the dashboard and camera setup step by step.
+
+## A note on setup commands
+
+It is worth keeping these commands straight:
+
+- `ispy-boot` prepares and validates the setup; it does not start the live loop.
+- `ispy-run` starts the camera pipelines and web app.
+- `ispy start` does normal boot checks, then starts vision.
+- `ispy setup` does a fresh boot, then starts vision. It can remove existing config, models, logs, and dataset state.
+
+See [CLI and Commands](./cli-reference) before running a command you do not recognize. The `-f`/`--fresh` behavior is intentionally destructive.
+
+## Where to go next
+
+- New install? Start with [Installation and Setup](./installation), then follow [First Launch and Basic Setup](./getting-started).
+- Picking hardware, cameras, or models? Use [Cameras and Models](./cameras-and-models) and [Vision Pipelines and Backends](./vision-pipelines).
+- Need reliable positions? Read [Camera Calibration](./calibration) and the coordinate/unit notes in [Configuration](./configuration).
+- Need to tune or debug a robot run? See [Web UI and Networking](./web-ui-and-networking), [Datasets and Session Recordings](./datasets-and-recordings), and [Troubleshooting](./troubleshooting).
+- Want to change the code? Start at [Development and Advanced Configuration](./development-and-advanced-config).

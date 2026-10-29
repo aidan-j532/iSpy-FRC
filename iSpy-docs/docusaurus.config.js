@@ -1,0 +1,153 @@
+// @ts-check
+// `@type` JSDoc annotations allow editor autocompletion and type checking
+// (when paired with `@ts-check`).
+// There are various equivalent ways to declare your Docusaurus config.
+// See: https://docusaurus.io/docs/api/docusaurus-config
+
+import {themes as prismThemes} from 'prism-react-renderer';
+
+// This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
+
+/** @type {import('@docusaurus/types').Config} */
+const config = {
+  title: 'iSpy FRC',
+  tagline: 'Vision pipeline for FRC object detection, calibration, and robot telemetry',
+  favicon: 'img/favicon.ico',
+
+  // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
+  future: {
+    v4: true, // Improve compatibility with the upcoming Docusaurus v4
+  },
+
+  // Set the production url of your site here
+  url: 'https://aidan-j532.github.io',
+  baseUrl: '/iSpy-FRC/',
+  organizationName: 'aidan-j532',
+  projectName: 'iSpy-FRC',
+  trailingSlash: false,
+
+  onBrokenLinks: 'throw',
+
+  // Even if you don't use internationalization, you can use this field to set
+  // useful metadata like html lang. For example, if your site is Chinese, you
+  // may want to replace "en" with "zh-Hans".
+  i18n: {
+    defaultLocale: 'en',
+    locales: ['en'],
+  },
+
+  presets: [
+    [
+      'classic',
+      /** @type {import('@docusaurus/preset-classic').Options} */
+      ({
+        docs: {
+          sidebarPath: './sidebars.js',
+          // Please change this to your repo.
+          // Remove this to remove the "edit this page" links.
+          editUrl:
+            'https://github.com/aidan-j532/iSpy-FRC/tree/main/iSpy-Docs/',
+        },
+        theme: {
+          customCss: './src/css/custom.css',
+        },
+      }),
+    ],
+  ],
+
+  themeConfig:
+    /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
+    ({
+      // Replace with your project's social card
+      image: 'img/iSpyLogoTransparentWhite.png',
+      colorMode: {
+        defaultMode: 'dark',
+        disableSwitch: false,
+        respectPrefersColorScheme: true,
+      },
+      navbar: {
+        title: 'iSpy FRC',
+        logo: {
+          alt: 'iSpy FRC logo',
+          src: 'img/iSpyLogoTransparent.png',
+          srcDark: 'img/iSpyLogoTransparentWhite.png',
+        },
+        items: [
+          {
+            type: 'docSidebar',
+            sidebarId: 'tutorialSidebar',
+            position: 'left',
+            label: 'Docs',
+          },
+          {
+            href: 'https://github.com/aidan-j532/iSpy-FRC',
+            label: 'GitHub',
+            position: 'right',
+          },
+        ],
+      },
+      footer: {
+        style: 'dark',
+        links: [
+          {
+            title: 'Docs',
+            items: [
+              {
+                label: 'Overview',
+                to: '/docs/intro',
+              },
+              {
+                label: 'Installation',
+                to: '/docs/installation',
+              },
+            ],
+          },
+          {
+            title: 'Project',
+            items: [
+              {
+                label: 'GitHub',
+                href: 'https://github.com/aidan-j532/iSpy-FRC',
+              },
+            ],
+          },
+          {
+            title: 'Team 2207 - Bright Bears',
+            items: [
+              {
+                label: 'Team Website',
+                href: 'http://www.whitebearlakerobotics.com/',
+              },
+              {
+                label: 'Instagram',
+                href: 'https://www.instagram.com/wblroboticsfrc2207/',
+              },
+              {
+                label: 'Facebook',
+                href: 'https://www.facebook.com/wblrobotics/',
+              },
+              {
+                label: 'X (Twitter)',
+                href: 'https://twitter.com/team2207',
+              },
+              {
+                label: 'YouTube',
+                href: 'https://www.youtube.com/@FRC-Team2207',
+              },
+              {
+                label: 'Chief Delphi',
+                href: 'https://www.chiefdelphi.com/t/introducing-ispy-a-students-project-for-advanced-computer-vision/523910',
+              },
+            ],
+          },
+        ],
+        copyright: `Copyright © ${new Date().getFullYear()} iSpy FRC. Docs are largely AI-generated, but fact checked. `,
+      },
+      prism: {
+        theme: prismThemes.github,
+        darkTheme: prismThemes.dracula,
+      },
+    }),
+};
+
+export default config;

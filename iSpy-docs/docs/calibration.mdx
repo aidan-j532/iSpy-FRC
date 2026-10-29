@@ -1,0 +1,74 @@
+---
+title: Camera Calibration
+sidebar_position: 8
+---
+
+# Camera Calibration
+
+Calibration is how iSpy relates pixels in a camera image to measurements in the real world. The web wizard is opened from the **Calibrate** button on a camera card in the Cameras page. The available tabs depend on the selected pipeline and model.
+
+Calibration data is saved to that camera's entry in `Config/config.json`. The wizard may tell you to restart vision after saving; restart `ispy-run` or the `iSpy` service before relying on the new values in a live pipeline.
+
+Calibration is not a one-time property of the robot alone. It describes a camera/lens and the way that camera is being used. If you swap the camera, change the lens, resolution, zoom, or physical mount, re-check the calibration instead of assuming the old values still apply.
+
+## Before you start
+
+1. Make sure the camera is configured and producing a live frame. The calibration feed cannot work until vision is running.
+2. Secure the camera in its final mount. If the camera moves after calibration, repeat the calibration and update its mount values.
+3. Use consistent camera resolution, focus, and zoom while collecting calibration data. If those change later, check the result again.
+4. Keep the camera's physical mounting pose separate from lens calibration. `height`, `x`, `y`, `yaw`, and `pitch` describe where and how the camera is mounted; the calibration wizard measures image geometry.
+
+## ChArUco intrinsics
+
+Intrinsics describe the camera lens and its distortion. They are useful when a pipeline needs to correct or interpret image geometry. The default board shipped by the wizard is a ChArUco grid with a 7 by 9 square layout, `DICT_4X4_50` markers, 25 mm squares, and 18 mm markers.
+
+1. Open the camera's **Calibrate** wizard and select **ChArUco Intrinsics**.
+2. Select **Download Board PDF** and print the board at its intended size. Do not stretch, crop, or change the grid pattern.
+3. Hold the board where the camera can see it clearly. Move it around the image and tilt it through different angles and distances; a stationary, front-facing board does not provide enough varied views.
+4. Leave **Auto Capture** running while you move the board. The live feed marks detected corners and the frame count increases when it captures a useful, different view. Pause capture once you have a useful range of views.
+5. Select **Calibrate Intrinsics**. The result reports reprojection error (RMS) and the resolution used for calibration. A lower RMS is generally better, but also check that the board was detected across varied positions and that the image looks undistorted afterward.
+
+At least three distinct captures are required by the solver. If calibration fails, collect more varied views: move the board toward the corners of the image, tilt it, and vary its distance. Avoid motion blur, glare, and a board that is too small in the frame.
+
+The wizard saves values such as `camera_matrix`, `dist_coeffs`, `resolution`, and `rms` in the camera's `calibration` object. These describe the lens; they do not set the camera's robot-relative position.
+
+Keep the resolution consistent. Intrinsics collected at one resolution may not be directly valid at another, and a camera that silently changes its output mode can make a previously good calibration look wrong. If you do change modes, recalibrate or verify the scaled intrinsics before relying on geometry.
+
+## Known-object focal length and field of view
+
+The **Focal / FOV** tab estimates horizontal field of view from an object whose real size and distance are known. It is useful when a pipeline needs a size-to-distance estimate.
+
+1. Place a clearly visible object at a measured distance from the camera. Measure from the camera to the object, not from the robot bumper.
+2. Select **Freeze & measure** when the object is visible. Drag vertically over the object in the frozen image, or enter its pixel height directly.
+3. Enter the object's real vertical size and its distance in inches. Use the same real-world unit for both measurements.
+4. Select **Compute & save**. The wizard stores the measurement and reports focal length in pixels and horizontal FOV in degrees.
+
+The object should be upright and its measured height should match the dimension you enter. This method assumes the object is at the distance you measured and that the camera's zoom and resolution will not change. If the known size or distance is wrong, the calculated FOV will be wrong too.
+
+This is a scale estimate from one known object, not a full lens-distortion calibration. Use ChArUco intrinsics when you need lens geometry. For best results, take the known-size measurement near the area of the image and distance range where you expect to use the camera, then validate against another known placement.
+
+## Pose keypoints (PnP)
+
+Pose pipelines may show a **Pose Keypoints** tab. PnP uses 2D keypoints from the image and matching 3D keypoint coordinates for the physical object to estimate its 3D pose. Run ChArUco intrinsics first; the wizard disables saving PnP settings until intrinsics are available.
+
+For each model keypoint, enter its `x`, `y`, and `z` position in the object's local coordinate frame, in meters. The keypoint order must match the order used by the pose model. Choose **Flexible** for deformable objects where points can move relative to one another, or **Rigid** when the object's shape is fixed. Set **Min keypoint conf** to ignore low-confidence points. Use **Load COCO Defaults** only when the model's keypoints use the standard COCO 17-point human skeleton; those coordinates are not suitable for a different object or keypoint order.
+
+## Mounting values and field coordinates
+
+Mounting offsets are configured on the camera entry, not calculated by the lens wizard. With the default `unit: "frc"`, enter the mount distances in inches; `yaw` and `pitch` are angles in degrees:
+
+- `height`: camera height above the reference surface
+- `x` and `y`: camera offset from the robot reference point
+- `yaw` and `pitch`: horizontal and vertical mounting angles
+
+Measure these after the camera is secured. Use the same robot coordinate convention as your robot code and verify signs by checking known targets from both sides of the field. The chosen top-level `unit` controls position inputs and output conversion; the default `frc` mode uses inches for camera mount and known-object inputs, then publishes positions in meters.
+
+A calibration can be mathematically valid while the robot-relative result is still wrong if mount offsets, angle signs, or units are wrong. Validate a few targets at known positions before using the values on a moving robot.
+
+Do the validation with the robot still and the camera fixed. Check at least a near and a far point, and if possible targets on both sides of the camera centerline. A constant offset often points to `x`/`y` or height; a left/right sign error often points to yaw or the coordinate convention; an error that grows with distance can indicate bad FOV/intrinsics or target size. Treat these as clues, not automatic diagnoses.
+
+## Reset or redo a calibration
+
+The wizard's reset action clears the saved calibration values for that camera. It does not delete the camera or model. To redo a measurement, open **Calibrate** again and run the relevant section. Back up `Config/config.json` before making manual edits or large configuration changes.
+
+After a change, repeat the same known-point check you used before. If the image geometry looks right but the robot still reports a different position, confirm which unit and coordinate frame your robot code expects. The [Configuration Reference](./configuration) explains the `frc` convention, and [Troubleshooting](./troubleshooting) has a geometry checklist.

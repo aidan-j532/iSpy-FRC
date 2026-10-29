@@ -15,16 +15,17 @@ class TestGlobalChrome(unittest.TestCase):
     def test_base_has_favicon_and_theme_color(self):
         html = read("base.html")
         self.assertIn('rel="icon"', html)
-        self.assertIn("/static/favicon.svg", html)
+        self.assertIn("/static/favicon.ico", html)
         # matched loosely so an HTML reformat (self-closing tags, attribute
         # wrapping) can't break a test that's really about the tag being present
         self.assertIn('name="theme-color"', html)
         self.assertIn('content="#0d1117"', html)
 
     def test_favicon_exists(self):
-        svg = (STATIC / "favicon.svg").read_text(encoding="utf-8")
-        self.assertIn("#0d1117", svg)  # dark bg
-        self.assertIn("#2f81f7", svg)  # brand accent glyph
+        data = (STATIC / "favicon.ico").read_bytes()
+        # ICO header: reserved 0x0000, type 0x0001 (icon); non-empty payload
+        self.assertEqual(data[:4], b"\x00\x00\x01\x00")
+        self.assertGreater(len(data), 100)
 
     def test_design_css_shared_pieces(self):
         css = (STATIC / "css" / "design.css").read_text(encoding="utf-8")
@@ -48,7 +49,7 @@ class TestSetupWizardPage(unittest.TestCase):
 
     def test_links_design_system_and_favicon(self):
         self.assertIn("/static/css/design.css", self.SOURCE)
-        self.assertIn("/static/favicon.svg", self.SOURCE)
+        self.assertIn("/static/favicon.ico", self.SOURCE)
 
     def test_no_raw_hex_feedback_colors(self):
         self.assertNotIn("#2c7", self.SOURCE)

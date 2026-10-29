@@ -9,7 +9,7 @@ from wpimath.geometry import Pose2d
 
 from iSpy.config.iSpyConfig import iSpyAddonConfig, iSpyConfig
 from iSpy.core.control_channel import ControlServer
-from iSpy.core.rollback import ReplayCompare, RollBack
+from iSpy.core.rollback import RollBack
 from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import (
     FrameProcessorBase,
@@ -58,7 +58,6 @@ class iSpy:
 
         self.shutdown_event = threading.Event()
         self.pause_event = threading.Event()
-        self._replay_compare = None
         os.makedirs("Outputs", exist_ok=True)
 
         signal.signal(signal.SIGINT, lambda *_: self._handle_shutdown())
@@ -324,89 +323,10 @@ class iSpy:
                 except Exception:
                     self.logger.exception("Error stopping plugin '%s'", name)
 
-    @property
-    def replay_mode(self) -> bool:
-        # true when every camera is serving a recording rather than a device
-        cams = getattr(self, "cameras", None) or []
-        if not cams:
-            return False
-        return all(callable(getattr(cam, "replay_pose", None)) for cam in cams)
 
-    def _replay_pose(self):
-        # the sidecar pose for the frame a replay camera is currently serving.
-        # cameras run in lockstep off the same sidecar, so the first one that
-        # has a pose for this tick is the pose for the tick
-        for cam in getattr(self, "cameras", None) or []:
-            get_pose = getattr(cam, "replay_pose", None)
-            if not callable(get_pose):
-                continue
-            try:
-                pose = get_pose()
-            except Exception:
-                continue
-            if pose:
-                return pose
-        return None
-
-    def _replay_record(self):
-        # the sidecar entry for the frame a replay camera is currently serving
-        for cam in getattr(self, "cameras", None) or []:
-            get_record = getattr(cam, "replay_record", None)
-            if not callable(get_record):
-                continue
-            try:
-                record = get_record()
-            except Exception:
-                continue
-            if record:
-                return record
-        return None
-
-    def _note_replay(self, detections):
-        # during a replay, diff what the pipeline just found against what the
-        # original run recorded. a no-op unless every camera is a replay camera
-        if self._replay_compare is None:
-            if not self.replay_mode:
-                return
-            self._replay_compare = ReplayCompare(self._replay_session_name())
-            self.logger.info(
-                "Replay comparison armed for session %s",
-                self._replay_compare.session_name,
-            )
-        self._replay_compare.add(self._replay_record(), detections)
-
-    def _replay_session_name(self) -> str:
-        for cam in getattr(self, "cameras", None) or []:
-            name = getattr(cam, "replay_session", None)
-            if callable(name):
-                try:
-                    return name() or "replay"
-                except Exception:
-                    continue
-        return "replay"
-
-    def _finish_replay_compare(self):
-        if self._replay_compare is None:
-            return
-        try:
-            self._replay_compare.finish()
-        except Exception:
-            self.logger.exception("Failed to write the replay comparison")
-        self._replay_compare = None
 
     def _get_pose(self, code_times: dict | None = None) -> Pose2d:
-        # a replayed run must not read a live pose off NetworkTables - the
-        # recorded one wins, before any utility gets a say
-        replayed = self._replay_pose()
-        if replayed is not None:
-            try:
-                return Pose2d(
-                    float(replayed.get("x", 0.0)),
-                    float(replayed.get("y", 0.0)),
-                    float(replayed.get("heading", 0.0)),
-                )
-            except (TypeError, ValueError):
-                pass
+
 
         for name, util in self.utilities.items():
             if hasattr(util, "get_robot_pose"):
@@ -582,10 +502,7 @@ class iSpy:
             0.0, time.perf_counter() - t_track - opted_trackers_s
         )
 
-        # after the trackers: the sidecar holds post-tracker detections, so
-        # comparing the pre-tracker set would report a difference on every
-        # frame of a run that had trackers enabled
-        self._note_replay(detections)
+
 
         if hasattr(camera, "get_code_times"):
             try:
@@ -677,8 +594,7 @@ class iSpy:
             0.0, time.perf_counter() - t_track - opted_trackers_s
         )
 
-        # after the trackers - see _run_loop_body_solo
-        self._note_replay(detections)
+
 
         for cam in handler.cameras:
             if hasattr(cam, "get_code_times"):
@@ -764,7 +680,6 @@ class iSpy:
 
         finally:
             print()
-            self._finish_replay_compare()
             self._stop_all_plugins()
             if self.web_app:
                 self.web_app.stop()
@@ -812,7 +727,6 @@ class iSpy:
 
         finally:
             print()
-            self._finish_replay_compare()
             self._stop_all_plugins()
             if self.web_app:
                 self.web_app.stop()

@@ -1,0 +1,154 @@
+---
+title: Vision Pipelines and Backends
+sidebar_position: 7
+---
+
+# Vision Pipelines and Backends
+
+A pipeline is the processing path assigned to a camera. Choose it in the camera's pipeline settings in the web UI. The available choices come from the pipeline registry in this version of iSpy:
+
+Choose based on the result you need, not just on the name of a model. A pipeline defines how images are processed and what sort of result comes back; a backend is the runtime that executes model operations on a particular device. AprilTag, QR, and HSV color pipelines, for example, need no YOLO object detector.
+
+| Pipeline | Use it for | What to know |
+| --- | --- | --- |
+| `object_detection` | Detecting objects with a model trained for your targets | Select a compatible model. This is the usual starting point for game-piece detection. A pose model can expose a PnP calibration section. |
+| `yolo_world` | Text-prompted, open-vocabulary object detection | Uses a prompt and one of the available model sizes (`s`, `m`, or `l`). Model weights download on first use. |
+| `hsv_detection` | Detecting brightly colored objects without a model | Tunes HSV color thresholds and finds blobs by shape. No training and no model weights. Good for a balloon, cone, or colored ball; fragile under changing light. Has live tuning. |
+| `april_tag` | Detecting AprilTags | This implementation detects the `tag36h11` family. Set the physical tag size; ChArUco intrinsics are available in the calibration wizard. |
+| `depth_anything` | Producing a monocular depth estimate from an image | Uses Depth Anything V2 Small. It is not an object detector and does not show the calibration wizard. The default inference interval is every five frames. |
+| `optical_flow` | Measuring apparent image motion between frames | This pipeline is marked beta. Farneback computes dense flow and is smoother but slower; LK tracks selected corners and is faster but noisier. FOV and camera pitch affect the motion estimate. |
+| `qr_code` | Reading QR codes | Uses OpenCV's QR detector. Set `qr_size` to the printed code's physical size in the configured unit; `decode_mode` can be `standard` or `fast`. |
+
+Use the pipeline's schema in the camera editor for its current settings. A setting shown in the editor belongs under that camera's `pipeline.settings` object in `Config/config.json`.
+
+The QR-code and optical-flow entries are considered experimental and are hidden from the usual selector unless the top-level `admin` option is enabled. Optical flow is marked beta in the current code, so test it under the camera motion and lighting you expect rather than treating its result as a field-ready measurement out of the box.
+
+AprilTag currently detects the `tag36h11` family. The tag size in settings must match the printed tag's physical size; a wrong size produces a systematic pose error even when every tag is detected. ChArUco camera intrinsics are available in the calibration wizard for pipelines that use them.
+
+## Picking a model-backed pipeline
+
+`object_detection`, `yolo_world`, and `depth_anything` use model weights. The default object-detection config points to a PyTorch model under `YoloModels/pytorch/`; first boot downloads the default model files. For a custom object detector, add the model through the Models page or place it in the matching `YoloModels/<format>/` directory, then select it in the camera's `vision_model` settings. Keep metadata sidecars with model files when they are available; they hold details such as labels and input size.
+
+`hsv_detection` is the exception in the table above: it needs no model, no weights, and no download. If a target is a single strong color and the light is stable, it can be set up faster than training or finding a model. If targets share colors or the light swings, a model-backed pipeline will be more reliable.
+
+YOLO-World is useful when you need to try text-described classes without training a project-specific detector. It still needs suitable prompts and careful field testing; “open vocabulary” does not mean every target will be detected reliably. Depth Anything returns a depth estimate, not labels or bounding boxes.
+
+For a field game piece that your trained model already recognizes, `object_detection` is generally the simplest path. Use YOLO-World to experiment with text prompts; use AprilTag when the target is a known fiducial; use QR for code decoding. Depth and optical flow answer different questions and are not drop-in replacements for object detection.
+
+## Optimization and target formats
+
+Model settings separate whether optimization runs from which format it should target:
+
+- `optimize`: `off` disables conversion; `auto` asks iSpy to optimize in the background; `onnx` selects the ONNX optimization path.
+- `target_format`: when optimization is enabled, `auto` selects a format based on detected hardware, or you can choose a supported explicit target for the pipeline.
+- `quantize`: optionally requests an INT8 quantized artifact. Quantization can change model accuracy; test the result with representative images before deploying it.
+
+Supported optimized formats across the model-backed pipeline code include ONNX, RKNN, TFLite, OpenVINO, TensorRT (`engine`), CoreML, TPU, Hailo, and Qualcomm QNN. Individual pipelines expose only the formats they support in the editor. An explicit target does not make the matching hardware or runtime package available.
+
+With `target_format: "auto"`, iSpy checks the machine and selects a suitable backend. For example, it prefers RKNN for a Rockchip NPU, Hailo for a Hailo device, QNN for a supported Qualcomm NPU, TensorRT for NVIDIA when its runtime is available, CoreML on Apple Silicon, OpenVINO on supported Intel hardware, and ONNX as a general fallback. Some ARM devices may select TFLite. The actual result depends on installed runtime dependencies; check the model status and log after optimization.
+
+Optimization is asynchronous. A model may run in its original format while a converted artifact is being prepared. On machines without a supported accelerator, CPU inference is expected and can be slower. Start with `optimize: "off"` or `target_format: "auto"` as appropriate for the selected pipeline; benchmark before assuming a converted model is faster.
+
+An explicit `target_format` is a request, not a package installer. If the target runtime is missing, the hardware is unsupported, or the pipeline does not offer that format, conversion or load can fail. Start with `auto` unless you have a reason to pin a backend, read the model status/log after conversion, and measure performance on the actual deployment board.
+
+### A practical backend test
+
+1. Get the source `.pt` model working first.
+2. Record its detection behavior and loop timing with a few representative images or a session.
+3. Enable one optimization target and allow the background conversion to finish.
+4. Check the active model status and logs; confirm the runtime is actually using the new artifact.
+5. Compare results and timing under the same conditions.
+
+Use [`ispy-bench`](./cli-reference) to compare available inference backends, and [`ispy-stats`](./cli-reference) to compare a base model with an optimized artifact. A single FPS number is not a complete comparison if the boxes or target classes changed.
+
+## Calibration by pipeline
+
+Calibration is pipeline-specific. The camera editor only shows sections that the selected pipeline/model uses:
+
+- Object detection can show ChArUco intrinsics and known-object Focal / FOV calibration. Pose models can also show Pose Keypoints (PnP).
+- HSV color uses ChArUco intrinsics, or a known-object Focal / FOV measurement, but does not require calibration to start.
+- AprilTag uses ChArUco intrinsics for pose estimation.
+- Optical flow can use ChArUco intrinsics or a known-object FOV measurement.
+- YOLO-World and Depth Anything do not expose the camera calibration wizard.
+- QR code has ChArUco support in its wizard, but does not require calibration to start.
+
+See [Camera Calibration](./calibration) for the physical setup and steps. Camera mount offsets are configured separately in the camera entry.
+
+## Color detection with `hsv_detection`
+
+`hsv_detection` finds objects by color instead of by a learned model. There are no weights to train or download. It thresholds the frame in HSV, keeps blobs that pass a set of shape filters, and reports each surviving blob as a detection. Reach for it when targets are strongly colored and the lighting is under your control: a colored ball, a painted cone, a balloon, a game piece with a bright, distinct color. It will not tell one object from another when they share a color, and it needs re-tuning when the light changes.
+
+The pipeline does not require calibration to start. It computes a focal length from the camera matrix if a ChArUco calibration exists, otherwise from the configured FOV, and failing both it assumes a 60 degree horizontal field of view so distances are at least in the right ballpark. A real calibration is still what makes the reported positions accurate.
+
+### How a frame is processed
+
+1. If `process_scale` is below `1.0`, the frame is resized down and thresholds and contours are computed at that size, then boxes are scaled back. Lower values are faster and less precise.
+2. The frame is converted to HSV.
+3. If `lighting_normalize` is `clahe` or `auto_gamma`, the brightness (V) channel is flattened first, so harsh light does not swing the threshold. Hue is left alone.
+4. If `blur_kernel` is at least 3, saturation and value are blurred. Hue is deliberately not blurred, since blurring it mixes colors at edges.
+5. The HSV ranges are applied to build a mask. A wrapped hue range (low end above the high end, for red) runs two threshold passes and ORs them.
+6. `roi_top_ignore_pct` blacks out the top band of the mask, which is useful for hiding a colored ceiling or field element.
+7. Morphological open and close are applied if enabled, then `merge_distance_px` runs a large close so nearby blobs join.
+8. External contours are found, and each is filtered by area, aspect, circularity, and solidity. Survivors are sorted by area and the largest `max_detections` are kept.
+
+### The settings
+
+| Setting | What it does |
+| --- | --- |
+| `preset` | Replaces the three HSV ranges at runtime. Options are `custom`, `orange`, `yellow`, `red`, `green`, `blue`, `white`. `custom` keeps the ranges below. |
+| `hue_range` | OpenCV hue, `0` to `179`. Set the low end above the high end to span the red wrap. |
+| `sat_range`, `val_range` | Saturation and brightness bands, `0` to `255`. |
+| `lighting_normalize` | `off`, `clahe`, or `auto_gamma`. Flattens the brightness channel before thresholding. |
+| `clahe_clip` | Contrast limit for `clahe`. Higher pushes local contrast and can amplify noise. |
+| `blur_kernel` | Odd size; below `3` turns blur off. |
+| `morph_open_iters`, `morph_close_iters` | Open removes specks; close fills pinholes. |
+| `morph_kernel_size`, `morph_kernel_shape` | Kernel for the open/close passes, `ellipse` or `rect`. Size is forced odd. |
+| `process_scale` | Threshold at a fraction of the frame, then scale boxes back. Lower is faster. |
+| `roi_top_ignore_pct` | Percentage of the frame height to ignore from the top. |
+| `min_area_px`, `max_area_px` | Pixel area band. `max_area_px` stops one huge blob from taking over. |
+| `min_circularity` | `4π · area / perimeter²`. `1.0` is a perfect circle. |
+| `min_solidity` | Blob area over its convex hull. Low values flag shapes with bites taken out. |
+| `min_aspect`, `max_aspect` | Long side over short side. `max_aspect` drops thin blobs like cables or lane lines. |
+| `shape_hint` | `any`, `circle`, or `rect`. Selects which shape term feeds confidence and which pixel the position uses. |
+| `max_detections` | Keep the N biggest blobs. |
+| `merge_distance_px` | Merge blobs closer than this; `0` turns merging off. |
+| `object_name` | The class name every detection reports. |
+| `object_size_in` | Real width or diameter in inches, used by size-based depth. |
+| `z_mode` | `ground_plane` or `size_based`. Which depth method runs first. |
+| `plane_height_in` | Height of the plane the object sits on, in inches. `0` is the floor. |
+| `view_mode`, `mask_style`, `draw_labels` | Rendering only: outline or mask view, color or binary mask, and whether to draw labels. |
+
+Out-of-range values are clamped and logged, and a malformed range or an unknown choice falls back to its default with a warning. Some numeric settings are rounded or forced to odd values: `blur_kernel` and `morph_kernel_size` must be odd, and a `blur_kernel` below `3` is treated as off.
+
+### Presets
+
+A preset overrides `hue_range`, `sat_range`, and `val_range` at runtime, so the ranges in the panel are ignored while it is active. The built-in values are:
+
+| Preset | Hue | Saturation | Value |
+| --- | --- | --- | --- |
+| `orange` | `5`–`25` | `110`–`255` | `80`–`255` |
+| `yellow` | `25`–`40` | `110`–`255` | `80`–`255` |
+| `red` | `170`–`10` (wraps) | `100`–`255` | `70`–`255` |
+| `green` | `40`–`85` | `90`–`255` | `60`–`255` |
+| `blue` | `85`–`130` | `90`–`255` | `60`–`255` |
+| `white` | `0`–`179` (all) | `0`–`60` | `180`–`255` |
+
+White is low saturation with high brightness, so it uses the whole hue wheel and relies on the other two bands.
+
+### Live tuning
+
+This pipeline is live tunable. The camera panel exposes its settings for adjustment while the camera is running, and mask view and mask style have action buttons next to the preview. A change swaps the whole processing setup in one step, so a frame never sees half of an update. The parsed values are what the panel shows, so what you see is what is running, not what you typed before it was clamped.
+
+### Depth and shape
+
+Positions use the same geometry as the other 2D pipelines. `z_mode` chooses which method runs first, and each detection carries a `depth_source` of `ground_plane` or `size_based`. In `ground_plane` mode a ray is cast onto the plane at `plane_height_in`; in `size_based` mode the distance comes from `object_size_in` and the apparent width. See [Coordinates and Distance](./coordinates-and-distance) for what the frame means and why the two methods disagree.
+
+The shape hint also decides where the position is measured. For `circle`, the ray goes through the blob's centroid, since a sphere centers on its plane. For `any` and `rect`, it goes through the bottom of the box, since the object sits on its bottom edge.
+
+Confidence is a blend of fill and shape match: half from how rectangular the blob is, half from the shape term selected by the hint (circularity, rectangularity, or the larger of the two for `any`). It is a shape score, not a model score, so a value near `1.0` means "a clean blob", not "certainly the target".
+
+## Output expectations
+
+Pipeline output should be checked at the pipeline before the robot. A detector result may include a class, confidence, and position fields; a depth estimate or optical-flow measurement has different meaning. The NetworkTables utility serializes the detections it receives, but robot code still needs to agree with the topic type and the fields it reads. Do not interpret every numeric coordinate as a field position without checking the selected pipeline and unit setting.
+
+For `hsv_detection` specifically, the class name is whatever `object_name` is set to, the confidence is a shape score, and the position is only as good as the color threshold. Treat it as a fast sensor for one clearly colored object under steady light, not as a general detector.

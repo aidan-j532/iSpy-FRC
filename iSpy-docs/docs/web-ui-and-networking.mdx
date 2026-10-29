@@ -1,0 +1,114 @@
+---
+title: Web UI and Networking
+author: iSpy FRC
+sidebar_position: 7
+---
+
+# Web UI and Networking
+
+Use the web app to configure cameras and models, check health, and review logs while iSpy is running.
+
+## Opening the UI
+
+When `ispy-run` is active, open the dashboard on the same computer at:
+
+```text
+http://localhost:5000
+```
+
+The web app binds to `0.0.0.0` on port `5000`, so another device on the same network can open `http://<machine-ip>:5000`. On Linux, `hostname -I` prints the machine's local IP addresses; on Windows, run `ipconfig` and use the IPv4 address for the connected network adapter. The boot process also sends a UDP discovery announcement on port `37429`; that is for discovery tools, not for opening the dashboard.
+
+Because it listens on all interfaces, any device that can reach the vision computer may be able to reach the dashboard. Keep it on the team's trusted robot LAN or a similarly controlled network; do not port-forward it to the public internet. Use the network firewall to restrict access if the computer is also connected to a broader network.
+
+## What the UI is for
+
+The main pages are:
+
+- dashboard
+- camera configuration
+- model management
+- dataset handling
+- logs and metrics
+- health checks
+- rollback and replay
+- settings
+- setup wizard
+- plugin status
+
+Camera and model settings are usually easiest to change here. Some changes need a vision restart; the page reports when that is the case.
+
+The dashboard is an operator tool, not a robot-side API client. It can show that the web process answers while the camera feed is stale, and it can show detections while the robot is disconnected. Check the relevant page for each part rather than relying on the home screen alone.
+
+## Core routes and API endpoints
+
+The Flask app registers multiple modules. These routes are useful for a quick check or for integrations:
+
+- `/` -> main dashboard
+- `/cameras` -> camera list and configuration page
+- `/health` -> quick health response
+- `/health/detailed` -> uptime, loop count, per-camera details, and add-on status
+- `/health-page` -> health dashboard
+- `/api/health` -> detailed health JSON
+- `/api/version` -> version information
+- `/api/cameras` -> camera list
+- `/video/<camera_name>` -> camera's live MJPEG stream
+- `/api/cameras/config/<cam_name>` -> read or update a camera's configuration
+
+Camera configuration uses `GET` to read and `PUT` to update that camera. Adding a camera uses `POST /api/cameras/config`; removing one uses `DELETE /api/cameras/config/<cam_name>`. The stream route is useful to confirm that frames are being served. It does not confirm that a model is detecting the right objects or that NetworkTables is connected.
+
+## Health and status
+
+If a camera stops delivering frames or an important part of the runtime stalls, health can become degraded. The stale-frame threshold is configured with `health_stale_threshold`. A healthy HTTP response only confirms the web process is answering; separately check the camera feed, detections, and NetworkTables utility status.
+
+## NetworkTables output
+
+The built-in NetworkTables utility is named `FRC/network_table_handler`. Add it under `plugins.utilities` in the config to enable publishing. It connects as a NetworkTables client to the configured `network_tables_ip`; the default is `10.0.0.2`, the usual roboRIO address on an FRC network.
+
+The default publish list writes these topics in the `VisionData` table:
+
+- `fps` (number)
+- `num_detections` (number)
+- `camera_lag` (number of seconds)
+- `vision_data` (JSON string containing the detections)
+- `selected_target` (JSON when a selected-target value is available)
+
+The default publish list writes `vision_data` as a JSON string. If robot code expects the `Object` struct array instead, change that entry's `data_type` to `struct[]`; that mode publishes `VisionData/vision_data` with `x`, `y`, `z`, `roll`, `pitch`, and `yaw` fields. The struct form is not published by default. Confirm the schema and units with the robot code that consumes the data; do not assume every detection pipeline supplies the same optional fields.
+
+The JSON form is an array of detection objects. A typical object can contain an `id`, `name`, `confidence`, `x`/`y`/`z`, `roll`/`pitch`/`yaw`, and pipeline-specific metadata such as `vis_type` or keypoints. Optional values vary by pipeline and model, so robot code should handle a missing field rather than assume every entry has a pose. Use the configured `unit` convention when interpreting positions; in `frc` mode, output positions are meters.
+
+For example, the utility entry in `Config/config.json` can start with:
+
+```json
+{
+	"plugins": {
+		"utilities": {
+			"FRC/network_table_handler": {
+				"network_tables_ip": "10.0.0.2"
+			}
+		}
+	}
+}
+```
+
+Merge this into the existing config rather than replacing the whole file. The robot and vision computer must be on a network where the roboRIO address is reachable. Check the utility status in the web UI and the runtime log if it remains disconnected.
+
+The `network_tables_ip` is the address of the NT server, normally the roboRIO, not the vision board's own IP. If the team is using a different network configuration, set the actual server address. A connected status means the client reached a server; it does not prove the robot code subscribes to the same table, topic, or type.
+
+## If the robot is not receiving data
+
+1. Confirm that the vision computer and roboRIO are on the same robot network.
+2. Check `network_tables_ip` in the `FRC/network_table_handler` utility. It defaults to `10.0.0.2`; use the server address for your network if it differs.
+3. Confirm that the utility reports **Connected** in the web UI and that `Outputs/log.txt` does not report repeated connection failures.
+4. In robot code, read from the `VisionData` table and the exact topic names listed above. Verify the expected type: `vision_data` is a JSON string by default; only use the struct-array reader if the publish entry is configured as `struct[]`.
+
+NetworkTables sends processed results to the robot; it does not send the camera's raw video stream.
+
+### Keep the connection useful
+
+For the first robot test, read `fps` and `num_detections` before parsing all detection fields. That confirms the data path is alive and makes it easier to see whether a failure is in the vision pipeline or the robot's consumer code. Then read one detection and compare its class, confidence, and position with a known target. Do this with the robot stationary before using the output in a motion or aiming loop.
+
+Treat the dashboard and NetworkTables as separate interfaces. The dashboard uses HTTP on port `5000`; NetworkTables uses the robot network connection and server address configured in the utility. Opening one does not open or proxy the other.
+
+## Local network discovery
+
+The boot process broadcasts the machine's hostname, IP address, and web port over UDP port `37429`. Discovery tools can use this packet to locate the dashboard, but it does not assign a static address or replace the team's network configuration.

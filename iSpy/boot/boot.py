@@ -441,69 +441,13 @@ def cleanup_broken_images(config: iSpyConfig) -> None:
             shutil.move(str(file), str(destination))
 
 
-def _recorded_cameras(session_dir: Path) -> list:
-    # every camera name that appears in a sidecar, in the order first seen
-    from iSpy.core.rollback import _iter_segments
 
-    names = []
-    for seg in _iter_segments(session_dir):
-        for cam in seg.get("cams") or []:
-            if cam not in names:
-                names.append(cam)
-    return names
-
-
-def build_replay_camera_configs(
-    config: iSpyConfig,
-    session_dir: Path,
-    speed: float = 1.0,
-    loop: bool = True,
-    only: str = "",
-) -> dict:
-    # one replay camera per recorded camera. the pipeline settings are copied
-    # from an existing camera so the recorded frames still go through the same
-    # vision stack - only the source is swapped for the recording
-    existing = config.get("camera_configs", {}) or {}
-    template = None
-    for entry in existing.values():
-        if isinstance(entry, dict):
-            template = entry
-            break
-
-    wanted = [only] if only else _recorded_cameras(session_dir)
-    if not wanted:
-        raise RuntimeError(
-            f"No recorded cameras found in {session_dir}. A replay needs at "
-            f"least one recorded segment."
-        )
-
-    built = {}
-    for cam in wanted:
-        entry = dict(template) if template else {}
-        name = f"replay_{cam}" if not only else f"replay_{only}"
-        entry.update(
-            {
-                "name": name,
-                "camera_type": "replay",
-                "source": str(session_dir),
-                "replay_cam": cam,
-                "replay_speed": speed,
-                "loop": loop,
-                "is_image": False,
-            }
-        )
-        built[name] = entry
-    return built
 
 
 def on_boot(
     install_service: bool = False,
     fresh: bool = False,
     wait: bool = False,
-    replay: str = "",
-    replay_speed: float = 1.0,
-    replay_cam: str = "",
-    replay_loop: bool = True,
 ):
     _configure_quiet_logging()
     logger.info("ispy-boot python: executable=%r prefix=%r", sys.executable, sys.prefix)
@@ -542,48 +486,13 @@ def on_boot(
     cleanup_missing_cameras(config)
     cleanup_broken_images(config)
 
-    replay_dir = None
-    if replay:
-        # a replay runs on a throwaway copy of the config. it must never touch
-        # Config/config.json, or quitting the replay would leave the real robot
-        # pointed at a video file
-        replay_dir = Path(replay).expanduser()
-        if not replay_dir.is_dir():
-            raise RuntimeError(f"Replay session not found: {replay_dir}")
-        config.set(
-            "camera_configs",
-            build_replay_camera_configs(
-                config, replay_dir, replay_speed, replay_loop, replay_cam
-            ),
-        )
-        # a replay must never record a new run over the top of the old one
-        rollback = dict(config.get("rollback", {}) or {})
-        rollback["enabled"] = False
-        config.set("rollback", rollback)
-        # calibration, the optimizer and the web settings all call
-        # config.save() mid-run - point the object at a scratch file so a
-        # replay can never write the replay cameras into the real config.json
-        config.file_path = str(_PROJECT_ROOT / "Outputs" / "replay_config.json")
-        banner = "!" * 72
-        logger.warning(
-            "\n%s\n%s\nREPLAY MODE: serving %s\n"
-            "Recording is OFF and NetworkTables publishing is disabled.\n"
-            "Nothing here drives a real robot. Config is not saved.\n%s\n%s",
-            banner,
-            banner,
-            replay_dir,
-            banner,
-            banner,
-        )
-
     if not validate_system():
         raise RuntimeError("System validation failed. Aborting boot.")
 
     pipeline_classes = get_pipeline_classes()
     if wait:
         _wait_for_pipeline_ready(config, pipeline_classes)
-    if not replay_dir:
-        config.save(quiet=True)
+    config.save(quiet=True)
     logger.info("Boot sequence complete.")
 
     # Start UDP announce beacon so tools/find_ispy.py can locate this board
@@ -623,30 +532,6 @@ def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
         action="store_true",
         help="Wait for all pipelines to be ready before running vision",
     )
-    parser.add_argument(
-        "-r",
-        "--replay",
-        metavar="SESSION_DIR",
-        default="",
-        help="Replay a recorded session instead of using live cameras. "
-        "Never modifies your saved config.",
-    )
-    parser.add_argument(
-        "--replay-speed",
-        type=float,
-        default=1.0,
-        help="Replay speed multiplier (default 1.0, i.e. real time)",
-    )
-    parser.add_argument(
-        "--replay-cam",
-        default="",
-        help="Replay only this recorded camera (default: all of them)",
-    )
-    parser.add_argument(
-        "--replay-no-loop",
-        action="store_true",
-        help="Stop at the end of the recording instead of looping",
-    )
     return parser
 
 
@@ -666,21 +551,7 @@ def main():
         install_service=args.service,
         fresh=args.fresh,
         wait=args.wait,
-        replay=args.replay,
-        replay_speed=args.replay_speed,
-        replay_cam=args.replay_cam,
-        replay_loop=not args.replay_no_loop,
     )
-
-    if args.replay:
-        # on_boot built the replay config in memory but cannot run it itself -
-        # handing it straight to the vision loop is what keeps Config/config.json
-        # untouched. run() blocks until Ctrl-C and the replay compare json is
-        # written in its finally
-        from iSpy.core.game_loop import main as run_vision
-
-        run_vision(config=config)
-        return
 
     # Flush everything and hard-exit to avoid Segfualt stuff.
     logging.shutdown()

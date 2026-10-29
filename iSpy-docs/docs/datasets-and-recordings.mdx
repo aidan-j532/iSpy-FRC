@@ -1,0 +1,112 @@
+---
+title: Datasets and Session Recordings
+description: Manage quantization images and review recorded camera sessions.
+sidebar_position: 9
+---
+
+# Datasets and Session Recordings
+
+iSpy has two different kinds of saved image data. **Datasets** hold still images you select for preparing model conversions. **Session recordings** capture a running vision session so you can review what the cameras and pipelines saw. They solve different problems and live in different places.
+
+## Quantization datasets
+
+The dashboard's **Datasets** page manages image collections under `QuantizeDataset/`. Create a named collection, then upload or drop `.jpg`, `.jpeg`, `.png`, or `.bmp` images into it. Images are stored in that dataset's folder, and iSpy keeps a `dataset.txt` list for the uploaded images.
+
+These are not automatically labeled object-detection training datasets. The page does not draw bounding boxes or create class labels. Its main use is supplying representative images to model conversion and quantization, where the optimizer uses them to calibrate a supported backend.
+
+A dataset is a flat folder: `QuantizeDataset/<name>/` holds the images directly, with a `dataset.txt` list of the filenames. A `default` dataset is created automatically the first time the page loads. Uploads are limited to `.jpg`, `.jpeg`, `.png`, and `.bmp`. Filenames are sanitized to letters, digits, dots, dashes, underscores, and spaces, and any path that escapes the dataset folder is rejected, so you do not have to worry about an odd filename climbing out of the folder.
+
+The `dataset.txt` list is not just bookkeeping. Some backends, RKNN in particular, fail calibration outright if it is missing or lists images that are not present, so the validation step checks both. If you add or remove images by hand in the filesystem instead of through the page, rebuild the list or the conversion may refuse to run.
+
+When setting up an optimized model, point `quantization_dataset` at the dataset folder if the selected format needs calibration images. Use images that look like the robot's real camera feed: same camera, resolution, lighting, target distance, and background. A pile of images from a different camera or a bright lab is a poor stand-in for a dim field.
+
+Some conversion paths can create synthetic fallback images if the provided set is too small. Those can let a conversion proceed, but they are not a substitute for representative camera images when you care about output quality. Compare converted-model detections with the original model before using the result on the robot. The optimizer behavior depends on the target backend; see [Vision Pipelines and Backends](./vision-pipelines).
+
+### A simple workflow
+
+1. Get a stable camera feed and choose the pipeline/model first.
+2. Save a sample of images that cover the expected field conditions and target positions.
+3. Create a dataset in the dashboard and upload the images.
+4. Select that dataset for the model's quantization setting when needed.
+5. Run conversion, then compare the converted artifact with the original on the same representative images.
+
+Keep source images elsewhere if they are important to your team. A fresh boot with `ispy-boot -f` deletes the generated dataset folder along with other generated state.
+
+## Session recordings
+
+The core rollback recorder can save a session while iSpy runs. The default location is `VideoRecordings/`. A session contains camera video segments and JSON sidecars with per-frame timestamps, detections, and robot pose data. The video is recorded from the raw camera frames, before overlays are drawn; the sidecar helps line up the vision results with the footage during replay.
+
+Open **Rollback** in the web dashboard to inspect sessions and segments, scrub through a camera clip, pin a session you want to keep, or remove old data. Recordings are useful for questions like:
+
+- Did the camera lose frames when the robot turned?
+- Was the target visible before the model missed it?
+- Did a change improve detections, or did the lighting just change?
+- Did the measured position drift even though the detection box looked stable?
+
+Replay is for review and debugging. It does not publish that old session's detections as live robot output.
+
+### Recording settings
+
+The top-level `rollback` block in `Config/config.json` controls recording:
+
+| Setting | What it changes |
+| --- | --- |
+| `enabled` | Turns recording on or off. |
+| `data_dir` | Output folder; default is `VideoRecordings`. |
+| `fps` | Frame rate written to the video segments. |
+| `downsample` | Records every Nth runtime frame; `1` records every frame. |
+| `segment_minutes` | Starts a new segment after this many minutes. Shorter segments are easier to jump through but create more files. |
+| `max_queue` | Bounds frames waiting for the writer. Increasing it can absorb short write stalls, but uses more memory and does not make a slow disk faster. |
+| `max_total_mb` | Retention target for the recording folder. Old unpinned sessions can be removed when the limit is exceeded. |
+
+There is a separate, small free-space safety margin: the recorder can pause when the storage device is nearly full. Keep enough free space for normal operation even when the retention cap is configured.
+
+### How a session is laid out
+
+A session is a directory named `session_<YYYY-MM-DD_HH-MM-SS>` under `data_dir`. Inside it:
+
+```text
+VideoRecordings/session_2026-01-15_18-42-10/
+  session.json
+  PINNED
+  rollback_2026-01-15_18-42-10.json
+  rollback_2026-01-15_18-42-10_front_cam.avi
+  rollback_2026-01-15_18-42-10_rear_cam.avi
+  rollback_2026-01-15_18-47-10.json
+  rollback_2026-01-15_18-47-10_front_cam.avi
+```
+
+Each segment has one shared JSON sidecar and one AVI per camera, all with the same stem. The sidecar carries the per-frame records: detections, robot pose, and timing. The `session.json` file records the camera calibration and geometry for the run, which is what lets the player project detections back onto the video even after the config has changed.
+
+The video is MJPG inside an AVI container. That choice is deliberate: every MJPG frame is a keyframe, so scrubbing to an arbitrary point works in a browser and in a desktop player. It trades file size for seeking, which is the right trade for review footage.
+
+### How retention decides what to delete
+
+Retention works at the session level, not the file level:
+
+- The active session is never deleted.
+- A session with a `PINNED` file in its directory is never deleted.
+- Everything else is deleted oldest-first once the folder passes `max_total_mb`.
+
+If everything left is pinned or active and the folder is still over the cap, the recorder logs a warning and keeps writing rather than deleting something it was told to keep. That means a pinned session can hold the folder above its target indefinitely, which is by design.
+
+`downsample` records every Nth runtime frame, so a clip made with `fps` 30 and `downsample` 2 has content at a 15 per second rate. The player paces replay off the sidecar timestamps, so the clip still plays at the right speed instead of running at double speed.
+
+`max_queue` bounds the writer's backlog. One queue item carries every camera's frame for a single tick, so at 30 fps the default of 60 is about a two second stall budget. Raising it absorbs a longer disk stall at the cost of memory. It does not make a slow disk faster, and once the queue is full the recorder drops frames.
+
+### Old recordings still show up
+
+Recordings written by the older plugin-based recorder, including flat `recording_<ts>.mp4` files sitting directly in `data_dir`, still list, still replay, and still count against the retention cap. They are grouped under an implicit `_legacy` session, and pinning that group writes a `PINNED` file at the top of `data_dir`.
+
+Pin important sessions before the storage limit is reached. Pinned sessions are kept during automatic pruning, so they can cause the folder to remain over its configured target. Copy any match-critical footage off the robot; the SD card is not a long-term archive.
+
+## Dataset vs. recording at a glance
+
+| | Dataset images | Session recording |
+| --- | --- | --- |
+| Stored under | `QuantizeDataset/<name>/` | `VideoRecordings/` by default |
+| Main purpose | Prepare supported model conversions | Replay real camera/runtime behavior |
+| Data shape | Uploaded still images | Video segments plus frame records |
+| Labels included? | No, not by the dataset manager | Detections are recorded, but this is not a labeled training export |
+
+For general disk and reset warnings, see [Installation and Setup](./installation) and [Troubleshooting](./troubleshooting).
