@@ -1019,7 +1019,7 @@ class ReplayBootTests(unittest.TestCase):
             self.assertEqual(set(built), {"replay_Left", "replay_Right"})
             for entry in built.values():
                 self.assertEqual(entry["camera_type"], "replay")
-                self.assertEqual(entry["source"], str(session))
+                self.assertEqual(Path(entry["source"]).resolve(), session.resolve())
                 self.assertEqual(entry["replay_speed"], 2.0)
                 # the vision stack has to be the one already configured
                 self.assertEqual(entry["pipeline"], "line")
