@@ -96,7 +96,7 @@ class HealthModule(WebModule):
     def _build_payload(self):
         now = time.perf_counter()
         with self._lock:
-            fps, inference_ms, detections = self._fps, self._inference_s, self._detections
+            fps, vision_ms, detections = self._fps, self._inference_s, self._detections
             last_tick, loop_count = self._last_tick, self._loop_count
 
         stale_s = round(now - last_tick, 2)

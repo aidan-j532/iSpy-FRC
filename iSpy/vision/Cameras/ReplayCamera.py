@@ -160,7 +160,7 @@ class ReplayCamera(CameraBase):
     @classmethod
     def _resolve_playlist(cls, camera_config) -> list[dict]:
         clips = cls._resolve_clips(camera_config)
-        source = Path(str(camera_config.get("source", ""))).expanduser()
+        source = Path(str(camera_config.get("source", ""))).expanduser().resolve()
         requested_cam = str(camera_config.get("replay_cam", "")).strip()
         segments = _iter_segments(source) if source.is_dir() else []
         playlist = []
