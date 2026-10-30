@@ -24,7 +24,7 @@ class HealthModule(WebModule):
         self._lock = threading.Lock()
         self.cameras = context.get("cameras", [])
         self._fps = 0.0
-        self._vision_s = 0.0
+        self._inference_s = 0.0
         self._detections = 0
         self._loop_count = 0
         self._last_tick = time.perf_counter()
@@ -53,7 +53,7 @@ class HealthModule(WebModule):
     def update(self, frame_data: dict):
         with self._lock:
             self._fps = round(frame_data.get("fps", 0), 1)
-            self._vision_s = round(frame_data.get("vision_s", 0) * 1000, 2)
+            self._inference_s = round(frame_data.get("inference_s", 0) * 1000, 2)
             self._detections = frame_data.get("detection_count", 0)
             self._last_tick = time.perf_counter()
             self._loop_count += 1
@@ -96,7 +96,7 @@ class HealthModule(WebModule):
     def _build_payload(self):
         now = time.perf_counter()
         with self._lock:
-            fps, vision_ms, detections = self._fps, self._vision_s, self._detections
+            fps, inference_ms, detections = self._fps, self._inference_s, self._detections
             last_tick, loop_count = self._last_tick, self._loop_count
 
         stale_s = round(now - last_tick, 2)

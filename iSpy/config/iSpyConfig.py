@@ -42,6 +42,14 @@ _CAMERA_CORE_KEYS = {
     "tello_ip",
     "tello_command_port",
     "tello_video_port",
+    # Optional per-camera assignment for frame processors.  The list contains
+    # enabled processor names in execution order.  When it is absent the old
+    # "every enabled processor runs on every camera" behavior is preserved.
+    "frame_processors",
+    # Optional per-camera tracker assignment.  The list contains enabled
+    # tracker plugin names in execution order.  When the key is absent the old
+    # global-tracker behavior is preserved for that camera lane.
+    "trackers",
 }
 
 # Camera-source config keys that are valid at the top level for every
@@ -312,6 +320,9 @@ class iSpyConfig:
             # optical flow pipelines only. On = those pipelines are offered;
             # Off (normal users) = they are hidden from the dropdown.
             "admin": False,
+            # Beta lifecycle controls: allow loopback + RFC1918/LAN restarts.
+            # False restricts them to localhost or ISPY_ADMIN_TOKEN.
+            "allow_remote_restart": True,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
             # seconds without a fresh frame before /health reports degraded
@@ -411,6 +422,11 @@ class iSpyConfig:
                 "segment_minutes": 5,
                 "max_total_mb": 2048,
             },
+            # Editor/runtime routing for shared utility nodes.  Each utility
+            # maps to the camera lanes whose tracker detections it receives.
+            # An absent top-level block keeps the legacy behavior: every
+            # utility receives detections from every camera.
+            "utility_sources": {},
             "plugins": {
                 # enabled add-ons only - presence == enabled, no flag. each entry maps
                 # a name to that add-on's own settings (schema defaults apply at runtime).

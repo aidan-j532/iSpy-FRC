@@ -1,0 +1,76 @@
+:root {
+  --wbl-orange: #e35205;
+  --ifm-color-primary: #b64000;
+  --ifm-color-primary-dark: #a33a00;
+  --ifm-color-primary-darker: #983600;
+  --ifm-color-primary-darkest: #7e2d00;
+  --ifm-color-primary-light: #c85b24;
+  --ifm-color-primary-lighter: #d27342;
+  --ifm-color-primary-lightest: #fce7dc;
+  --ifm-background-color: #fff;
+  --ifm-background-surface-color: #fff;
+  --ifm-font-color-base: #171717;
+  --ifm-navbar-background-color: #fff;
+  --ifm-footer-background-color: #111;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(227, 82, 5, 0.08);
+}
+
+.navbar {
+  --ifm-navbar-background-color: #171717;
+  --ifm-navbar-link-color: #fff;
+  --ifm-navbar-link-hover-color: var(--wbl-orange);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+}
+.navbar__brand {
+  display: flex;
+  align-items: center;
+}
+
+.navbar__logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.navbar__logo img {
+  display: block;
+  height: 2.5rem;
+  width: auto;
+  object-fit: contain;
+}
+.footer--dark {
+  --ifm-footer-background-color: #111;
+}
+
+.navbar__logo img {
+  height: 2.5rem;
+}
+
+.footer__social-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Lay the social icons out in a horizontal row instead of stacked. */
+.footer__items:has(.footer__social-link) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.footer__items:has(.footer__social-link) .footer__item {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.footer__social-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.footer__social-link:hover .footer__social-icon {
+  color: var(--wbl-orange);
+}

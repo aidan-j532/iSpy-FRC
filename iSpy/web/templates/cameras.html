@@ -162,7 +162,7 @@
     max-height: 300px;
     overflow-y: auto;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: 8px;
     padding: 8px;
     margin: 8px 0;
   }
@@ -174,10 +174,10 @@
     margin: 2px 0;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: 6px;
     cursor: pointer;
   }
-  .folder-picker-item:hover { border-color: var(--accent); }
+  .folder-picker-item:hover { border-color: #444; }
   .picker-hint {
     font-size: 0.8rem;
     color: var(--text-dim);
@@ -195,13 +195,14 @@
   #calibration-header h3 { margin: 0; font-size: 1rem; }
   #calibration-note { margin-left: auto; }
   .calib-pipeline-badge {
-    display: none; padding: 2px 8px; border-radius: var(--radius-sm);
-    background: var(--accent-dim); color: var(--accent);
+    display: none; padding: 2px 8px; border-radius: 4px;
+    background: var(--bg-surface); color: var(--text);
     font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+    border: 1px solid var(--border);
   }
   .calib-pipeline-badge.visible { display: inline-block; }
   .calib-stage {
-    position: relative; border-radius: var(--radius); overflow: hidden;
+    position: relative; border-radius: 8px; overflow: hidden;
     background: #000; border: 1px solid var(--border);
   }
   .calib-stage img { width: 100%; display: block; aspect-ratio: 16/9; object-fit: contain; background: #000; }
@@ -215,7 +216,7 @@
   }
   .calib-section {
     background: var(--bg-surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 14px; margin-top: 12px;
+    border-radius: 8px; padding: 14px; margin-top: 12px;
   }
   .calib-section-title {
     font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
@@ -240,7 +241,7 @@
   .calib-status.err { color: var(--bad); }
   .calib-result-card {
     background: var(--ok-dim); border: 1px solid var(--ok);
-    border-radius: var(--radius); padding: 12px 14px; margin-top: 10px;
+    border-radius: 8px; padding: 12px 14px; margin-top: 10px;
   }
   .calib-result-card.err {
     background: var(--bad-dim); border-color: var(--bad);
@@ -274,7 +275,7 @@
   .settings-section details[open] summary::before { transform: rotate(90deg); }
   .settings-section details summary:hover { color: var(--accent); }
   .settings-section.step-hidden { display: none; }
-  .settings-section.step-active { outline: 1px solid var(--accent); outline-offset: 4px; border-radius: var(--radius); }
+  .settings-section.step-active { outline: 1px solid #555; outline-offset: 4px; border-radius: 8px; }
   .form-field.field-invalid input, .form-field.field-invalid select { border-color: var(--bad); }
 
   .form-field { margin-bottom: 10px; }
@@ -437,6 +438,7 @@ document.addEventListener('ispy:performance', () => {
 let knownCameras = new Map();
 const camerasConn = connTracker(2);
 let pipelineSchemas = {};
+const CAMERA_ADMIN = {{ editor_admin|tojson }};
 let cameraSchemas = {};   // camera_type -> config_schema() from /api/camera_schemas
 
 const camModal = {
@@ -471,7 +473,7 @@ async function _syncUnit() {
 const COMMON_FIELDS = {
   device: { label: 'Device', type: 'device', required: true, help: 'A physical camera detected on this machine.' },
   source: { label: 'Source', type: 'text', required: true, help: 'Camera index (e.g. 0), a /dev/video path, or an RTSP / MJPEG URL.' },
-  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: ['opencv', 'tello'], help: 'Select the camera source type (most likely OpenCV). Replay cameras are not created here - use `ispy-boot --replay <session folder>`.' },
+  camera_type: { label: 'Camera Type', type: 'select', required: true, default: 'opencv', options: CAMERA_ADMIN ? ['opencv', 'tello'] : ['opencv'], help: 'Select the camera source type (most likely OpenCV). Replay cameras are not created here - use `ispy-boot --replay <session folder>`.' },
   name: { label: 'Name', type: 'text', required: true, default: '', help: 'Short unique name used on the dashboard and in code (e.g. front_cam).' },
   pipeline: { label: 'Pipeline', type: 'pipeline', required: true },
   replay_cam: { label: 'Recorded Camera', type: 'text', default: '', help: 'Which camera to replay out of a session folder. Leave blank to take the first one found.' },
@@ -1102,6 +1104,7 @@ async function openCameraModal(mode, arg) {
   COMMON_FIELDS.height.unit = _posUnit();
   camModal.mode = mode;
   camModal.data = null;
+  camModal.discoverPath = arg;
   if (mode === 'edit') {
     if (!arg) return;
     const r = await fetch(`/api/cameras/config/${encodeURIComponent(arg)}`).then(r => r.json());
@@ -1249,7 +1252,14 @@ function renderSourceSection(cameraType) {
       const field = buildField('device', COMMON_FIELDS.device, 'common');
       newRow.appendChild(field);
       newRow.dataset.fieldKey = 'device';
-      populateDevices().then(() => initSettingsFlow());
+      populateDevices().then(() => {
+        if (camModal.discoverPath) {
+          const sel = $id(fieldId('device'));
+          const opt = sel.querySelector(`option[value="${camModal.discoverPath}"]`);
+          if (opt) opt.selected = true;
+        }
+        initSettingsFlow();
+      });
     }
   } else if (cameraType === 'tello') {
     // Text input for Tello UDP source

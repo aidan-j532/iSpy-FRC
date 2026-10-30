@@ -10,10 +10,12 @@ import subprocess
 import sys
 import time
 import time as _time
+import cv2
 from pathlib import Path
 
 from PIL import Image
 
+from iSpy.boot.args import add_boot_arguments
 from iSpy.config.iSpyConfig import get_pipeline_name, iSpyConfig
 from iSpy.dataset.dataset import get_active_dataset_dir
 from iSpy.validations.validate_system import validate_system
@@ -54,20 +56,63 @@ def _remove_path_for_cleanup(path: Path) -> None:
 
 
 def _bootstrap_default_camera(config: iSpyConfig):
+    from iSpy.web.modules.cameras import CamerasModule
+    from iSpy.vision.Cameras import _discovery
+    from iSpy.vision.Cameras.OpenCVCamera import OpenCVCamera
+
     cams = config.get("camera_configs", {})
     if cams and any(c.get("source") not in (None, "") for c in cams.values()):
         return  # already has something real
-    from iSpy.web.modules.cameras import (
-        CamerasModule,
-    )  # or move probing to a shared util
 
-    devices = CamerasModule({})._probe_devices()
+    devices = _discovery.probe_opencv_devices()
     if not devices:
         logger.warning(
             "No cameras detected at first boot - leaving default placeholder config."
         )
         return
-    dev = devices[0]
+
+    # Option A: rank cameras by FPS and pick the best one
+    best_dev = None
+    best_fps = 0
+
+    for dev in devices:
+        path = dev.get("path")
+        name = dev.get("name", f"Camera {path}")
+        # Try to open and measure FPS
+        cap = cv2.VideoCapture(path, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            continue
+        # Warmup frames
+        for _ in range(3):
+            cap.read()
+        start = time.perf_counter()
+        frames = 0
+        for _ in range(20):
+            ret, frame = cap.read()
+            if ret and frame is not None and frame.size > 0:
+                frames += 1
+            else:
+                break
+        cap.release()
+        elapsed = time.perf_counter() - start
+        if elapsed > 0:
+            fps = frames / elapsed
+        else:
+            fps = 0
+
+        if fps > best_fps:
+            best_fps = fps
+            best_dev = dev
+
+    # Fallback to Option B if no camera could be opened
+    if best_dev is None:
+        logger.warning(
+            "No cameras accessible at first boot - proceeding without default camera. "
+            "Add a camera via the web UI."
+        )
+        return
+
+    dev = best_dev
     name = "camera_1"
     default_cam = config.default_config["camera_configs"]["default_cam"]
     cam_cfg = json.loads(json.dumps(default_cam))
@@ -77,11 +122,13 @@ def _bootstrap_default_camera(config: iSpyConfig):
     config.set("camera_configs", {name: cam_cfg})
     config.save()
     logger.info(
-        "First boot: auto-configured camera '%s' -> %s (pipeline=%s)",
+        "First boot: auto-configured camera '%s' -> %s (pipeline=%s, FPS=%.1f)",
         name,
         dev["path"],
         get_pipeline_name(cam_cfg),
+        best_fps,
     )
+
 
 
 _USB_ID_RE = re.compile(r"VID_[0-9A-F]+&PID_[0-9A-F]+(?:&MI_\d+)?", re.IGNORECASE)
@@ -632,6 +679,79 @@ def cleanup_broken_images(config: iSpyConfig) -> None:
 
 
 
+def _runtime_dependency_backends(config) -> list[str]:
+
+    from iSpy.boot.backend_deps import backends_for_config
+
+    data = getattr(config, "config", None)
+    if not isinstance(data, dict):
+        data = {}
+    backends = backends_for_config(data)
+    if not backends:
+        # No model-backed camera (or a config we could not inspect): keep the
+        # documented .pt baseline usable rather than silently leaving torch out.
+        backends = ["pytorch"]
+    return backends
+
+
+def _provision_runtime_dependencies(config, *, fresh: bool):
+
+
+    from iSpy.boot import backend_deps
+    from iSpy.core import network_policy
+
+    online = not network_policy.is_offline()
+    auto_install = bool(fresh and online)
+    if fresh:
+        # On a fresh install, provision inference runtimes for EVERY backend
+        # so that all backends tested by `ispy-bench --all-backends` work
+        # out of the box.  The registry's resolvers already handle platform
+        # compatibility (unsupported/manual backends are skipped, not errors).
+        backends = backend_deps.all_backend_names()
+        logger.info(
+            "Fresh install: provisioning inference runtimes for all backends: %s",
+            ", ".join(backends),
+        )
+    else:
+        backends = _runtime_dependency_backends(config)
+        logger.info("Runtime backend dependencies: %s", ", ".join(backends))
+    report = backend_deps.ensure_backends(
+        backends,
+        auto_install=auto_install,
+    )
+    for line in report.lines():
+        logger.info("%s", line)
+
+    for result in report.manual_requirements:
+        if result.status == "unsupported":
+            logger.warning(
+                "Backend %s is not supported on this platform: %s",
+                result.backend,
+                result.detail,
+            )
+        else:
+            logger.warning(
+                "Backend %s needs manual installation: %s",
+                result.backend,
+                result.detail,
+            )
+
+    if fresh and online:
+        backend_deps.raise_for_actionable_failures(report)
+    elif fresh and not online and not report.ok:
+        logger.warning(
+            "Offline mode: missing runtime dependencies were not installed. "
+            "Reconnect and rerun 'ispy-boot -f'."
+        )
+    elif report.actionable_failures:
+        logger.error(
+            "Missing runtime dependencies for: %s. Run 'ispy-boot -f' to "
+            "install/repair them.",
+            ", ".join(item.backend for item in report.actionable_failures),
+        )
+    return report
+
+
 def on_boot(
     install_service: bool = False,
     fresh: bool = False,
@@ -661,6 +781,10 @@ def on_boot(
         config = iSpyConfig(config_path, create=True)
         _bootstrap_default_camera(config)
 
+        # The unified setup/repair path.  Mandatory/actionable failures raise
+        # DependencyProvisionError instead of being logged and forgotten.
+        logger.info("First-boot dependency provisioning starting...")
+        _provision_runtime_dependencies(config, fresh=True)
         # fresh install with no prior deps installed - pull in whatever backend it needs (rknn wheel, onnxruntime-gpu, etc.) so first boot doesn't fail on a missing import mid-pipeline-construction
         from iSpy.core import network_policy
 
@@ -693,6 +817,8 @@ def on_boot(
             )
         logger.info("Using existing config: %s", config_path)
         config = iSpyConfig(config_path, create=False)
+        # Verify (do not install) on ordinary boots; -f is the repair entry.
+        _provision_runtime_dependencies(config, fresh=False)
 
     _consume_game_mode_web_off(config)
     _apply_offline_mode(config)
@@ -797,12 +923,26 @@ def main():
         "default setup",
     )
     args = parser.parse_args()
-    config = on_boot(
-        install_service=args.service,
-        fresh=args.fresh,
-        wait=args.wait and not args.replay,
-        force_web=args.web,
-    )
+    try:
+        config = on_boot(
+            install_service=args.service,
+            fresh=args.fresh,
+            wait=args.wait and not args.replay,
+            force_web=args.web,
+        )
+    except Exception as exc:
+        from iSpy.boot.backend_deps import DependencyProvisionError
+
+        if not isinstance(exc, DependencyProvisionError):
+            raise
+        logger.error("%s", exc)
+        logger.error(
+            "Fix the failure above and rerun 'ispy-boot -f'. Nothing was "
+            "reported as installed that is not importable."
+        )
+        logging.shutdown()
+        sys.stderr.flush()
+        sys.exit(1)
 
     if args.replay:
         _configure_replay(

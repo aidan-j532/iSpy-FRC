@@ -9,7 +9,7 @@ from wpimath.geometry import Pose2d, Rotation2d
 
 from iSpy.config.iSpyConfig import iSpyAddonConfig, iSpyConfig
 from iSpy.core import network_policy, performance
-from iSpy.core.control_channel import ControlServer
+from iSpy.core.control_channel import ControlServer, update_service_state
 from iSpy.core.rollback import RollBack
 from iSpy.plugins._loader import load_plugins
 from iSpy.plugins.bases import (
@@ -44,10 +44,12 @@ class iSpy:
     ):
         self.config = config
         self.logger = logging.getLogger(__name__)
+        update_service_state(phase="initializing vision")
 
         # bring the web app up FIRST!! so the UI is reachable
         self.web_app = web_app
         if self.web_app is None and performance.effective_app_mode(config):
+            update_service_state(phase="starting web UI", web_enabled=True)
             if performance.web_forced_on() and not performance.get_profile().web_enabled:
                 self.logger.warning(
                     "ISPY_FORCE_WEB: web UI forced on for this run despite "
@@ -110,6 +112,54 @@ class iSpy:
                 )
             else:
                 self.logger.warning("Unknown tracker: %s", name)
+
+        # Lane-specific tracker instances.  A camera with an explicit
+        # ``trackers`` list runs only those trackers and only on its own
+        # tagged detections.  Cameras without the key keep the legacy global
+        # behavior, so older configs are untouched.
+        self.camera_trackers: dict[str, dict] = {}
+        self._camera_tracker_configs: dict[str, list[str]] = {}
+        tracker_settings = dict(self._enabled_addons("trackers"))
+        raw_cams = config.get("camera_configs", {}) or {}
+        if isinstance(raw_cams, dict):
+            for cam_name, cam_cfg in raw_cams.items():
+                if not isinstance(cam_cfg, dict) or "trackers" not in cam_cfg:
+                    continue
+                names = cam_cfg.get("trackers")
+                names = names if isinstance(names, list) else []
+                clean_names = [str(name) for name in names if str(name).strip()]
+                self._camera_tracker_configs[str(cam_name)] = clean_names
+                instances = {}
+                for name in clean_names:
+                    cls = tracker_classes.get(name)
+                    if cls is None:
+                        self.logger.warning(
+                            "Camera '%s' references unknown tracker '%s' - skipping it.",
+                            cam_name,
+                            name,
+                        )
+                        continue
+                    if name not in tracker_settings:
+                        self.logger.warning(
+                            "Camera '%s' references disabled tracker '%s' - skipping it.",
+                            cam_name,
+                            name,
+                        )
+                        continue
+                    settings = tracker_settings.get(name, {})
+                    if not self._gate_addon("tracker", name, cls, settings):
+                        continue
+                    try:
+                        instances[name] = cls(
+                            self._addon_context(cls, settings)
+                        )
+                    except Exception:
+                        self.logger.exception(
+                            "Failed to initialize tracker '%s' for camera '%s'",
+                            name,
+                            cam_name,
+                        )
+                self.camera_trackers[str(cam_name)] = instances
 
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
         self.utilities = {}
@@ -191,13 +241,45 @@ class iSpy:
         self._silence_external_loggers()
 
         if self.frame_processors:
-            for camera in self.cameras:
-                for name, processor in self.frame_processors.items():
-                    camera.add_frame_processor(processor)
+            self._attach_frame_processors()
 
         # I think this has to be at very bottom
         if self.web_app:
             self.web_app.set_vision_instance(self)
+
+    def _attach_frame_processors(self):
+        """Attach each camera's configured processors, preserving legacy wiring.
+
+        A camera with no ``frame_processors`` list gets every enabled processor,
+        exactly like iSpy did before per-camera assignment existed.  An empty
+        list is an explicit "no processors on this camera"; unknown names are
+        skipped with a warning so one stale name cannot break every camera.
+        """
+        for camera in self.cameras:
+            cam_cfg = getattr(camera, "_camera_config", None)
+            assigned = (
+                cam_cfg.get("frame_processors")
+                if hasattr(cam_cfg, "get")
+                else None
+            )
+            if isinstance(assigned, list):
+                processors = []
+                for name in assigned:
+                    processor = self.frame_processors.get(name)
+                    if processor is None:
+                        self.logger.warning(
+                            "Camera '%s' references unknown frame processor '%s' - "
+                            "skipping it.",
+                            cam_cfg.get("name", "?"),
+                            name,
+                        )
+                        continue
+                    processors.append(processor)
+            else:
+                processors = list(self.frame_processors.values())
+
+            for processor in processors:
+                camera.add_frame_processor(processor)
 
     @staticmethod
     def _build_cameras_from_config(config: iSpyConfig) -> list[VisionPipeline]:
@@ -415,7 +497,11 @@ class iSpy:
         self.shutdown_event.set()
 
     def _stop_all_plugins(self):
-        for name, plugin in {**self.trackers, **self.utilities}.items():
+        plugins = {**self.trackers, **self.utilities}
+        for camera_name, instances in getattr(self, "camera_trackers", {}).items():
+            for name, plugin in instances.items():
+                plugins[f"{camera_name}:{name}"] = plugin
+        for name, plugin in plugins.items():
             if plugin is None:
                 continue
             if hasattr(plugin, "stop"):
@@ -459,6 +545,114 @@ class iSpy:
                     return pose
         return Pose2d()
 
+    @staticmethod
+    def _tag_detections(detections, camera_name: str):
+        for obj in detections or []:
+            if getattr(obj, "source_cameras", None):
+                continue
+            try:
+                obj.source_cameras = [camera_name]
+                obj.source_camera = camera_name
+            except Exception:
+                pass
+        return detections
+
+    def _tracker_items_for_camera(self, camera_name: str):
+        """Return (explicit, [(name, instance)]) for one camera lane."""
+        configs = getattr(self, "_camera_tracker_configs", {})
+        camera_trackers = getattr(self, "camera_trackers", {})
+        if camera_name in configs:
+            return True, list(camera_trackers.get(camera_name, {}).items())
+        return False, list(self.trackers.items())
+
+    def _run_tracker_sequence(self, detections, items, pose, code_times):
+        for name, tracker in items:
+            t_one = time.perf_counter()
+            detections = tracker.update(
+                detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
+            )
+            if self._addon_breakdown_parts(tracker):
+                key = getattr(tracker, "plugin_name", name)
+                code_times[key] = time.perf_counter() - t_one
+        return detections
+
+    def _run_lane_trackers(self, detections, pose, code_times):
+        """Run trackers per camera for multi-camera detections.
+
+        Lanes with an explicit tracker list only see objects tagged with that
+        camera.  Remaining cameras keep the legacy global tracker pipeline.
+        Triangulated objects carry every contributing camera in
+        ``source_cameras`` so both source lanes can claim them.
+        """
+        configs = getattr(self, "_camera_tracker_configs", {})
+        camera_trackers = getattr(self, "camera_trackers", {})
+        if not configs:
+            return self._run_tracker_sequence(
+                detections, list(self.trackers.items()), pose, code_times
+            )
+
+        combined = []
+        seen = set()
+        handled = set()
+        for camera_name, instances in camera_trackers.items():
+            lane_objects = [
+                obj
+                for obj in detections or []
+                if camera_name
+                in (getattr(obj, "source_cameras", None) or [])
+            ]
+            for obj in lane_objects:
+                handled.add(id(obj))
+            lane_objects = self._run_tracker_sequence(
+                lane_objects, list(instances.items()), pose, code_times
+            )
+            self._tag_detections(lane_objects, camera_name)
+            for obj in lane_objects or []:
+                if id(obj) not in seen:
+                    seen.add(id(obj))
+                    combined.append(obj)
+
+        legacy = [
+            obj
+            for obj in detections or []
+            if id(obj) not in handled
+            and not (
+                getattr(obj, "source_cameras", None)
+                and any(
+                    camera in configs
+                    for camera in obj.source_cameras
+                )
+            )
+        ]
+        if legacy:
+            legacy = self._run_tracker_sequence(
+                legacy, list(self.trackers.items()), pose, code_times
+            )
+            for obj in legacy:
+                if id(obj) not in seen:
+                    seen.add(id(obj))
+                    combined.append(obj)
+        return combined
+
+    def _utility_frame_data(self, frame_data: dict, name: str) -> dict:
+        raw = self.config.get("utility_sources") if self.config is not None else None
+        if not isinstance(raw, dict) or name not in raw:
+            return frame_data
+        sources = raw.get(name)
+        if not isinstance(sources, list):
+            return frame_data
+        wanted = {str(source) for source in sources if str(source).strip()}
+        detections = [
+            obj
+            for obj in frame_data.get("detections", []) or []
+            if wanted.intersection(getattr(obj, "source_cameras", None) or [])
+        ]
+        scoped = dict(frame_data)
+        scoped["detections"] = detections
+        scoped["detection_count"] = len(detections)
+        scoped["utility_sources"] = sorted(wanted)
+        return scoped
+
     def _update_utilities(self, frame_data: dict):
         code_times = frame_data.setdefault("code_times", {})
         t_util = time.perf_counter()
@@ -466,7 +660,15 @@ class iSpy:
         for name, util in self.utilities.items():
             t0 = time.perf_counter()
             try:
-                util.update(frame_data)
+                # RollBack is core plumbing and records every frame, not a
+                # configurable detection consumer, so it always gets the full
+                # frame data.
+                scoped = (
+                    frame_data
+                    if name == "rollback"
+                    else self._utility_frame_data(frame_data, name)
+                )
+                util.update(scoped)
             except Exception:
                 self.logger.exception("Utility update failed")
             if self._addon_breakdown_parts(util):
@@ -526,6 +728,9 @@ class iSpy:
             self.logger.error("No cameras provided.")
             return
 
+        # The supervisory status page upgrades booting -> running from this.
+        update_service_state(status="running", phase="running")
+
         control = self._control_server()
         try:
             control.start()
@@ -553,18 +758,25 @@ class iSpy:
                 control.stop()
 
     @staticmethod
-    def _camera_label(cam, index: int) -> str:
-        # same naming MultipleCameraHandler.get_camera_frames() uses, so the
-        # rollback sidecar, session.json and camera_frames all agree
-        cfg = getattr(cam, "config", None)
-        if cfg is not None:
+    def _camera_name(cam, index: int = 0) -> str:
+        """Resolve a camera's configured lane name, not its device path."""
+        for attr in ("config", "_camera_config"):
+            cfg = getattr(cam, attr, None)
+            if cfg is None:
+                continue
             try:
-                name = cfg.get("name")
+                name = cfg.get("name") if hasattr(cfg, "get") else None
             except Exception:
                 name = None
             if name:
                 return str(name)
         return f"Camera {index + 1}"
+
+    @classmethod
+    def _camera_label(cls, cam, index: int) -> str:
+        # same naming MultipleCameraHandler.get_camera_frames() uses, so the
+        # rollback sidecar, session.json and camera_frames all agree
+        return cls._camera_name(cam, index)
 
     # does the rollback recorder actually want raw frames? the copies cost a full
     # frame copy per camera per tick, so ask first. probe failure = assume wanted
@@ -632,22 +844,13 @@ class iSpy:
         pose = self._get_pose(code_times)
 
         t_track = time.perf_counter()
-        opted_trackers_s = 0.0
-        for name, tracker in self.trackers.items():
-            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so change
-            t_one = time.perf_counter()
-            detections = tracker.update(
-                detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
-            )
-            if self._addon_breakdown_parts(tracker):
-                key = getattr(tracker, "plugin_name", name)
-                code_times[key] = time.perf_counter() - t_one
-                opted_trackers_s += code_times[key]
-        code_times["trackers"] = max(
-            0.0, time.perf_counter() - t_track - opted_trackers_s
+        camera_name = self._camera_name(camera)
+        detections = self._tag_detections(detections, camera_name)
+        _explicit, tracker_items = self._tracker_items_for_camera(camera_name)
+        detections = self._run_tracker_sequence(
+            detections, tracker_items, pose, code_times
         )
-
-
+        code_times["trackers"] = max(0.0, time.perf_counter() - t_track)
 
         if hasattr(camera, "get_code_times"):
             try:
@@ -720,13 +923,23 @@ class iSpy:
         t_vis = time.perf_counter()
         self._reset_frame_processor_times()
         detections, frame = self.run_multi_vision(handler)
-        vision_s = time.perf_counter() - t_vis
+        # Measure model predict time only.
+        # The pipeline records "device" ms (just model.predict) in _record_inference.
+        # We get it from the model's last_tpu_stage_ms if available, otherwise fallback.
+        if hasattr(handler, "model") and hasattr(handler.model, "last_tpu_stage_ms"):
+            inference_s = getattr(handler.model, "last_tpu_stage_ms", {}).get("device", 0.0)
+        else:
+            # Fallback: use the vision processor time as before
+            inference_s = code_times.get("vision", 0)
+        vision_s = inference_s  # both now measure model predict time
         vision_s -= self._merge_frame_processor_times(code_times)
         code_times["vision"] = max(0.0, vision_s)
 
         pose = self._get_pose(code_times)
 
         t_track = time.perf_counter()
+        detections = self._run_lane_trackers(detections, pose, code_times)
+        code_times["trackers"] = max(0.0, time.perf_counter() - t_track)
         opted_trackers_s = 0.0
         for name, tracker in self.trackers.items():
             # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so change
@@ -828,7 +1041,8 @@ class iSpy:
 
                 actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
                 if print_fps:
-                    print(f"\rFPS: {actual_fps:.1f}   ", end="")
+                    inf_ms = frame_data.get("vision_s", 0) * 1000
+                    print(f"\rFPS: {actual_fps:.1f} | Inf: {inf_ms:.1f}ms   ", end="")
 
         finally:
             if print_fps:
@@ -880,7 +1094,8 @@ class iSpy:
 
                 actual_fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
                 if print_fps:
-                    print(f"\rFPS: {actual_fps:.1f}   ", end="")
+                    inf_ms = frame_data.get("vision_s", 0) * 1000
+                    print(f"\rFPS: {actual_fps:.1f} | Inf: {inf_ms:.1f}ms   ", end="")
 
         finally:
             if print_fps:

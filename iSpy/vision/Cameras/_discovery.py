@@ -427,6 +427,155 @@ def _probe_index_devices(claimed):
     return devices
 
 
+def _windows_dshow_device_names() -> list[str]:
+    """Return DirectShow video device names in the order OpenCV enumerates them.
+
+    The registry-based discovery below assumes its enumeration order matches
+    OpenCV's DirectShow index order, which is not always true (e.g. on some
+    laptops the built-in camera sorts before an attached USB camera in
+    DirectShow but not in the registry). Enumerating DirectShow directly gives
+    the authoritative order so source indices stop being swapped.
+    """
+    try:
+        import ctypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_uint32),
+                ("Data2", ctypes.c_uint16),
+                ("Data3", ctypes.c_uint16),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        def make_guid(s):
+            s = s.strip("{}")
+            parts = s.split("-")
+            g = GUID()
+            g.Data1 = int(parts[0], 16)
+            g.Data2 = int(parts[1], 16)
+            g.Data3 = int(parts[2], 16)
+            b = bytes.fromhex("".join(parts[3:]))
+            for i in range(8):
+                g.Data4[i] = b[i]
+            return g
+
+        class VARIANT(ctypes.Structure):
+            _fields_ = [
+                ("vt", ctypes.c_ushort),
+                ("r1", ctypes.c_ushort),
+                ("r2", ctypes.c_ushort),
+                ("r3", ctypes.c_ushort),
+                ("bstrVal", ctypes.c_wchar_p),
+                ("ptr", ctypes.c_void_p),
+            ]
+
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitializeEx(None, 0)
+
+        CLSID_SystemDeviceEnum = make_guid("{62BE5D10-60EB-11d0-BD3B-00A0C911CE86}")
+        IID_ICreateDevEnum = make_guid("{29840822-5B84-11D0-BD3B-00A0C911CE86}")
+        CLSID_VideoInputDeviceCategory = make_guid("{860BB310-5D01-11d0-BD3B-00A0C911CE86}")
+        IID_IPropertyBag = make_guid("{55272A00-42CB-11CE-8135-00AA004BB851}")
+
+        pDevEnum = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(
+            ctypes.byref(CLSID_SystemDeviceEnum),
+            None,
+            1,
+            ctypes.byref(IID_ICreateDevEnum),
+            ctypes.byref(pDevEnum),
+        )
+        if hr != 0 or not pDevEnum.value:
+            return []
+
+        def vt(ptr):
+            return ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+
+        names = []
+        # CreateClassEnumerator
+        CreateClassEnumerator = ctypes.WINFUNCTYPE(
+            ctypes.c_long,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_uint,
+        )(vt(pDevEnum)[3])
+        pEnum = ctypes.c_void_p()
+        hr = CreateClassEnumerator(
+            pDevEnum,
+            ctypes.byref(CLSID_VideoInputDeviceCategory),
+            ctypes.byref(pEnum),
+            0,
+        )
+        if hr == 0 and pEnum.value:
+            Next = ctypes.WINFUNCTYPE(
+                ctypes.c_long,
+                ctypes.c_void_p,
+                ctypes.c_ulong,
+                ctypes.POINTER(ctypes.c_void_p),
+                ctypes.POINTER(ctypes.c_ulong),
+            )(vt(pEnum)[3])
+            while True:
+                moniker = ctypes.c_void_p()
+                fetched = ctypes.c_ulong(0)
+                hr = Next(pEnum, 1, ctypes.byref(moniker), ctypes.byref(fetched))
+                if hr != 0 or fetched.value == 0 or not moniker.value:
+                    break
+
+                propbag = ctypes.c_void_p()
+                mon_vt = vt(moniker)
+                # BindToStorage is at index 9 in the IMoniker vtable
+                for idx in (8, 9, 10):
+                    try:
+                        BindToStorage = ctypes.WINFUNCTYPE(
+                            ctypes.c_long,
+                            ctypes.c_void_p,
+                            ctypes.c_void_p,
+                            ctypes.c_void_p,
+                            ctypes.c_void_p,
+                            ctypes.POINTER(ctypes.c_void_p),
+                        )(mon_vt[idx])
+                        hr2 = BindToStorage(
+                            moniker,
+                            None,
+                            None,
+                            ctypes.byref(IID_IPropertyBag),
+                            ctypes.byref(propbag),
+                        )
+                        if hr2 == 0 and propbag.value:
+                            break
+                    except Exception:
+                        continue
+
+                if propbag.value:
+                    pb_vt = vt(propbag)
+                    Read = ctypes.WINFUNCTYPE(
+                        ctypes.c_long,
+                        ctypes.c_void_p,
+                        ctypes.c_wchar_p,
+                        ctypes.POINTER(VARIANT),
+                        ctypes.c_void_p,
+                    )(pb_vt[3])
+                    var = VARIANT()
+                    hr3 = Read(propbag, "FriendlyName", ctypes.byref(var), None)
+                    if hr3 == 0 and var.vt == 8 and var.bstrVal:
+                        names.append(var.bstrVal)
+                    Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(pb_vt[2])
+                    Release(propbag)
+
+                Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(mon_vt[2])
+                Release(moniker)
+
+            Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vt(pEnum)[2])
+            Release(pEnum)
+
+        Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vt(pDevEnum)[2])
+        Release(pDevEnum)
+        return names
+    except Exception:
+        return []
+
+
 def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
     claimed = {str(s) for s in (claimed_sources or [])}
     devices = []
@@ -493,7 +642,7 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
         # registry order stops matching CAP_MSMF index order.
         present = _windows_present_camera_instance_ids()
         seen_interfaces = set()
-        index = 0
+        present_cams = []
         for cam in _windows_cameras_from_registry():
             if present and not _windows_camera_is_present(cam, present):
                 continue
@@ -501,8 +650,59 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
             if dedup in seen_interfaces:
                 continue
             seen_interfaces.add(dedup)
-            cam_index = str(index)
-            index += 1
+            present_cams.append(cam)
+
+        # Prefer DirectShow's own enumeration order, which is the order OpenCV
+        # uses for CAP_DSHOW indices. Fall back to registry order when DirectShow
+        # enumeration is unavailable.
+        dshow_names = [n.strip().lower() for n in _windows_dshow_device_names()]
+        name_to_index = {}
+        for i, n in enumerate(dshow_names):
+            name_to_index.setdefault(n, i)
+
+        def _norm_words(s):
+            import re
+
+            return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
+
+        def _dshow_index(cam):
+            cname = (cam.get("name") or "").strip().lower()
+            if cname in name_to_index:
+                return name_to_index[cname]
+            cwords = _norm_words(cname)
+            best_di = None
+            best_overlap = 0
+            for dn, di in name_to_index.items():
+                dwords = _norm_words(dn)
+                overlap = len(cwords & dwords)
+                # ignore very generic tokens so a lone "camera" doesn't match everything
+                distinctive = (cwords & dwords) - {"camera", "usb", "video", "device"}
+                if distinctive and overlap > best_overlap:
+                    best_overlap = overlap
+                    best_di = di
+            if best_di is not None:
+                return best_di
+            for dn, di in name_to_index.items():
+                if cname and (cname in dn or dn in cname):
+                    return di
+            return None
+
+        # Assign each camera an index: matched -> its DirectShow position,
+        # unmatched -> the next free slot after all matched positions.
+        assigned = []
+        used = set()
+        for cam in present_cams:
+            idx = _dshow_index(cam)
+            if idx is None or idx in used:
+                idx = 0
+                while idx in used:
+                    idx += 1
+            used.add(idx)
+            assigned.append((idx, cam))
+        assigned.sort(key=lambda x: x[0])
+
+        for idx, cam in assigned:
+            cam_index = str(idx)
             if cam_index in claimed:
                 continue
             devices.append(

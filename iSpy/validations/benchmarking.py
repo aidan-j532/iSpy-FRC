@@ -12,15 +12,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
-from iSpy.config.AutoOpt import (
-    has_arm,
-    has_edge_tpu,
-    has_nvidia,
-    has_rockchip_npu,
-    has_tensorrt,
-    has_tpu,
-)
-from iSpy.validations.bench_to_matplotlib import collect_system_info, render_report
+from iSpy.config.AutoOpt import has_nvidia, has_rockchip_npu, has_tensorrt, has_tpu
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.optimizer import _convert_model_subprocess_report
 
@@ -177,21 +169,22 @@ def _file_fingerprint(path: Path) -> tuple[int, str]:
 
 
 def _install_plan_dependencies(active: dict) -> None:
-    from iSpy.vision.optimizer import BACKEND_DEPENDENCIES, _is_installed, _pip_install
+    from iSpy.boot.backend_deps import ensure_backends
 
-    fmts = {fmt for fmt, _dev, _masks in active.values()}
-    for fmt in sorted(fmts):
-        deps = BACKEND_DEPENDENCIES.get(fmt)
-        if not deps:
-            continue
-        for entry in deps:
-            mod, target = entry[0], entry[1]
-            extra_args = list(entry[2]) if len(entry) > 2 else None
-            if _is_installed(mod):
-                continue
-            print(f"Installing {target} for backend '{fmt}'...")
-            if not _pip_install(target, extra_args=extra_args):
-                print(f"  failed to install {target} - '{fmt}' will likely fail below")
+    fmts = sorted({fmt for fmt, _dev, _masks in active.values()})
+    if not fmts:
+        return
+    report = ensure_backends(fmts, auto_install=True)
+    for line in report.lines():
+        print(line)
+    for item in report.actionable_failures:
+        print(
+            f"  failed to provision {item.backend}: "
+            f"{item.detail or item.status} - '{item.backend}' may fail below"
+        )
+    for item in report.manual_requirements:
+        print(f"  {item.backend} needs manual setup: {item.detail or item.status}")
+
 
 
 def find_pt_files() -> list[Path]:
@@ -440,7 +433,14 @@ def detect_test_plan() -> dict:
             )
     if (has_arm() and not has_nvidia()) or has_edge_tpu():
         # same tflite backend auto-opt picks on arm / edge-tpu boxes
-        plan["tflite"] = ("tflite", "cpu", [(None, "TFLite")])
+        if exporter_supported("tflite"):
+            plan["tflite"] = ("tflite", "cpu", [(None, "TFLite")])
+        else:
+            print(
+                "  [skip] TFLite: Ultralytics' LiteRT exporter only runs on "
+                "Linux x86_64 and macOS - this box can run a cached .tflite "
+                "but cannot convert a .pt to one"
+            )
     if not has_rockchip_npu():
         plan["pt_cpu"] = ("pt", "cpu", [(None, "CPU")])
         plan["onnx_cpu"] = ("onnx", "cpu", [(None, "ONNX-CPU")])
@@ -463,6 +463,14 @@ def _recommended_backend_plan() -> dict[str, tuple]:
         # optimizer's own engine failure path does
         fmt = "onnx"
     if fmt in ("coreml", "hailo", "qnn"):
+        fmt = "onnx"
+    if fmt == "tflite" and not exporter_supported("tflite"):
+        # Auto-opt can still recommend tflite for *inference* on ARM, but this
+        # box cannot export a .pt to .tflite (LiteRT is x86_64/macOS only).
+        print(
+            "  [note] TFLite export is unavailable on this platform - "
+            "benchmarking ONNX instead (a cached .tflite would still run)"
+        )
         fmt = "onnx"
 
     if fmt == "onnx":
@@ -510,15 +518,7 @@ def _ensure_calibration_dataset(fmt) -> Path:
     return ds
 
 
-def get_or_convert(pt_path, fmt, input_size=(640, 640), calib_dataset=None):
-    """Convert *pt_path* to *fmt* (or reuse a cached artifact).
-
-    Returns ``(artifact_path, report)``: ``(Path, None)`` on success; on
-    ``(None, report)`` the conversion failed and *report* explains why
-    (a JSON-serialisable dict with ``status`` and ``error``).  Callers use the
-    report so a failed RKNN conversion is recorded as a failure instead of
-    silently benchmarking the source .pt as if it were the converted backend.
-    """
+def get_or_convert(pt_path, fmt, input_size=(640, 640)):
     if fmt in ("tpu", "pt"):
         return pt_path, None
     quantize = fmt in _QUANTIZABLE_FORMATS
@@ -551,12 +551,7 @@ def get_or_convert(pt_path, fmt, input_size=(640, 640), calib_dataset=None):
 
 
 def _conversion_failure_result(model_name, fmt, device, report) -> dict:
-    """Build an ok=False result entry so a failed conversion is visible.
-
-    Benchmarks must never *report* a backend as benchmarked when its
-    conversion failed - this entry has ``ok=False`` plus the real reason, so
-    ``_fmt_result`` shows an explicit error instead of a fabricated FPS.
-    """
+    """Build an ok=False result entry for a failed conversion."""
     return {
         "model": model_name,
         "backend": f"Auto/{fmt.upper()}",

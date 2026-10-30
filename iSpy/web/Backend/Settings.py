@@ -23,6 +23,9 @@ _RESTART_REQUIRED_KEYS = {
     # the web-enable decision, the module scheduler and the loop knobs are
     # all set up at boot
     "performance_level",
+    # the child reads this when it starts; the supervisor re-reads it when it
+    # owns the port, so a restart keeps both sides in sync
+    "allow_remote_restart",
 }
 
 

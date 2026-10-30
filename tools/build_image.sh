@@ -167,6 +167,10 @@ run_in_target() {
     else
         chroot "$MOUNT_POINT" /usr/bin/env \
             PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            ISPY_NO_SUPERVISOR=1 \
+            ISPY_TARGET_ARCH=aarch64 \
+            ISPY_TARGET_OS=Linux \
+            ISPY_SKIP_HARDWARE_DETECT=1 \
             "$@"
     fi
 }
@@ -223,6 +227,18 @@ echo "==> Installing iSpy..."
 run_in_target bash -c "
     pip3 install --break-system-packages --no-cache-dir \
         'git+https://github.com/aidan-j532/iSpy-FRC.git'
+"
+
+# Provision the target-architecture runtime dependencies (CPU torch) during the
+# image build. Do not run `boot -f` here: this image has no repo checkout and no
+# camera, and boot would create /root/Config for the wrong WorkingDirectory. The
+# baked first-boot service runs the full fresh boot on the board.
+echo "==> Provisioning target-architecture runtime dependencies..."
+run_in_target python3 -c "
+from iSpy.boot.backend_deps import ensure_backends, raise_for_actionable_failures
+report = ensure_backends(['pytorch'], auto_install=True)
+print(chr(10).join(report.lines()))
+raise_for_actionable_failures(report)
 "
 
 # 4c. Systemd units (baked — enabled so they start on every boot)

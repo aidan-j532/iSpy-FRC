@@ -1,6 +1,7 @@
 import inspect
 import json
 import logging
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,6 +66,30 @@ class ServiceSetupRegressions(unittest.TestCase):
         self.assertEqual(
             run.call_args_list,
             [mock.call(["sudo", "systemctl", "enable", "ispy-first-boot"])],
+        )
+
+    @mock.patch.object(setup_service, "_service_user", return_value="robot")
+    @mock.patch.object(setup_service, "_make_python", return_value="/venv/bin/python")
+    @mock.patch.object(setup_service, "_systemd_is_running", return_value=True)
+    @mock.patch.object(setup_service, "run")
+    @mock.patch.object(
+        setup_service.subprocess,
+        "run",
+        return_value=SimpleNamespace(returncode=0, stderr=""),
+    )
+    def test_deferred_install_does_not_start_a_second_supervisor(
+        self, _write, run, *_mocks
+    ):
+        with mock.patch.dict(
+            os.environ, {setup_service.DEFER_SERVICE_START_ENV: "1"}
+        ):
+            setup_service.setup_systemd("ignored", project_root="/opt/ispy")
+        self.assertEqual(
+            run.call_args_list,
+            [
+                mock.call(["sudo", "systemctl", "enable", "iSpy"]),
+                mock.call(["sudo", "systemctl", "daemon-reload"]),
+            ],
         )
 
 

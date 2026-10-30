@@ -8,13 +8,26 @@ import getpass
 from pathlib import Path
 
 # make the iSpy package importable even when this file is run directly 
-if str(Path(__file__).resolve().parents[1]) not in sys.path:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+if str(Path(__file__).resolve().parents[2]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from iSpy.boot._venv import record_python
 
 SERVICE_NAME = "iSpy"
 FIRST_BOOT_SERVICE_NAME = "ispy-first-boot"
+# `ispy start -s` installs the unit while the foreground supervisor still owns
+# port 5000. Starting systemd immediately would create a second supervisor that
+# fails to bind. The child sets this so installation only enables the unit.
+DEFER_SERVICE_START_ENV = "ISPY_DEFER_SERVICE_START"
+
+
+def _defer_service_start() -> bool:
+    return os.environ.get(DEFER_SERVICE_START_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 MDNS_HOSTNAME = "ispy"
 
@@ -308,13 +321,21 @@ WantedBy=multi-user.target
     run(["sudo", "systemctl", "enable", SERVICE_NAME])
     if _systemd_is_running():
         run(["sudo", "systemctl", "daemon-reload"])
-        run(["sudo", "systemctl", "start", SERVICE_NAME])
-        print(f"Service '{SERVICE_NAME}' installed and started.")
+        if _defer_service_start():
+            print(
+                f"Service '{SERVICE_NAME}' installed and enabled, but not "
+                "started so it cannot fight this foreground run for port 5000."
+            )
+            print(f"  Start later: sudo systemctl start {SERVICE_NAME}")
+        else:
+            run(["sudo", "systemctl", "start", SERVICE_NAME])
+            print(f"Service '{SERVICE_NAME}' installed and started.")
     else:
         print(f"Service '{SERVICE_NAME}' installed and enabled.")
     print(f"  Logs:    journalctl -u {SERVICE_NAME} -f")
     print(f"  Stop:    sudo systemctl stop {SERVICE_NAME}")
     print(f"  Disable: sudo systemctl disable {SERVICE_NAME}")
+    print("  Status:  http://localhost:5000 (stays available while iSpy boots/restarts)")
 
 
 def _is_admin_windows():
@@ -457,8 +478,14 @@ def setup_macos(script_path):
     with open(plist_path, "w") as f:
         f.write(plist)
 
-    run(["launchctl", "load", plist_path])
-    print(f"LaunchAgent '{SERVICE_NAME}' installed and started.")
+    if _defer_service_start():
+        print(
+            f"LaunchAgent '{SERVICE_NAME}' installed; it will start at the next "
+            "login instead of competing with this foreground run."
+        )
+    else:
+        run(["launchctl", "load", plist_path])
+        print(f"LaunchAgent '{SERVICE_NAME}' installed and started.")
     print(f"  Stop:    launchctl unload {plist_path}")
     print(f"  Remove:  rm {plist_path}")
 

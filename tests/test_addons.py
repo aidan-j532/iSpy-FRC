@@ -1456,7 +1456,7 @@ class HealthModuleTests(unittest.TestCase):
 
     def test_payload_reflects_updates(self):
         mod = self._make()
-        mod.update({"fps": 25.0, "vision_s": 0.02, "detection_count": 7})
+        mod.update({"fps": 25.0, "inference_s": 0.02, "detection_count": 7})
         payload, _healthy = mod._build_payload()
         self.assertEqual(payload["fps"], 25.0)
         self.assertEqual(payload["vision_ms"], 20.0)

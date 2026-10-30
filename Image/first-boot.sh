@@ -6,6 +6,10 @@ set -e
 LOG="/var/log/iSpy-firstboot.log"
 exec > >(tee -a "$LOG") 2>&1
 
+# First boot is a headless provisioning pass. Do not hold port 5000 while it
+# runs; the real ispy.service will start the supervisor afterwards.
+export ISPY_NO_SUPERVISOR=1
+
 echo "============================================"
 echo " iSpy First Boot - $(date)"
 echo "============================================"

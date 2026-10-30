@@ -413,9 +413,12 @@ class TestAutoOpt(unittest.TestCase):
             "engine",
         )
 
-    def test_runtime_unsupported_skips_openvino_on_intel(self):
+    def test_runtime_unsupported_keeps_openvino_on_intel(self):
+        # OpenVINO IR is loadable at runtime by GenericYolo, so it must remain
+        # a valid recommendation even when runtime_supported=False (the build-target
+        # path used by auto-opt / ispy-optimize).
         self.assertEqual(
-            _recommend(has_intel_gpu=True, runtime_supported=False), "onnx"
+            _recommend(has_intel_gpu=True, runtime_supported=False), "openvino"
         )
         self.assertEqual(
             _recommend(has_intel_gpu=True, runtime_supported=True), "openvino"
@@ -855,7 +858,8 @@ class TestPosePtRegression(unittest.TestCase):
 
         import importlib
 
-        # Restore the REAL torch (the fake above only satisfies import-time).
+        # Remove fake/import-time-only torch modules so the real torch can be used.
+        # The real torch is needed for actual inference testing.
         for _m in [
             m for m in list(sys.modules) if m == "torch" or m.startswith("torch.")
         ]:
@@ -868,6 +872,9 @@ class TestPosePtRegression(unittest.TestCase):
             importlib.reload(cls._yolo_pt)
         except Exception as exc:  # no real torch on this machine
             raise unittest.SkipTest(f"real torch unavailable: {exc}")
+
+    # No tearDownClass - the torch module removal is intentional for this test class
+    # and is acceptable since this test specifically needs the real torch
 
     def test_pose_pt_loads_and_infers(self):
         model_path = self._locate_pose_model()
@@ -1603,21 +1610,26 @@ class TestOfflineGate(unittest.TestCase):
         return _Needy
 
     def test_critical_requirement_is_skipped_not_raised(self):
-        import logging
-
         from iSpy.core import network_policy
 
         needy = self._requirement_class()
         network_policy.set_offline(True, "unit-test")
 
-        gate_logger = logging.getLogger("iSpy.validations.offline_test")
-        with self.assertLogs(gate_logger, level="WARNING") as logs:
-            allowed = self._gate(needy, logger=gate_logger)
+        # boot validation runs this suite with logging.disable(ERROR), which
+        # would silently drop the warning before assertLogs could see it.
+        # Spy on the logger the gate is handed instead - independent of the
+        # global logging state, so this passes both standalone and at boot.
+        gate_logger = MagicMock()
+        allowed = self._gate(needy, logger=gate_logger)
 
         self.assertFalse(allowed, "a critical need must keep the add-on unconstructed")
+        warnings = [
+            call.args[0] % call.args[1:]
+            for call in gate_logger.warning.call_args_list
+        ]
         self.assertTrue(
-            any("skipping tracker 'probe'" in line for line in logs.output),
-            logs.output,
+            any("skipping tracker 'probe'" in message for message in warnings),
+            warnings,
         )
 
         report = network_policy.get_report()

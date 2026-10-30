@@ -250,6 +250,64 @@ def _save_model_profile(config, pipeline_name: str, settings: dict) -> None:
         pass
 
 
+_MEDIA_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".avi",
+    ".mp4",
+    ".mov",
+    ".mkv",
+}
+
+
+def _source_is_stream_or_file(source) -> bool:
+    text = str(source if source is not None else "").strip()
+    if not text:
+        return False
+    if text.lower().startswith(
+        ("rtsp://", "http://", "https://", "udp://", "tcp://")
+    ):
+        return True
+    if Path(text).suffix.lower() in _MEDIA_SUFFIXES:
+        return True
+    try:
+        return Path(text).expanduser().is_file()
+    except OSError:
+        return False
+
+
+def _camera_source_available(config, source, device_id=None) -> bool:
+    """True when a new physical camera source is present right now.
+
+    Explicit streams and image/video files keep working without discovery;
+    bare device indexes and /dev/video paths must match a detected device.
+    """
+    if _source_is_stream_or_file(source):
+        return True
+    claimed = set()
+    for entry in (config.get("camera_configs", {}) or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("source") is not None:
+            claimed.add(str(entry.get("source")))
+    try:
+        devices = OpenCVCamera.discover(claimed_sources=claimed)
+    except Exception:
+        devices = []
+    source_text = str(source if source is not None else "").strip()
+    for device in devices:
+        if device_id and str(device.get("device_id") or "") == str(device_id):
+            return True
+        if str(device.get("path") or "").strip() == source_text:
+            return True
+    return False
+
+
 class CamerasModule(WebModule):
     plugin_name = "cameras"
 
@@ -283,7 +341,16 @@ class CamerasModule(WebModule):
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule(
-            "/cameras", "cameras_page", lambda: render_template("cameras.html")
+            "/cameras",
+            "cameras_page",
+            lambda: render_template(
+                "cameras.html",
+                editor_admin=bool(
+                    (self.context.get("config").get("admin"))
+                    if self.context.get("config") is not None
+                    else False
+                ),
+            ),
         )
         flask_app.add_url_rule("/api/cameras", "api_cameras", self._api_cameras)
         flask_app.add_url_rule(
@@ -1828,6 +1895,20 @@ class CamerasModule(WebModule):
         cams = dict(config.get("camera_configs", {}))
         if name in cams:
             return jsonify(error=f"Camera '{name}' already exists"), 409
+        if camera_type == "tello" and not bool(config.get("admin")):
+            return jsonify(
+                error="Tello EDU cameras require admin mode."
+            ), 403
+        if (
+            camera_type == "opencv"
+            and not _camera_source_available(config, source, device_id)
+        ):
+            return jsonify(
+                error=(
+                    f"Camera source '{source}' is not a detected device. "
+                    "Refresh devices and pick one from the list."
+                )
+            ), 400
 
         # refuse to add a device already claimed by another configured cam
         if device_id:
@@ -1984,6 +2065,14 @@ class CamerasModule(WebModule):
             return jsonify(error="Camera source is required"), 400
         if new_name != entry_key and new_name in cams:
             return jsonify(error=f"Camera '{new_name}' already exists"), 409
+        if (
+            str(new_entry.get("camera_type") or "opencv") == "tello"
+            and str(entry.get("camera_type") or "opencv") != "tello"
+            and not bool(config.get("admin"))
+        ):
+            return jsonify(
+                error="Tello EDU cameras require admin mode."
+            ), 403
 
         pipeline_name = str(pipeline_entry.get("name") or "object_detection")
         try:
@@ -2018,9 +2107,19 @@ class CamerasModule(WebModule):
         config.save()
 
         # settings apply on the next vision start - never rebuild the running pipeline mid-run
+        warning = None
+        if (
+            str(new_entry.get("camera_type") or "opencv") == "tello"
+            and not bool(config.get("admin"))
+        ):
+            warning = (
+                "This existing Tello camera is preserved, but Tello cameras are "
+                "hidden in normal mode. Enable admin mode to add or change one."
+            )
         return jsonify(
             success=True,
             note="Settings saved - restart vision to apply.",
+            warning=warning,
             camera=new_entry,
         )
 

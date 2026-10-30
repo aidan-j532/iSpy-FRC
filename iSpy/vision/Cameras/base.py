@@ -90,6 +90,9 @@ class CameraBase:
         **kwargs,
     ):
         self.logger = logging.getLogger(__name__)
+        # Keep the raw entry so runtime wiring can read optional per-camera
+        # assignments (frame_processors) without guessing by source.
+        self._camera_config = camera_config
 
         if input_size is None:
             input_size = (self._PLACEHOLDER_W, self._PLACEHOLDER_H)
@@ -320,9 +323,18 @@ class CameraBase:
         deadline = time.perf_counter() + timeout
         while time.perf_counter() < deadline:
             try:
+                # Some UVC drivers (e.g. Microsoft LifeCam Cinema under
+                # DirectShow) report grab() == False even though read() returns a
+                # valid frame, so prefer read() and fall back to grab/retrieve.
+                ret, frame = cap.read()
+                if ret and frame is not None and frame.size > 0 and frame.max() >= 1:
+                    return True
+            except Exception:
+                pass
+            try:
                 if cap.grab():
                     ok, frame = cap.retrieve()
-                    if ok and frame is not None and frame.max() >= 1:
+                    if ok and frame is not None and frame.size > 0 and frame.max() >= 1:
                         return True
             except Exception:
                 pass

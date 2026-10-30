@@ -25,6 +25,8 @@ class Object:
         depth_source: str = "monocular",
         vis_type: str = "generic",
         vis_meta: dict | None = None,
+        source_camera: str | None = None,
+        source_cameras: list | None = None,
     ):
         self.x = x
         self.y = y
@@ -39,6 +41,18 @@ class Object:
         self.ray_origin = ray_origin  # np.ndarray(3,) robot-frame, or None
         self.ray_direction = ray_direction  # np.ndarray(3,) unit vector, or None
         self.depth_source = depth_source
+        # Optional lane metadata.  Single-camera detections carry one source;
+        # triangulated and cross-lane detections carry every contributing
+        # camera so lane-specific trackers and utility routing can filter them.
+        cameras = []
+        if source_cameras:
+            cameras.extend(str(name) for name in source_cameras if str(name).strip())
+        if source_camera and str(source_camera) not in cameras:
+            cameras.insert(0, str(source_camera))
+        self.source_cameras = list(dict.fromkeys(cameras))
+        self.source_camera = str(source_camera) if source_camera else (
+            self.source_cameras[0] if self.source_cameras else None
+        )
 
         # vis_type -> renderer mapping (see VIS_RENDERERS in viewer3d.html)
         self.vis_type = vis_type
@@ -119,6 +133,8 @@ class Object:
             "depth_source": self.depth_source,
             "vis_type": self.vis_type,
             "vis_meta": dict(self.vis_meta),
+            "source_camera": self.source_camera,
+            "source_cameras": list(self.source_cameras),
             "keypoints_3d": (
                 [[float(c) for c in kpt] for kpt in self.keypoints_3d]
                 if self.keypoints_3d is not None
@@ -152,6 +168,8 @@ class Object:
             depth_source=str(data.get("depth_source", "monocular")),
             vis_type=str(data.get("vis_type", "generic")),
             vis_meta=dict(data.get("vis_meta") or {}),
+            source_camera=data.get("source_camera"),
+            source_cameras=data.get("source_cameras"),
         )
         origin = data.get("ray_origin")
         direction = data.get("ray_direction")

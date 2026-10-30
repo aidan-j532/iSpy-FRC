@@ -236,7 +236,7 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
     logger.info("Config validation passed.")
 
 
-def get_recommendations(config_path: str = "iSpy/example_config.json") -> str:
+def get_recommendations(config_path: str = "Config/config.json") -> str:
     import json
     from pathlib import Path
 

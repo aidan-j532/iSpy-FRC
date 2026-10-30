@@ -1,0 +1,123 @@
+---
+title: Tracking and Target Selection
+author: iSpy FRC
+sidebar_position: 7.5
+---
+
+# Tracking and Target Selection
+
+A detector reports what it sees this frame. A tracker decides whether this frame's detection is the same object it saw last frame, keeps a stable identity for it, and smooths it so the robot is not chasing noise. This page explains how the built-in trackers actually work, because the reference page only lists their parameters.
+
+Trackers are off in a default config. Each one is enabled by its presence under `plugins.trackers`, and they run in the order they appear in the file.
+
+## What a tracker is for
+
+Without a tracker, every detection gets a fresh id every frame. That makes it impossible for robot code to say "follow that specific game piece." It also means a single-frame position error is passed straight through.
+
+A tracker solves three things:
+
+- **Identity.** It keeps one id for an object across frames, so the robot can lock onto it.
+- **Smoothing.** It blends new measurements with the previous position to reduce jitter.
+- **Memory.** It keeps an object alive for a short time after the detector stops seeing it, so a momentary miss does not drop the target.
+
+## The object tracker
+
+`FRC/object_tracker` is the simple tracker. When a detection comes in:
+
+1. Detections are first converted into the robot frame using the current robot pose. This is why the tracker takes the pose as an argument: an object's robot-relative position changes as the robot moves, and matching has to happen in a consistent frame.
+2. If a detection is within `distance_threshold` meters of an existing track **and is the same class**, it merges into that track.
+3. Otherwise it becomes a new track.
+
+Merging applies exponential smoothing with a fixed alpha of `0.3` to position, and to the angles with shortest-path wrapping. So each merged measurement moves the track 30 percent of the way toward the new reading. This is why a tracked position lags a fast-moving object slightly; that lag is the smoothing doing its job.
+
+Tracked objects are dropped after `stale_threshold` seconds without a match. The default is one second, which is roughly thirty frames at 30 fps.
+
+The same-class rule matters. Distance alone would let a game piece merge into a robot-sized track that happens to be nearby, so a detection only merges into a track of the same `name`. Detections with no class name on both sides are treated as equal for backward compatibility, but a named detection never merges into an unnamed track or a differently named one.
+
+## The EKF tracker
+
+`ekf_tracker` is the same matching logic with a Kalman filter instead of the fixed-alpha smoothing. It shares `distance_threshold` and `stale_threshold` with the object tracker and adds two parameters:
+
+- `process_noise` is how much the filter distrusts its motion model. Higher values make the track follow measurements faster, which is more responsive and noisier.
+- `measurement_noise` is how much it distrusts each detection. Higher values make the track smoother and more laggy; lower values keep it closer to the raw detections.
+
+The filter runs predict-and-update using the real elapsed time between observations, not a fixed step. That means it behaves the same whether the loop is running at 15 fps or 60.
+
+The EKF adds one behavior the object tracker does not have: velocity extrapolation. When a track misses a detection for a tick, the filter forecasts where it should be and moves the track there instead of leaving it parked at the last reading. That keeps a fast object moving through a single dropped frame rather than appearing to stop.
+
+**Which one to use.** The object tracker is simpler and has no tuning beyond a merge distance. The EKF is better when a target moves smoothly and you want to predict through dropouts, and worse when detections jump around, because a jumping detection is exactly what its noise model is trying to reject. Start with the object tracker. Move to the EKF when you need prediction or a target that moves fast.
+
+## The path planner
+
+`path_planner` does not track objects at all. It clusters them. It runs DBSCAN over the current detections:
+
+- `epsilon` is the cluster radius in meters. Detections within this distance of each other join the same cluster.
+- `min_samples` is the smallest cluster that counts. Smaller groups are labeled noise.
+
+It returns the clustered detections and separately exposes the noise points. Use it when you care about groups, such as a pile of game pieces, rather than individual tracks.
+
+There is a guard worth knowing: if a frame has fewer detections than `min_samples`, DBSCAN would mark everything as noise and report nothing. Instead, the path planner returns every detection as its own cluster in that case. So a single visible game piece still comes through when `min_samples` is three.
+
+Because it clusters rather than tracks, `path_planner` does not give stable ids over time and does not smooth. Do not chain it where you need identity.
+
+## Chaining trackers
+
+Trackers run in config order. A common chain merges and smooths first, then clusters the result. Put the identity tracker before the clustering one, since clustering discards identity.
+
+## Target selection
+
+`target_selector` is a utility, not a tracker, and it answers a different question: which detection is "the" target right now? It works on the ids the trackers assign.
+
+The selection itself is shared state, not private to the utility. The web dashboard and the utility read the same selection, so selecting a track in the UI and reading `selected_target` on the robot refer to the same object.
+
+How it behaves each tick:
+
+- If nothing is selected, it publishes an explicit `null` so any subscriber clears its last target rather than holding a stale one.
+- If the selected id is present in the current detections, it publishes that detection's full data.
+- If the selected id is briefly missing, it stays quiet for `reacquire_timeout_s` seconds. During that window it publishes nothing new, so the robot keeps its last known target instead of being cleared immediately. After the timeout, it publishes `null`.
+
+The output lands under `frame_data['addon_data'][output_key]`, where `output_key` defaults to `selected_target`. That is exactly the key the NetworkTables utility publishes by default, which is how the selected target reaches the robot.
+
+The selection can be set and cleared over HTTP:
+
+| Route | Method | Purpose |
+| --- | --- | --- |
+| `/api/target-selector/select` | POST | Body `{"track_id": <int>}` selects a track. |
+| `/api/target-selector/clear` | POST | Clears the selection. |
+| `/api/target-selector/status` | GET | Returns the selected id and its age in seconds. |
+
+Selecting requires an integer track id, so `target_selector` is only useful when a tracker is enabled to assign ids. With no tracker, ids change every frame and a selection cannot be held.
+
+## A working configuration
+
+This enables the simple tracker, the EKF, and the selector together. In practice you would choose one tracker, not both; they would fight over the same detections.
+
+```json
+"plugins": {
+  "trackers": {
+    "FRC/object_tracker": {
+      "distance_threshold": 0.5,
+      "stale_threshold": 1.0
+    }
+  },
+  "utilities": {
+    "FRC/network_table_handler": {
+      "network_tables_ip": "10.0.0.2"
+    },
+    "target_selector": {
+      "reacquire_timeout_s": 1.0,
+      "output_key": "selected_target"
+    }
+  }
+}
+```
+
+With this in place, the robot reads the lock-on target from the `selected_target` topic, and the dashboard can change that selection while the match is running.
+
+## Tuning from symptoms
+
+- **Target flickers between two nearby objects.** The merge distance is too small for how far apart the detections land. Raise `distance_threshold`, or fix the detection jitter first if the two objects are genuinely separate.
+- **Target id changes when the object passes behind something.** `stale_threshold` is too short. Raise it so the track survives the dropout.
+- **Target position lags badly.** The smoothing is too strong for the object's speed. On the object tracker there is no knob; switch to the EKF and raise `process_noise`.
+- **Target jumps to a far object.** Raising `distance_threshold` too far lets unrelated detections merge. Lower it and let distance do its job.
+- **Robot loses target the instant a frame is missed.** Raise `reacquire_timeout_s` so the selector holds the lock through brief dropouts.

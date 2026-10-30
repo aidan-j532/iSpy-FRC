@@ -75,7 +75,7 @@ _ADDON_TYPES_FROM_PTYPE = {
 _CORE_PUBLISH_SOURCES = [
     {"source": "fps", "label": "fps"},
     {"source": "loop_s", "label": "loop_s"},
-    {"source": "vision_s", "label": "vision_s"},
+    {"source": "inference_s", "label": "Inference time"},
     {"source": "camera_lag_s", "label": "camera_lag_s"},
     {"source": "detection_count", "label": "detection_count"},
     {"source": "detections", "label": "detections (struct[])"},
@@ -89,6 +89,15 @@ def _coerce_setting_value(value, defn: dict):
     if not isinstance(defn, dict):
         return value
     stype = defn.get("type")
+    if value is None and defn.get("nullable"):
+        return None
+    if (
+        isinstance(value, str)
+        and not value.strip()
+        and defn.get("nullable")
+        and stype in ("number", "model", "source", "browse")
+    ):
+        return None
     if stype == "number":
         if isinstance(value, bool):
             raise ValueError(f"'{defn.get('label', 'value')}' must be a number")

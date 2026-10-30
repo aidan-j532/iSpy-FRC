@@ -196,7 +196,7 @@ def derive_format_metadata(
             "output_format": "hardware_nms",
             "output_layout": "anchors_first",
             "box_format": "xyxy",
-            "score_mode": "objectness",
+            "score_mode": "objectness" if pt_meta.get("nc", 1) == 1 else "multi_class",
             "scores_are_logits": False,
             "apply_software_nms": False,
             "quantization": "none",

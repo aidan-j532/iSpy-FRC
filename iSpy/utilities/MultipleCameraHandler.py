@@ -42,6 +42,20 @@ class MultipleCameraHandler:
             )
             self._threads[-1].start()
 
+    @staticmethod
+    def _camera_name(camera, index: int) -> str:
+        for attr in ("config", "_camera_config"):
+            cfg = getattr(camera, attr, None)
+            if cfg is None:
+                continue
+            try:
+                name = cfg.get("name") if hasattr(cfg, "get") else None
+            except Exception:
+                name = None
+            if name:
+                return str(name)
+        return f"Camera {index + 1}"
+
     def _camera_loop(self, i: int, camera: VisionPipeline):
         stop_event = self._stop_events[i]
         last_timestamp = None
@@ -74,8 +88,18 @@ class MultipleCameraHandler:
                 objects, frame = [], camera.get_frame()
                 time.sleep(0.05)  # Dont starve CPU
             try:
+                camera_name = self._camera_name(camera, i)
+                tagged = []
+                for obj in objects or []:
+                    if not getattr(obj, "source_cameras", None):
+                        try:
+                            obj.source_cameras = [camera_name]
+                            obj.source_camera = camera_name
+                        except Exception:
+                            pass
+                    tagged.append(obj)
                 with self._locks[i]:
-                    self._objects[i] = objects if objects is not None else []
+                    self._objects[i] = tagged
                     self._frames[i] = frame
                 self._fresh[i].set()
             except Exception:
@@ -138,6 +162,16 @@ class MultipleCameraHandler:
                         float(point[2]) * self._inches_to_output_unit,
                     )
                     obj_a.depth_source = "triangulated"
+                    sources = list(getattr(obj_a, "source_cameras", None) or [])
+                    for source in getattr(obj_b, "source_cameras", None) or []:
+                        if source not in sources:
+                            sources.append(source)
+                    try:
+                        obj_a.source_cameras = sources
+                        if not getattr(obj_a, "source_camera", None) and sources:
+                            obj_a.source_camera = sources[0]
+                    except Exception:
+                        pass
                     used.add((cam_b, idx_b))
 
                 used.add((cam_a, idx_a))

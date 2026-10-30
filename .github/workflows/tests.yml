@@ -43,12 +43,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      # torch is a build-time extra ([dev]/[optimizer]), not a runtime dep, but
-      # the suite needs it: the .pt fallback path in test_model_select calls
-      # ensure_torch_imported(), and the pickle-gadget tests in
-      # test_model_upload_security skip without it - that's security coverage
-      # worth keeping. CPU wheels only; the rest of [dev] (tensorflow, tensorrt,
-      # jupyter) isn't needed to run tests.
+      # torch is provisioned by iSpy.boot.backend_deps at runtime, not by the
+      # core install, but the suite needs it: the .pt fallback path in
+      # test_model_select calls ensure_torch_imported(), and the pickle-gadget
+      # tests in test_model_upload_security skip without it - that's security
+      # coverage worth keeping. CPU wheels only; the rest of [dev] (tensorflow,
+      # tensorrt, jupyter) isn't needed to run tests.
       - name: Install torch (CPU)
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 

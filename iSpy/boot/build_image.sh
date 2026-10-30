@@ -84,6 +84,9 @@ echo "==> Chroot: installing deps + running fresh boot + enabling services"
 sudo chroot "$WORK_DIR/rootfs" /bin/bash -e <<'CHROOT_EOF'
 set -e
 export DEBIAN_FRONTEND=noninteractive
+# Setup runs inline in the build chroot; never leave a status listener bound
+# to port 5000 inside the image being built.
+export ISPY_NO_SUPERVISOR=1
 
 apt-get update
 apt-get install -y python3 python3-pip python3-venv avahi-daemon v4l-utils
@@ -91,9 +94,16 @@ apt-get install -y python3 python3-pip python3-venv avahi-daemon v4l-utils
 cd /opt/iSpy-FRC
 pip3 install -e . --break-system-packages
 
+# Image build: the chroot shares the build host's /proc, so never let hardware
+# probes mistake the x86 builder's GPU for the target board's hardware. The
+# image targets are ARM64 SBCs; the registry selects CPU wheels accordingly.
+export ISPY_TARGET_ARCH=aarch64
+export ISPY_TARGET_OS=Linux
+export ISPY_SKIP_HARDWARE_DETECT=1
+
 # fresh install: prefer the `ispy` CLI, fall back to python -m if the
-# console script didn't register. this pulls hardware-appropriate deps via
-# install_special_dependencies(auto_install=True) (see first_boot.py patch)
+# console script didn't register. this provisions the configured backend
+# through iSpy.boot.backend_deps (torch is no longer a core pip dependency).
 if command -v ispy >/dev/null 2>&1; then
     ispy setup
 else
@@ -133,3 +143,4 @@ echo "==> Done: ${OUT_NAME}.img.xz"
 echo "Flash with Raspberry Pi Imager or balenaEtcher. Board boots as 'ispy.local'."
 echo "Manage the install with 'ispy setup' / 'ispy start'"
 echo "  (fallback: 'python3 -m iSpy.boot.boot -f' / 'python3 -m iSpy.boot.boot')."
+echo "Dashboard: http://ispy.local:5000 (status page stays up while booting/restarting)"

@@ -107,17 +107,17 @@ class ConverterEnvProvisioningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp) / "cache"
-            env_dir = cache / "rknn-converter" / env._identity_hash(identity)
+            with mock.patch.object(env, "_cache_root", return_value=cache):
+                # Converter envs are now grouped as <format>_env/<identity>.
+                env_dir = env._env_dir(identity)
+                py = env._is_py(env_dir)
 
-            py = env._is_py(env_dir)
-
-            with mock.patch.object(env, "_cache_root", return_value=cache), \
-                 mock.patch.object(env, "_env_is_current", return_value=True), \
-                 mock.patch.object(env, "_light_verify", return_value=True):
-                with mock.patch.object(env, "_provision") as mock_provision:
-                    result_py = env.converter_python()
-                    mock_provision.assert_not_called()
-                    self.assertEqual(result_py, py)
+                with mock.patch.object(env, "_env_is_current", return_value=True), \
+                     mock.patch.object(env, "_light_verify", return_value=True):
+                    with mock.patch.object(env, "_provision") as mock_provision:
+                        result_py = env.converter_python()
+                        mock_provision.assert_not_called()
+                        self.assertEqual(result_py, py)
 
     def test_missing_env_is_created_on_first_use(self):
         """converter_python() provisions when no valid env exists."""
@@ -153,11 +153,13 @@ class ConverterEnvDependencyTests(unittest.TestCase):
     """The pinned dependency set is correct and minimal."""
 
     def test_numpy_pinned_below_2(self):
-        """NumPy must be <2 (toolkit2 2.3.2 ABI compatibility)."""
+        """NumPy must be 1.26.4 (toolkit2 2.3.2 ABI compatibility)."""
         from iSpy.boot._rknn_converter_env import _CONVERTER_REQUIREMENTS
 
         numpy_req = next(r for r in _CONVERTER_REQUIREMENTS if r.startswith("numpy"))
-        self.assertIn("<2", numpy_req)
+        # Exact pin matching rknn-toolkit2 2.3.2's METADATA; also satisfies
+        # the old "numpy<2" contract.
+        self.assertIn("1.26.4", numpy_req)
 
     def test_setuptools_pinned_below_82(self):
         """setuptools must be <82 (provides pkg_resources)."""
@@ -172,6 +174,23 @@ class ConverterEnvDependencyTests(unittest.TestCase):
 
         scipy_req = next(r for r in _CONVERTER_REQUIREMENTS if r.startswith("scipy"))
         self.assertIn("<1.15", scipy_req)
+
+    def test_legacy_identity_includes_spec_hash(self):
+        """A pin/probe change must invalidate the legacy RKNN env too."""
+        from iSpy.boot import _rknn_converter_env
+
+        identity = _rknn_converter_env._identity()
+        self.assertIn("spec_hash", identity)
+        self.assertIn("spec_hash", _rknn_converter_env._canonical_identity(identity))
+
+    def test_pyproject_has_no_platform_wide_numpy_pin(self):
+        """Runtime NumPy is resolved per host, not assumed for all aarch64."""
+        import tomllib
+
+        data = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
+        deps = " ".join(data["project"]["dependencies"])
+        self.assertNotIn("platform_machine == 'aarch64'", deps)
+        self.assertNotIn("platform_system == 'Linux'", deps)
 
     def test_no_ultralytics_in_main_runtime_deps(self):
         """Ultralytics must NOT be a main runtime dependency."""
@@ -275,6 +294,54 @@ class ConversionRoutingTests(unittest.TestCase):
             env = mock_run.call_args[1].get("env")
             self.assertEqual(env.get("PYTHONPATH"), str(_REPO_ROOT))
             self.assertEqual(env.get("PYTHONNOUSERSITE"), "1")
+            self.assertEqual(env.get("ISPY_CONVERTER_ENV"), "rknn")
+
+    def test_protobuf_mismatch_rebuilds_env_and_retries_once(self):
+        """A drifted env is rebuilt once, then the conversion is retried."""
+        from iSpy.boot import _rknn_converter_env
+        from iSpy.vision import optimizer as opt
+
+        calls = {"n": 0}
+
+        def fake_run(cmd, **kwargs):
+            calls["n"] += 1
+            args_path = Path(cmd[-1])
+            result_path = Path(str(args_path) + ".result.json")
+            if calls["n"] == 1:
+                result_path.write_text(
+                    json.dumps(
+                        {
+                            "error": (
+                                "'google._upb._message.FieldDescriptor' object "
+                                "has no attribute 'label'"
+                            ),
+                            "error_type": "AttributeError",
+                            "traceback": "Traceback ...",
+                        }
+                    )
+                )
+                return mock.Mock(returncode=1, stdout="", stderr="")
+            result_path.write_text(json.dumps({"result": "out.rknn"}))
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(
+            _rknn_converter_env,
+            "converter_python",
+            return_value=Path("/fake/converter/bin/python"),
+        ), mock.patch.object(
+            _rknn_converter_env, "ispy_source_root", return_value=_REPO_ROOT
+        ), mock.patch(
+            "iSpy.boot.converter_envs.rebuild_env",
+            return_value=Path("/fake/converter/bin/python"),
+        ) as rebuild, mock.patch("subprocess.run", side_effect=fake_run):
+            result, report = opt._convert_model_subprocess_report(
+                "model.pt", "rknn", [640, 640], quantize=False, force=True
+            )
+
+        self.assertIsNone(report)
+        self.assertEqual(result, Path("out.rknn"))
+        rebuild.assert_called_once_with("rknn")
+        self.assertEqual(calls["n"], 2)
 
     def test_non_rknn_uses_main_python(self):
         """Non-RKNN conversion continues using sys.executable."""
@@ -570,14 +637,21 @@ class MainEnvSeparationTests(unittest.TestCase):
 
     def test_backend_deps_rknn_only_lite(self):
         """BACKEND_DEPENDENCIES['rknn'] contains only the lite wheel, not the full toolkit."""
-        from iSpy.vision import optimizer as opt
+        from iSpy.boot import backend_deps
 
-        # On aarch64 the lite wheel is found; on other platforms the list is
-        # empty.  Recompute the deps with a mocked platform to verify content.
-        with mock.patch.object(opt, "_IS_AARCH64", True), \
-             mock.patch.object(opt, "_PY_TAG", "cp312"), \
-             mock.patch.object(opt, "_RKNN_LITE_DIR", _REPO_ROOT / "iSpy" / "rknn_wheels"):
-            deps = opt._backend_dependencies().get("rknn", [])
+        with tempfile.TemporaryDirectory() as tmp:
+            wheel = Path(tmp) / (
+                "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_"
+                "aarch64.manylinux2014_aarch64.whl"
+            )
+            wheel.write_bytes(b"")
+            platform = backend_deps.PlatformInfo(
+                system="Linux", machine="aarch64", python_tag="cp312"
+            )
+            with mock.patch.object(
+                backend_deps, "rknn_lite_wheel_dir", return_value=Path(tmp)
+            ):
+                deps = backend_deps.legacy_dependencies(platform).get("rknn", [])
 
         # Should have exactly one entry: the lite wheel
         self.assertEqual(len(deps), 1)
@@ -602,44 +676,26 @@ class MainEnvSeparationTests(unittest.TestCase):
             self.assertNotIn("protobuf", target)
 
     def test_install_special_deps_does_not_install_full_toolkit(self):
-        """install_special_dependencies for RKNN only installs the lite wheel."""
-        from iSpy.config import AutoOpt
+        """install_special_dependencies delegates to the central registry.
 
+        The registry resolves RKNN only to the bundled lite wheel (see
+        test_backend_deps_rknn_only_lite); this test pins the delegation so the
+        optimizer cannot quietly grow its own installer again.
+        """
         from iSpy.vision import optimizer as opt
 
-        installed = []
-
-        def fake_pip(target, **kwargs):
-            installed.append(target)
-            return True
-
-        with tempfile.TemporaryDirectory() as tmp:
-            lite_target = str(
-                Path(tmp)
-                / "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_"
-                  "aarch64.manylinux2014_aarch64.whl"
+        report = mock.Mock()
+        report.lines.return_value = []
+        report.results = []
+        with mock.patch(
+            "iSpy.boot.backend_deps.ensure_backends", return_value=report
+        ) as ensure:
+            result = opt.install_special_dependencies(
+                auto_install=True, backend="rknn"
             )
-            deps = {
-                "onnx": [("onnxruntime", "onnxruntime")],
-                "rknn": [("rknnlite", lite_target)],
-            }
 
-            with mock.patch.object(opt, "BACKEND_DEPENDENCIES", deps), \
-                 mock.patch.object(AutoOpt, "recommend_format", return_value="rknn"), \
-                 mock.patch.object(AutoOpt, "has_jetson", return_value=False), \
-                 mock.patch.object(opt, "_is_installed", return_value=False), \
-                 mock.patch.object(opt, "_pip_install", side_effect=fake_pip), \
-                 mock.patch.object(opt, "_ensure_onnxruntime_variant"), \
-                 mock.patch.object(opt, "_ensure_cuda_torch"), \
-                 mock.patch("platform.machine", return_value="x86_64"):
-                opt.install_special_dependencies(auto_install=True)
-
-            # Exactly one install: the local lite wheel, never the full toolkit
-            self.assertEqual(installed, [lite_target])
-        for target in installed:
-            self.assertNotIn("rknn_toolkit2", target)
-            self.assertNotIn("ultralytics", target)
-            self.assertNotIn("http", target)  # no remote toolkit URL
+        self.assertIs(result, report)
+        ensure.assert_called_once_with(["rknn"], auto_install=True)
 
     def test_ensure_export_deps_noop_in_converter_env(self):
         """_ensure_export_deps is a no-op when deps are already present."""
@@ -648,6 +704,18 @@ class MainEnvSeparationTests(unittest.TestCase):
         with mock.patch.object(opt, "_is_installed", return_value=True):
             result = opt._ensure_export_deps()
         self.assertTrue(result)
+
+    def test_converter_env_never_installs_unpinned_export_deps(self):
+        """A missing dep must rebuild the env, not pip-mutate its pins."""
+        from iSpy.vision import optimizer as opt
+
+        with mock.patch.object(opt, "_in_converter_env", return_value=True), \
+             mock.patch.object(opt, "_is_installed", return_value=False), \
+             mock.patch.object(opt, "_pip_install") as pip_install:
+            result = opt._ensure_export_deps()
+
+        self.assertFalse(result)
+        pip_install.assert_not_called()
 
     def test_rknn_wheel_targets_never_offers_full_toolkit(self):
         """The normal-env wheel helper returns lite only, never the full toolkit."""
@@ -841,6 +909,29 @@ class WorkerFailureClassificationTests(unittest.TestCase):
             self._classify(1, "No module named 'pkg_resources'", "ModuleNotFoundError"),
             "dependency",
         )
+
+    def test_protobuf_onnx_label_mismatch_is_dependency(self):
+        """A drifted protobuf must be reported as a broken converter env."""
+        self.assertEqual(
+            self._classify(
+                1,
+                "'google._upb._message.FieldDescriptor' object has no attribute 'label'",
+                "AttributeError",
+            ),
+            "dependency",
+        )
+
+    def test_protobuf_onnx_mismatch_helper(self):
+        """Only the onnx/protobuf crash triggers the env self-heal retry."""
+        from iSpy.vision.optimizer import _is_protobuf_onnx_mismatch
+
+        self.assertTrue(
+            _is_protobuf_onnx_mismatch(
+                "'google._upb._message.FieldDescriptor' object has no attribute 'label'"
+            )
+        )
+        self.assertFalse(_is_protobuf_onnx_mismatch("rknn build failed with code 8"))
+        self.assertFalse(_is_protobuf_onnx_mismatch("No module named 'onnx'"))
 
     def test_memory_error_is_resource(self):
         self.assertEqual(
@@ -1081,14 +1172,15 @@ class LightVerifyTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp) / "cache"
-            env_dir = cache / "rknn-converter" / env._identity_hash(identity)
-            py = env._is_py(env_dir)
+            with mock.patch.object(env, "_cache_root", return_value=cache):
+                # Converter envs are now grouped as <format>_env/<identity>.
+                env_dir = env._env_dir(identity)
+                py = env._is_py(env_dir)
 
-            with mock.patch.object(env, "_cache_root", return_value=cache), \
-                 mock.patch.object(env, "_env_is_current", return_value=True), \
-                 mock.patch.object(env, "_light_verify", return_value=False), \
-                 mock.patch.object(env, "_provision", return_value=py) as mock_provision:
-                result = env.converter_python()
+                with mock.patch.object(env, "_env_is_current", return_value=True), \
+                     mock.patch.object(env, "_light_verify", return_value=False), \
+                     mock.patch.object(env, "_provision", return_value=py) as mock_provision:
+                    result = env.converter_python()
 
             self.assertEqual(result, py)
             # The broken env was not trusted: provisioning was triggered.

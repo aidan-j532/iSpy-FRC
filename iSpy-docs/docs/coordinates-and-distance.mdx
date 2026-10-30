@@ -1,0 +1,132 @@
+---
+title: Coordinates and Distance
+author: iSpy FRC
+sidebar_position: 7
+---
+
+# Coordinates and Distance
+
+The configuration pages tell you which keys exist. This page answers the question that comes up as soon as a robot uses the output: where does a reported position actually come from, and why is it sometimes wrong?
+
+Almost every "the boxes look right but the position is off" problem is explained by the material here.
+
+## The coordinate frame
+
+iSpy reports positions in a robot-relative frame, not a field frame:
+
+- `+X` points to the robot's right.
+- `+Y` points forward.
+- `+Z` points up.
+- `yaw` is zero when the camera faces `+Y`, and a positive yaw turns toward `+X`, which is to the right.
+- `pitch` is positive looking down.
+
+A detection's `x` and `y` are therefore "how far right" and "how far forward" of the robot, before any robot pose is applied. They are not field coordinates. The transform to the field happens on the robot side, using your odometry and the robot's heading.
+
+The frame is right-handed and up-positive throughout. The camera's own optical axis is down-positive internally, and every conversion flips it so the value you read in a detection is already in the up-positive robot frame.
+
+## Mount geometry
+
+Four camera fields decide the geometry. They are read once when the camera is built, so a change needs a restart.
+
+| Field | Meaning |
+| --- | --- |
+| `x`, `y` | Camera position on the robot, in the configured unit. |
+| `height` | Camera height above the ground, in the configured unit. This is the single mount-height field; the old `z` key is ignored with a warning. |
+| `yaw` | Camera rotation about the vertical axis. Zero faces forward; positive turns right. |
+| `pitch` | Camera tilt. Zero is level; positive looks down. |
+
+These four values define the origin and orientation of the ray the pipeline casts for every detection. If a position drifts by a constant amount, one of these is wrong. If it drifts by a growing amount as the robot turns, `yaw` is the usual suspect.
+
+## Focal length
+
+Turning a pixel into an angle needs a focal length in pixels. iSpy picks it in this order:
+
+1. The camera matrix from a ChArUco calibration, if one exists. This is the most accurate source.
+2. A focal length computed from the field of view, if the FOV was calibrated and no matrix exists.
+3. The focal length from the known-object calibration, as a fallback.
+
+The fallback matters. If none of the three is set, the focal length drops to `1.0`, the angles computed from pixel offsets become meaningless, and positions are nonsense even though the boxes are drawn correctly. If positions are wildly wrong with no obvious pattern, check that at least the known-object calibration was done.
+
+## How a detection becomes a position
+
+The pipeline does not use the center of the box for depth. It casts a ray through the **bottom-center** pixel, because that is where the object touches its surface. The top of the box moves with the object's height; the bottom stays on the plane.
+
+There are two ways to turn that ray into a position, and `z_mode` decides which runs first.
+
+### ground_plane
+
+The ray is intersected with the horizontal plane the object is assumed to sit on. By default that is the ground, `z = 0`. If a class has an entry in `object_heights`, the ray intersects a plane at that height instead.
+
+This is the default behavior in a fresh config, because the generated camera has no `z_mode` key and the pipeline's fallback is `ground_plane`. It is the more accurate method for objects actually resting on the ground, and it keeps working when the object's apparent size is unreliable.
+
+It fails when the ray runs parallel to the plane. A level camera pointed at the horizon casts a ray with almost no vertical component, so the intersection point shoots off to infinity and the method is discarded. A camera with a downward pitch does not have this problem.
+
+### size_based
+
+The distance comes from the object's apparent size. The pipeline takes the average of the box's width and height in pixels and uses:
+
+```
+distance = (known_object_size_inches × focal_length_pixels) / average_pixel_size
+```
+
+The object size comes from the known-object calibration (`game_piece_size`). This is the older method. It is accurate only when the object's real size matches what was calibrated, the detection box tightly bounds the object, and the object is not partially hidden. A box that clips the edge of the object reads as smaller and therefore farther.
+
+When `z_mode` is `size_based`, this method runs first and the ground plane is the fallback. When `z_mode` is `ground_plane` or missing, it is the other way around.
+
+### Which one ran
+
+Each detection carries a `depth_source` field naming the method that produced its position: `ground_plane`, `size_based`, `triangulated`, `pnp`, or `optical_flow`. If you are deciding whether a distance is trustworthy, read that field first. A `size_based` value on a partially occluded object is the usual explanation for a distance that jumps around.
+
+## Per-class heights
+
+`object_heights` is a list of `class_name` and `height_in` pairs. When a detection's class has an entry, its plane sits at that height instead of the ground. This is for objects that rest on a field element rather than the floor, such as a game piece sitting on a raised structure.
+
+Two details:
+
+- The value is the height above the ground of the surface the object sits on, not the object's own height.
+- Heights are always in inches, regardless of the top-level `unit`, matching the calibration convention.
+
+The reported `z` of such a detection is that plane height, converted to the output unit. So a detection on a 6 inch plane with `unit` set to `meter` reports a `z` of about 0.152.
+
+## What the output looks like
+
+A detection is a dictionary with these spatial fields:
+
+| Field | Meaning |
+| --- | --- |
+| `x`, `y`, `z` | Position in the robot frame, in the output unit. |
+| `roll`, `pitch`, `yaw` | Orientation in radians, when the pipeline can estimate it. Zero when it cannot. |
+| `name` | Class name. |
+| `confidence` | Model confidence. |
+| `depth_source` | Which distance method produced the position. |
+| `id` | Track identity, stable while the object is tracked. |
+| `keypoints_3d` | Keypoint positions in the robot frame, for pose models. |
+| `vis_type`, `vis_meta` | Hints for the 3D viewer's renderer. |
+
+Under `unit: "frc"`, `x`, `y`, and `z` are meters, because that is what WPILib expects. Under the other unit settings they are in that unit. This is the split that catches people: a mount `height` typed as inches in `frc` mode comes back as a `z` in meters.
+
+## Two cameras triangulate
+
+With more than one camera, iSpy can triangulate a detection seen by two of them. Each camera already produced a ray from its own mount geometry, and the pipeline finds the point between the two rays that is closest to both.
+
+- Only detections of the **same class** are matched between cameras.
+- Matching is gated on a rough distance first, then refined by the ray residual. If the two rays miss each other by more than the residual limit, or either intersection is behind a camera, the pair is rejected.
+- A matched detection gets the triangulated position and its `depth_source` becomes `triangulated`. An unmatched detection keeps its per-camera estimate.
+
+Triangulation is more accurate than either single-camera method because it does not rely on an assumed object size or the ground plane. Its weakness is that it needs a real baseline. Two cameras close together produce nearly parallel rays, and nearly parallel rays cannot be triangulated, so the pair is rejected and each camera falls back to its own estimate.
+
+## Pose estimation with keypoints
+
+A model trained for pose can return keypoints. A pose pipeline can use them with a stored camera matrix and object points to solve PnP directly, which yields a full position and orientation rather than a flat guess. This path reports `depth_source` as `pnp` and fills `roll`, `pitch`, and `yaw`. The PnP block in the model settings holds the object points, camera matrix, distortion coefficients, the `min_keypoint_conf` gate, and a `flexible` or `rigid` mode. Flexible allows variation between keypoints; rigid assumes a fixed body shape and is less tolerant of a bent or partially seen object.
+
+## Debugging a wrong position
+
+Work through this in order, because each step depends on the previous one:
+
+1. **Check the unit.** A factor of roughly 39 or 0.025 between what you expect and what you get is the inch/meter split.
+2. **Check `depth_source`.** If it is `size_based` and you expected `ground_plane`, the ground-plane method is being rejected, usually because the camera has little downward pitch.
+3. **Check mount geometry.** A wrong `height` or `pitch` biases every distance. A wrong `yaw` rotates the whole frame.
+4. **Check focal length.** Confirm a ChArUco calibration or a FOV value exists. With neither, the fallback is `size_based` against the known-object calibration, and it will be rough.
+5. **Check the calibration size.** `game_piece_size` and `distance` must describe the object you actually calibrated with. If the object changed size, the size-based distance is scaled by the same factor.
+
+If positions are stable but consistently offset, the mount geometry is the fix. If they are noisy, the distance method and detection quality are the fix.

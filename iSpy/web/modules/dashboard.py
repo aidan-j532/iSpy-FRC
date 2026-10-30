@@ -172,7 +172,7 @@ class DashboardModule(WebModule):
     def update(self, frame_data: dict):
         tick = {
             "fps": round(frame_data.get("fps", 0), 1),
-            "vision_ms": round(frame_data.get("vision_s", 0) * 1000, 1),
+            "inference_ms": round(frame_data.get("inference_s", 0) * 1000, 1),
             "camera_lag_ms": round(frame_data.get("camera_lag_s", 0) * 1000, 1),
             "detections": frame_data.get("detection_count", 0),
             "loop_s": round(frame_data.get("loop_s", 0) * 1000, 1),

@@ -690,37 +690,30 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._load_onnx(force)
 
     def _load_tflite(self, force: bool = False):
-        try:
-            import onnx2tf
-        except ImportError:
-            self.logger.warning(
-                "onnx2tf not installed - 'tflite' backend unavailable, falling back to onnx"
-            )
-            return self._load_onnx(force)
+        tflite_path = self._artifact_path("tflite")
+        tflite_path.parent.mkdir(parents=True, exist_ok=True)
 
-        artifact, converted = self._export_onnx_source(force, quantize=False)
-        if not converted or not artifact:
-            self._session = None
-            self._load_error = "TFLite build produced no ONNX source"
-            return
-
-        out_dir = _YOLO_MODELS_DIR / "tflite"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        tflite_path = (
-            out_dir
-            / f"{_DEPTH_ARTIFACT_STEM}_{self._input_size}x{self._input_size}.tflite"
-        )
-        try:
-            if not tflite_path.exists() or force:
+        # A cached artifact loads without provisioning the multi-GB TFLite
+        # build environment (and without the ONNX source being present).
+        if not tflite_path.exists() or force:
+            artifact, converted = self._export_onnx_source(force, quantize=False)
+            if not converted or not artifact:
+                self._session = None
+                self._load_error = "TFLite build produced no ONNX source"
+                return
+            try:
                 self.logger.info("Converting %s -> TFLite ...", artifact)
-                onnx2tf.convert(
-                    input_onnx_file_path=artifact,
-                    output_folder_path=str(out_dir),
-                    non_verbose=True,
+                self._build_tflite_subprocess(artifact, tflite_path)
+            except Exception as exc:
+                self.logger.warning(
+                    "TFLite build failed (%s) - falling back to onnx",
+                    exc,
                 )
-                generated = out_dir / f"{Path(artifact).stem}_float32.tflite"
-                if generated.exists():
-                    generated.replace(tflite_path)
+                self._session = None
+                self._load_onnx(force)
+                return
+
+        try:
             interpreter = self._tflite_interpreter(tflite_path)
             interpreter.allocate_tensors()
             self._session = interpreter
@@ -731,11 +724,71 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             )
         except Exception as exc:
             self.logger.warning(
-                "TFLite build/load failed (%s) - falling back to onnx",
+                "TFLite artifact load failed (%s) - falling back to onnx",
                 exc,
             )
             self._session = None
             self._load_onnx(force)
+
+    def _build_tflite_subprocess(self, onnx_path: Path, tflite_path: Path) -> None:
+        import json
+        import os
+        import subprocess
+        import tempfile
+
+        from iSpy.boot import converter_envs
+
+        converter_py = str(converter_envs.converter_python("tflite"))
+        args = {"onnx": str(onnx_path), "output": str(tflite_path)}
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            args_path = Path(f.name)
+            json.dump(args, f)
+        result_path = Path(str(args_path) + ".result.json")
+
+        env = os.environ.copy()
+        # Replace the parent's PYTHONPATH so runtime packages cannot shadow
+        # the converter env's TensorFlow/onnx2tf stack.
+        env["PYTHONPATH"] = str(converter_envs.ispy_source_root())
+        env["PYTHONNOUSERSITE"] = "1"
+        try:
+            self.logger.info("Running TFLite ONNX build subprocess: %s", args_path)
+            proc = subprocess.run(
+                [converter_py, "-m", "iSpy.boot._tflite_onnx_worker", str(args_path)],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            if proc.stdout:
+                self.logger.debug("TFLite build stdout:\n%s", proc.stdout.rstrip())
+            if proc.stderr:
+                self.logger.debug("TFLite build stderr:\n%s", proc.stderr.rstrip())
+
+            if proc.returncode != 0 or not result_path.exists():
+                detail = ""
+                if result_path.exists():
+                    try:
+                        detail = json.loads(result_path.read_text()).get("error", "")
+                    except (OSError, ValueError):
+                        detail = ""
+                raise RuntimeError(
+                    f"TFLite build subprocess failed (exit {proc.returncode}): "
+                    f"{detail or 'no result produced'}"
+                )
+            data = json.loads(result_path.read_text())
+            if "error" in data:
+                raise RuntimeError(f"TFLite build subprocess failed: {data['error']}")
+            produced = Path(data["result"])
+            if not produced.exists():
+                raise RuntimeError(
+                    f"TFLite build subprocess reported success but produced no "
+                    f"artifact at {produced}"
+                )
+        finally:
+            for p in (args_path, result_path):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
     @staticmethod
     def _tflite_interpreter(model_path: Path):

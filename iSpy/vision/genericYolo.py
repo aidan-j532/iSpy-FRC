@@ -1062,11 +1062,25 @@ class GenericYolo:
 
     def _load_tflite(self, model_file: str):
         num_threads = max(1, (os.cpu_count() or 4) - 1)
-        try:
-            from tflite_runtime.interpreter import Interpreter, load_delegate
+        interpreter = None
+        load_delegate = None
+        for module_name in ("tflite_runtime.interpreter", "ai_edge_litert.interpreter"):
+            try:
+                module = __import__(module_name, fromlist=["Interpreter", "load_delegate"])
+                interpreter = module.Interpreter
+                load_delegate = getattr(module, "load_delegate", None)
+                break
+            except ImportError:
+                continue
+        if interpreter is None:
+            from tensorflow.lite.python.interpreter import Interpreter
 
+            self.model = Interpreter(model_path=model_file, num_threads=num_threads)
+        else:
             delegates = []
             try:
+                if load_delegate is None:
+                    raise ImportError("no load_delegate")
                 delegates = [load_delegate("libedgetpu.so.1")]
                 self.logger.info("Coral Edge TPU delegate loaded.")
             except Exception:
@@ -1074,15 +1088,11 @@ class GenericYolo:
                     "No Edge TPU delegate - running TFLite on CPU (%d threads).",
                     num_threads,
                 )
-            self.model = Interpreter(
+            self.model = interpreter(
                 model_path=model_file,
                 experimental_delegates=delegates,
                 num_threads=num_threads,
             )
-        except ImportError:
-            from tensorflow.lite.python.interpreter import Interpreter
-
-            self.model = Interpreter(model_path=model_file, num_threads=num_threads)
 
         self.model.allocate_tensors()
         self._tflite_inp = self.model.get_input_details()[0]
@@ -1259,7 +1269,14 @@ class GenericYolo:
         out["format"] = "raw_detect"
         out["layout"] = "features_first"
         out["box_format"] = "xywh"
-        if out.get("score_mode") not in ("objectness", "classwise"):
+        # The IR's real feature width is (4 + score columns). A single-class
+        # model keeps score_mode='objectness' (5 columns); anything wider is a
+        # multi-class head and must use 'multi_class' (4 + num_classes), otherwise
+        # _feature_width() (5) disagrees with the tensor (e.g. 84) and verification
+        # fails with "Tensor shape ... vs feature width 5".
+        if int(ov_out_shape[1]) != 5 and out.get("score_mode") == "objectness":
+            out["score_mode"] = "multi_class"
+        if out.get("score_mode") not in ("objectness", "classwise", "multi_class"):
             out["score_mode"] = "classwise"
         # Ultralytics detect heads emit sigmoid-activated class probabilities.
         out["scores_are_logits"] = False

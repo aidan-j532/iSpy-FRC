@@ -242,6 +242,24 @@ block content %}
     </div>
 
     <div class="form-row">
+      <span class="form-label">Remote Restart</span>
+
+      <select class="form-input" data-key="allow_remote_restart" data-restart="true">
+        <option value="true">Robot LAN allowed</option>
+
+        <option value="false">Localhost / token only</option>
+      </select>
+
+      <span class="restart-badge" style="display: none">restart required</span>
+
+      <span class="text-dim text-sm"
+        >When enabled, loopback and RFC1918/link-local robot-network clients may
+        restart iSpy. Set <code>ISPY_ADMIN_TOKEN</code> to allow other remote
+        callers; "Localhost / token only" disables LAN restarts.</span
+      >
+    </div>
+
+    <div class="form-row">
       <span class="form-label">Log Level</span>
 
       <select class="form-input" data-key="log_level" data-restart="true">
@@ -296,6 +314,27 @@ block content %}
       <button class="btn btn-secondary" onclick="exportConfig()">Export</button>
       <button class="btn btn-secondary" onclick="document.getElementById('import-config-input').click()">Import</button>
       <input type="file" id="import-config-input" accept=".json" style="display:none" onchange="importConfig(this.files[0])">
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h3>Beta: Restart iSpy</h3>
+
+    <p class="text-dim text-sm" style="margin: 0 0 12px 0; max-width: 72ch">
+      Stops the vision process and starts it again through the process
+      supervisor. Port 5000 stays reachable with a status page while iSpy
+      restarts. Vision, trackers and the robot connection will be unavailable
+      for a few seconds - do not use this mid-match.
+    </p>
+
+    <div class="form-row">
+      <span class="form-label">Restart process</span>
+
+      <button class="btn btn-danger" id="restart-ispy-btn" onclick="restartISpy()">
+        Restart iSpy
+      </button>
+
+      <span class="text-dim" id="restart-ispy-status" style="margin-left: 8px"></span>
     </div>
   </div>
 
@@ -444,7 +483,14 @@ block content %}
 
   let defaultsData = {};
 
-  const BOOL_KEYS = new Set(["frame_sync", "metrics", "debug_mode", "admin", "offline_mode"]);
+  const BOOL_KEYS = new Set([
+    "frame_sync",
+    "metrics",
+    "debug_mode",
+    "admin",
+    "offline_mode",
+    "allow_remote_restart",
+  ]);
 
   function parseValue(el) {
     const val = el.value;
@@ -991,6 +1037,41 @@ block content %}
       showToast('Invalid JSON file', 'error');
     }
     document.getElementById('import-config-input').value = '';
+  }
+
+  async function restartISpy() {
+    if (
+      !window.confirm(
+        "Restart iSpy now? Vision, trackers and the robot connection will " +
+          "drop for a few seconds. Do not do this mid-match."
+      )
+    ) {
+      return;
+    }
+    const btn = document.getElementById("restart-ispy-btn");
+    const status = document.getElementById("restart-ispy-status");
+    if (btn) btn.disabled = true;
+    if (status) status.textContent = "Restarting...";
+    try {
+      const r = await fetch("/api/supervisor/restart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      let j = {};
+      try {
+        j = await r.json();
+      } catch (e) {}
+      if (!r.ok || j.ok === false) {
+        throw new Error(j.error || "HTTP " + r.status);
+      }
+      showToast("Restarting iSpy", "info");
+      if (status) status.textContent = "Waiting for iSpy to come back...";
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      if (status) status.textContent = "";
+      showToast(e.message || String(e), "error");
+    }
   }
 
   async function armGameMode() {
