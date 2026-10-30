@@ -37,19 +37,20 @@ def main(argv=None) -> int:
         install_service=args.service,
         fresh=args.command == "setup",
         wait=args.wait,
+        replay=args.replay,
+        replay_speed=args.replay_speed,
+        replay_cam=args.replay_cam,
+        replay_loop=not args.replay_no_loop,
     )
 
-    # boot only prepares the install - config, models, cameras, service. the
-    # vision loop is a separate step, and exiting here is why "ispy start"
-    # (what the install scripts tell people to run) brought the web UI up and
-    # then did nothing else. ispy-run is the same thing without the boot.
-    #
-    # imported here, not at module scope: importing game_loop configures
-    # logging and pulls in the whole vision stack (torch and all), which
-    # "ispy setup" has no use for
-    from iSpy.core.game_loop import main as game_loop_main
+    if args.replay:
+        # the flags come from the shared add_boot_arguments(), so ignoring them
+        # here booted the LIVE camera stack for what the user asked to be a
+        # replay - the one outcome replay mode exists to prevent
+        from iSpy.core.game_loop import main as run_vision
 
-    game_loop_main(config)
+        run_vision(config=config)
+        return 0
 
     # mirror boot.py's main(): flush everything and hard-exit to dodge
     # RKNN/OpenCV native-extension segfaults during interpreter teardown on ARM
