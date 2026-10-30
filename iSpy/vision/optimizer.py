@@ -438,15 +438,6 @@ def _in_converter_env() -> bool:
     return False
 
 
-BACKEND_DEPENDENCIES = _backend_dependencies()
-
-
-def _in_virtualenv() -> bool:
-    return hasattr(sys, "real_prefix") or (
-        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
-    )
-
-
 def _is_installed(module_name: str) -> bool:
     return importlib.util.find_spec(module_name) is not None
 
@@ -514,44 +505,6 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
         )
     else:
         logger.info("Optimized model %s: READY.", converted_path.name)
-
-
-def _purge_pip_cache() -> bool:
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pip", "cache", "purge"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-    except Exception as exc:
-        logger.warning("pip cache purge did not run: %s", exc)
-        return False
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
-        logger.warning("pip cache purge failed (exit %s): %s", proc.returncode, tail)
-        return False
-    logger.info("Purged the pip cache to free disk space.")
-    return True
-
-
-# pip/OS wordings that mean the disk filled up mid-install.
-_SPACE_ERRORS = (
-    "no space left",
-    "errno 28",
-    "enospc",
-    "disk is full",
-    "disk full",
-    "not enough space",
-    "there is not enough space",
-    "insufficient disk space",
-    "0x80070070",  # windows ERROR_DISK_FULL
-)
-
-
-def _looks_out_of_space(text: str) -> bool:
-    lowered = (text or "").lower()
-    return any(sig in lowered for sig in _SPACE_ERRORS)
 
 
 def _purge_pip_cache() -> bool:

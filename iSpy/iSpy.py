@@ -940,22 +940,6 @@ class iSpy:
         t_track = time.perf_counter()
         detections = self._run_lane_trackers(detections, pose, code_times)
         code_times["trackers"] = max(0.0, time.perf_counter() - t_track)
-        opted_trackers_s = 0.0
-        for name, tracker in self.trackers.items():
-            # wpilib pose yaw is CCW-positive but relative_to uses right-positive, so change
-            t_one = time.perf_counter()
-            detections = tracker.update(
-                detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
-            )
-            if self._addon_breakdown_parts(tracker):
-                key = getattr(tracker, "plugin_name", name)
-                code_times[key] = time.perf_counter() - t_one
-                opted_trackers_s += code_times[key]
-        code_times["trackers"] = max(
-            0.0, time.perf_counter() - t_track - opted_trackers_s
-        )
-
-
 
         for cam in handler.cameras:
             if hasattr(cam, "get_code_times"):

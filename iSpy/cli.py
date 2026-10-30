@@ -86,29 +86,6 @@ def _set_performance_level(level: int) -> int:
     from iSpy.config.iSpyConfig import iSpyConfig
     from iSpy.core import performance
 
-    config_path = boot.search_for_config()
-    if not config_path:
-        print(
-            "No Config/config.json found - run 'ispy setup' first.",
-            file=sys.stderr,
-        )
-        return 1
-
-    config = iSpyConfig(str(config_path), create=False)
-    config.set("performance_level", int(level))
-    config.save()
-    profile = performance.PROFILES[int(level)]
-    print(f"Performance profile set to {profile.label} ({profile.level}).")
-    print("Restart vision (or reboot) to apply it.")
-    if profile.level == 0:
-        print(performance.recovery_help())
-    return 0
-
-
-def _set_performance_level(level: int) -> int:
-    from iSpy.config.iSpyConfig import iSpyConfig
-    from iSpy.core import performance
-
     from iSpy.boot import boot
 
     config_path = boot.search_for_config()
@@ -311,7 +288,7 @@ def _run_vision(args) -> int:
 
     from iSpy.core.game_loop import main as game_loop_main
 
-        game_loop_main(config)
+    game_loop_main(config)
 
     logging.shutdown()
     sys.stdout.flush()

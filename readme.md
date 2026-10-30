@@ -578,6 +578,7 @@ When the pipeline is running, open a browser and go to `http://<board-ip>:5000`.
 | Endpoint | What you get |
 |---|---|
 | `/` | Dashboard |
+| `/editor` | Visual pipeline editor (additive; all existing pages stay available) |
 | `/health` | System health dashboard (browser) or JSON (API) |
 | `/api/cameras` | List of connected cameras |
 | `/video/<name>` | Live annotated stream for a specific camera |
@@ -585,6 +586,9 @@ When the pipeline is running, open a browser and go to `http://<board-ip>:5000`.
 | `/api/cameras/<name>/pipeline_settings` | GET or POST live-tunable pipeline settings |
 | `/api/cameras/<name>/sample_hsv` | Sample HSV at a clicked frame pixel |
 | `/api/cameras/<name>/actions/<action_id>` | POST a per-camera action button |
+| `/api/editor/graph` | GET the canonical graph; POST a validated save (local/token) |
+| `/api/editor/validate` | POST graph validation without saving (local/token) |
+| `/api/plugins/available` | Discovered add-ons, enabled state, and saved settings |
 
 The health endpoint returns `200 OK` when everything is healthy, `503` when
 degraded. Useful for robot code that wants to know if vision is alive.
@@ -961,8 +965,14 @@ comparing model execution speed; use the normal `predict` FPS to estimate the
 cost of running inference through iSpy. Device synchronization is included so
 accelerator timings account for completed work.
 
-Linux ARM64 installs constrain NumPy below 2 because the supported PyTorch and
-RKNN runtime wheels on those boards are built against the NumPy 1.x ABI.
+The runtime torch/NumPy pair is chosen by `ispy setup` for the host's actual
+wheels; iSpy does not pin a platform-wide NumPy version. If PyTorch prints
+`A module that was compiled using NumPy 1.x cannot be run in NumPy 2.x`, the
+installed torch wheel and the installed NumPy are from different ABIs. Rerun
+`ispy setup` so it can repair the pair (it reinstalls torch and verifies the
+NumPy bridge), or, if the host has no NumPy 2-compatible torch wheel, install
+`numpy<2` in that environment. The RKNN converter environment pins its own
+NumPy 1.26.4/protobuf 4.25.4 stack and is unaffected by the runtime choice.
 
 ---
 

@@ -785,28 +785,6 @@ def on_boot(
         # DependencyProvisionError instead of being logged and forgotten.
         logger.info("First-boot dependency provisioning starting...")
         _provision_runtime_dependencies(config, fresh=True)
-        # fresh install with no prior deps installed - pull in whatever backend it needs (rknn wheel, onnxruntime-gpu, etc.) so first boot doesn't fail on a missing import mid-pipeline-construction
-        from iSpy.core import network_policy
-
-        if network_policy.is_offline():
-            logger.warning(
-                "Offline mode: skipping the first-boot dependency install - "
-                "pip needs the internet; install the backend packages "
-                "manually and reboot."
-            )
-        else:
-            try:
-                from iSpy.vision.optimizer import install_special_dependencies
-
-                logger.info(
-                    "First-boot dependency install starting (auto_install=True)..."
-                )
-                install_special_dependencies(auto_install=True)
-            except Exception:
-                logger.exception(
-                    "First-boot dependency install failed - continuing boot anyway; "
-                    "the relevant pipeline will fall back or error clearly at runtime."
-                )
     else:
         setup_files(fresh=False)
         config_path = search_for_config()
@@ -863,52 +841,6 @@ def on_boot(
         logger.info("Skipping service installation. Run with -s to install.")
 
     return config
-
-
-def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser.add_argument(
-        "-s",
-        "--service",
-        action="store_true",
-        help="Install and start the watchdog service",
-    )
-    parser.add_argument(
-        "-w",
-        "--wait",
-        action="store_true",
-        help="Wait for all pipelines to be ready before running vision",
-    )
-    parser.add_argument(
-        "--web",
-        action="store_true",
-        help=(
-            "Force the web UI on for this run (recovery from performance "
-            "level 0). Nothing is saved - the configured level is unchanged."
-        ),
-    )
-    parser.add_argument(
-        "--replay",
-        metavar="SESSION_OR_CLIP",
-        default="",
-        help="Replay a rollback session directory or a recorded video clip",
-    )
-    parser.add_argument(
-        "--replay-speed",
-        type=float,
-        default=1.0,
-        help="Playback speed multiplier (default: 1.0)",
-    )
-    parser.add_argument(
-        "--replay-cam",
-        default="",
-        help="Recorded camera name to replay (defaults to the first camera)",
-    )
-    parser.add_argument(
-        "--replay-no-loop",
-        action="store_true",
-        help="Stop vision when the replay reaches its end",
-    )
-    return parser
 
 
 def main():

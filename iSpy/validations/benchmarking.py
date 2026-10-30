@@ -12,7 +12,16 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
-from iSpy.config.AutoOpt import has_nvidia, has_rockchip_npu, has_tensorrt, has_tpu
+from iSpy.boot.converter_envs import exporter_supported
+from iSpy.config.AutoOpt import (
+    has_arm,
+    has_edge_tpu,
+    has_nvidia,
+    has_rockchip_npu,
+    has_tensorrt,
+    has_tpu,
+)
+from iSpy.validations.bench_to_matplotlib import collect_system_info, render_report
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.optimizer import _convert_model_subprocess_report
 
@@ -184,7 +193,6 @@ def _install_plan_dependencies(active: dict) -> None:
         )
     for item in report.manual_requirements:
         print(f"  {item.backend} needs manual setup: {item.detail or item.status}")
-
 
 
 def find_pt_files() -> list[Path]:
@@ -518,7 +526,8 @@ def _ensure_calibration_dataset(fmt) -> Path:
     return ds
 
 
-def get_or_convert(pt_path, fmt, input_size=(640, 640)):
+def get_or_convert(pt_path, fmt, input_size=(640, 640), calib_dataset=None):
+    """Convert *pt_path* to *fmt* (or reuse cached). Returns (artifact, report)."""
     if fmt in ("tpu", "pt"):
         return pt_path, None
     quantize = fmt in _QUANTIZABLE_FORMATS

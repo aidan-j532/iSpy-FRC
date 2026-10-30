@@ -303,67 +303,6 @@
         };
       })();
     </script>
-    <script>
-      // /api/performance loads once onto window.ispyPerf; every page timer goes
-      // through ispyPoll so the multiplier + hidden-tab pause apply everywhere
-      (function () {
-        window.ispyPerf = {
-          level: 4,
-          label: "Full Features",
-          ui_poll_multiplier: 1,
-          pause_poll_hidden: false,
-          loaded: false,
-        };
-        const resyncs = [];
-        function resync() {
-          while (resyncs.length) {
-            try {
-              resyncs.shift()();
-            } catch (e) {}
-          }
-        }
-        fetch("/api/performance")
-          .then((r) => r.json())
-          .then((j) => {
-            window.ispyPerf = Object.assign(window.ispyPerf, j, {
-              loaded: true,
-            });
-            document.dispatchEvent(new CustomEvent("ispy:performance"));
-            resync();
-          })
-          .catch(() => {});
-
-        window.ispyPoll = function (fn, baseMs) {
-          // one shared poller: fires now, scales by the profile multiplier,
-          // pauses while hidden when asked, re-times once the profile lands
-          const state = { timer: null, stopped: false };
-          function start() {
-            const k = window.ispyPerf.ui_poll_multiplier || 1;
-            state.timer = setInterval(loop, Math.max(1, Math.round(baseMs * k)));
-          }
-          function loop() {
-            if (
-              document.visibilityState === "hidden" &&
-              window.ispyPerf.pause_poll_hidden
-            )
-              return;
-            fn();
-          }
-          fn();
-          start();
-          resyncs.push(function () {
-            if (state.stopped) return;
-            clearInterval(state.timer);
-            start();
-          });
-          state.stop = function () {
-            state.stopped = true;
-            if (state.timer) clearInterval(state.timer);
-          };
-          return state;
-        };
-      })();
-    </script>
   </head>
   <body>
     <div class="app-shell">
