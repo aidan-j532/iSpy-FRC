@@ -1,6 +1,7 @@
 import atexit
 import logging
 import platform
+import re
 import subprocess
 import threading
 import time
@@ -33,6 +34,11 @@ class CameraOpenTimeout(ValueError):
 _OPEN_WORKER_MAX = 4
 _open_worker_guard = threading.Lock()
 _open_worker_live = 0
+
+# v4l2-ctl prints the format it actually applied after --set-fmt-video. UVC
+# drivers may silently adjust an unsupported size, so read the result back
+# instead of trusting the requested width/height.
+_V4L2_SIZE_RE = re.compile(r"Width/Height\s*:\s*(\d+)\s*/\s*(\d+)")
 
 
 class CameraBase:
@@ -100,6 +106,10 @@ class CameraBase:
         self.grayscale = bool(grayscale)
         self._cap_w = input_size[0]
         self._cap_h = input_size[1]
+        # Set on Linux once v4l2-ctl reports the size the driver actually
+        # accepted, so _configure_capture does not ask for an unsupported
+        # model-input size and make OpenCV negotiate something larger.
+        self._negotiated_capture_size = None
 
         self.source = camera_config["source"]
 
@@ -144,6 +154,19 @@ class CameraBase:
             self._fps_cap = max(0, float(camera_config.get("fps_cap", 0) or 0))
         except (TypeError, ValueError):
             self._fps_cap = 0.0
+
+        # Rate requested from the capture device. 0 means "no explicit
+        # request": fall back to fps_cap (the historical behavior) and then to
+        # whatever mode the driver picked. Drivers default to 30 FPS for many
+        # UVC cameras, so set this above 30 to use a high-speed camera mode.
+        try:
+            self._capture_fps = max(
+                0, float(camera_config.get("capture_fps", 0) or 0)
+            )
+        except (TypeError, ValueError):
+            self._capture_fps = 0.0
+        if self._capture_fps <= 0 and self._fps_cap > 0:
+            self._capture_fps = self._fps_cap
 
         if self.is_image:
             self.image = cv2.imread(self.source)
@@ -346,13 +369,13 @@ class CameraBase:
             return
         is_windows = platform.system() == "Windows"
         is_linux = platform.system() == "Linux"
+        cap_w, cap_h = self._negotiated_capture_size or (self._cap_w, self._cap_h)
 
         if is_windows:
             requested_fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             cap.set(cv2.CAP_PROP_FOURCC, requested_fourcc)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
-            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_h)
 
             actual_fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
             if actual_fourcc != requested_fourcc:
@@ -362,18 +385,60 @@ class CameraBase:
                     self.source,
                 )
         elif is_linux:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_h)
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
-            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_h)
         else:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cap_w)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cap_h)
-            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_h)
+
+        # Never impose a rate the user did not ask for; a hardcoded 30 here
+        # silently capped every source, including cameras that support 60+.
+        if self._capture_fps > 0:
+            cap.set(cv2.CAP_PROP_FPS, self._capture_fps)
+            self._request_v4l2_capture_fps()
 
         self._apply_capture_controls(cap, allow_reopen=False)
+
+    def _request_v4l2_capture_fps(self):
+        """Also set VIDIOC_S_PARM directly; some UVC drivers ignore OpenCV's
+        CAP_PROP_FPS request and stay on their default 30 FPS mode."""
+        if (
+            platform.system() != "Linux"
+            or self._is_url_source
+            or getattr(self, "is_image", False)
+            or self._capture_fps <= 0
+        ):
+            return
+        device = (
+            self.source
+            if isinstance(self.source, str)
+            else f"/dev/video{self.source}"
+        )
+        try:
+            subprocess.run(
+                [
+                    "v4l2-ctl",
+                    "-d",
+                    device,
+                    f"--set-parm={self._capture_fps:g}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except FileNotFoundError:
+            pass
+        except subprocess.TimeoutExpired:
+            self.logger.warning(
+                "v4l2-ctl timed out setting frame rate on %s", device
+            )
+        except Exception as exc:
+            self.logger.debug(
+                "v4l2-ctl frame-rate request failed on %s: %s", device, exc
+            )
         
     def _open_camera(self):
         sys_platform = platform.system()
@@ -394,6 +459,7 @@ class CameraBase:
                 (640, 360),
             ]
             _fmt_ok = False
+            self._negotiated_capture_size = None
             for _fw, _fh in _fmt_resolutions:
                 try:
                     result = subprocess.run(
@@ -409,6 +475,31 @@ class CameraBase:
                     )
                     if result.returncode == 0:
                         _fmt_ok = True
+                        # The driver may adjust the requested size; query the
+                        # applied format so OpenCV keeps that mode instead of
+                        # renegotiating to the model's square input size.
+                        output = (result.stdout or "") + (result.stderr or "")
+                        try:
+                            check = subprocess.run(
+                                ["v4l2-ctl", "-d", device, "--get-fmt-video"],
+                                capture_output=True,
+                                text=True,
+                                timeout=5,
+                            )
+                            if check.returncode == 0:
+                                output = (check.stdout or "") + (
+                                    check.stderr or ""
+                                )
+                        except (FileNotFoundError, subprocess.TimeoutExpired):
+                            pass
+                        match = _V4L2_SIZE_RE.search(output)
+                        if match:
+                            self._negotiated_capture_size = (
+                                int(match.group(1)),
+                                int(match.group(2)),
+                            )
+                        else:
+                            self._negotiated_capture_size = (_fw, _fh)
                         break
                 except (FileNotFoundError, subprocess.TimeoutExpired):
                     break
@@ -470,21 +561,42 @@ class CameraBase:
             if fourcc
             else "N/A"
         )
+        requested = (
+            f", requested {self._capture_fps:.1f} FPS"
+            if self._capture_fps > 0
+            else ""
+        )
         self.logger.info(
-            "Camera %s: capture %dx%d @ %.1f FPS (format %s)",
+            "Camera %s: capture %dx%d @ %.1f FPS (format %s%s)",
             self.source,
             actual_w,
             actual_h,
             actual_fps,
             fourcc_str,
+            requested,
         )
-        if actual_w != self._cap_w or actual_h != self._cap_h:
+        expected_w, expected_h = self._negotiated_capture_size or (
+            self._cap_w,
+            self._cap_h,
+        )
+        if actual_w != expected_w or actual_h != expected_h:
             self.logger.warning(
                 "Requested %dx%d but camera vetoed to %dx%d",
-                self._cap_w,
-                self._cap_h,
+                expected_w,
+                expected_h,
                 actual_w,
                 actual_h,
+            )
+        if (
+            self._capture_fps > 0
+            and actual_fps > 0
+            and actual_fps < self._capture_fps * 0.9
+        ):
+            self.logger.warning(
+                "Requested %.1f FPS but camera negotiated %.1f FPS - "
+                "the current resolution/format may not support the higher rate.",
+                self._capture_fps,
+                actual_fps,
             )
         if fourcc_str not in ("MJPG", "JPEG"):
             self.logger.warning(

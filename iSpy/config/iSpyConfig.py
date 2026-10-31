@@ -29,6 +29,7 @@ _CAMERA_CORE_KEYS = {
     "calibration",
     "exposure_time",
     "gain",
+    "capture_fps",
     "fps_cap",
     "brightness",
     "contrast",
@@ -1019,6 +1020,7 @@ class iSpyCameraConfig:
         "source": "/dev/video0",
         "device_id": None,
         "subsystem": "field",
+        "capture_fps": 0,
         "pipeline": {"name": "object_detection", "settings": {}},
     }
 

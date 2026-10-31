@@ -37,20 +37,21 @@ Changing `unit` does not convert numbers already in the file. If you switch from
 
 ## Make a camera run faster
 
-There are two frame rate controls and they multiply.
-
-`max_fps` caps the whole vision loop. `fps_cap` on one camera caps that camera's capture rate.
+There are three frame rate controls. `max_fps` caps the whole vision loop, `fps_cap` caps one camera's processed frames after capture, and `capture_fps` asks the capture device for a rate.
 
 ```json
-"max_fps": 20,
+"max_fps": 0,
 "camera_configs": {
   "front_cam": {
-    "fps_cap": 30
+    "capture_fps": 60,
+    "fps_cap": 0
   }
 }
 ```
 
-With the values above, the loop runs at most 20 times a second, so `front_cam` effectively runs at 20 even though its own cap is 30. To slow one noisy camera without affecting the rest, set only its `fps_cap`. To slow everything, set `max_fps`. Setting both to 0 leaves the loop uncapped, and the loop then runs as fast as the slowest pipeline allows.
+With the values above, `front_cam` asks the camera for 60 FPS and the loop runs as fast as the model allows. `capture_fps: 0` falls back to `fps_cap` when that is set, then to the driver default, which is 30 FPS for many UVC cameras. If a camera sits at almost exactly 30 FPS while the model has headroom, the camera mode is usually the limit: check `v4l2-ctl --list-formats-ext -d /dev/video0` and request a rate that the current resolution supports.
+
+To slow one noisy camera without affecting the rest, set only its `fps_cap`. To slow everything, set `max_fps`. Setting all three to 0 leaves the loop uncapped, and it then runs as fast as the slowest pipeline allows.
 
 If the bottleneck is the model rather than capture, the depth pipeline has its own throttle. See the recipe below.
 

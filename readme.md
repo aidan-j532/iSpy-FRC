@@ -948,7 +948,7 @@ ispy start -> iSpy.supervisor (owns :5000; status pages + crash loop)
                     └── CameraApp (Flask web server; takes :5000 back from the supervisor)
 ```
 
-The main loop runs at whatever FPS the camera and model allow. On an Orange Pi 5 with a nano RKNN model, expect 30–60 FPS.
+The main loop runs at whatever FPS the camera and model allow. On an Orange Pi 5 with a nano RKNN model, expect 30–60 FPS. If the loop sits at almost exactly 30 FPS, check the camera mode before blaming the model: many UVC drivers default to 30 FPS. Set `capture_fps` on the camera entry to a rate the current resolution supports (verify with `v4l2-ctl --list-formats-ext -d /dev/video0`), or set `fps_cap` and let it be used as the capture rate fallback.
 
 Benchmark results are hardware- and model-dependent. The Orange Pi 5 Pro
 (RK3588) has been tested at roughly 30 FPS for YOLO pose and roughly 60 FPS

@@ -215,7 +215,7 @@ The dashboard uses the threshold to color the temperature reading. It does not s
 
 `max_fps` caps the whole vision loop, across all cameras. It is read once when the run starts, so edit it and restart. `0` leaves the loop uncapped. Use a positive value when the machine is saturated, when the cameras produce more frames than the robot can use, or when you want a predictable load for thermal testing.
 
-Per-camera capture rate is separate. `fps_cap` on a camera entry limits that camera. The two controls multiply: a global cap of 20 and a camera cap of 30 gives at most 20 processed frames per second from that camera.
+Per-camera capture rate is separate. `capture_fps` is the rate requested from the camera itself. `fps_cap` limits processed frames after capture. A global cap of 20, a camera `fps_cap` of 30, and `capture_fps` of 60 gives at most 20 processed frames per second from that camera, because the loop cap wins.
 
 `frame_sync` is used by the object-detection pipeline. With it enabled, the pipeline waits for a fresh frame instead of timing out and reusing or skipping. It can line up processing with capture, and it can also add latency, which is why the code logs a warning when it is on. Leave it off unless you are diagnosing a frame-timing problem.
 
@@ -284,7 +284,8 @@ A camera entry has three kinds of fields:
 | `device_id` | none | string | Stable hardware identifier from discovery. Used for profiles and boot cleanup. |
 | `subsystem` | `"field"` | string | Label used to route data to a consumer. |
 | `grayscale` | `false` | boolean | Convert frames to grayscale before the pipeline sees them. |
-| `fps_cap` | `0` | number | Per-camera maximum processed frames per second. `0` means uncapped. |
+| `capture_fps` | `0` | number | Rate requested from the capture device. `0` falls back to `fps_cap`, then to the driver default. Many UVC cameras default to 30 FPS; set this above 30 only when the current resolution supports it. |
+| `fps_cap` | `0` | number | Per-camera maximum processed frames per second, applied after capture. `0` means uncapped. |
 | `exposure_time` | none | number, 1 to 100000 | Fixed exposure value in microseconds, as labeled by the UI. Left out with `gain` to keep auto-exposure. |
 | `gain` | none | number, 0 to 1024 | Fixed sensor gain. See the exposure note below. |
 | `brightness` | `0` | number, -100 to 100 | Additive brightness offset. |
@@ -341,7 +342,9 @@ There is a pairing rule for exposure and gain. If neither key is present on the 
 
 The units are driver-specific. The UI labels exposure in microseconds, but v4l2 and UVC implementations do not all interpret the number the same way. Change one step at a time and watch the image.
 
-`fps_cap` is enforced after capture. It does not change the camera's negotiated format; it drops frames so the pipeline sees fewer of them.
+`capture_fps` asks the capture device for a frame interval. It is the only camera key that changes the negotiated mode, and drivers may reject or clamp the request. `0` falls back to `fps_cap`, then to the driver default, which is 30 FPS for many UVC cameras. `fps_cap` is enforced after capture: it drops frames so the pipeline sees fewer of them and does not change the camera mode.
+
+To check what a Linux camera actually supports, run `v4l2-ctl --list-formats-ext -d /dev/video0`. The startup log also prints the negotiated result on the `Camera ...: capture WxH @ N FPS` line, and warns when the camera did not accept the requested rate.
 
 `grayscale` converts to a single channel before processing. It saves a little work and is fine for detection models trained on grayscale, but a color model may lose useful information. Test it rather than assuming it helps.
 

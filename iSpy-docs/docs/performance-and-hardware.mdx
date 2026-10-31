@@ -125,7 +125,9 @@ Things that help, in rough order of effect:
 Capture is rarely the bottleneck on a single camera, but it can be with several.
 
 - USB bandwidth is shared. Two high-resolution cameras on one USB controller can starve each other. Separate controllers or a lower resolution fixes it.
+- `capture_fps` sets the rate requested from the camera. Many UVC drivers default to 30 FPS, and a request for more is ignored when the current resolution/format does not support it. Check the camera's supported modes with `v4l2-ctl --list-formats-ext -d /dev/videoX`, then set `capture_fps` to a rate that mode actually offers.
 - `fps_cap` on a camera is enforced after the frame is read, so it reduces downstream work but not capture cost. If the camera itself is the cost, lower its resolution where the driver allows it.
+- If the loop sits at almost exactly 30 FPS, suspect the camera mode before the model. The startup line `Camera ...: capture WxH @ N FPS` reports what the driver negotiated, and a warning appears when a higher request was not accepted.
 - A network stream adds latency that shows up as `camera_lag_s`. It does not necessarily slow the loop, but it makes every position stale by that amount, which matters for a fast-moving robot.
 
 ## Recording cost

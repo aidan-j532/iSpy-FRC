@@ -455,7 +455,7 @@ const camModal = {
 
 const COMMON_SECTIONS = [
   { title: 'Mount & Location', fields: ['x', 'y', 'height', 'yaw', 'pitch'] },
-  { title: 'Capture', fields: ['subsystem', 'grayscale', 'exposure_time', 'gain', 'fps_cap'] },
+  { title: 'Capture', fields: ['subsystem', 'grayscale', 'exposure_time', 'gain', 'capture_fps', 'fps_cap'] },
 ];
 
 const _UNIT_LABELS = { inch:'in', inches:'in', foot:'ft', feet:'ft', meter:'m', meters:'m', centimeter:'cm', centimeters:'cm', frc:'in' };
@@ -491,7 +491,8 @@ const COMMON_FIELDS = {
   grayscale: { label: 'Grayscale', type: 'boolean', default: false, help: 'Convert frames to grayscale before processing (slightly faster).' },
   exposure_time: { label: 'Exposure', type: 'number', step: 1, unit: '\u00b5s', nullable: true, help: 'Fixed exposure in microseconds. Leave empty for the camera default.' },
   gain: { label: 'Gain', type: 'number', step: 1, nullable: true, help: 'Fixed sensor gain. Leave empty for the camera default.' },
-  fps_cap: { label: 'FPS cap', type: 'number', step: 1, nullable: true, help: 'Hard cap on capture framerate. Leave empty for uncapped.' },
+  capture_fps: { label: 'Capture FPS', type: 'number', step: 1, nullable: true, help: 'Rate requested from the camera. Leave empty to use the FPS cap, or the camera default. Set 60+ for high-speed modes.' },
+  fps_cap: { label: 'Processed FPS cap', type: 'number', step: 1, nullable: true, help: 'Maximum processed frames per second, applied after capture. Leave empty for uncapped.' },
 };
 
 function humanizePipelineName(name) {
@@ -1578,6 +1579,7 @@ function fillCommonValues() {
   setFieldValue('grayscale', src.grayscale ?? false);
   setFieldValue('exposure_time', src.exposure_time);
   setFieldValue('gain', src.gain);
+  setFieldValue('capture_fps', src.capture_fps);
   setFieldValue('fps_cap', src.fps_cap);
   if (camModal.mode === 'edit') {
     setFieldValue('source', src.source ?? '');
@@ -1638,7 +1640,7 @@ async function submitCameraModal() {
     if (v != null) payload[k] = v;
   });
   payload.grayscale = !!readField('grayscale');
-  ['exposure_time', 'gain', 'fps_cap'].forEach(k => {
+  ['exposure_time', 'gain', 'capture_fps', 'fps_cap'].forEach(k => {
     const v = readField(k);
     payload[k] = (v === '' || v == null) ? null : Number(v);
   });

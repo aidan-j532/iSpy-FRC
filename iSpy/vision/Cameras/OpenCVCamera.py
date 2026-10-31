@@ -26,11 +26,19 @@ class OpenCVCamera(CameraBase):
                 "help": "Hardware identifier reported by discovery "
                 "(auto-filled when you pick a discovered camera).",
             },
+            "capture_fps": {
+                "type": "number",
+                "label": "Capture FPS",
+                "default": 0,
+                "help": "Rate requested from the camera (0 = use FPS Cap if set, "
+                "otherwise the driver default). Set 60+ to use a high-speed mode.",
+            },
             "fps_cap": {
                 "type": "number",
-                "label": "FPS Cap",
+                "label": "Processed FPS Cap",
                 "default": 0,
-                "help": "Maximum processed frames per second (0 = uncapped).",
+                "help": "Maximum processed frames per second, applied after capture "
+                "(0 = uncapped).",
             },
             "exposure_time": {
                 "type": "number",

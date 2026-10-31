@@ -8,8 +8,11 @@ backward-compatible *Camera -> *Pipeline / TelloEduCamera -> TelloCamera
 aliases. Hardware-bound paths are mocked.
 """
 
+import logging
 import unittest
 from unittest import mock
+
+import cv2
 
 from iSpy.vision.Cameras import (
     BUILTIN_CAMERAS,
@@ -83,6 +86,7 @@ class CameraSchemaTests(unittest.TestCase):
         keys = set(OpenCVCamera.config_schema())
         self.assertIn("source", keys)
         self.assertIn("device_id", keys)
+        self.assertIn("capture_fps", keys)
         self.assertIn("fps_cap", keys)
         self.assertIn("exposure_time", keys)
 
@@ -157,6 +161,95 @@ class CameraBaseContractTests(unittest.TestCase):
         # The bounded opener guard lives in Cameras.base; verify the sentinel
         # error type is importable through the public package.
         self.assertTrue(issubclass(CameraOpenTimeout, ValueError))
+
+
+class CameraCaptureRateTests(unittest.TestCase):
+    class _FakeCapture:
+        def __init__(self):
+            self.settings = {}
+
+        def set(self, prop, value):
+            self.settings[prop] = value
+
+        def get(self, prop):
+            if prop == cv2.CAP_PROP_FOURCC:
+                return cv2.VideoWriter_fourcc(*"MJPG")
+            return 0
+
+    def _bare_camera(self, capture_fps):
+        cam = object.__new__(CameraBase)
+        cam.logger = logging.getLogger("test")
+        cam.source = 0
+        cam._is_url_source = False
+        cam._cap_w = 640
+        cam._cap_h = 480
+        cam._negotiated_capture_size = None
+        cam._capture_fps = capture_fps
+        cam.is_image = False
+        cam._apply_capture_controls = lambda *a, **k: None
+        return cam
+
+    def test_configure_capture_requests_configured_rate(self):
+        cam = self._bare_camera(60)
+        cap = self._FakeCapture()
+        with mock.patch(
+            "iSpy.vision.Cameras.base.platform.system", return_value="Linux"
+        ):
+            cam._configure_capture(cap)
+        self.assertEqual(cap.settings[cv2.CAP_PROP_FPS], 60)
+
+    def test_configure_capture_does_not_impose_a_default_rate(self):
+        cam = self._bare_camera(0)
+        cap = self._FakeCapture()
+        with mock.patch(
+            "iSpy.vision.Cameras.base.platform.system", return_value="Linux"
+        ):
+            cam._configure_capture(cap)
+        self.assertNotIn(cv2.CAP_PROP_FPS, cap.settings)
+
+    def test_configure_capture_uses_v4l2_negotiated_size(self):
+        cam = self._bare_camera(60)
+        cam._negotiated_capture_size = (800, 600)
+        cap = self._FakeCapture()
+        with mock.patch(
+            "iSpy.vision.Cameras.base.platform.system", return_value="Linux"
+        ):
+            cam._configure_capture(cap)
+        self.assertEqual(cap.settings[cv2.CAP_PROP_FRAME_WIDTH], 800)
+        self.assertEqual(cap.settings[cv2.CAP_PROP_FRAME_HEIGHT], 600)
+
+    def test_configure_capture_also_sets_v4l2_parm(self):
+        cam = self._bare_camera(60)
+        cap = self._FakeCapture()
+        with mock.patch(
+            "iSpy.vision.Cameras.base.platform.system", return_value="Linux"
+        ), mock.patch("iSpy.vision.Cameras.base.subprocess.run") as run:
+            cam._configure_capture(cap)
+        run.assert_called_once()
+        self.assertIn("--set-parm=60", run.call_args.args[0])
+
+    def test_v4l2_size_parser_reads_applied_format(self):
+        from iSpy.vision.Cameras.base import _V4L2_SIZE_RE
+
+        match = _V4L2_SIZE_RE.search(
+            "Format Video Capture:\n\tWidth/Height      : 640/480\n"
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual((match.group(1), match.group(2)), ("640", "480"))
+
+    def test_fps_cap_is_used_as_capture_rate_fallback(self):
+        cam = CameraBase({"source": "missing-test-frame.png", "fps_cap": 60})
+        self.assertEqual(cam._capture_fps, 60)
+
+    def test_capture_fps_overrides_fps_cap_fallback(self):
+        cam = CameraBase(
+            {
+                "source": "missing-test-frame.png",
+                "fps_cap": 30,
+                "capture_fps": 90,
+            }
+        )
+        self.assertEqual(cam._capture_fps, 90)
 
 
 if __name__ == "__main__":
