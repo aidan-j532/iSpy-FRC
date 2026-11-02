@@ -59,7 +59,6 @@ cat > /etc/systemd/system/iSpy.service <<EOF
 Description=iSpy FRC Vision Pipeline
 After=network.target
 Wants=network.target
-
 [Service]
 Type=simple
 User=$SERVICE_USER
@@ -70,7 +69,6 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 Environment=iSpy_CONFIG=$CONFIG_DEST
-
 [Install]
 WantedBy=multi-user.target
 EOF

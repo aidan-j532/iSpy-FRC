@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Support - iSpy{% endblock %}
+{% block head %}
+<style>
+  .donation-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin: 20px 0;
+    max-width: 600px;
+  }
+  .donation-amount-input {
+    width: 100%;
+    padding: 10px;
+    margin: 10px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+    color: var(--text);
+    font-size: 1rem;
+  }
+  .donation-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    background: var(--accent);
+    color: var(--on-accent);
+    border: none;
+    border-radius: var(--radius);
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .donation-btn:hover {
+    background: var(--accent-dim);
+  }
+  .donation-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .donation-note {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    margin-top: 12px;
+  }
+  .fun-fact {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin: 20px 0;
+  }
+</style>
+{% endblock %}
+{% block content %}
+<h1>Support iSpy</h1>
+
+<p>iSpy is free open-source software for FRC teams. If you find it helpful, consider supporting the project!</p>
+
+<div class="donation-card">
+  <h3>Donate</h3>
+  
+  <div class="fun-fact">
+    <strong>Fun fact:</strong> 100 bucks buys me a Google Coral accelerator - that's the hardware accelerator that can run YOLO models super fast on iSpy!
+  </div>
+
+  <label for="donate-amount" style="display: block; margin-bottom: 8px; font-weight: 500;">
+    Custom donation amount ($):
+  </label>
+  <input type="number" id="donate-amount" class="donation-amount-input" min="1" step="5" value="100">
+  
+  <button class="donation-btn" id="donate-btn" disabled>
+    Donate
+  </button>
+  <div class="donation-note" id="donate-note">
+    Amount is recorded locally - no real payment processing yet
+  </div>
+</div>
+
+<div class="donation-card">
+  <h3>Quick Links</h3>
+  <ul style="list-style: none; padding: 0;">
+    <li style="margin: 8px 0;">
+      <a href="https://github.com/aidan-j532/iSpy-FRC" target="_blank" style="color: var(--text); text-decoration: none;">
+        📦 GitHub Repository
+      </a>
+    </li>
+    <li style="margin: 8px 0;">
+      <a href="https://github.com/aidan-j532/iSpy-FRC/issues" target="_blank" style="color: var(--text); text-decoration: none;">
+        🐛 Report Issues / Feature Requests
+      </a>
+    </li>
+    <li style="margin: 8px 0;">
+      <a href="https://github.com/aidan-j532/iSpy-FRC/blob/main/CONTRIBUTING.md" target="_blank" style="color: var(--text); text-decoration: none;">
+        📄 Contributing Guidelines
+      </a>
+    </li>
+  </ul>
+</div>
+
+<script>
+  document.getElementById('donate-amount').addEventListener('input', function() {
+    const amount = parseFloat(this.value) || 0;
+    const btn = document.getElementById('donate-btn');
+    btn.disabled = isNaN(amount) || amount < 1;
+  });
+
+  document.getElementById('donate-btn').addEventListener('click', async function() {
+    const amount = parseFloat(document.getElementById('donate-amount').value);
+    const btn = this;
+    const note = document.getElementById('donate-note');
+    
+    // Disable button during API call
+    btn.disabled = true;
+    btn.textContent = 'Processing...';
+    
+    try {
+      const response = await fetch('/api/support/donate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ amount: amount })
+      });
+      const data = await response.json();
+      
+      if (data.ok) {
+        note.textContent = `Donation of $${amount} recorded (no real processing yet)`;
+        note.style.color = 'var(--text-dim)';
+      } else {
+        note.textContent = `Error: ${data.error || 'Unknown error'}`;
+        note.style.color = 'var(--text-bad)';
+      }
+    } catch (error) {
+      note.textContent = `Request failed: ${error.message}`;
+      note.style.color = 'var(--text-bad)';
+    } finally {
+      // Re-enable button
+      btn.disabled = false;
+      btn.textContent = 'Donate';
+    }
+  });
+</script>
+{% endblock %}
