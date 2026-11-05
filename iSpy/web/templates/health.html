@@ -5,6 +5,7 @@
 {% endblock %}
 {% block content %}
 <h1>System Health</h1>
+<p class="page-subtitle">Runtime, camera, plugin, and add-on health for the vision loop.</p>
 <div id="health-banner" class="vision-banner"></div>
 
 <div class="grid stats-grid">
@@ -152,11 +153,11 @@ async function refresh() {
     document.getElementById('h-plugins').innerHTML = plugins.length === 0
       ? '<div class="empty-state">No plugins loaded</div>'
       : plugins.map(p => `
-        <div class="plugin-item" style="display:flex;align-items:center;gap:8px;padding:10px 12px;margin-bottom:6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-surface);">
+        <div class="plugin-item plugin-row">
           <span class="${statusDot(p.status)}"></span>
           <strong>${p.name}</strong>
           ${typeBadge(p.type)}
-          <span style="margin-left:auto;color:var(--text-dim);font-size:0.85rem;">${p.status}</span>
+          <span class="plugin-status">${p.status}</span>
         </div>`).join('');
   } catch (e) {
     console.error('Health refresh failed', e);

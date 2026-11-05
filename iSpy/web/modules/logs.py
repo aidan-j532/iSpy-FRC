@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from flask import jsonify, render_template, request
 from iSpy.web.Backend.WebModule import WebModule
@@ -33,10 +34,31 @@ class LogsModule(WebModule):
 
     @staticmethod
     def _efficient_tail(path: Path, n: int) -> list[str]:
+        if n <= 0:
+            return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                all_lines = f.readlines()
-            return [line.rstrip("\n\r") for line in all_lines[-n:]]
+            # Read backwards in chunks instead of loading the whole file. Log
+            # files can grow large, and this runs every couple of seconds.
+            chunk_size = 64 * 1024
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                pos = f.tell()
+                data = b""
+                # Keep at least one newline beyond the requested count so the
+                # first line we return is complete rather than a cut-off tail.
+                while pos > 0 and data.count(b"\n") <= n:
+                    size = min(chunk_size, pos)
+                    pos -= size
+                    f.seek(pos)
+                    data = f.read(size) + data
+                if pos > 0:
+                    newline = data.find(b"\n")
+                    data = data[newline + 1 :] if newline != -1 else b""
+            # Older log entries may have been written with the Windows locale
+            # encoding (e.g. cp1252 em dashes). Replace bad bytes instead of
+            # failing the whole request and showing an empty log page.
+            text = data.decode("utf-8", errors="replace")
+            return text.splitlines()[-n:]
         except Exception as e:
             logger.error(f"Error reading log file: {e}")
             return []

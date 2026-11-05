@@ -588,6 +588,13 @@ class Pose(Detect):
                 a = torch.cat((a, y[:, :, 2:3].sigmoid()), 2)
             return a.view(bs, self.nk, -1)
         y = kpts.clone()
+        if ndim == 3:
+            # Ultralytics sigmoids the keypoint confidence in eager inference
+            # (the export path does it in-graph above). Without this the .pt
+            # path leaks logits while metadata says scores_are_logits=False,
+            # so downstream confidence thresholds (> 0.5) and PnP keypoint
+            # filtering see values far outside [0, 1].
+            y[:, 2::ndim] = y[:, 2::ndim].sigmoid()
         y[:, 0::ndim] = (y[:, 0::ndim] * 2.0 + (self.anchors[0] - 0.5)) * self.strides
         y[:, 1::ndim] = (y[:, 1::ndim] * 2.0 + (self.anchors[1] - 0.5)) * self.strides
         return y

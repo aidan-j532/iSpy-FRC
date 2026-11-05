@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 import logging
 import sys
 import os
@@ -29,7 +30,7 @@ def _configure_quiet_logging() -> None:
 
     log_path = Path.cwd() / "Outputs" / "log.txt"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    file_handler = logging.FileHandler(log_path, mode="a")
+    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     file_handler.addFilter(_iSpyLogFilter())
@@ -78,17 +79,30 @@ def _init_performance_level(config) -> None:
         )
 
 
-def main(config=None):
+def main(config=None, dry=False):
     # a replay passes the config boot already built in memory; anything else
     # loads its own from disk
     if config is None:
+        parser = argparse.ArgumentParser(description="iSpy vision loop")
+        parser.add_argument(
+            "--dry",
+            action="store_true",
+            help="Run with no vision pipelines - web UI only, for testing the web UI.",
+        )
+        args = parser.parse_args()
+        dry = dry or args.dry
+
         config_path = Path.cwd() / "Config" / "config.json"
         logger.info(f"Using config file: {config_path}")
 
         config = iSpyConfig(str(config_path))
     _init_offline_mode(config)
     _init_performance_level(config)
-    vision = iSpy(config)
+    if dry:
+        # keep the web UI reachable even if the configured performance level
+        # would normally turn it off
+        os.environ.setdefault("ISPY_FORCE_WEB", "1")
+    vision = iSpy(config, dry=dry)
     vision.run()
 
 

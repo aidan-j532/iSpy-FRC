@@ -261,7 +261,7 @@ export default function Home() {
               </p>
             </div>
             <div className={styles.aboutActions}>
-              {/* TODO: point this at your real donation or sponsorship page */}
+              {/* TODO: point this at my real donation or sponsorship page */}
               <Link
                 className="button button--primary button--lg"
                 href="">

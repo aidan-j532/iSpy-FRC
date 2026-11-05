@@ -345,6 +345,7 @@
             <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg
           >Cameras</a
         >
+        {% if admin %}
         <a href="/editor"
           ><svg
             viewBox="0 0 24 24"
@@ -360,6 +361,7 @@
             <path d="M7 6h10M6.5 7.7l4.3 8.6M17.5 7.7l-4.3 8.6"></path></svg
           >Editor (Pre-Alpha)</a
         >
+        {% endif %}
         <a href="/health-page"
           ><svg
             viewBox="0 0 24 24"
@@ -372,6 +374,7 @@
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg
           >Health</a
         >
+        {% if admin %}
         <a href="/rollback"
           ><svg
             viewBox="0 0 24 24"
@@ -383,8 +386,9 @@
           >
             <polyline points="1 4 1 10 7 10"></polyline>
             <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg
-          >Rollback</a
+          >Rollback (Pre-Alpha)</a
         >
+        {% endif %}
         <a href="/metrics"
           ><svg
             viewBox="0 0 24 24"
@@ -491,6 +495,7 @@
             ></path></svg
           >Settings</a
         >
+        {% if admin %}
         <a href="/support"
           ><svg
             viewBox="0 0 24 24"
@@ -502,8 +507,9 @@
           >
             <circle cx="12" cy="12" r="3"></circle>
             <path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg
-          >Support</a
+          >Support (Pre-Alpha)</a
         >
+        {% endif %}
         <div class="sidebar-footer">
           <span>iSpy</span>
           <span class="footer-version" id="ispy-version"></span>
@@ -806,7 +812,7 @@
           {
             page: "/dashboard",
             title: "Welcome to iSpy",
-            text: "iSpy is your robot vision copilot - cameras running plug-and-play pipelines (object detection, AprilTags, QR codes, optical flow, depth estimation), a live 3D field viewer, model workflows, and calibration, all from this web UI.",
+            text: "iSpy runs cameras through configurable vision pipelines - object detection, AprilTags, QR codes, HSV color, optical flow, and depth - with a live 3D viewer, model management, and calibration, all from this web UI.",
           },
           {
             page: "/dashboard",

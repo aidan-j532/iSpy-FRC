@@ -190,6 +190,9 @@ class PoseModelRegressionTests(unittest.TestCase):
         self.assertEqual(kd.ndim, 3)
         self.assertEqual(kd.shape[1:], (17, 3))
         self.assertEqual(len(r.boxes), kd.shape[0])
+        # the eager decode sigmoids keypoint confidence, matching Ultralytics
+        self.assertTrue(bool((kd[..., 2] >= 0).all()))
+        self.assertTrue(bool((kd[..., 2] <= 1).all()))
 
     def test_pose_pt_keypoint_values_are_finite(self):
         register_shim()

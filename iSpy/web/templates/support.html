@@ -46,28 +46,141 @@
     margin-top: 12px;
   }
   .fun-fact {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 16px;
     margin: 20px 0;
   }
+  .fun-fact-body {
+    flex: 1;
+    min-width: 0;
+    min-height: 76px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    text-align: center;
+  }
+  .fun-fact-body.is-animating {
+    animation: fun-fact-pop 0.22s ease;
+  }
+  @keyframes fun-fact-pop {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .fun-fact-amount {
+    font-size: 1.55rem;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--accent);
+  }
+  .fun-fact-copy {
+    line-height: 1.45;
+    color: var(--text);
+  }
+  .fun-fact-arrow {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-surface);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
+  }
+  .fun-fact-arrow:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+  }
+  .fun-fact-arrow:active {
+    transform: scale(0.94);
+  }
+  .fun-fact-arrow:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  @media (max-width: 520px) {
+    .fun-fact {
+      gap: 8px;
+      padding: 12px;
+    }
+    .fun-fact-arrow {
+      width: 32px;
+      height: 32px;
+    }
+    .fun-fact-amount {
+      font-size: 1.3rem;
+    }
+    .fun-fact-copy {
+      font-size: 0.92rem;
+    }
+  }
 </style>
 {% endblock %}
 {% block content %}
 <h1>Support iSpy</h1>
+<p class="page-subtitle">Ways to help, report issues, and support development.</p>
 
 <p>iSpy is free open-source software for FRC teams. If you find it helpful, consider supporting the project!</p>
 
 <div class="donation-card">
   <h3>Donate</h3>
   
-  <div class="fun-fact">
-    <strong>Fun fact:</strong> 100 bucks buys me a Google Coral accelerator - that's the hardware accelerator that can run YOLO models super fast on iSpy!
+  <div class="fun-fact" id="fun-fact" role="group" aria-label="What your donation could buy">
+    <button
+      type="button"
+      class="fun-fact-arrow"
+      id="fun-fact-prev"
+      aria-label="Show previous donation idea"
+      title="Previous donation idea"
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+           stroke-linejoin="round" aria-hidden="true">
+        <polyline points="15 18 9 12 15 6"></polyline>
+      </svg>
+    </button>
+    <div class="fun-fact-body" id="fun-fact-body" aria-live="polite">
+      <div class="fun-fact-amount" id="fun-fact-amount">$100</div>
+      <div class="fun-fact-copy" id="fun-fact-copy">
+        Buys me a Google Coral USB accelerator, a USB hardware accelerator
+        that can run YOLO models super fast on iSpy!
+      </div>
+    </div>
+    <button
+      type="button"
+      class="fun-fact-arrow"
+      id="fun-fact-next"
+      aria-label="Show next donation idea"
+      title="Next donation idea"
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+           stroke-linejoin="round" aria-hidden="true">
+        <polyline points="9 18 15 12 9 6"></polyline>
+      </svg>
+    </button>
   </div>
 
   <label for="donate-amount" style="display: block; margin-bottom: 8px; font-weight: 500;">
-    Custom donation amount ($):
+    Donation amount ($):
   </label>
   <input type="number" id="donate-amount" class="donation-amount-input" min="1" step="5" value="100">
   
@@ -75,7 +188,7 @@
     Donate
   </button>
   <div class="donation-note" id="donate-note">
-    Amount is recorded locally - no real payment processing yet
+    Pick a preset with the arrows, or type any amount. Amount is recorded locally - no real payment processing yet.
   </div>
 </div>
 
@@ -101,16 +214,89 @@
 </div>
 
 <script>
-  document.getElementById('donate-amount').addEventListener('input', function() {
-    const amount = parseFloat(this.value) || 0;
-    const btn = document.getElementById('donate-btn');
-    btn.disabled = isNaN(amount) || amount < 1;
+  // This is wher I add like preset stuff
+  const DONATION_PRESETS = [
+    {
+      amount: 2.75,
+      message: 'Buys me a caffeine Ice soda or a Dr. Pepper - the drinks that keep me going while working on iSpy.'
+    },
+    {
+      amount: 100,
+      message:
+        'Buys me a Google Coral USB accelerator, a USB hardware accelerator that can run YOLO models super fast on iSpy!',
+    },
+    {
+      amount: 200,
+      message:
+        'Buys me an Orange Pi 5, a low-cost board that is a popular vision coprocessor for FRC teams.',
+    },
+    {
+      amount: 450,
+      message:
+        'Buys me a Jetson Orin Nano Super dev kit, so iSpy can run bigger vision models right at the field at high FPS. ',
+    }
+  ];
+
+  const amountInput = document.getElementById('donate-amount');
+  const donateBtn = document.getElementById('donate-btn');
+  const note = document.getElementById('donate-note');
+  const funFact = document.getElementById('fun-fact');
+  const funFactBody = document.getElementById('fun-fact-body');
+  const funFactAmount = document.getElementById('fun-fact-amount');
+  const funFactCopy = document.getElementById('fun-fact-copy');
+
+  let presetIndex = Math.floor(Math.random() * DONATION_PRESETS.length);
+
+  function syncDonateButton() {
+    const amount = parseFloat(amountInput.value) || 0;
+    donateBtn.disabled = isNaN(amount) || amount < 1;
+  }
+
+  function renderPreset(animate) {
+    const preset = DONATION_PRESETS[presetIndex];
+    funFactAmount.textContent = `$${preset.amount}`;
+    funFactCopy.textContent = preset.message;
+    // Keep the donation box in sync with the preset the user is looking at.
+    amountInput.value = preset.amount;
+    syncDonateButton();
+    if (animate) {
+      funFactBody.classList.remove('is-animating');
+      void funFactBody.offsetWidth;
+      funFactBody.classList.add('is-animating');
+    }
+  }
+
+  function stepPreset(delta) {
+    presetIndex =
+      (presetIndex + delta + DONATION_PRESETS.length) % DONATION_PRESETS.length;
+    renderPreset(true);
+  }
+
+  document
+    .getElementById('fun-fact-prev')
+    .addEventListener('click', () => stepPreset(-1));
+  document
+    .getElementById('fun-fact-next')
+    .addEventListener('click', () => stepPreset(1));
+
+  funFact.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      stepPreset(-1);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      stepPreset(1);
+    }
   });
+
+  amountInput.addEventListener('input', syncDonateButton);
+
+  // Random starting idea on every page load; no animation for the first paint.
+  renderPreset(false);
 
   document.getElementById('donate-btn').addEventListener('click', async function() {
     const amount = parseFloat(document.getElementById('donate-amount').value);
     const btn = this;
-    const note = document.getElementById('donate-note');
     
     // Disable button during API call
     btn.disabled = true;
@@ -137,9 +323,9 @@
       note.textContent = `Request failed: ${error.message}`;
       note.style.color = 'var(--text-bad)';
     } finally {
-      // Re-enable button
-      btn.disabled = false;
+      // Re-enable the button only if the current amount is still valid.
       btn.textContent = 'Donate';
+      syncDonateButton();
     }
   });
 </script>

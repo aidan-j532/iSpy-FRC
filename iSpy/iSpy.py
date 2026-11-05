@@ -41,14 +41,16 @@ class iSpy:
         config: iSpyConfig,
         cameras: list[VisionPipeline] | None = None,
         web_app=None,
+        dry: bool = False,
     ):
         self.config = config
+        self._dry = bool(dry)
         self.logger = logging.getLogger(__name__)
         update_service_state(phase="initializing vision")
 
         # bring the web app up FIRST!! so the UI is reachable
         self.web_app = web_app
-        if self.web_app is None and performance.effective_app_mode(config):
+        if self.web_app is None and (self._dry or performance.effective_app_mode(config)):
             update_service_state(phase="starting web UI", web_enabled=True)
             if performance.web_forced_on() and not performance.get_profile().web_enabled:
                 self.logger.warning(
@@ -62,7 +64,10 @@ class iSpy:
                 target=self.web_app.run, daemon=True, name="iSpyWebServer"
             ).start()
 
-        if cameras is None:
+        if self._dry:
+            self.logger.info("Dry run: skipping camera/pipeline initialization.")
+            cameras = []
+        elif cameras is None:
             cameras = self._build_cameras_from_config(config)
         self.cameras = cameras
 
@@ -74,7 +79,8 @@ class iSpy:
         signal.signal(signal.SIGTERM, lambda *_: self._handle_shutdown())
 
         if len(cameras) == 0:
-            self.logger.warning("No cameras provided - vision will not run.")
+            if not self._dry:
+                self.logger.warning("No cameras provided - vision will not run.")
             self.camera_handler = None
         elif len(cameras) == 1:
             self.logger.info("Single camera mode.")
@@ -724,6 +730,9 @@ class iSpy:
         )
 
     def run(self, duration_s: float | None = None):
+        if self._dry:
+            self._run_dry_mode(duration_s)
+            return
         if not self.cameras:
             self.logger.error("No cameras provided.")
             return
@@ -754,6 +763,126 @@ class iSpy:
             else:
                 self.run_multi_mode()
         finally:
+            if control is not None:
+                control.stop()
+
+    def _run_dry_mode(self, duration_s: float | None = None):
+        self.logger.info("Dry run: web UI only, no vision pipelines. Press Ctrl+C to stop.")
+        update_service_state(status="running", phase="running (dry)")
+        control = self._control_server()
+        try:
+            control.start()
+        except OSError:
+            self.logger.exception("Control channel failed to start - service pause/resume unavailable.")
+            control = None
+
+        if duration_s is not None:
+
+            def _stop():
+                time.sleep(duration_s)
+                self._handle_shutdown()
+
+            threading.Thread(target=_stop, daemon=True).start()
+
+        max_fps = self.config.get("max_fps", 0)
+        if not max_fps or max_fps <= 0:
+            max_fps = 30
+        print_fps = performance.get_profile().fps_console_print
+        fps = 0.0
+        try:
+            while not self.shutdown_event.is_set():
+                if self.pause_event.is_set():
+                    time.sleep(0.05)
+                    continue
+
+                t_start = time.perf_counter()
+                frame_data = {
+                    "fps": round(fps, 1),
+                    "inference_s": 0.0,
+                    "camera_lag_s": 0.0,
+                    "detection_count": 0,
+                    "loop_s": 0.0,
+                    "detections": [],
+                    "cameras": [],
+                    "raw_frames": {},
+                    "code_times": {},
+                }
+                t_web = time.perf_counter()
+                self._update_web(frame_data)
+                frame_data["code_times"]["web"] = time.perf_counter() - t_web
+
+                elapsed = time.perf_counter() - t_start
+                sleep_time = max(0.0, 1.0 / max_fps - elapsed)
+                time.sleep(sleep_time)
+                fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
+                if print_fps:
+                    print("\rFPS: %.1f (dry)   " % fps, end="")
+        finally:
+            if print_fps:
+                print()
+            self._stop_all_plugins()
+            if self.web_app:
+                self.web_app.stop()
+            if control is not None:
+                control.stop()
+
+    def _run_dry_mode(self, duration_s: float | None = None):
+        self.logger.info("Dry run: web UI only, no vision pipelines. Press Ctrl+C to stop.")
+        update_service_state(status="running", phase="running (dry)")
+        control = self._control_server()
+        try:
+            control.start()
+        except OSError:
+            self.logger.exception("Control channel failed to start - service pause/resume unavailable.")
+            control = None
+
+        if duration_s is not None:
+
+            def _stop():
+                time.sleep(duration_s)
+                self._handle_shutdown()
+
+            threading.Thread(target=_stop, daemon=True).start()
+
+        max_fps = self.config.get("max_fps", 0)
+        if not max_fps or max_fps <= 0:
+            max_fps = 30
+        print_fps = performance.get_profile().fps_console_print
+        fps = 0.0
+        try:
+            while not self.shutdown_event.is_set():
+                if self.pause_event.is_set():
+                    time.sleep(0.05)
+                    continue
+
+                t_start = time.perf_counter()
+                frame_data = {
+                    "fps": round(fps, 1),
+                    "inference_s": 0.0,
+                    "camera_lag_s": 0.0,
+                    "detection_count": 0,
+                    "loop_s": 0.0,
+                    "detections": [],
+                    "cameras": [],
+                    "raw_frames": {},
+                    "code_times": {},
+                }
+                t_web = time.perf_counter()
+                self._update_web(frame_data)
+                frame_data["code_times"]["web"] = time.perf_counter() - t_web
+
+                elapsed = time.perf_counter() - t_start
+                sleep_time = max(0.0, 1.0 / max_fps - elapsed)
+                time.sleep(sleep_time)
+                fps = 1.0 / max(time.perf_counter() - t_start, 1e-6)
+                if print_fps:
+                    print("\rFPS: %.1f (dry)   " % fps, end="")
+        finally:
+            if print_fps:
+                print()
+            self._stop_all_plugins()
+            if self.web_app:
+                self.web_app.stop()
             if control is not None:
                 control.stop()
 

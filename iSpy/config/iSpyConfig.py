@@ -972,7 +972,7 @@ class iSpyConfig:
                 log_path = _REPO_ROOT / log_path
             log_path.parent.mkdir(parents=True, exist_ok=True)
 
-            fh = logging.FileHandler(log_path, mode="a")
+            fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
             fh.setLevel(logging.NOTSET)
             fh.setFormatter(fmt)
             fh.addFilter(_iSpyFilter())

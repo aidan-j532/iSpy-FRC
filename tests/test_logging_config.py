@@ -29,13 +29,14 @@ class LogLevelConfigTests(unittest.TestCase):
             root.setLevel(saved_root_level)
             ispy.setLevel(saved_ispy_level)
 
-        self.addCleanup(_restore)
-
         # held for the lifetime of the test - letting the TemporaryDirectory
         # go out of scope deletes it, and iSpyConfig(create=True) would then
         # quietly write and reload a *default* config instead of ours.
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        # cleanups run in reverse order, so close log handlers before Windows
+        # tries to delete the temporary directory they may still hold open
+        self.addCleanup(_restore)
         self._seq = 0
 
     def _load(self, log_level):
@@ -77,6 +78,21 @@ class LogLevelConfigTests(unittest.TestCase):
                 self.assertEqual(
                     logging.getLogger("iSpy").getEffectiveLevel(), logging.INFO
                 )
+
+    def test_log_file_is_written_as_utf8(self):
+        # Regression: the FileHandler used the Windows locale encoding, so an
+        # em dash became 0x97 and the UTF-8 log reader failed on the file.
+        log_path = Path(self._tmp.name) / "utf8.log"
+        config_path = Path(self._tmp.name) / "utf8-config.json"
+        config_path.write_text(
+            json.dumps({"log_level": "INFO", "log_file": str(log_path)}),
+            encoding="utf-8",
+        )
+        iSpyConfig(str(config_path))
+        logging.getLogger("iSpy.test.logging").info("camera ready \u2014 go")
+        data = log_path.read_bytes()
+        self.assertIn("\u2014".encode("utf-8"), data)
+        self.assertNotIn(b"\x97", data)
 
 
 if __name__ == "__main__":

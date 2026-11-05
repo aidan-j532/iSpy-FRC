@@ -330,7 +330,7 @@ def _configure_quiet_logging() -> None:
 
     log_path = Path.cwd() / "Outputs" / "log.txt"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    file_handler = logging.FileHandler(log_path, mode="a")
+    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     file_handler.addFilter(_iSpyLogFilter())
@@ -876,17 +876,18 @@ def main():
         sys.stderr.flush()
         sys.exit(1)
 
-    if args.replay:
-        _configure_replay(
-            config,
-            args.replay,
-            args.replay_cam,
-            args.replay_speed,
-            loop=not args.replay_no_loop,
-        )
+    if args.replay or args.dry:
+        if args.replay:
+            _configure_replay(
+                config,
+                args.replay,
+                args.replay_cam,
+                args.replay_speed,
+                loop=not args.replay_no_loop,
+            )
         from iSpy.core.game_loop import main as game_loop_main
 
-        game_loop_main(config)
+        game_loop_main(config, dry=args.dry)
 
     # Flush everything and hard-exit to avoid Segfualt stuff.
     logging.shutdown()

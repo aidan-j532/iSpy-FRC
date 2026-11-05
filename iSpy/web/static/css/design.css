@@ -112,6 +112,10 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 12px 0; }
 @media (max-width: 1100px) { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 600px) { .metrics-grid { grid-template-columns: 1fr; } }
 
+.page-subtitle {
+  color: var(--text-dim); font-size: 0.9rem; line-height: 1.5;
+  margin: 0 0 18px 0; max-width: 720px;
+}
 .stat-label {
   color: var(--text-dim); font-size: 0.72rem;
   text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
@@ -332,6 +336,13 @@ pre {
 
 .plugin-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .plugin-item { font-size: 0.85rem; }
+.plugin-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; margin-bottom: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+}
+.plugin-status { margin-left: auto; color: var(--text-dim); font-size: 0.85rem; }
 .plugin-pill {
   display: inline-block; padding: 2px 8px; border-radius: var(--radius-sm);
   background: var(--accent-dim); color: var(--accent); border: 1px solid transparent;

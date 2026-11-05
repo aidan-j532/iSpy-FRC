@@ -52,4 +52,9 @@ def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
         action="store_true",
         help="Stop vision when the replay reaches its end",
     )
+    parser.add_argument(
+        "--dry",
+        action="store_true",
+        help="Run with no vision pipelines - web UI only, for testing the web UI.",
+    )
     return parser

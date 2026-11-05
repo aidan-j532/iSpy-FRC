@@ -1249,11 +1249,12 @@ class GenericYolo:
     def _align_openvino_output(self, ov_out_shape: tuple) -> None:
         # The IR metadata is a verbatim copy of the .pt metadata
         # (hardware_nms / anchors_first / xyxy), but Ultralytics' OpenVINO
-        # export emits a raw detect tensor [1, F, N] (N anchors, features
-        # first, F = 4 + score columns, coords in cxcywh pixel space). The
-        # old config sent that tensor to the hardware-NMS parser, which read
-        # the wrong axis and produced misplaced boxes. Re-derive the parser
-        # config from the IR's real output instead.
+        # export emits a raw head tensor [1, F, N] (N anchors, features
+        # first, F = 4 + score columns, plus keypoints for pose models;
+        # coords in cxcywh pixel space). The old config sent that tensor to
+        # the hardware-NMS parser, which read the wrong axis and produced
+        # misplaced boxes. Re-derive the parser config from the IR's real
+        # output instead.
         if (
             self.output is None
             or not isinstance(self.output, dict)
@@ -1265,27 +1266,36 @@ class GenericYolo:
         anchors = int(ov_out_shape[2])
         if anchors < feat:
             return
+        is_pose = getattr(self, "task", None) == "pose"
         out = dict(self.output)
         out["format"] = "raw_detect"
         out["layout"] = "features_first"
         out["box_format"] = "xywh"
-        # The IR's real feature width is (4 + score columns). A single-class
-        # model keeps score_mode='objectness' (5 columns); anything wider is a
-        # multi-class head and must use 'multi_class' (4 + num_classes), otherwise
-        # _feature_width() (5) disagrees with the tensor (e.g. 84) and verification
-        # fails with "Tensor shape ... vs feature width 5".
-        if int(ov_out_shape[1]) != 5 and out.get("score_mode") == "objectness":
+        # The IR's real feature width is (4 + score columns), plus the
+        # keypoint block for pose. A single-class detect model keeps
+        # score_mode='objectness' (5 columns); a pose head is wider even
+        # with nc=1 because of its keypoints, so don't mistake it for a
+        # multi-class detect head. Anything that really is wider than
+        # 4 + num_classes must use 'multi_class', otherwise
+        # _feature_width() disagrees with the tensor and verification
+        # fails with "Tensor shape ... vs feature width ...".
+        if (
+            not is_pose
+            and int(ov_out_shape[1]) != 5
+            and out.get("score_mode") == "objectness"
+        ):
             out["score_mode"] = "multi_class"
         if out.get("score_mode") not in ("objectness", "classwise", "multi_class"):
             out["score_mode"] = "classwise"
-        # Ultralytics detect heads emit sigmoid-activated class probabilities.
+        # Ultralytics heads emit sigmoid-activated class probabilities.
         out["scores_are_logits"] = False
         out["apply_software_nms"] = True
         out["nms_iou"] = float(out.get("nms_iou") or 0.45)
         self.output = out
         self.logger.info(
-            "OpenVINO output aligned: format=raw_detect layout=%s shape=%s "
+            "OpenVINO output aligned: format=%s layout=%s shape=%s "
             "score_mode=%s scores_are_logits=False software_nms=True",
+            "raw_pose" if is_pose else "raw_detect",
             "features_first",
             tuple(ov_out_shape),
             out["score_mode"],

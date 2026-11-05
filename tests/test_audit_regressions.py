@@ -204,6 +204,28 @@ class LoopTimingRegressions(unittest.TestCase):
 
 
 class OpenVinoOutputAlignmentTests(unittest.TestCase):
+    def test_pose_output_keeps_objectness_for_single_class(self):
+        model = GenericYolo.__new__(GenericYolo)
+        model.output = {
+            "format": "hardware_nms",
+            "layout": "anchors_first",
+            "box_format": "xyxy",
+            "score_mode": "objectness",
+            "apply_software_nms": False,
+            "nms_iou": 0.45,
+            "num_keypoints": 17,
+            "keypoint_dims": 3,
+        }
+        model.task = "pose"
+        model.num_classes = 1
+        model.logger = logging.getLogger(__name__)
+        model._align_openvino_output((1, 56, 8400))
+        # 56 = 4 box + 1 class + 17 * 3 keypoints; the wider pose head must
+        # not be mistaken for a multi-class detect head.
+        self.assertEqual(model.output["score_mode"], "objectness")
+        self.assertEqual(model.output["format"], "raw_detect")
+        self.assertEqual(model._feature_width(), 56)
+
     def test_raw_activated_scores_are_nms_filtered(self):
         model = GenericYolo.__new__(GenericYolo)
         model.output = {

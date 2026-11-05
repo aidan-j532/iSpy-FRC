@@ -45,6 +45,7 @@
 {% endblock %}
 {% block content %}
 <h1>Logs</h1>
+<p class="page-subtitle">Live and stored runtime logs for debugging.</p>
 <div class="card controls-bar log-toolbar">
   <span class="log-live">Live logs</span>
   <label class="log-toggle">
@@ -94,7 +95,9 @@ async function refresh() {
     const n = document.getElementById('line-count').value;
     const data = await fetch(`/api/logs?n_lines=${n}`).then(r => r.json());
     logsConn.ok();
-    const content = data.lines.map(colorize).join('');
+    if (!Array.isArray(data.lines)) throw new Error('Malformed log response');
+    // Keep one log entry per line; .log-view uses white-space: pre-wrap.
+    const content = data.lines.map(colorize).join('\n');
     if (content !== lastContent) {
       view.innerHTML = content;
       lastContent = content;

@@ -66,6 +66,10 @@ class iSpyWebApp:
 
         self.context = context
 
+        # Make the admin flag available to every template (base.html uses it to
+        # gate the (Pre-Alpha) nav entries).
+        self.flask_app.context_processor(self._template_context)
+
         self.modules: dict[str, WebModule] = {
             "cameras": CamerasModule(context),
             "editor": EditorModule(context),
@@ -222,6 +226,14 @@ class iSpyWebApp:
                 mod.stop()
             except Exception:
                 self.logger.exception("Error stopping web module")
+
+    def _template_context(self):
+        config = self.context.get("config", self.config)
+        try:
+            admin = bool(config.get("admin")) if config is not None else False
+        except Exception:
+            admin = False
+        return {"admin": admin, "is_admin": admin}
 
 
 def create_app(cameras, config) -> iSpyWebApp:
