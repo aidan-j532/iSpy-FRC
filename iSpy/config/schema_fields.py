@@ -1,49 +1,22 @@
-"""Shared schema helpers for required settings and completion progress.
-
-The editor sends this module's result to the browser, and the same result is
-used by the backend save/validate routes.  Keeping the rule here means a field
-cannot look required in the canvas and optional to the API (or the other way
-around).
-
-Rule (unless a schema explicitly overrides it with ``required``):
-
-* ``nullable: true`` is optional.
-* ``model``, ``source`` and ``browse`` fields are always required because they
-  point at a real artifact.
-* A field with no default is required.  A field whose default is blank is
-  optional; a meaningful default is required, but the default never satisfies
-  completion until the user confirms it (or uses "Use Defaults") and it is
-  written explicitly.  Defaults are shown as ghosts, not saved values.
-* A field hidden behind an inactive ``gated_by`` controller is not counted.
-* Runtime settings loading still merges defaults; only editor completion and
-  validation require an explicit saved value.
-"""
 
 from __future__ import annotations
 
 from typing import Any
 
-# Types whose whole job is to point at a real artifact.  These stay required
-# even when a schema gives them an empty default so the canvas cannot report a
-# camera/model node as complete before the user has chosen something.
 CORE_ARTIFACT_TYPES = frozenset({"model", "source", "browse"})
 
 MODEL_PATH_KEYS = ("file_path", "source_pt", "path", "name")
 
-
 def _defn(schema: dict, key: str) -> dict:
     value = schema.get(key)
     return value if isinstance(value, dict) else {}
-
 
 def _effective_value(schema: dict, settings: dict, key: str) -> Any:
     if isinstance(settings, dict) and key in settings:
         return settings[key]
     return _defn(schema, key).get("default")
 
-
 def gate_is_active(schema: dict, settings: dict, defn: dict) -> bool:
-    """Return False when a conditional field's controller is off."""
     gate = defn.get("gated_by") if isinstance(defn, dict) else None
     if not gate:
         return True
@@ -55,9 +28,7 @@ def gate_is_active(schema: dict, settings: dict, defn: dict) -> bool:
             return False
     return True
 
-
 def setting_is_required(schema: dict, key: str, settings: dict | None = None) -> bool:
-    """Whether ``key`` counts toward completion for this schema/settings pair."""
     defn = _defn(schema, key)
     if not gate_is_active(schema, settings or {}, defn):
         return False
@@ -70,14 +41,9 @@ def setting_is_required(schema: dict, key: str, settings: dict | None = None) ->
         return True
     if "default" not in defn:
         return True
-    # A default makes a blank optional; a meaningful default is still a value
-    # the user must explicitly confirm.  That is what makes ghost values in
-    # the inspector and "Use Defaults" meaningful.
     return not value_is_blank(defn.get("default"), defn)
 
-
 def required_setting_keys(schema: dict, settings: dict | None = None) -> list[str]:
-    """Active required keys, in schema order."""
     if not isinstance(schema, dict):
         return []
     settings = settings if isinstance(settings, dict) else {}
@@ -87,9 +53,7 @@ def required_setting_keys(schema: dict, settings: dict | None = None) -> list[st
         if setting_is_required(schema, key, settings)
     ]
 
-
 def value_is_blank(value: Any, defn: dict | None = None) -> bool:
-    """True for values that should not satisfy a required field."""
     if value is None:
         return True
     stype = (defn or {}).get("type")
@@ -109,18 +73,14 @@ def value_is_blank(value: Any, defn: dict | None = None) -> bool:
         return not isinstance(value, (list, tuple)) or len(value) != 2
     return False
 
-
 def setting_is_complete(
     schema: dict, key: str, settings: dict | None = None
 ) -> bool:
-    """Whether a required field is explicitly present with a usable value."""
     if not isinstance(settings, dict) or key not in settings:
         return False
     return not value_is_blank(settings[key], _defn(schema, key))
 
-
 def completion_for_schema(schema: dict, settings: dict | None = None) -> dict:
-    """Progress payload shared by the editor canvas and backend validation."""
     settings = settings if isinstance(settings, dict) else {}
     required = required_setting_keys(schema, settings)
     missing = [

@@ -1,7 +1,6 @@
 from iSpy.vision.Cameras import _discovery
 from iSpy.vision.Cameras.base import CameraBase
 
-
 class OpenCVCamera(CameraBase):
     camera_type = "opencv"
     plugin_name = "opencv"

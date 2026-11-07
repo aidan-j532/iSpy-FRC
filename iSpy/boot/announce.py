@@ -10,7 +10,6 @@ BROADCAST_PORT = 37429  # high port, unlikely to collide
 BROADCAST_INTERVAL_S = 5.0
 WEB_PORT = 5000  # iSpy Flask default
 
-
 def _local_ip() -> str:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -21,10 +20,8 @@ def _local_ip() -> str:
     except Exception:
         return "127.0.0.1"
 
-
 def _hostname() -> str:
     return socket.gethostname()
-
 
 def _broadcast_addr(ip: str) -> str:
     parts = ip.split(".")
@@ -32,7 +29,6 @@ def _broadcast_addr(ip: str) -> str:
         return "255.255.255.255"
     parts[-1] = "255"
     return ".".join(parts)
-
 
 def build_payload() -> bytes:
     data = {
@@ -42,7 +38,6 @@ def build_payload() -> bytes:
     }
     return MAGIC + json.dumps(data).encode("utf-8")
 
-
 def send_announcement(sock: socket.socket, payload: bytes) -> None:
     ip = _local_ip()
     bcast = _broadcast_addr(ip)
@@ -50,7 +45,6 @@ def send_announcement(sock: socket.socket, payload: bytes) -> None:
         sock.sendto(payload, (bcast, BROADCAST_PORT))
     except OSError as exc:
         logger.debug("announce: sendto %s failed: %s", bcast, exc)
-
 
 def announce_loop(stop_event: threading.Event | None = None) -> None:
     stop = stop_event or threading.Event()
@@ -70,13 +64,11 @@ def announce_loop(stop_event: threading.Event | None = None) -> None:
     finally:
         sock.close()
 
-
 def start_announcer(daemon: bool = True) -> threading.Event:
     stop_event = threading.Event()
     t = threading.Thread(target=announce_loop, args=(stop_event,), daemon=daemon)
     t.start()
     return stop_event
-
 
 def main() -> None:
     logging.basicConfig(
@@ -88,7 +80,6 @@ def main() -> None:
         announce_loop()
     except KeyboardInterrupt:
         logger.info("announce: shutting down")
-
 
 if __name__ == "__main__":
     main()

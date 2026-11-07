@@ -17,17 +17,10 @@ _RESTART_REQUIRED_KEYS = {
     "camera_configs",
     "device",
     "num_gpus",
-    # add-ons are constructed at boot, so the offline gate only re-evaluates
-    # after a restart
     "offline_mode",
-    # the web-enable decision, the module scheduler and the loop knobs are
-    # all set up at boot
     "performance_level",
-    # the child reads this when it starts; the supervisor re-reads it when it
-    # owns the port, so a restart keeps both sides in sync
     "allow_remote_restart",
 }
-
 
 def _detect_gpu_count() -> int:
     try:
@@ -38,7 +31,6 @@ def _detect_gpu_count() -> int:
         return 0
     except Exception:
         return 0
-
 
 class SettingsModule(WebModule):
     plugin_name = "settings"
@@ -89,8 +81,6 @@ class SettingsModule(WebModule):
         flask_app.add_url_rule(
             "/api/settings/import", "api_settings_import", self._import, methods=["POST"]
         )
-        # get the running level and the whole table, set the configured level
-        # (a restart applies it)
         flask_app.add_url_rule(
             "/api/performance",
             "api_performance_get",
@@ -127,8 +117,6 @@ class SettingsModule(WebModule):
         level = performance.clamp(data.get("level"))
         if level is None:
             return jsonify(error="level must be an integer 0-4"), 400
-        # the UI handles the level-0 countdown, but the raw JSON editor and
-        # curl can still reach this route - require the explicit flag
         if level == 0 and not data.get("confirm_max"):
             return jsonify(
                 error=(
@@ -169,8 +157,6 @@ class SettingsModule(WebModule):
             old_offline = bool(config.get("offline_mode", False))
             config._update_config(data)
             config.save()
-            # the imported file owns offline_mode - not ours to silently drop
-            # or flip - but say so, or it reads as the internet randomly breaking
             new_offline = bool(config.get("offline_mode", False))
             if old_offline != new_offline:
                 logger.warning(
@@ -237,8 +223,6 @@ class SettingsModule(WebModule):
             ), 404
         config = self.context["config"]
         config.config = snap["config"]
-        # whole config dict was swapped underneath the camera wrappers -
-        # normalize + rebuild them like _update_config does
         from iSpy.config.iSpyConfig import ensure_camera_entries_ready
 
         ensure_camera_entries_ready(config.config.get("camera_configs", {}))
@@ -266,9 +250,6 @@ class SettingsModule(WebModule):
                 changed_keys & (_RESTART_REQUIRED_KEYS | frontend_restart_keys)
             )
 
-            # push critical post-save recommendations to the dashboard via SSE so
-            # they show up in real time, not only when someone visits
-            # /recommendations
             recs = get_structured_recommendations(config.config)
             critical = [r for r in recs if r["severity"] == "critical"]
             dash = self.context.get("dashboard_module")

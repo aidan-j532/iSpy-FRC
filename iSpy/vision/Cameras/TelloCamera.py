@@ -8,23 +8,16 @@ import cv2
 from iSpy.config.iSpyConfig import iSpyCameraConfig
 from iSpy.vision.Cameras.OpenCVCamera import OpenCVCamera
 
-# Defaults for a stock DJI Tello / Tello Edu with its onboard access point.
 _TELLO_DEFAULT_IP = "192.168.10.1"
 _TELLO_DEFAULT_COMMAND_PORT = 8889
 _TELLO_DEFAULT_VIDEO_PORT = 11111
 
-# at-command handshake. the drone only opens the udp stream once told to, so this
-# has to happen before opencv touches the udp:// source
 _COMMAND_TIMEOUT_S = 3.0
 _HANDSHAKE_RETRIES = 3
 _HANDSHAKE_RETRY_DELAY_S = 1.0
 
-# the first _open_camera runs sync from __init__, so one fast attempt - a full
-# retry loop would stall startup ~20s when the drone isnt up yet. real retries
-# happen on the reader threads reconnect
 _QUICK_HANDSHAKE_RETRIES = 1
 _QUICK_COMMAND_TIMEOUT_S = 1.5
-
 
 class TelloCamera(OpenCVCamera):
     camera_type = "tello"
@@ -110,8 +103,6 @@ class TelloCamera(OpenCVCamera):
             self._command_port = _TELLO_DEFAULT_COMMAND_PORT
             self._video_port = _TELLO_DEFAULT_VIDEO_PORT
 
-        # Keep a log-line handle available even if the camera config doesn't
-        # carry it, so the handshake messages label the right camera.
         self._tello_source_label = str(camera_config.get("name", "tello"))
 
         self.logger = logging.getLogger(__name__)
@@ -120,9 +111,6 @@ class TelloCamera(OpenCVCamera):
         if not isinstance(camera_config.get("source"), str) or not self._is_tello_url(
             camera_config.get("source")
         ):
-            # Convenience: if the user left source as a device index or a bare
-            # "tello_source", point it at the default UDP stream so the
-            # subclass just works out of the box.
             merged = deepcopy(
                 camera_config.data
                 if hasattr(camera_config, "data")
@@ -137,10 +125,6 @@ class TelloCamera(OpenCVCamera):
     def _is_tello_url(source) -> bool:
         return isinstance(source, str) and source.startswith("udp://")
 
-    # OpenCV needs the FFmpeg backend to decode the Tello's UDP H.264 stream -
-    # the default backends (MSMF / V4L2) can't open a udp:// source, and the
-    # base _open_capture bypasses backends entirely for URL sources. Force the
-    # FFmpeg backend explicitly for the udp stream.
     def _open_capture(self, extra_backends: bool = False, prefer_dshow: bool = False):
         try:
             cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
@@ -194,8 +178,6 @@ class TelloCamera(OpenCVCamera):
         retries = _QUICK_HANDSHAKE_RETRIES if quick else _HANDSHAKE_RETRIES
         timeout = _QUICK_COMMAND_TIMEOUT_S if quick else _COMMAND_TIMEOUT_S
         for attempt in range(retries):
-            # "command" switches the drone from SDK-off to command mode; only
-            # then does it accept "streamon".
             if self._send_command("command", timeout=timeout) and self._send_command(
                 "streamon", timeout=timeout
             ):
@@ -213,16 +195,12 @@ class TelloCamera(OpenCVCamera):
 
     def _open_camera(self):
         quick = self._first_open_attempt
-        # Negotiate with the drone first. If we can't reach it yet, raise so the
-        # base lifecycle keeps the placeholder and the reader thread keeps
-        # retrying (via _attempt_reconnect) until the drone is found.
         if not self._ensure_stream(quick=quick):
             raise ValueError(
                 f"Tello {self._tello_source_label}: unable to start video stream "
                 f"at {self._tello_ip}:{self._command_port}."
             )
 
-        # Video needs a moment to actually start flowing before OpenCV grabs.
         time.sleep(0.5)
 
         self.cap = self._open_capture()
@@ -245,6 +223,4 @@ class TelloCamera(OpenCVCamera):
         self._first_open_attempt = False
 
     def _attempt_reconnect(self) -> bool:
-        # Re-running _open_camera re-sends command/streamon, which is what we
-        # want when the drone (or its video stream) drops out.
         return super()._attempt_reconnect()

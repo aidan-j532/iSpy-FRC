@@ -9,7 +9,6 @@ def _addon_setting(
         return default
     return entry.get(key, default)
 
-
 def get_structured_recommendations(config: dict) -> list[dict]:
     out = []
 
@@ -18,7 +17,6 @@ def get_structured_recommendations(config: dict) -> list[dict]:
 
     for cam_name, cam_cfg in config.get("camera_configs", {}).items():
         calib = cam_cfg.get("calibration", {})
-        # calibrated intrinsics are a valid calibration on their own
         if (
             calib.get("camera_matrix") is None
             and calib.get("size", 0) == 0
@@ -42,7 +40,6 @@ def get_structured_recommendations(config: dict) -> list[dict]:
                 f"Camera '{cam_name}' has no saved device_id - it may not survive a USB replug/reindex.",
             )
 
-    # dbscan/tracking settings live in their add-ons now; add-on not enabled = no rec, since it aint running
     eps = _addon_setting(config, "trackers", "path_planner", "epsilon", None)
     if eps is not None and eps == 0:
         add(

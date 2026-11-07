@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-
 def ensure_quantized_model(
     source_pt,
     target_format="auto",
@@ -28,7 +27,6 @@ def ensure_quantized_model(
         target_format = recommend_format()
 
     if target_format == "tpu":
-        # TPU backends consume the .pt directly via torch_xla at runtime.
         return source_pt, True
 
     if target_format not in {"onnx", "rknn", "tflite", "openvino", "engine", "coreml"}:
@@ -73,10 +71,8 @@ def ensure_quantized_model(
     logger.info("Quantized artifact ready: %s", artifact)
     return str(artifact), True
 
-
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
-
 
 class _CalibrationDataReader:
     def __init__(self, image_paths, input_size, mean=None, std=None):
@@ -115,7 +111,6 @@ class _CalibrationDataReader:
     def rewind(self):
         self._index = 0
 
-
 def _calibration_image_paths(dataset_path) -> list:
     ds = Path(dataset_path)
     if not ds.exists():
@@ -139,7 +134,6 @@ def _calibration_image_paths(dataset_path) -> list:
             for ext in ("*.jpg", "*.jpeg", "*.png", "*.bmp"):
                 paths.extend(ds.rglob(ext))
     return paths
-
 
 def _quantize_static_onnx(fp32_path: Path, int8_path: Path, dataset_path, input_size):
     from onnxruntime.quantization import QuantFormat, QuantType, quantize_static
@@ -165,22 +159,18 @@ def _quantize_static_onnx(fp32_path: Path, int8_path: Path, dataset_path, input_
         weight_type=QuantType.QInt8,
     )
 
-
 def _artifact_loads(path: Path) -> bool:
     if not path.exists():
         return False
     try:
         import onnxruntime as ort
 
-        # ORT's own W logs (e.g. probing /sys/class/drm/* on NPU boards)
-        # are noise, not errors - keep the stream at ERROR.
         ort.set_default_logger_severity(3)
         ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
         return True
     except Exception as exc:
         logger.warning("Cached ONNX artifact %s failed to load (%s).", path.name, exc)
         return False
-
 
 def ensure_onnx_model(
     build_module,
@@ -190,8 +180,6 @@ def ensure_onnx_model(
     force=False,
     dataset_path=None,
 ):
-    # repair the logging tables (rknnlite may have clobbered them) and pull
-    # torch in once, before any export work starts
     from iSpy.vision._safe_imports import ensure_torch_imported
 
     ensure_torch_imported()
@@ -206,12 +194,9 @@ def ensure_onnx_model(
     out_dir = _PROJECT_ROOT / "YoloModels" / "onnx"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # input size baked into the artifact name so changing it forces a rebuild
-    # instead of silently reusing a stale export
     size_tag = f"{height}x{width}"
     fp32_path = out_dir / f"{artifact_stem}_{size_tag}.onnx"
     int8_path = out_dir / f"{artifact_stem}_{size_tag}_int8.onnx"
-    # legacy/hand-copied artifact names (no size tag)
     legacy_fp32 = out_dir / f"{artifact_stem}.onnx"
     legacy_int8 = out_dir / f"{artifact_stem}_int8.onnx"
 
@@ -233,8 +218,6 @@ def ensure_onnx_model(
             raise TypeError("build_module must return a torch.nn.Module")
         model.eval()
         dummy = torch.zeros(1, 3, height, width)
-        # transformers emits harmless TracerWarnings during tracing (python
-        # bool/int control flow). they don't affect the export, only the log.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             torch.onnx.export(
@@ -248,7 +231,6 @@ def ensure_onnx_model(
             )
     except Exception as exc:
         logger.warning("ONNX export of %s failed (%s).", artifact_stem, exc)
-        # offline fallback: keep the camera running on an existing fp32 copy
         if quantize:
             for candidate in (fp32_path, legacy_fp32):
                 if _artifact_loads(candidate):

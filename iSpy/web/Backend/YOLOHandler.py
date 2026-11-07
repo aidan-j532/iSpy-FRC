@@ -7,13 +7,11 @@ from flask import jsonify, request
 _PROJECT_ROOT = Path.cwd()
 _YOLO_DIR = _PROJECT_ROOT / "YoloModels"
 
-
 def _model_rel_path(path: Path) -> str:
     try:
         return path.resolve().relative_to(_PROJECT_ROOT.resolve()).as_posix()
     except ValueError:
         return str(path)
-
 
 def _target_format(settings: dict) -> str:
     fmt = str(settings.get("target_format") or "auto").strip().lower()
@@ -25,7 +23,6 @@ def _target_format(settings: dict) -> str:
         return ObjectDetectionPipeline.recommended_format()
     except Exception:
         return "onnx"
-
 
 class YOLOHandler(UtilityBase):
     plugin_name = "yolo_handler"
@@ -46,12 +43,6 @@ class YOLOHandler(UtilityBase):
         if not p.exists():
             return jsonify(error=f"Model not found: {p}"), 404
 
-        # model selection lives in each model-backed camera's pipeline
-        # settings (per-camera vision_model blocks) - never at the config
-        # root, where it gets ignored and trips the next boot. source_pt
-        # always points at the .pt; file_path points at an already-built
-        # optimized artifact for it so a stale artifact from a previous
-        # pick can't keep an old model running.
         from iSpy.vision.optimizer import existing_artifact_for
 
         updated = []

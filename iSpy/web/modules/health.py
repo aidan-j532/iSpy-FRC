@@ -9,10 +9,7 @@ from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
 
-# the only color presets a health contributor may choose. anything else falls
-# back to green (or red when the legacy "ok": False flag is used)
 COLOR_PRESETS = ("green", "yellow", "red")
-
 
 class HealthModule(WebModule):
     plugin_name = "health"
@@ -29,8 +26,6 @@ class HealthModule(WebModule):
         self._loop_count = 0
         self._last_tick = time.perf_counter()
         self._uptime_start = time.perf_counter()
-        # single canonical health implementation merged the old
-        # health_reporter/status_reporter add-ons into this always-on module)
         self._stale_threshold = float(config.get("health_stale_threshold", 1.0) or 1.0)
 
     def set_cameras(self, cameras):
@@ -38,13 +33,10 @@ class HealthModule(WebModule):
             self.cameras = cameras
 
     def register_routes(self, flask_app):
-        # minimal stable contract for watchdogs - external tooling may depend on the shape
         flask_app.add_url_rule("/health", "health", self._health_route)
-        # fuller payload: uptime, loop_count, per-cam detail
         flask_app.add_url_rule(
             "/health/detailed", "health_detailed", self._detailed_route
         )
-        # human-facing page: everything above + live plugin status
         flask_app.add_url_rule(
             "/health-page", "health_page", lambda: render_template("health.html")
         )
@@ -121,8 +113,6 @@ class HealthModule(WebModule):
         }, healthy
 
     def _performance_entry(self) -> dict:
-        # always visible: at levels 0-1 it is intentionally degraded UX, so it
-        # reads yellow. own payload key so addon_health stays add-ons only
         profile = performance.get_profile()
         state = f"{profile.label} ({profile.level})"
         if not profile.web_enabled:
@@ -192,8 +182,6 @@ class HealthModule(WebModule):
                 }
             )
 
-        # skipped add-ons were never constructed, no instance to ask - surface
-        # them from the report. yellow, pipelines left to their camera row
         for skip in network_policy.get_report().get("skipped", []):
             if str(skip.get("kind")) == "pipeline":
                 continue
@@ -232,7 +220,6 @@ class HealthModule(WebModule):
 
     def _health_route(self):
         payload, healthy = self._build_payload()
-        # keep the body minimal/stable for watchdogs
         return jsonify(status=payload["status"], uptime_s=payload["uptime_s"]), (
             200 if healthy else 503
         )

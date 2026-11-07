@@ -1,8 +1,6 @@
 import numpy as np
 
-
 class KalmanTrack:
-    # fixed measurement model: only observe the 3 position components
     _H = np.array(
         [
             [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -21,7 +19,6 @@ class KalmanTrack:
         self.x = np.concatenate([pos, np.zeros(3)]) # Im like 90% this is [x, y, z, vx, vy, vz]
         self.P = np.eye(6) * 1.0
         self.Q = np.eye(6) * max(process_noise, 0.0)
-        # velocity elements of process noise get a little extra
         self.Q[3:, 3:] = self.Q[3:, 3:] * 2.0
         self.R = np.eye(3) * max(measurement_noise, 0.0)
 

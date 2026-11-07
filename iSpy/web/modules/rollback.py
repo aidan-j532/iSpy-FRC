@@ -29,10 +29,6 @@ from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
 
-# a scrub through a segment asks for the same frames over and over, and an MJPG
-# avi is cheap to decode but not free - so both the open capture and the encoded
-# jpegs are held. everything here is process-wide and guarded by one lock.
-# reentrant because _encoded calls _capture_for while the caller holds it
 _CAPS = {}
 _FRAMES = {}
 _FRAME_ORDER = []
@@ -40,17 +36,11 @@ _CAPS_LOCK = threading.RLock()
 _MAX_CAPS = 4
 _MAX_FRAMES = 48
 
-# segment file -> (mtime_ns, size, record count). counting a segment's frames
-# means parsing its whole sidecar, and the Recordings list sums that over every
-# segment on the card, so the count is memoised against the file's identity and
-# only re-read when the file has actually changed
 _SEGMENT_FRAMES = {}
 _MAX_CACHED_SEGMENTS = 512
 
 _JPEG_QUALITY = 85
 
-# the rollback block is the recorder's, so the settings form is derived from its
-# own schema - the UI can never drift from what the recorder accepts
 _NUMERIC_SETTINGS = {
     "fps": float,
     "max_queue": int,
@@ -61,7 +51,6 @@ _NUMERIC_SETTINGS = {
 _TEXT_SETTINGS = ("data_dir",)
 _BOOL_SETTINGS = ("enabled",)
 
-# sanity floors, so a typo in the form cannot wedge the recorder
 _MINIMUMS = {
     "fps": 0.5,
     "max_queue": 1,
@@ -70,10 +59,8 @@ _MINIMUMS = {
     "max_total_mb": 1,
 }
 
-
 def _mb(num_bytes) -> float:
     return round(float(num_bytes or 0) / (1024 * 1024), 2)
-
 
 def _segment_sidecar(seg):
     for path in seg["files"]:
@@ -81,12 +68,7 @@ def _segment_sidecar(seg):
             return path
     return None
 
-
 def _segment_frames(seg) -> int:
-    # the number of records in a segment's sidecar. this is the expensive part
-    # of listing a session, so it is cached against the file's identity - a
-    # closed segment's count can never change, and the open one is re-read only
-    # while its size or mtime moves
     path = _segment_sidecar(seg)
     if path is None:
         return 0
@@ -102,18 +84,14 @@ def _segment_frames(seg) -> int:
 
     count = len(read_sidecar(path).get("records") or [])
     if len(_SEGMENT_FRAMES) >= _MAX_CACHED_SEGMENTS:
-        # a deleted segment must not keep its entry (and its count) forever
         for stale in [k for k in _SEGMENT_FRAMES if not Path(k).exists()]:
             _SEGMENT_FRAMES.pop(stale, None)
     _SEGMENT_FRAMES[key] = (stat.st_mtime_ns, stat.st_size, count)
     return count
 
-
 def _segment_header(seg) -> dict:
-    # started/fps/cams without touching the records array
     path = _segment_sidecar(seg)
     return read_sidecar_header(path) if path is not None else {}
-
 
 def _capture_for(path: Path):
     with _CAPS_LOCK:
@@ -121,10 +99,6 @@ def _capture_for(path: Path):
         if cap is not None:
             return cap
         while len(_CAPS) >= _MAX_CAPS:
-            # evict the OLDEST capture. popitem() with no argument is LIFO, so
-            # it threw away the clip that had just been opened and kept the
-            # stale one - the player then re-opened the same file on every
-            # scrub and thrashed the disk
             oldest = next(iter(_CAPS))
             try:
                 _CAPS.pop(oldest).release()
@@ -134,11 +108,7 @@ def _capture_for(path: Path):
         _CAPS[str(path)] = cap
         return cap
 
-
 def _release_tree(root: Path) -> None:
-    # windows will not unlink a file that is still open, so any cached capture
-    # for a segment inside this tree has to be closed before a delete. without
-    # this, deleting the session you are previewing silently fails
     prefix = str(root)
     with _CAPS_LOCK:
         for key in [k for k in _CAPS if k.startswith(prefix)]:
@@ -151,7 +121,6 @@ def _release_tree(root: Path) -> None:
             if key in _FRAME_ORDER:
                 _FRAME_ORDER.remove(key)
 
-
 def _encoded(path: Path, index: int):
     key = (str(path), int(index))
     hit = _FRAMES.get(key)
@@ -161,9 +130,6 @@ def _encoded(path: Path, index: int):
     cap = _capture_for(path)
     if cap is None or not cap.isOpened():
         return None
-    # a seek past the end, or a segment whose writer died mid-file, just means
-    # the frame is not there. do not fall back to frame 0 - that would silently
-    # show the wrong picture on a scrub
     if not cap.set(cv2.CAP_PROP_POS_FRAMES, int(index)):
         return None
     ok, frame = cap.read()
@@ -182,11 +148,7 @@ def _encoded(path: Path, index: int):
         _FRAMES.pop(_FRAME_ORDER.pop(0), None)
     return payload
 
-
 def _trim_pose(pose) -> dict:
-    # jsonify emits a bare NaN token, which is not valid JSON - res.json() then
-    # throws in the browser and the whole segment loads with an empty timeline.
-    # the EKF pose path can produce NaN, so every number is coerced here
     if not isinstance(pose, dict):
         return {}
 
@@ -199,10 +161,7 @@ def _trim_pose(pose) -> dict:
 
     return {"x": _f("x"), "y": _f("y"), "heading": _f("heading")}
 
-
 def _trim_detection(det: dict) -> dict:
-    # only what the player draws - the full record carries keypoints and rays
-    # that would bloat every scrub request
     def _f(k, default=0.0):
         try:
             v = det.get(k, default)
@@ -226,7 +185,6 @@ def _trim_detection(det: dict) -> dict:
         "vis_type": str(det.get("vis_type", "generic")),
     }
 
-
 class RollbackModule(WebModule):
     plugin_name = "rollback"
 
@@ -234,11 +192,6 @@ class RollbackModule(WebModule):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
         self._last_retention = None
-        # session.json is rewritten every time the recorder opens a segment
-        # (to capture calibration set mid-run), so a bare "read once per name"
-        # cache serves a stale calibration to the active session's overlay.
-        # Keyed on (name -> (mtime_ns, meta)) instead: unchanged files are
-        # still read only once.
         self._session_meta_cache = {}
 
     def _session_meta(self, session) -> dict:
@@ -259,11 +212,7 @@ class RollbackModule(WebModule):
         self._session_meta_cache[key] = (stamp, meta)
         return meta
 
-    # lookups
-
     def _recorder(self):
-        # the live RollBack instance lives in vision.utilities, not in the web
-        # app, so live counters have to be asked for rather than held here
         vision = self.context.get("vision_instance")
         if vision is None:
             return None
@@ -281,8 +230,6 @@ class RollbackModule(WebModule):
         return Path(block.get("data_dir") or RollBack.config_schema()["data_dir"]["default"])
 
     def _find_session(self, name: str):
-        # resolved through _iter_sessions rather than joined from the URL, so a
-        # crafted name can never walk out of data_dir
         for session in _iter_sessions(self._data_dir()):
             if session["name"] == name:
                 return session
@@ -305,8 +252,6 @@ class RollbackModule(WebModule):
         for path in videos:
             if path.stem == wanted:
                 return path
-        # a legacy flat segment has one file and no cam list - the recorded
-        # camera name is unknown, so serve it under its own filename
         if len(videos) == 1 and not seg["cams"]:
             return videos[0]
         return None
@@ -315,8 +260,6 @@ class RollbackModule(WebModule):
         for path in seg["files"]:
             if path.suffix.lower() != ".json":
                 continue
-            # crash tolerant: a sidecar cut off mid-write still lists, and
-            # still plays back everything it managed to write
             return read_sidecar(path)
         return {}
 
@@ -333,9 +276,6 @@ class RollbackModule(WebModule):
             "started": header.get("started"),
             "fps": header.get("fps"),
             "has_sidecar": bool(frames),
-            # the open segment has no avi index yet and a cached capture never
-            # sees the frames still being appended, so the player must not offer
-            # it as scrubbable
             "recording": seg["stem"] == self._open_stem(),
             "size_mb": _mb(sum(_file_size(p) for p in seg["files"])),
             "clips": [
@@ -347,14 +287,10 @@ class RollbackModule(WebModule):
         }
 
     def _open_stem(self):
-        # the segment the live recorder is writing to, if there is one. only the
-        # recorder knows which file is still open
         recorder = self._recorder()
         if recorder is None or not getattr(recorder, "_started", False):
             return None
         return getattr(recorder, "_stem", None)
-
-    # routes
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule(
@@ -437,8 +373,6 @@ class RollbackModule(WebModule):
             methods=["GET"],
         )
 
-    # status and settings
-
     def _status(self):
         data_dir = self._data_dir()
         sessions = _iter_sessions(data_dir)
@@ -479,8 +413,6 @@ class RollbackModule(WebModule):
             free = None
 
         return jsonify(
-            # runtime state, not the config value - the profile can turn the
-            # recorder off for this run (level 0) without touching config.json
             enabled=bool(getattr(recorder, "_enabled", block.get("enabled", True))),
             performance_off=bool(getattr(recorder, "_disabled_by_profile", False)),
             replay_mode=replay_mode,
@@ -588,14 +520,9 @@ class RollbackModule(WebModule):
             payload["rejected"] = rejected
         return jsonify(payload)
 
-    # sessions
-
     def _session_row(self, session) -> dict:
         path = session["path"]
         started = session.get("started")
-        # the cameras, version and unit all live in session.json - reading them
-        # from there is what kept _session_row from having to parse every
-        # sidecar in the session just to label the row
         meta = self._session_meta(session)
         segments = _iter_segments(path)
         return {
@@ -628,9 +555,6 @@ class RollbackModule(WebModule):
         return jsonify(session=row)
 
     def _prune(self):
-        # the same oldest-unpinned-first walk the recorder does when it opens a
-        # segment, but run on demand from the tab. the recorder keeps its own
-        # copy so its rotation path stays independent of the web app
         data_dir = self._data_dir()
         config = self.context.get("config")
         block = config.get("rollback", {}) if config is not None else {}
@@ -649,7 +573,6 @@ class RollbackModule(WebModule):
                 break
             if session["name"] == active or session["pinned"]:
                 continue
-            # same as the delete endpoint: an open capture would block the rmtree
             _release_tree(session["path"])
             if not _delete_session(session):
                 continue
@@ -703,17 +626,12 @@ class RollbackModule(WebModule):
         active = session_name == getattr(recorder, "_session_name", None)
         if active:
             return jsonify(error="That is the session being recorded right now"), 400
-        # the player may be holding this session's segments open right now
         _release_tree(session["path"])
         if not _delete_session(session):
             return jsonify(error="Could not delete the session"), 500
         self._session_meta_cache.pop(session_name, None)
         self.logger.info("Deleted session %s from the web UI", session_name)
         return jsonify(success=True)
-
-
-
-    # playback
 
     def _segment(self, session_name, stem):
         session = self._find_session(session_name)
@@ -750,10 +668,6 @@ class RollbackModule(WebModule):
                 }
             )
 
-        # the cameras and unit come from the cached session.json rather than a
-        # fresh _session_row(): this route is hit on every segment change, and
-        # _session_row() walks and sizes the whole session to produce numbers
-        # the player does not use here
         meta = self._session_meta(session)
         return jsonify(
             segment=self._segment_payload(seg),
@@ -764,12 +678,6 @@ class RollbackModule(WebModule):
         )
 
     def _camera_meta(self, session) -> dict:
-        # session.json stores the camera offsets as raw config values, but the
-        # detections in the sidecar are already in the config's OUTPUT unit
-        # (metres for frc, since FRC geometry is entered in inches). converting
-        # here - where the unit is known - means the player subtracts a camera
-        # offset in the same unit it projects with, instead of the template
-        # carrying a copy of the conversion table
         meta = self._session_meta(session)
         cams = meta.get("cameras")
         if not isinstance(cams, dict):
@@ -823,7 +731,6 @@ class RollbackModule(WebModule):
         if err is not None:
             return err
         return send_file(str(path), as_attachment=True, download_name=path.name)
-
 
 def _file_size(path: Path) -> int:
     try:

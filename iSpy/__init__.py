@@ -1,12 +1,9 @@
 import os
 
-# Stop the opencv log spam befre imported
 os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
 os.environ["OPENCV_VIDEOIO_LOG_LEVEL"] = "SILENT"
 
-
 def _detect_version() -> str:
-    # pyproject.toml is the single source of truth. 
     try:
         from importlib.metadata import version
 
@@ -26,6 +23,5 @@ def _detect_version() -> str:
     except Exception:
         pass
     return "0.0.0+unknown"
-
 
 __version__ = _detect_version()

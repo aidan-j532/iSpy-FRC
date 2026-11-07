@@ -1,9 +1,7 @@
 import cv2
 
-
 def clamp(value, minimum=0.0, maximum=100.0):
     return max(minimum, min(maximum, value))
-
 
 def validate_camera_frame(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -35,7 +33,6 @@ def validate_camera_frame(frame):
         "sharpness": round(sharpness_score, 1),
         "exposure": round(exposure_score, 1),
         "contrast": round(contrast_score, 1),
-        # Raw values are useful for debugging/tuning
         "raw": {
             "sharpness": sharpness,
             "dark_pixels": dark,

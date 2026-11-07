@@ -4,7 +4,6 @@ from flask import jsonify, request
 
 from iSpy.plugins.bases import UtilityBase
 
-
 class TargetSelector(UtilityBase):
     plugin_name = "target_selector"
 
@@ -101,8 +100,6 @@ class TargetSelector(UtilityBase):
 
         selected_id = selection.selected_id
         if selected_id is None:
-            # nothing selected - explicit None so any subscriber clears its
-            # last target rather than seeing a stale value
             self.publish_output(frame_data, None)
             return
 
@@ -116,8 +113,6 @@ class TargetSelector(UtilityBase):
             and selection.age_s() is not None
             and selection.age_s() < self.reacquire_timeout_s
         ):
-            # briefly dropped out - hold the lock but publish nothing new this
-            # tick so the robot keeps its last target instead of a cleared one
             return
 
         self.publish_output(frame_data, obj.to_dict() if obj else None)

@@ -1,4 +1,4 @@
-/* iSpy Design System */
+
 :root {
   --bg: #0d1117;
   --bg-elevated: #161b22;
@@ -106,8 +106,7 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 12px 0; }
 .card-full { grid-column: 1 / -1; }
 .card-full h3 .part-note { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-dim); }
 
-/* Metrics page: the four top charts (FPS, Loop, Vision, Camera Lag) always
-   span the full content width in one row instead of auto-wrapping. */
+
 .metrics-grid { grid-template-columns: repeat(4, 1fr); align-items: stretch; }
 @media (max-width: 1100px) { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 600px) { .metrics-grid { grid-template-columns: 1fr; } }
@@ -128,10 +127,7 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 12px 0; }
 .status-bad { background: var(--bad); }
 .status-warn { background: var(--warn); }
 
-/* Flash 'off' half of the blink: a single shared timer in cameras.html
-   toggles this class on every dot at once (per-dot CSS animations each run
-   their own phase and drift out of sync), so header + footer + all cards
-   blink together. Yellow blinks slow, red fast; green stays solid. */
+
 .status-dot.status-hidden { opacity: 0.12; }
 
 button, .btn {
@@ -303,7 +299,7 @@ pre {
 .sys-label { color: var(--text-dim); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .sys-val { font-family: var(--mono); font-size: 0.9rem; }
 
-/* Hardware accelerators (added by vision pipelines) */
+
 .hw-list { display: flex; flex-direction: column; margin-top: 12px; gap: 10px; }
 .hw-row { transition: opacity 0.15s ease; }
 .hw-head { display: flex; align-items: baseline; gap: 8px; }
@@ -449,7 +445,7 @@ pre {
   background: var(--warn-dim); color: var(--warn); font-size: 0.68rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; margin-left: 8px;
 }
-/* Performance profile slider (Settings > General) */
+
 .perf-wrap { display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
 .perf-head { display: flex; align-items: center; gap: 8px; }
 .perf-level-label { font-weight: 600; }
@@ -586,7 +582,7 @@ pre {
 
     background: rgba(0, 0, 0, 0.65);
 
-    /* Block interaction with everything underneath */
+    
     pointer-events: all;
     touch-action: none;
     user-select: none;
@@ -660,9 +656,7 @@ body.connection-lost {
 
 .chart-card { position: relative; }
 .chart-card canvas {
-  /* Charts keep a stable height instead of re-flowing with every grid
-     column that snaps in/out as the window resizes. With
-     maintainAspectRatio:false (metrics.html) the canvas fills this box. */
+  
   width: 100%;
   height: 210px;
   max-height: 210px;

@@ -7,7 +7,7 @@ import hashlib
 import getpass
 from pathlib import Path
 
-# make the iSpy package importable even when this file is run directly 
+# make the ispy package importable even when this file is run directly
 if str(Path(__file__).resolve().parents[2]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -15,11 +15,10 @@ from iSpy.boot._venv import record_python
 
 SERVICE_NAME = "iSpy"
 FIRST_BOOT_SERVICE_NAME = "ispy-first-boot"
-# `ispy start -s` installs the unit while the foreground supervisor still owns
-# port 5000. Starting systemd immediately would create a second supervisor that
-# fails to bind. The child sets this so installation only enables the unit.
 DEFER_SERVICE_START_ENV = "ISPY_DEFER_SERVICE_START"
-
+# ispy start -s installs the unit while the foreground supervisor still owns
+# port 5000. starting systemd immediately would create a second supervisor
+# that fails to bind. the child sets this so installation only enables the unit
 
 def _defer_service_start() -> bool:
     return os.environ.get(DEFER_SERVICE_START_ENV, "").strip().lower() in (
@@ -59,14 +58,12 @@ def _board_identifier() -> str:
 
     return socket.gethostname()
 
-
 def default_mdns_hostname() -> str:
     override = os.environ.get(MDNS_HOSTNAME_ENV, "").strip()
     if override:
         return override
     digest = hashlib.sha256(_board_identifier().encode()).hexdigest()[:6]
     return f"{MDNS_HOSTNAME}-{digest}"
-
 
 def setup_mdns(hostname: str | None = None) -> None:
     hostname = hostname or default_mdns_hostname()
@@ -109,7 +106,6 @@ def setup_mdns(hostname: str | None = None) -> None:
 
     _configure_dhcp_hostname(hostname)
 
-
 def _setup_mdns_macos(hostname: str | None = None) -> None:
     hostname = hostname or default_mdns_hostname()
     current = run(["scutil", "--get", "LocalHostName"], check=False).stdout.strip()
@@ -134,9 +130,8 @@ def _setup_mdns_macos(hostname: str | None = None) -> None:
     run(["sudo", "killall", "-HUP", "mDNSResponder"], check=False)
     print(f"mDNS ready - board will be reachable at http://{hostname}.local:5000")
 
-
 def _configure_dhcp_hostname(hostname: str) -> None:
-    # Try dhcpcd first (common on Raspberry Pi OS / Armbian).
+    # try dhcpcd first (common on raspberry pi os / armbian)
     dhcpcd_conf = "/etc/dhcpcd.conf"
     if os.path.exists(dhcpcd_conf):
         try:
@@ -151,7 +146,7 @@ def _configure_dhcp_hostname(hostname: str) -> None:
         except Exception as exc:
             print(f"dhcpcd: could not set hostname hint (non-fatal): {exc}")
 
-    # Try NetworkManager (used on some Armbian builds).
+    # try networkmanager (used on some armbian builds)
     nm_conns = run(
         ["sudo", "nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
         check=False,
@@ -184,7 +179,7 @@ def _configure_dhcp_hostname(hostname: str) -> None:
         except Exception as exc:
             print(f"NetworkManager: could not set DHCP hostname (non-fatal): {exc}")
 
-    # Try systemd-networkd (fallback for minimal images).
+    # try systemd-networkd (fallback for minimal images)
     networkd_dir = "/etc/systemd/network"
     if os.path.isdir(networkd_dir):
         try:
@@ -202,10 +197,8 @@ def _configure_dhcp_hostname(hostname: str) -> None:
         except Exception as exc:
             print(f"systemd-networkd: could not set DHCP hostname (non-fatal): {exc}")
 
-
 def run(cmd, check=True):
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
-
 
 def get_platform():
     if platform.system() == "Windows":
@@ -217,16 +210,13 @@ def get_platform():
         return "linux_systemd"
     return "linux_other"
 
-
 def _make_python() -> str:
     python = sys.executable
     record_python(python)
     return python
 
-
 def _systemd_is_running() -> bool:
     return os.path.isdir("/run/systemd/system")
-
 
 def setup_first_boot_service(project_root: str | None = None) -> None:
     python = _make_python()
@@ -268,7 +258,6 @@ WantedBy=multi-user.target
     else:
         print(f"Service '{FIRST_BOOT_SERVICE_NAME}' installed and enabled.")
 
-
 def _service_user() -> str:
     if hasattr(os, "geteuid"):
         try:
@@ -286,7 +275,6 @@ def _service_user() -> str:
     except Exception:
         pass
     return "pi"
-
 
 def setup_systemd(script_path, project_root: str | None = None):
     user = _service_user()
@@ -310,7 +298,7 @@ WantedBy=multi-user.target
 """
     service_file = f"/etc/systemd/system/{SERVICE_NAME}.service"
 
-    # Write via tee so we can use sudo
+    # write via tee so we can use sudo
     proc = subprocess.run(
         ["sudo", "tee", service_file], input=service, text=True, capture_output=True
     )
@@ -337,7 +325,6 @@ WantedBy=multi-user.target
     print(f"  Disable: sudo systemctl disable {SERVICE_NAME}")
     print("  Status:  http://localhost:5000 (stays available while iSpy boots/restarts)")
 
-
 def _is_admin_windows():
     try:
         import ctypes
@@ -346,15 +333,15 @@ def _is_admin_windows():
     except Exception:
         return False
 
-
 def _relaunch_as_admin_windows(cmd):
     try:
-        # write the cmd to a .bat so we avoid quoting/escaping issues through Start-Process
+        # write the cmd to a .bat so we avoid quoting/escaping issues through
+        # start-process
         public = "C:\\Users\\Public"
         bat_file = os.path.join(public, "vc_elevate.bat")
         out_file = os.path.join(public, "vc_schtasks_result.txt")
 
-        # Quote args that contain spaces
+        # quote args that contain spaces
         def quote(s):
             return f'"{s}"' if " " in s else s
 
@@ -365,7 +352,7 @@ def _relaunch_as_admin_windows(cmd):
             f.write(f"{cmd_line}\r\n")
             f.write(f'echo %ERRORLEVEL% > "{out_file}"\r\n')
 
-        # Run the bat file elevated
+        # run the bat file elevated
         ps_cmd = f"Start-Process -FilePath '{bat_file}' -Verb RunAs -Wait"
         subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], check=False)
 
@@ -388,12 +375,11 @@ def _relaunch_as_admin_windows(cmd):
         print(f"UAC elevation failed: {e}")
         return False
 
-
 def setup_windows(script_path):
     python = _make_python()
     script_path = os.path.abspath(script_path)
 
-    # Register as a scheduled task that runs at startup
+    # register as a scheduled task that runs at startup
     cmd = [
         "schtasks",
         "/create",
@@ -411,7 +397,7 @@ def setup_windows(script_path):
     if result.returncode != 0:
         print(f"Failed to create task: {result.stderr.strip()}")
 
-        # If I'm not already admin, re-run just the schtasks command elevated.
+        # if i'm not already admin, re-run just the schtasks command elevated
         if not _is_admin_windows():
             print("Requesting administrator privileges via UAC...")
             if _relaunch_as_admin_windows(cmd):
@@ -422,7 +408,8 @@ def setup_windows(script_path):
             else:
                 print("UAC elevation was declined or the task creation failed.")
 
-        # either I'm admin and schtasks still failed, or elevation got declined - fall back to a per-user startup entry
+        # either i'm admin and schtasks still failed, or elevation got
+        # declined - fall back to a per-user startup entry
         try:
             appdata = str(Path.home() / "AppData" / "Roaming")
             startup_dir = os.path.join(
@@ -450,7 +437,6 @@ def setup_windows(script_path):
     print(f"  Start:  schtasks /run /tn {SERVICE_NAME}")
     print(f"  Stop:   schtasks /end /tn {SERVICE_NAME}")
     print(f"  Remove: schtasks /delete /tn {SERVICE_NAME}")
-
 
 def setup_macos(script_path):
     python = _make_python()
@@ -489,7 +475,6 @@ def setup_macos(script_path):
     print(f"  Stop:    launchctl unload {plist_path}")
     print(f"  Remove:  rm {plist_path}")
 
-
 def setup(script_path: str, project_root: str | None = None):
     detected = get_platform()
     print(f"Detected platform: {detected}")
@@ -504,7 +489,6 @@ def setup(script_path: str, project_root: str | None = None):
     else:
         print("Unsupported platform (no systemd detected). Set up a cron job manually:")
         print(f"  @reboot {_make_python()} {os.path.abspath(script_path)}")
-
 
 if __name__ == "__main__":
     setup("watchdog.py iSpy/boot/service_daemon.py")

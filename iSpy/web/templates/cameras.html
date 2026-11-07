@@ -51,7 +51,7 @@
   </div>
 </div>
 
-<!-- shared add/edit modal, every field renders from the same schema so the two modes can never drift apart lol -->
+
 <div id="camera-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeCameraModal()">
   <div class="modal camera-modal">
 <div id="camera-modal-header">
@@ -59,7 +59,7 @@
       <span id="camera-modal-note" class="restart-badge">Restart vision to apply</span>
       <span id="pipeline-warning" class="pill warning-pill hidden"></span>
 </div>
-    <!-- model-backed pipelines offer New/Load Profile: saved runs to copy, or a blank form -->
+    
     <div id="model-profile-tabs" class="settings-tabs" style="display:none;">
       <button type="button" class="settings-tab" id="profile-tab-new" onclick="setProfileTab('new')">New Profile</button>
       <button type="button" class="settings-tab" id="profile-tab-load" onclick="setProfileTab('load')">Load Profile</button>
@@ -72,7 +72,7 @@
   </div>
 </div>
 
-<!-- camera calibration wizard: known-object (focal/FOV) + ChArUco intrinsics -->
+
 <div id="calibration-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeCalibrationWizard()">
   <div class="modal calibration-modal">
     <div id="calibration-header">

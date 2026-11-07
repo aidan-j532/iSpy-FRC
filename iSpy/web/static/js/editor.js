@@ -250,7 +250,6 @@ function updateDirtyText() {
   el.dirty.classList.toggle("dirty", state.dirty);
 }
 
-// ---------------------------------------------------------------- API
 
 async function fetchGraph({ refresh = false, paletteOnly = false } = {}) {
   const response = await fetch(
@@ -397,7 +396,6 @@ async function postGraph(url, label) {
   }
 }
 
-// ---------------------------------------------------------------- render
 
 function renderAll() {
   applyLayout();
@@ -839,7 +837,6 @@ function fieldHtml(node, key, defn) {
   return `<${wrapper} class="field ${active ? "" : "gated-off"}"><span class="field-label">${esc(label)}${required ? '<span class="required">required</span>' : ""}${ghost ? '<span class="default-badge">default</span>' : ""}</span>${control}${hint ? `<small class="field-help">${esc(hint)}</small>` : ""}</${wrapper}>`;
 }
 
-// ---------------------------------------------------------------- palette
 
 function paletteSection(title, section, items, extra = "") {
   const query = state.paletteFilter.toLowerCase();
@@ -1166,7 +1163,6 @@ function addLanePlugin(item, preferred = null) {
   return true;
 }
 
-// ---------------------------------------------------------------- inspector editing
 
 function sharedNodesFor(node) {
   if (!["frame_processor", "tracker"].includes(node.type)) return [];
@@ -1320,7 +1316,6 @@ function handleInspectorInput(event) {
   if (target.matches("[data-range-index]")) return;
   if (target.tagName === "SELECT" || target.type === "checkbox") return;
   if (target.dataset.ghost === "1") return;
-  // Update live text/number fields without re-rendering the inspector.
   const defn = definition(node, key);
   let value = target.value;
   if (defn.type === "number" && value !== "") {
@@ -1338,8 +1333,6 @@ function handleInspectorInput(event) {
     state.settingEdit.nodeId !== node.id ||
     state.settingEdit.key !== key
   ) {
-    // Record the pre-typing graph immediately so Ctrl+Z can revert the edit
-    // even before the field's change event fires.
     const before = snapshot();
     state.settingEdit = { nodeId: node.id, key, before };
     pushHistory(before);
@@ -1474,7 +1467,6 @@ function useDefaultsForSelection() {
   toast(`Applied defaults to ${nodes.length} node(s).`, "success");
 }
 
-// ---------------------------------------------------------------- node actions
 
 function selectNode(id, additive = false) {
   state.settingEdit = null;
@@ -1505,7 +1497,6 @@ function removeNodes(ids) {
             (node) => node.type !== "utility" && node.camera === plan.camera,
           )
         ) {
-          // keep ids from other lanes; nothing to do here
         }
       }
     }
@@ -1584,7 +1575,6 @@ function reorderUtility(plugin, targetIndex) {
   return true;
 }
 
-// ---------------------------------------------------------------- drop state
 
 function dragTargetColumn(item) {
   return item?.type === "camera" ? "camera" : item?.type || null;
@@ -1651,7 +1641,6 @@ function applyDropNodeState() {
   });
 }
 
-// ---------------------------------------------------------------- pointer / wheel
 
 function canvasPoint(event) {
   const rect = el.canvas.getBoundingClientRect();
@@ -1890,7 +1879,6 @@ function onWheel(event) {
   applyViewport();
 }
 
-// ---------------------------------------------------------------- palette events
 
 function onPaletteClick(event) {
   if (event.target.closest("[data-palette-refresh]")) {
@@ -1958,7 +1946,6 @@ async function refreshDevices() {
   }
 }
 
-// ---------------------------------------------------------------- toolbar
 
 function updateToolbar() {
   if (el.undo) el.undo.disabled = state.busy || !state.history.length;
@@ -2075,7 +2062,6 @@ async function useDefaultsAll() {
   toast(`Applied defaults to all ${state.nodes.length} nodes.`, "success");
 }
 
-// ---------------------------------------------------------------- modal
 
 function closeModal() {
   if (el.modalRoot) el.modalRoot.innerHTML = "";
@@ -2243,7 +2229,6 @@ async function openShortcuts() {
   );
 }
 
-// ---------------------------------------------------------------- startup / events
 
 function bindEvents() {
   el.canvas.addEventListener("pointerdown", onPointerDown);
@@ -2394,8 +2379,6 @@ function onKeyDown(event) {
   } else if (event.key === "?" || (event.shiftKey && event.key === "/")) {
     openShortcuts();
   }
-  // Arrow keys are intentionally not handled: node positions are locked to
-  // their column and lane.
 }
 
 function cacheElements() {

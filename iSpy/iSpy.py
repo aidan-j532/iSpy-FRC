@@ -34,7 +34,6 @@ while not (PROJECT_ROOT / "plugins").exists():
 
 _PLUGIN_ROOT = PROJECT_ROOT / "plugins"
 
-
 class iSpy:
     def __init__(
         self,
@@ -48,7 +47,6 @@ class iSpy:
         self.logger = logging.getLogger(__name__)
         update_service_state(phase="initializing vision")
 
-        # bring the web app up FIRST!! so the UI is reachable
         self.web_app = web_app
         if self.web_app is None and (self._dry or performance.effective_app_mode(config)):
             update_service_state(phase="starting web UI", web_enabled=True)
@@ -91,12 +89,10 @@ class iSpy:
         if self.web_app is not None:
             self.web_app.set_cameras(self.cameras)
 
-        # shared "what object is currently selected (for tracking)"
         from iSpy.plugins.selection import SelectionState
 
         self.selection = SelectionState()
 
-        # shared context for every add-on; each one gets its OWN settings view
         self._base_context = {
             "config": config,
             "global_config": config,
@@ -119,10 +115,6 @@ class iSpy:
             else:
                 self.logger.warning("Unknown tracker: %s", name)
 
-        # Lane-specific tracker instances.  A camera with an explicit
-        # ``trackers`` list runs only those trackers and only on its own
-        # tagged detections.  Cameras without the key keep the legacy global
-        # behavior, so older configs are untouched.
         self.camera_trackers: dict[str, dict] = {}
         self._camera_tracker_configs: dict[str, list[str]] = {}
         tracker_settings = dict(self._enabled_addons("trackers"))
@@ -170,10 +162,6 @@ class iSpy:
         utility_classes = load_plugins(_PLUGIN_ROOT / "utilities", UtilityBase)
         self.utilities = {}
 
-        # RollBack is core code, not an add-on: it is built from the top-level
-        # "rollback" config block whether or not anything is enabled, so it
-        # lives in self.utilities (the health check and shutdown paths iterate
-        # that dict) but never shows up in /addons
         try:
             self.utilities["rollback"] = RollBack(
                 self._addon_context(RollBack, config.get("rollback", {}))
@@ -183,8 +171,6 @@ class iSpy:
 
         for name, settings in self._enabled_addons("utilities"):
             if name == "rollback":
-                # stale entry from before rollback was core - the instance
-                # above is the only recorder, do not build a second one
                 continue
             if self.replay_mode and utility_classes.get(name) is not None and getattr(
                 utility_classes[name], "disabled_in_replay", False
@@ -215,9 +201,6 @@ class iSpy:
                 key,
             )
 
-        # Generic transform providers: components that can transform detection
-        # coordinates between frames. Core stays agnostic about what the
-        # transform means (FRC plugins supply robot-pose-based ones).
         self.transform_providers = [
             u
             for u in self.utilities.values()
@@ -249,7 +232,6 @@ class iSpy:
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
         if self.web_app:
-            # server thread already started above, just wire in what loaded since then
             dash = self.web_app.modules.get("dashboard")
             if dash and hasattr(dash, "set_plugins"):
                 dash.set_plugins(self.trackers, self.utilities, self.frame_processors)
@@ -261,18 +243,10 @@ class iSpy:
         if self.frame_processors:
             self._attach_frame_processors()
 
-        # I think this has to be at very bottom
         if self.web_app:
             self.web_app.set_vision_instance(self)
 
     def _attach_frame_processors(self):
-        """Attach each camera's configured processors, preserving legacy wiring.
-
-        A camera with no ``frame_processors`` list gets every enabled processor,
-        exactly like iSpy did before per-camera assignment existed.  An empty
-        list is an explicit "no processors on this camera"; unknown names are
-        skipped with a warning so one stale name cannot break every camera.
-        """
         for camera in self.cameras:
             cam_cfg = getattr(camera, "_camera_config", None)
             assigned = (
@@ -399,8 +373,6 @@ class iSpy:
             out.append((name, settings if isinstance(settings, dict) else {}))
         return out
 
-    # false when offline mode means this add-on must not be constructed. critical
-    # unmet need = skipped + reported, non-critical = loads degraded. never raises
     def _gate_addon(self, group: str, name: str, cls, settings: dict) -> bool:
         if not network_policy.is_offline():
             return True
@@ -528,8 +500,6 @@ class iSpy:
                 except Exception:
                     self.logger.exception("Error stopping plugin '%s'", name)
 
-
-
     @property
     def replay_mode(self) -> bool:
         return bool(self.cameras) and all(
@@ -537,8 +507,6 @@ class iSpy:
         )
 
     def _get_pose(self, code_times: dict | None = None):
-        # Reference transform is optional: iSpy does not assume a robot or any
-        # specific frame. Ask generic transform providers; fall back to replay.
         for provider in getattr(self, "transform_providers", []):
             try:
                 rp = provider.get_reference_pose()
@@ -555,8 +523,6 @@ class iSpy:
         return None
 
     def _apply_transforms(self, detections):
-        # Let registered transform providers convert detection coordinates.
-        # Core stays agnostic about what the transform means.
         for provider in getattr(self, "transform_providers", []):
             try:
                 detections = provider.transform_detections(detections)
@@ -579,7 +545,6 @@ class iSpy:
         return detections
 
     def _tracker_items_for_camera(self, camera_name: str):
-        """Return (explicit, [(name, instance)]) for one camera lane."""
         configs = getattr(self, "_camera_tracker_configs", {})
         camera_trackers = getattr(self, "camera_trackers", {})
         if camera_name in configs:
@@ -587,10 +552,6 @@ class iSpy:
         return False, list(self.trackers.items())
 
     def _detection_frame(self) -> str:
-        # The frame is a pose/publisher plugin setting: publishing
-        # robot-relative data only makes sense when a consumer that understands
-        # robot frames (e.g. the NT handler) is present. Without such a plugin
-        # (or without the setting) keep the tracked field coordinates.
         for util in getattr(self, "utilities", {}).values():
             get_frame = getattr(util, "detection_frame", None)
             if callable(get_frame):
@@ -601,8 +562,6 @@ class iSpy:
         return "field"
 
     def _run_tracker_sequence(self, detections, items, code_times):
-        # Transform (if any) is applied by providers before tracking, so
-        # trackers just merge detections in whatever frame they arrive in.
         for name, tracker in items:
             t_one = time.perf_counter()
             detections = tracker.update(detections)
@@ -612,13 +571,6 @@ class iSpy:
         return detections
 
     def _run_lane_trackers(self, detections, code_times):
-        """Run trackers per camera for multi-camera detections.
-
-        Lanes with an explicit tracker list only see objects tagged with that
-        camera.  Remaining cameras keep the legacy global tracker pipeline.
-        Triangulated objects carry every contributing camera in
-        ``source_cameras`` so both source lanes can claim them.
-        """
         configs = getattr(self, "_camera_tracker_configs", {})
         camera_trackers = getattr(self, "camera_trackers", {})
         if not configs:
@@ -695,9 +647,6 @@ class iSpy:
         for name, util in self.utilities.items():
             t0 = time.perf_counter()
             try:
-                # RollBack is core plumbing and records every frame, not a
-                # configurable detection consumer, so it always gets the full
-                # frame data.
                 scoped = (
                     frame_data
                     if name == "rollback"
@@ -734,7 +683,6 @@ class iSpy:
             return objects, frame
         except Exception:
             self.logger.exception("Solo-vision exception")
-            # never kill the loop on one pipeline error, fall back to the raw frame so the feed keeps flowing
             return [], camera.get_frame() if hasattr(camera, "get_frame") else None
 
     def validate_vision_model(self, repo_root: Path | None = None):
@@ -766,7 +714,6 @@ class iSpy:
             self.logger.error("No cameras provided.")
             return
 
-        # The supervisory status page upgrades booting -> running from this.
         update_service_state(status="running", phase="running")
 
         control = self._control_server()
@@ -917,7 +864,6 @@ class iSpy:
 
     @staticmethod
     def _camera_name(cam, index: int = 0) -> str:
-        """Resolve a camera's configured lane name, not its device path."""
         for attr in ("config", "_camera_config"):
             cfg = getattr(cam, attr, None)
             if cfg is None:
@@ -932,12 +878,8 @@ class iSpy:
 
     @classmethod
     def _camera_label(cls, cam, index: int) -> str:
-        # same naming MultipleCameraHandler.get_camera_frames() uses, so the
-        # rollback sidecar, session.json and camera_frames all agree
         return cls._camera_name(cam, index)
 
-    # does the rollback recorder actually want raw frames? the copies cost a full
-    # frame copy per camera per tick, so ask first. probe failure = assume wanted
     def _recorder_wants_frames(self) -> bool:
         recorder = self.utilities.get("rollback")
         wants = getattr(recorder, "wants_raw_frames", None)
@@ -948,8 +890,6 @@ class iSpy:
         except Exception:
             return True
 
-    # does this tick's plot()/debug-frame work have a consumer? levels 2-0
-    # skip when no feed, lightbox, viewer or dashboard SSE is watching
     def _annotations_wanted(self) -> bool:
         if not performance.get_profile().annotate_only_when_watched:
             return True
@@ -962,16 +902,11 @@ class iSpy:
             return True
 
     def _raw_frames(self, cams) -> dict:
-        # raw (pre-processor, pre-plot) frames for the rollback recorder. a
-        # camera that is disconnected or serving a stale frame is skipped rather
-        # than writing its placeholder "camera not found" image to disk
         if not self._recorder_wants_frames():
             return {}
         frames = {}
         for i, cam in enumerate(cams):
             try:
-                # a still-image source never sets _connected, and a replay
-                # camera reports a live feed of its own - neither is a fault
                 live = getattr(cam, "is_image", False) or cam._connected
                 if not live or cam.get_frame_age() > 1.0:
                     continue
@@ -988,8 +923,6 @@ class iSpy:
         code_times = {}
         camera_lag_s = camera.get_frame_age()
 
-        # grab the raw frames up front, before any processor or plot touches
-        # the camera, so the recorded pixels are the ones this tick consumed
         raw_frames = self._raw_frames([camera])
 
         t_vis = time.perf_counter()
@@ -1063,8 +996,6 @@ class iSpy:
         if hasattr(camera, "get_debug_data"):
             frame_data["debug_data"] = camera.get_debug_data() or {}
         if not camera.in_calibration_mode():
-            # plot()/debug drawing is the expensive part here - skip it when
-            # nothing is streaming or viewing (levels 2-0)
             annotate = self._annotations_wanted()
             if annotate and hasattr(camera, "get_debug_frame"):
                 debug_frame = camera.get_debug_frame(frame)
@@ -1083,20 +1014,14 @@ class iSpy:
         ages = [cam.get_frame_age() for cam in handler.cameras]
         camera_lag_s = sum(ages) / len(ages) if ages else 0.0
 
-        # grab the raw frames up front, before any processor or plot touches
-        # the cameras, so the recorded pixels are the ones this tick consumed
         raw_frames = self._raw_frames(handler.cameras)
 
         t_vis = time.perf_counter()
         self._reset_frame_processor_times()
         detections, frame = self.run_multi_vision(handler)
-        # Measure model predict time only.
-        # The pipeline records "device" ms (just model.predict) in _record_inference.
-        # We get it from the model's last_tpu_stage_ms if available, otherwise fallback.
         if hasattr(handler, "model") and hasattr(handler.model, "last_tpu_stage_ms"):
             inference_s = getattr(handler.model, "last_tpu_stage_ms", {}).get("device", 0.0)
         else:
-            # Fallback: use the vision processor time as before
             inference_s = code_times.get("vision", 0)
         vision_s = inference_s  # both now measure model predict time
         vision_s -= self._merge_frame_processor_times(code_times)
@@ -1175,9 +1100,6 @@ class iSpy:
                     break
                 if self.pause_event.is_set():
                     if last_frame_data is not None:
-                        # raw_frames is cleared: the recorder consumes them on
-                        # every update() tick, and re-feeding the held frame
-                        # would write the same picture 20 times a second
                         frozen = {**last_frame_data, "fps": 0, "raw_frames": {}}
                         self._update_utilities(frozen)
                         self._update_web(frozen)

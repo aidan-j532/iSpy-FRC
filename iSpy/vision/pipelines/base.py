@@ -3,24 +3,17 @@ import threading
 from iSpy.vision.Camera import Camera
 from iSpy.plugins.bases import VisionBase
 
-# All pipelines return (list[Object], frame) with the same JSON fields.
 OUTPUT_SCHEMA_VERSION = 1
-
 
 class VisionPipeline(Camera, VisionBase):
     plugin_name = "pipeline"
     output_schema_version = OUTPUT_SCHEMA_VERSION
 
-    # Build-style messages (optimizing / building / downloading) can overlap
-    # with run-style ones (calibration warnings), so keep them in separate
-    # slots and surface both to the UI.
     _BUILD_PREFIXES = ("optimizing", "building", "converting", "download")
 
     def __init__(self, camera_config, input_size, grayscale):
         self._statuses = {"run": "initializing", "build": None}
         Camera.__init__(self, camera_config, input_size, grayscale)
-
-    # lifecycle
 
     def prepare(self):
         pass
@@ -28,7 +21,6 @@ class VisionPipeline(Camera, VisionBase):
     def is_ready(self) -> tuple[bool, str]:
         level, msg = self.calibration_status()
         if level == "yellow":
-            # runs, but approximate pose/depth until calibrated
             self._set_status(msg)
             return True, msg
         if level == "red":
@@ -43,13 +35,6 @@ class VisionPipeline(Camera, VisionBase):
         if not build:
             return run
         lowered = run.lower()
-        # build-style messages (optimizing / downloading / ...) already carry
-        # the lifecycle story, so a generic run-slot message sitting on top of
-        # them (the default "initializing", or a preparing/loading sibling) is
-        # just noise - never surface e.g. "optimizing\ninitializing". Terminal
-        # run states (ready / error) instead supersede a finished build message.
-        # Real run info like a calibration warning still shows through next to
-        # the build message, so the UI keeps that overlap.
         if lowered.startswith(
             self._BUILD_PREFIXES + ("initializing", "preparing", "loading", "working")
         ):
@@ -125,8 +110,6 @@ class VisionPipeline(Camera, VisionBase):
     def stop(self):
         self.destroy()
 
-    # universal output serialization
-
     @staticmethod
     def serialize_detections(objects) -> list[dict]:
         return [o.to_dict() if hasattr(o, "to_dict") else o for o in (objects or [])]
@@ -141,8 +124,6 @@ class VisionPipeline(Camera, VisionBase):
         out["detections"] = cls.serialize_detections(frame_data.get("detections"))
         out["schema_version"] = OUTPUT_SCHEMA_VERSION
         return out
-
-    # optimization (optional - only model-backed pipelines implement it)
 
     def get_optimization_options(self) -> dict:
         return {}
@@ -166,14 +147,6 @@ class VisionPipeline(Camera, VisionBase):
     def show_calibration(cls) -> bool:
         return True
 
-    # model profiles (optional - only the model-backed pipelines implement it)
-    #
-    # a profile is a snapshot of validated pipeline settings that the camera
-    # UI auto-saves when a camera is created/edited. uses_model_profile() opts
-    # the pipeline in, check_profile() reports whether a settings dict is
-    # loadable on this machine (file/artifact/hardware checks only - never
-    # builds or writes), and derive_profile_name() names the snapshot.
-
     @classmethod
     def uses_model_profile(cls) -> bool:
         return False
@@ -186,30 +159,12 @@ class VisionPipeline(Camera, VisionBase):
     def check_profile(cls, settings: dict) -> dict:
         return {"valid": True, "level": "ok", "message": "ready", "details": {}}
 
-    # Declares which calibration sections the calibration wizard should offer
-    # (each section becomes a tab). Subclasses override to opt in/out. The
-    # default is the universal ChArUco board intrinsics calibration - every
-    # pipeline gets it unless it explicitly sets calibration_sections = [].
-    # Valid tokens:
-    #   "charuco" -> ChArUco board intrinsics (camera_matrix + dist_coeffs)
-    #   "focal"   -> known-object focal/FOV measurement
-    #   "pnp"     -> pose keypoint 3D positions (for pose models)
     calibration_sections: list[str] = ["charuco"]
 
     @classmethod
     def requires_calibration(cls) -> bool:
         return bool(cls.calibration_sections)
 
-    # hardware / compute backend
-    #
-    # each pipeline declares every hardware target it can run inference on
-    # (e.g. ("npu", "tpu", "gpu", "cpu") for a model-backed detector). a pure
-    # CV pipeline like AprilTag runs on the CPU, which is already reported as
-    # the CPU load, so it declares the empty tuple and gets no label.
-    #
-    # active_hardware() resolves (per instance, at runtime) which one the
-    # pipeline's loaded backend is actually using. subclasses override it;
-    # the base reports None.
     hardware: tuple[str, ...] = ()
 
     @classmethod
@@ -243,8 +198,6 @@ class VisionPipeline(Camera, VisionBase):
             return True
         config = getattr(self, "config", None)
         if config is None:
-            # never a real pipeline instance (e.g. tests built via __new__) -
-            # don't gate
             return True
         try:
             calibration = config.get("calibration") or {}
@@ -280,13 +233,9 @@ class VisionPipeline(Camera, VisionBase):
         if level == "red":
             self._set_status(msg)
             return [], frame
-        # yellow: detection runs, just show a warning
         self._set_status(msg)
         return None
 
-
-# stand-in camera for a pipeline whose critical internet need is unmet. it
-# still shows in the UI reading "needs internet"; run() returns the raw frame
 class OfflineUnavailablePipeline(VisionPipeline):
     plugin_name = "offline"
     calibration_sections = []
@@ -307,7 +256,6 @@ class OfflineUnavailablePipeline(VisionPipeline):
         return f"error: needs internet - {self._offline_reason}"
 
     def get_health(self) -> dict:
-        # skipping is intentional in offline mode, so warn - not error
         return {
             "color": "yellow",
             "state": f"needs internet - {self._offline_reason}",
@@ -317,7 +265,6 @@ class OfflineUnavailablePipeline(VisionPipeline):
     def run(self):
         frame = self.get_frame()
         return [], frame
-
 
 class BackgroundPreparedPipeline(VisionPipeline):
     def __init__(self, camera_config, input_size, grayscale):

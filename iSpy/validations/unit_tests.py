@@ -9,11 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-# Fake rknnlite (import-order-dependent: monkeypatch sys.modules;
-# works if this file is the FIRST import of iSpy.vision.genericYolo)
 rknnlite_mod = types.ModuleType("rknnlite")
 rknnlite_api = types.ModuleType("rknnlite.api")
-
 
 class FakeRKNNLite:
     NPU_CORE_0 = 0
@@ -32,18 +29,12 @@ class FakeRKNNLite:
     def inference(self, inputs):
         return None
 
-
 rknnlite_api.RKNNLite = FakeRKNNLite
 rknnlite_mod.api = rknnlite_api
 rknnlite_mod.__file__ = "fake_rknnlite/__init__.py"
 sys.modules["rknnlite"] = rknnlite_mod
 sys.modules["rknnlite.api"] = rknnlite_api
 
-# Remove the module-level patch - instead, each test that needs RKNN fake
-# should patch genericYolo.RKNNLite directly using unittest.mock.patch
-
-
-# Fake tflite_runtime
 tflite_mod = types.ModuleType("tflite_runtime")
 tflite_interp = types.ModuleType("tflite_runtime.interpreter")
 tflite_interp.Interpreter = MagicMock()
@@ -52,7 +43,6 @@ tflite_mod.interpreter = tflite_interp
 sys.modules["tflite_runtime"] = tflite_mod
 sys.modules["tflite_runtime.interpreter"] = tflite_interp
 
-# Fake torch (pulled in transitively by some imports)
 torch_mod = types.ModuleType("torch")
 torch_mod.device = MagicMock()
 torch_mod.cuda = MagicMock()
@@ -60,7 +50,6 @@ torch_mod.cuda.is_available = MagicMock(return_value=False)
 torch_mod.cuda.device_count = MagicMock(return_value=0)
 sys.modules["torch"] = torch_mod
 
-# Fake scipy
 scipy_mod = types.ModuleType("scipy")
 scipy_spatial = types.ModuleType("scipy.spatial")
 scipy_transform = types.ModuleType("scipy.spatial.transform")
@@ -71,14 +60,11 @@ sys.modules["scipy"] = scipy_mod
 sys.modules["scipy.spatial"] = scipy_spatial
 sys.modules["scipy.spatial.transform"] = scipy_transform
 
-# Fake tensorrt (for .engine runtime tests)
 trt_mod = types.ModuleType("tensorrt")
-
 
 class _FakeTensorIOMode:
     INPUT = "input"
     OUTPUT = "output"
-
 
 class _FakeEngineContext:
     def __init__(self, shapes, output_name):
@@ -104,7 +90,6 @@ class _FakeEngineContext:
     def execute_async_v3(self, stream_handle=None):
         self.bindings = None
         return True
-
 
 class _FakeEngine:
     def __init__(self, input_name, output_name, feat_w):
@@ -133,7 +118,6 @@ class _FakeEngine:
         }
         return _FakeEngineContext(shapes, self._output_name)
 
-
 class _FakeTensorRTRuntime:
     def __init__(self, *args, **kwargs):
         self.engine = _FakeEngine("images", "output0", 5)
@@ -141,13 +125,11 @@ class _FakeTensorRTRuntime:
     def deserialize_cuda_engine(self, data):
         return self.engine
 
-
 trt_mod.Runtime = _FakeTensorRTRuntime
 trt_mod.Logger = MagicMock()
 trt_mod.TensorIOMode = _FakeTensorIOMode
 trt_mod.nptype = lambda dtype: dtype
 sys.modules["tensorrt"] = trt_mod
-
 
 class _FakeTorchTensor:
     def __init__(self, array):
@@ -170,15 +152,12 @@ class _FakeTorchTensor:
     def copy_(self, other):
         return self
 
-
 torch_mod.from_numpy = lambda array: _FakeTorchTensor(array)
 torch_mod.empty = lambda shape, dtype, device: _FakeTorchTensor(
     np.empty(shape, dtype=dtype)
 )
 
-# Fake openvino (for .xml runtime tests)
 ov_mod = types.ModuleType("openvino")
-
 
 class _FakeOutput:
     def __init__(self, name):
@@ -186,7 +165,6 @@ class _FakeOutput:
 
     def get_any_name(self):
         return self._name
-
 
 class _FakeCompiledModel:
     def __init__(self, feat_w):
@@ -196,7 +174,6 @@ class _FakeCompiledModel:
     def __call__(self, feed):
         return {"output0": np.empty((1, 0, self._feat_w), dtype=np.float32)}
 
-
 class _FakeOpenVINOCore:
     available_devices = ["CPU"]
 
@@ -205,7 +182,6 @@ class _FakeOpenVINOCore:
 
     def compile_model(self, model_path, device="AUTO", *args, **kwargs):
         return _FakeCompiledModel(5)
-
 
 ov_mod.Core = _FakeOpenVINOCore
 sys.modules["openvino"] = ov_mod
@@ -225,12 +201,10 @@ from iSpy.vision.metadata import (
     write_metadata,
 )
 
-
 def make_frame(w=320, h=320):
     frame = np.zeros((h, w, 3), dtype=np.uint8)
     frame[:, :, 1] = np.linspace(0, 255, w, dtype=np.uint8)  # green gradient
     return frame
-
 
 def _no_hw_flags():
     return {
@@ -249,7 +223,6 @@ def _no_hw_flags():
         "has_arm": False,
     }
 
-
 def _recommend(**overrides):
     import iSpy.config.AutoOpt as ao
 
@@ -265,14 +238,7 @@ def _recommend(**overrides):
             runtime_supported=runtime_supported,
         )
 
-
 def _pipeline_recommended_format(**overrides):
-    """OptimizableModelPipeline.recommended_format() with every hardware probe
-    stubbed out. The pipeline asks recommend_format(runtime_supported=False), so
-    a real arm host answers 'tflite' and a real intel one 'openvino' - patching
-    only the coreml flag would make the assertion machine-dependent.
-    Loaded by path to dodge the eager imports in pipelines/__init__.py (scipy
-    etc.) that may be missing."""
     import importlib.util
 
     import iSpy.config.AutoOpt as ao
@@ -295,7 +261,6 @@ def _pipeline_recommended_format(**overrides):
         finally:
             module._recommended_format_cached.cache_clear()
 
-
 class TestAutoOpt(unittest.TestCase):
     def test_returns_string(self):
         self.assertIsInstance(_recommend(), str)
@@ -308,8 +273,6 @@ class TestAutoOpt(unittest.TestCase):
         self.assertEqual(_recommend(has_rockchip_npu=True), "rknn")
 
     def test_rockchip_preserves_priority_over_hailo(self):
-        # A board with both a Rockchip and a Hailo NPU stays on rknn - Rockchip
-        # is the primary supported target.
         self.assertEqual(_recommend(has_rockchip_npu=True, has_hailo_npu=True), "rknn")
 
     def test_hailo_npu_uses_hailo_format(self):
@@ -319,8 +282,6 @@ class TestAutoOpt(unittest.TestCase):
         self.assertEqual(_recommend(has_qualcomm_npu=True), "qnn")
 
     def test_hailo_preserves_priority_over_qualcomm(self):
-        # Order between the NPU vendors only matters on multi-NPU boards; hailo
-        # is checked before qnn so it wins when both are present.
         self.assertEqual(_recommend(has_hailo_npu=True, has_qualcomm_npu=True), "hailo")
 
     def test_edge_tpu_uses_tflite(self):
@@ -362,8 +323,6 @@ class TestAutoOpt(unittest.TestCase):
                 ao.has_tpu.cache_clear()
 
     def test_tpu_hardware_without_torch_xla_installs_tpu(self):
-        # torch_xla missing but the hardware is there - installer has to be told
-        # tpu so it can pull torch_xla in, same escape hatch tensorrt gets.
         self.assertEqual(
             _recommend(has_tpu=False, has_tpu_hardware=True, ignore_dependencies=True),
             "tpu",
@@ -385,8 +344,6 @@ class TestAutoOpt(unittest.TestCase):
         self.assertEqual(_recommend(), "onnx")
 
     def test_runtime_unsupported_skips_coreml_on_apple_silicon(self):
-        # Bug 7: CoreML has no runtime inference, so a load-and-run caller
-        # must NOT be handed 'coreml' even on Apple hardware.
         self.assertEqual(
             _recommend(has_apple_silicon=True, runtime_supported=False), "onnx"
         )
@@ -395,10 +352,6 @@ class TestAutoOpt(unittest.TestCase):
         )
 
     def test_optimizable_recommended_format_skips_coreml_on_apple_silicon(self):
-        # OptimizableModelPipeline.recommended_format() defaults the build
-        # target, so it must never pick coreml when the runtime can't load the
-        # artifact that pick would produce. The fallback may vary by host, e.g.
-        # TFLite on ARM, so assert only the invariant this test is about.
         self.assertNotEqual(
             _pipeline_recommended_format(has_apple_silicon=True), "coreml"
         )
@@ -414,9 +367,6 @@ class TestAutoOpt(unittest.TestCase):
         )
 
     def test_runtime_unsupported_keeps_openvino_on_intel(self):
-        # OpenVINO IR is loadable at runtime by GenericYolo, so it must remain
-        # a valid recommendation even when runtime_supported=False (the build-target
-        # path used by auto-opt / ispy-optimize).
         self.assertEqual(
             _recommend(has_intel_gpu=True, runtime_supported=False), "openvino"
         )
@@ -425,8 +375,6 @@ class TestAutoOpt(unittest.TestCase):
         )
 
     def test_runtime_unsupported_keeps_cpu_backends(self):
-        # rknn/tflite/tpu/hailo/qnn remain valid runtime formats and shouldn't
-        # be skipped.
         self.assertEqual(
             _recommend(has_rockchip_npu=True, runtime_supported=False), "rknn"
         )
@@ -439,7 +387,6 @@ class TestAutoOpt(unittest.TestCase):
         self.assertEqual(
             _recommend(has_qualcomm_npu=True, runtime_supported=False), "qnn"
         )
-
 
 class TestBoxResults(unittest.TestCase):
     def test_box_stores_values(self):
@@ -470,10 +417,8 @@ class TestBoxResults(unittest.TestCase):
         out = r.plot(frame.copy())
         self.assertFalse(np.array_equal(out, frame))
 
-
 class TestGenericYoloModelSelection(unittest.TestCase):
     def setUp(self):
-        # Patch genericYolo.RKNNLite and RKNN_FOUND directly so tests work regardless of import order
         from iSpy import vision
 
         self._original_rknnlite = vision.genericYolo.RKNNLite
@@ -482,7 +427,6 @@ class TestGenericYoloModelSelection(unittest.TestCase):
         vision.genericYolo.RKNN_FOUND = True
 
     def tearDown(self):
-        # Restore original RKNNLite and RKNN_FOUND
         from iSpy import vision
 
         vision.genericYolo.RKNNLite = self._original_rknnlite
@@ -497,8 +441,6 @@ class TestGenericYoloModelSelection(unittest.TestCase):
         return path
 
     def test_missing_model_file_raises_model_file_error(self):
-        # graceful-degradation contract: boot catches ModelFileError and runs
-        # the camera without detection instead of crashing the whole app
         with self.assertRaises(ModelFileError):
             GenericYolo({"file_path": "does/not/exist.rknn", "task": "detect"})
 
@@ -523,7 +465,6 @@ class TestGenericYoloModelSelection(unittest.TestCase):
         w.model.release = MagicMock()
         w.release()
         w.model.release.assert_called_once()
-
 
 class TestCompiledFormatGenericYolo(unittest.TestCase):
     def _complete_cfg(self, path):
@@ -576,9 +517,6 @@ class TestCompiledFormatGenericYolo(unittest.TestCase):
         with open(eng, "wb") as f:
             f.write(b"\x00" * 4096)
 
-        # tensorrt is faked at module load above; null it out in sys.modules so
-        # the in-method `import tensorrt` fails, and assert GenericYolo surfaces
-        # the ImportError from _load_engine.
         with self.assertRaises(ImportError):
             with patch.dict(sys.modules, {"tensorrt": None}):
                 GenericYolo(self._complete_cfg(eng))
@@ -742,7 +680,6 @@ class TestCompiledFormatGenericYolo(unittest.TestCase):
         w = GenericYolo(self._complete_cfg(xml_path))
         self.assertEqual(w.model_type, "openvino")
 
-
 class TestTpuQueueFreshness(unittest.TestCase):
     def test_drop_oldest_keeps_newest_frames_in_order(self):
         import queue
@@ -754,7 +691,6 @@ class TestTpuQueueFreshness(unittest.TestCase):
             _put_latest(frames, sequence)
 
         self.assertEqual([frames.get_nowait(), frames.get_nowait()], [2, 3])
-
 
 class TestBenchmarkValidity(unittest.TestCase):
     def test_missing_model_is_a_benchmark_error(self):
@@ -796,7 +732,6 @@ class TestBenchmarkValidity(unittest.TestCase):
             info = collect_system_info()
 
         self.assertNotIn("torch_xla", info)
-
 
 class TestModelMetadata(unittest.TestCase):
     def test_rknn_metadata_contract(self):
@@ -841,7 +776,6 @@ class TestModelMetadata(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.assertIsNone(read_metadata(Path(d) / "nope.rknn"))
 
-
 class TestPosePtRegression(unittest.TestCase):
     _yolo_pt = None
 
@@ -858,8 +792,6 @@ class TestPosePtRegression(unittest.TestCase):
 
         import importlib
 
-        # Remove fake/import-time-only torch modules so the real torch can be used.
-        # The real torch is needed for actual inference testing.
         for _m in [
             m for m in list(sys.modules) if m == "torch" or m.startswith("torch.")
         ]:
@@ -872,9 +804,6 @@ class TestPosePtRegression(unittest.TestCase):
             importlib.reload(cls._yolo_pt)
         except Exception as exc:  # no real torch on this machine
             raise unittest.SkipTest(f"real torch unavailable: {exc}")
-
-    # No tearDownClass - the torch module removal is intentional for this test class
-    # and is acceptable since this test specifically needs the real torch
 
     def test_pose_pt_loads_and_infers(self):
         model_path = self._locate_pose_model()
@@ -895,7 +824,6 @@ class TestPosePtRegression(unittest.TestCase):
         self.assertEqual(kd.ndim, 3)
         self.assertEqual(kd.shape[1:], (17, 3))
 
-
 class TestValidateSystemRegression(unittest.TestCase):
     def test_broken_model_file_path_flips_validate_system_to_false(self):
         from iSpy.validations.validate_system import validate_system
@@ -907,16 +835,10 @@ class TestValidateSystemRegression(unittest.TestCase):
 
         bad_dir = Path(tmp.name) / "YoloModels" / "pytorch"
         bad_dir.mkdir(parents=True)
-        # NOT a .txt file - validate_model_files exempts .txt from the
-        # invalid-path check, so a .txt "corrupt model" would slip through and
-        # validate_system() would recurse into run_unit_tests() forever.
         (bad_dir / "corrupt model.svb").write_bytes(b"junk")
         os.chdir(tmp.name)
 
-        # validate_model_files() raises on the invalid path -> validate_system()
-        # returns False (never reaches run_unit_tests -> no recursion).
         self.assertFalse(validate_system())
-
 
 class _QuietLogging:
     def __init__(self):
@@ -935,7 +857,6 @@ class _QuietLogging:
     def __exit__(self, *exc):
         return self._stack.__exit__(*exc)
 
-
 class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
     @staticmethod
     def _restore_scipy_optimize(had_optimize, prior_optimize):
@@ -945,10 +866,6 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
             sys.modules.pop("scipy.optimize", None)
 
     def _build_pipeline(self, model_path: str):
-        # unit_tests.py fakes scipy with only scipy.spatial at import time, but
-        # the object_detection -> calibration import chain needs scipy.optimize.
-        # Register a fake submodule (and clean it up) so the pipeline module
-        # imports on machines where real scipy is absent.
 
         scipy_optimize = types.ModuleType("scipy.optimize")
         scipy_optimize.least_squares = MagicMock()
@@ -1011,23 +928,15 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
                 f"fill_missing_config ValueError (BUG 6); got: {e}"
             )
 
-        # the camera should surface as errored, not disappear entirely
         self.assertIsNone(camera.model)
         try:
             ready, status = camera.is_ready()
         finally:
-            # the pipeline starts a background _reader thread that keeps
-            # retrying the bogus source (99) - stop it so it doesn't spam
-            # stderr / keep the boot log alive on a nonexistent device
             camera.destroy()
         self.assertFalse(ready)
         self.assertTrue(status.startswith("error:"), f"unexpected status: {status!r}")
 
     def test_good_sidecar_constructs_ready(self):
-        # sanity: with NO sidecar and a missing file (fill_missing_config short
-        # circuits on os.path.exists -> returns config as-is), the pipeline
-        # still constructs with model None + error status, so a missing model
-        # does not take down the camera either.
         camera = self._build_pipeline("does/not/exist.pt")
         self.assertIsNone(camera.model)
         try:
@@ -1038,10 +947,6 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
         self.assertTrue(status.startswith("error:"))
 
     def test_destroy_stops_reader_thread_promptly(self):
-        # Regression for the boot-time leak: a pipeline built on a bogus source
-        # (99) must not leave its daemon _reader thread retrying /dev/video99
-        # after destroy(). On the RKNN board that leaked thread's cv2 polling
-        # raced native teardown at interpreter shutdown -> Segmentation fault.
         camera = self._build_pipeline("does/not/exist.pt")
         reader = getattr(camera, "_reader_thread", None)
         self.assertIsNotNone(reader, "reader thread should have been started")
@@ -1053,7 +958,6 @@ class TestObjectDetectionFillMissingConfigRegression(unittest.TestCase):
             "destroy() must stop the reader thread (polling must not survive "
             "into interpreter shutdown)",
         )
-
 
 class TestEKFTracker(unittest.TestCase):
     def _make_tracker(self, distance_threshold=1.0):
@@ -1089,13 +993,11 @@ class TestEKFTracker(unittest.TestCase):
             clock_value += 0.05
             return clock_value
 
-        # constant-velocity ground truth: start at origin, move +1.0 m/s in x
         velocity = np.array([1.0, 0.0, 0.0])
         dt = 0.1
         n = 30
         true_positions = []
         raw_sq = 0.0
-        # collect smoothed positions as they are produced
         smoothed_path = []
 
         with patch.object(
@@ -1134,7 +1036,6 @@ class TestEKFTracker(unittest.TestCase):
         )
 
     def test_same_identity_gating(self):
-        # a cone must never merge into a robot track, mirroring ObjectTracker
         from iSpy.vision.Object import Object
 
         tracker = self._make_tracker()
@@ -1147,7 +1048,6 @@ class TestEKFTracker(unittest.TestCase):
     def test_run_returns_tracked_objects(self):
         tracker = self._make_tracker()
         self.assertEqual(tracker.run(), tracker.tracked_objects)
-
 
 class TestSelectionState(unittest.TestCase):
     def test_basic_lifecycle(self):
@@ -1171,7 +1071,6 @@ class TestSelectionState(unittest.TestCase):
         inst = AddonBase.__new__(AddonBase)
         inst.context = ctx
         self.assertIs(inst.selection, ctx["selection"])
-
 
 class TestTargetSelector(unittest.TestCase):
     def _make_selector(
@@ -1221,23 +1120,19 @@ class TestTargetSelector(unittest.TestCase):
         selection.select(5)
         frame_data = {"detections": [Object(x=1.0, y=2.0, z=3.0, id=5)]}
         selector.update(frame_data)
-        # id drops out briefly but we are still inside the timeout
         frame_data2 = {"detections": []}
         selector.update(frame_data2)
-        # selection must be retained, and nothing new published this tick
         self.assertEqual(selection.selected_id, 5)
         self.assertNotIn("selected_target", frame_data2.get("addon_data", {}))
 
     def test_idless_objects_noop_no_raise(self):
         selector, selection = self._make_selector()
         selection.select(5)
-        # Object always has an id; simulate a plain id-less fallback dict
         obj_no_id = {"x": 1.0, "y": 2.0, "z": 3.0}
         frame_data = {"detections": [obj_no_id]}
         selector.update(frame_data)  # must not raise
         published = frame_data.get("addon_data", {}).get("selected_target")
         self.assertIsNone(published)
-
 
 class TestCalibrationGating(unittest.TestCase):
     @staticmethod
@@ -1294,7 +1189,6 @@ class TestCalibrationGating(unittest.TestCase):
             level, msg = camera.calibration_status()
             self.assertEqual(level, "yellow")
             self.assertIn("Needs Calibration for Better Accuracy", msg)
-            # _gate_uncalibrated must NOT block a detect pipeline
             self.assertIsNone(
                 camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8))
             )
@@ -1307,7 +1201,6 @@ class TestCalibrationGating(unittest.TestCase):
             level, msg = camera.calibration_status()
             self.assertEqual(level, "red")
             self.assertEqual(msg, "Needs Calibration")
-            # _gate_uncalibrated blocks a pose pipeline
             gated = camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8))
             self.assertIsNotNone(gated)
             objs, frame = gated
@@ -1354,21 +1247,14 @@ class TestCalibrationGating(unittest.TestCase):
         try:
             level, msg = camera.calibration_status()
             self.assertEqual(level, "ready")
-            # calibrated gate lets the pipeline through (model missing -> not
-            # processable, but that's a separate concern from calibration)
             self.assertIsNone(
                 camera._gate_uncalibrated(np.zeros((10, 10, 3), dtype=np.uint8))
             )
         finally:
             camera.destroy()
 
-
 class TestObjectResetRegression(unittest.TestCase):
     def test_reset_time_clears_destroyed_and_alive(self):
-        # Bug 3: age an Object past alive_time so update() marks it destroyed,
-        # then reset_time() must clear destroyed/alive so the next update()
-        # does not immediately re-destroy it (a persistent pipeline reuses one
-        # Object forever).
         import time
 
         from iSpy.vision.Object import Object
@@ -1386,9 +1272,6 @@ class TestObjectResetRegression(unittest.TestCase):
         self.assertFalse(obj.destroyed, "reset object must not re-destroy")
 
     def test_tracker_revives_stale_detection(self):
-        # Bug 3: after an object ages out (destroyed -> filtered -> re-appended),
-        # _merge must restart its age clock instead of leaving it permanently
-        # destroyed.
         import time
 
         from iSpy.plugins.trackers.BuiltIn.ObjectTracker import ObjectTracker
@@ -1404,7 +1287,6 @@ class TestObjectResetRegression(unittest.TestCase):
         tracker.update([obj], 0.0, 0.0, 0.0)
         self.assertEqual(len(tracker.tracked_objects), 1)
 
-        # age the object far past its stale threshold so the next tick drops it
         obj.start_time = time.perf_counter() - 5.0
         obj.update()
         self.assertTrue(obj.destroyed)
@@ -1415,7 +1297,6 @@ class TestObjectResetRegression(unittest.TestCase):
             1,
             "stale-absent detection must be revived, not left destroyed",
         )
-        # and the revived track must survive the following tick too
         tracker.update([obj], 0.0, 0.0, 0.0)
         self.assertEqual(len(tracker.tracked_objects), 1)
 
@@ -1448,7 +1329,6 @@ class TestObjectResetRegression(unittest.TestCase):
         self.assertEqual(len(tracker.tracked_objects), 1)
         tracker.update([obj], 0.0, 0.0, 0.0)
         self.assertEqual(len(tracker.tracked_objects), 1)
-
 
 class TestOfflineNetworkPolicy(unittest.TestCase):
     def tearDown(self):
@@ -1488,7 +1368,6 @@ class TestOfflineNetworkPolicy(unittest.TestCase):
     def test_unresolvable_hostname_counts_as_blocked(self):
         from iSpy.core.network_policy import is_private_address
 
-        # while offline a name we cannot resolve might be anywhere - blocked
         self.assertFalse(is_private_address("offline-policy-test.invalid"))
 
     def test_socket_guard_blocks_public_and_clears(self):
@@ -1509,8 +1388,6 @@ class TestOfflineNetworkPolicy(unittest.TestCase):
                 with self.assertRaises(network_policy.OfflineError):
                     probe.connect(("8.8.8.8", 443))
 
-            # loopback + LAN pass the guard. nothing listens on port 9, so a
-            # connection error is expected - an OfflineError is not.
             for target in (("127.0.0.1", 9), ("10.0.0.2", 9)):
                 try:
                     socket.create_connection(target, timeout=0.1)
@@ -1523,7 +1400,6 @@ class TestOfflineNetworkPolicy(unittest.TestCase):
 
         self.assertFalse(network_policy.is_offline())
         self.assertIs(socket.socket.connect, original_connect)
-        # and the original lookup works again
         self.assertTrue(socket.getaddrinfo("127.0.0.1", 9))
 
     def test_report_dedupes_and_clears_on_flip(self):
@@ -1540,7 +1416,6 @@ class TestOfflineNetworkPolicy(unittest.TestCase):
         self.assertEqual(len(report["degraded"]), 1)
         self.assertEqual(report["skipped"][0]["name"], "probe")
 
-        # flipping offline off must not leak the old run's report
         network_policy.set_offline(False)
         report = network_policy.get_report()
         self.assertFalse(report["offline"])
@@ -1564,8 +1439,6 @@ class TestOfflineNetworkPolicy(unittest.TestCase):
         policy_logger = logging.getLogger("iSpy.core.network_policy")
         policy_logger.addHandler(handler)
         try:
-            # game mode arming on top of an already-offline boot must not
-            # re-log or change the reason (no double-warn)
             network_policy.set_offline(True, "game_mode")
         finally:
             policy_logger.removeHandler(handler)
@@ -1577,7 +1450,6 @@ class TestOfflineNetworkPolicy(unittest.TestCase):
             if r.getMessage().startswith("Offline mode ON")
         ]
         self.assertEqual(on_lines, [])
-
 
 class TestOfflineGate(unittest.TestCase):
     def tearDown(self):
@@ -1615,10 +1487,6 @@ class TestOfflineGate(unittest.TestCase):
         needy = self._requirement_class()
         network_policy.set_offline(True, "unit-test")
 
-        # boot validation runs this suite with logging.disable(ERROR), which
-        # would silently drop the warning before assertLogs could see it.
-        # Spy on the logger the gate is handed instead - independent of the
-        # global logging state, so this passes both standalone and at boot.
         gate_logger = MagicMock()
         allowed = self._gate(needy, logger=gate_logger)
 
@@ -1636,7 +1504,6 @@ class TestOfflineGate(unittest.TestCase):
         self.assertEqual([s["name"] for s in report["skipped"]], ["probe"])
         self.assertIn("downloads weights", report["skipped"][0]["reason"])
 
-        # online, the very same add-on loads as normal
         network_policy.set_offline(False)
         self.assertTrue(self._gate(needy))
 
@@ -1674,7 +1541,6 @@ class TestOfflineGate(unittest.TestCase):
                 raise RuntimeError("boom")
 
         network_policy.set_offline(True, "unit-test")
-        # raising here would take the whole boot down - it must not
         self.assertTrue(self._gate(_Broken, name="broken"))
 
     def test_needs_internet_shortcut(self):
@@ -1776,7 +1642,6 @@ class TestOfflineGate(unittest.TestCase):
 
         self.assertTrue(any(r.critical for r in reqs), reqs)
 
-
 class TestOfflineWebSurface(unittest.TestCase):
     def tearDown(self):
         from iSpy.core import network_policy
@@ -1826,7 +1691,6 @@ class TestOfflineWebSurface(unittest.TestCase):
 
         self.assertIsNone(_offline_declaration_warning("def broken(:\n"))
 
-
 class TestGameModeOfflineOverride(unittest.TestCase):
     def tearDown(self):
         from iSpy.core import network_policy
@@ -1851,18 +1715,14 @@ class TestGameModeOfflineOverride(unittest.TestCase):
 
             boot._consume_game_mode_web_off(config)
 
-            # the one-shot run is offline in this process...
             self.assertTrue(network_policy.is_offline())
             self.assertEqual(network_policy.offline_reason(), "game_mode")
-            # ...but nothing about it reaches config.json, so a crash can
-            # never leave offline_mode stuck on
             self.assertFalse(bool(config.get("offline_mode", False)))
             saved = json.loads(path.read_text(encoding="utf-8-sig"))
             self.assertFalse(bool(saved.get("offline_mode", False)))
             self.assertFalse(bool(saved.get("game_mode_web_off_next_run", True)))
             self.assertFalse(bool(saved.get("app_mode", True)))
             self.assertTrue(bool(saved.get("game_mode_app_mode_backup", False)))
-
 
 class TestPerformanceProfiles(unittest.TestCase):
     def setUp(self):
@@ -1926,16 +1786,13 @@ class TestPerformanceProfiles(unittest.TestCase):
         strides = [performance.PROFILES[l].rollback_downsample_min for l in levels]
         self.assertEqual(strides, sorted(strides))
 
-        # 0 means "every tick"; the rated levels must throttle, never speed up
         hz = [performance.PROFILES[l].web_update_hz for l in levels if l < 4]
         self.assertTrue(hz)
         self.assertEqual(hz, sorted(hz, reverse=True))
 
-        # the two "everything off" facts of level 0
         self.assertFalse(performance.PROFILES[0].web_enabled)
         self.assertFalse(performance.PROFILES[0].rollback_recorder)
         self.assertFalse(performance.PROFILES[0].metrics_enabled)
-        # the default level keeps today's behavior
         full = performance.PROFILES[4]
         self.assertTrue(full.web_enabled)
         self.assertTrue(full.rollback_recorder)
@@ -1956,12 +1813,10 @@ class TestPerformanceProfiles(unittest.TestCase):
         self.assertTrue(performance.effective_app_mode(on))
         self.assertFalse(performance.effective_app_mode(off))
 
-        # level 0 turns the web off even though app_mode still says True
         performance.set_level_for_run(0)
         self.assertFalse(performance.effective_app_mode(on))
         self.assertFalse(performance.effective_app_mode(off))
 
-        # the recovery hatch wins for one run - and for the whole run only
         with patch.dict(os.environ, {"ISPY_FORCE_WEB": "1"}):
             self.assertTrue(performance.effective_app_mode(on))
             self.assertTrue(performance.effective_app_mode(off))
@@ -2062,13 +1917,11 @@ class TestPerformanceProfiles(unittest.TestCase):
         health, dashboard = _Fake(), _Fake()
         app.modules = {"health": health, "dashboard": dashboard}
 
-        # level 4 updates every module on every tick, like before the profile
         performance.set_level_for_run(4)
         for _ in range(10):
             app.update({})
         self.assertEqual((health.calls, dashboard.calls), (10, 10))
 
-        # level 1 caps the payload builders at 2 Hz, health never skipped
         performance.set_level_for_run(1)
         app._last_update.clear()
         health.calls = dashboard.calls = 0
@@ -2082,7 +1935,6 @@ class TestPerformanceProfiles(unittest.TestCase):
         self.assertEqual(health.calls, ticks)
         self.assertGreaterEqual(dashboard.calls, 1)
         self.assertLessEqual(dashboard.calls, 3)
-
 
 class TestHSVDetectionPipeline(unittest.TestCase):
     _DEFAULT_HSV = {
@@ -2357,7 +2209,6 @@ class TestHSVDetectionPipeline(unittest.TestCase):
 
         payload = response.get_json()
         self.assertEqual(payload["hsv"], [15, 255, 255])
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

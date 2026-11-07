@@ -8,8 +8,6 @@ from pathlib import Path
 _BOOT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = Path.cwd()
 
-# bg threads (the optimizer persisting quantization settings) and web handlers
-# share one iSpyConfig, and interleaved open("w")/write/close corrupts config.json
 _CONFIG_WRITE_LOCK = threading.RLock()
 
 _MODEL_BACKED_PIPELINES = ("object_detection",)
@@ -43,18 +41,10 @@ _CAMERA_CORE_KEYS = {
     "tello_ip",
     "tello_command_port",
     "tello_video_port",
-    # Optional per-camera assignment for frame processors.  The list contains
-    # enabled processor names in execution order.  When it is absent the old
-    # "every enabled processor runs on every camera" behavior is preserved.
     "frame_processors",
-    # Optional per-camera tracker assignment.  The list contains enabled
-    # tracker plugin names in execution order.  When the key is absent the old
-    # global-tracker behavior is preserved for that camera lane.
     "trackers",
 }
 
-# Camera-source config keys that are valid at the top level for every
-# camera type, no matter which Cameras/ class is running.
 _CAMERA_TYPE_KEYS = (
     "camera_type",
     "tello_ip",
@@ -79,7 +69,6 @@ _LEGACY_SETTING_ALIASES = {
 
 _ADDON_TYPES = ("trackers", "utilities", "frame_processors")
 
-# Conversion factors: how many inches does 1 of the given unit equal.
 _UNIT_TO_INCHES = {
     "inch": 1.0,
     "inches": 1.0,
@@ -89,7 +78,6 @@ _UNIT_TO_INCHES = {
     "meters": 1.0 / 0.0254,
     "centimeter": 1.0 / 2.54,
     "centimeters": 1.0 / 2.54,
-    # FRC/WPILib: inputs are in inches (calibration convention)
     "frc": 1.0,
 }
 
@@ -105,11 +93,6 @@ _UNIT_LABELS = {
     "frc": "in",
 }
 
-# how many output units one inch is worth, per unit. the same literal is
-# duplicated in every vision pipeline (see
-# iSpy/vision/pipelines/object_detection.py self.conversions) and in
-# iSpy/web/modules/viewer3d.py - a config value only becomes an output value
-# once both halves below have been applied
 _INCHES_TO_OUTPUT_UNIT = {
     "meter": 0.0254,
     "meters": 0.0254,
@@ -119,27 +102,20 @@ _INCHES_TO_OUTPUT_UNIT = {
     "feet": 1 / 12,
     "centimeter": 2.54,
     "centimeters": 2.54,
-    # FRC/WPILib convention: meters out (robot code), calibration in inches
     "frc": 0.0254,
 }
 
-
 def unit_to_inches(value: float, unit: str) -> float:
     return value * _UNIT_TO_INCHES.get(unit.lower().strip(), 1.0)
-
 
 def unit_to_output(value: float, unit: str) -> float:
     key = (unit or "frc").lower().strip()
     inches = _UNIT_TO_INCHES.get(key, 1.0)
     return value * inches * _INCHES_TO_OUTPUT_UNIT.get(key, _INCHES_TO_OUTPUT_UNIT["frc"])
 
-
 def unit_label(unit: str) -> str:
     return _UNIT_LABELS.get(unit.lower().strip(), unit)
 
-
-# legacy top-level keys folded into individual add-ons. (key, addon type,
-# addon name, target setting key) - used by _migrate_addons.
 _ADDON_LEGACY_FOLDS = (
     ("dbscan", "trackers", "FRC/object_tracker", None),  # special: dict
     (
@@ -151,8 +127,6 @@ _ADDON_LEGACY_FOLDS = (
     ("stale_threshold", "trackers", "FRC/object_tracker", "stale_threshold"),
 )
 
-# add-on names that moved under a namespace; (old name, addon type, new name).
-# applied in _migrate_addons so configs written before the rename keep working.
 _ADDON_RENAMES = (
     ("object_tracker", "trackers", "FRC/object_tracker"),
     ("network_table_handler", "utilities", "FRC/network_table_handler"),
@@ -161,16 +135,10 @@ _ADDON_RENAMES = (
     ("example_frame_processor", "frame_processors", "example/example_frame_processor"),
 )
 
-# health reporting is a core web module (HealthModule) - these opt-in
-# utilities were removed; their settings fold into top-level keys instead
 _MERGED_HEALTH_ADDONS = ("health_reporter", "status_reporter")
 
-# RollBack became a core service (iSpy/core/rollback.py) - same deal as the
-# health add-ons. Both the old names are folded into the top-level "rollback"
-# block, which is where its settings live now.
 _MERGED_ROLLBACK_ADDONS = ("rollback", "video_recorder")
 
-# legacy enabled flags - the flag value is discarded once it becomes add-on presence
 _ADDON_LEGACY_FLAGS = {
     "use_network_tables": ("utilities", "FRC/network_table_handler"),
 }
@@ -182,7 +150,6 @@ _ADDON_LEGACY_SETTINGS = {
         "network_tables_ip",
     ),
 }
-
 
 def _normalize_vision_model_settings(settings: dict) -> None:
     if not isinstance(settings, dict):
@@ -199,14 +166,12 @@ def _normalize_vision_model_settings(settings: dict) -> None:
         if legacy in settings and canonical in settings:
             del settings[legacy]
 
-
 def default_vision_model() -> dict:
     pts = sorted((_REPO_ROOT / "YoloModels" / "pytorch").glob("*.pt"))
     user_pts = [p for p in pts if not p.name.startswith("_default")]
     if user_pts:
         rel = f"YoloModels/pytorch/{user_pts[0].name}"
     else:
-        # Prefer the v26 fuel detection model, then the plain detect model.
         fuel = next(
             (p for p in pts if p.name == "_default_v26_detect_for_fuel.pt"), None
         )
@@ -221,10 +186,8 @@ def default_vision_model() -> dict:
             )
     return {"file_path": rel, "source_pt": rel, "min_conf": 0.5}
 
-
 def is_model_backed_pipeline(pipeline: str) -> bool:
     return str(pipeline or "") in _MODEL_BACKED_PIPELINES
-
 
 def get_pipeline_name(cam_entry: dict) -> str:
     if not isinstance(cam_entry, dict):
@@ -238,7 +201,6 @@ def get_pipeline_name(cam_entry: dict) -> str:
             return name
     return "object_detection"
 
-
 def get_pipeline_settings(cam_entry: dict) -> dict:
     if not isinstance(cam_entry, dict):
         return {}
@@ -250,7 +212,6 @@ def get_pipeline_settings(cam_entry: dict) -> dict:
         for k, v in cam_entry.items()
         if k not in _CAMERA_CORE_KEYS and k != "pipeline"
     }
-
 
 def normalize_camera_entry(cam_entry: dict) -> dict:
     if not isinstance(cam_entry, dict):
@@ -276,7 +237,6 @@ def normalize_camera_entry(cam_entry: dict) -> dict:
             cam_entry.pop(k)
         cam_entry["pipeline"] = {"name": p, "settings": settings}
         return cam_entry
-    # no pipeline key at all (raw JSON editor) - tag with the default.
     settings = {
         k: v
         for k, v in cam_entry.items()
@@ -286,7 +246,6 @@ def normalize_camera_entry(cam_entry: dict) -> dict:
         cam_entry.pop(k)
     cam_entry["pipeline"] = {"name": "object_detection", "settings": settings}
     return cam_entry
-
 
 def ensure_camera_entries_ready(camera_configs: dict) -> None:
     if not isinstance(camera_configs, dict):
@@ -301,7 +260,6 @@ def ensure_camera_entries_ready(camera_configs: dict) -> None:
             get_pipeline_settings(cam_cfg)["vision_model"] = default_vision_model()
         _normalize_vision_model_settings(get_pipeline_settings(cam_cfg))
 
-
 class iSpyConfig:
     def __init__(self, file_path: str = None, create: bool = True):
         self.logger = logging.getLogger(__name__)
@@ -312,40 +270,21 @@ class iSpyConfig:
             "temperature_warning": 80,
             
             "device": 0,
-            # "frc" = FRC/WPILib convention: outputs in meters (what robot code
-            # expects, matches Limelight/PhotonVision), calibration inputs in inches.
             "unit": "frc",
             "debug_mode": True,
             "frame_sync": False,
-            # Restrict the pipeline dropdown to the experimental QR Code /
-            # optical flow pipelines only. On = those pipelines are offered;
-            # Off (normal users) = they are hidden from the dropdown.
             "admin": False,
-            # Beta lifecycle controls: allow loopback + RFC1918/LAN restarts.
-            # False restricts them to localhost or ISPY_ADMIN_TOKEN.
             "allow_remote_restart": True,
             "log_level": "INFO",
             "log_file": "Outputs/log.txt",
-            # seconds without a fresh frame before /health reports degraded
             "health_stale_threshold": 1.0,
             "metrics": True,
-            # 0 = Max FPS ... 4 = Full Features (default). one master knob trading
-            # luxury features for FPS, never detection/trackers/NetworkTables
             "performance_level": 4,
             "app_mode": True,
-            # One-shot "Game Mode" web-off: the Settings > Advanced > Game Mode
-            # button arms this. The next boot skips the web dashboard for that
-            # single run, stashes the previous app_mode in
-            # game_mode_app_mode_backup, and the boot after that flips app_mode
-            # back so the web UI comes on again automatically.
             "game_mode_web_off_next_run": False,
             "game_mode_app_mode_backup": None,
-            # Blocks the public internet only - robot LAN, mDNS, loopback and the
-            # Tello keep working. Game Mode forces this on for its run (not saved).
             "offline_mode": False,
             "max_fps": 0,
-            # reset to False by every `boot -f` (fresh install) so the web UI
-            # shows its first-run tutorial once until the user dismisses it.
             "onboarding": {
                 "completed": False,
             },
@@ -362,7 +301,6 @@ class iSpyConfig:
                         "size": 0,
                         "fov": 0,
                     },
-                    # mount offsets stay on the cam entry; pipeline stuff lives under pipeline.settings
                     "yaw": 0,
                     "pitch": 0,
                     "height": 1.0,
@@ -372,67 +310,28 @@ class iSpyConfig:
                         "name": "object_detection",
                         "settings": {
                             "vision_model": {
-                                # input.*/output.* are auto-detected from the model's
-                                # _metadata.yaml sidecar - only override if its wrong.
                                 "file_path": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
                                 "source_pt": "YoloModels/pytorch/_default_v26_detect_for_fuel.pt",
                                 "min_conf": 0.5,
-                                # auto-optimize the model to the best format for this
-                                # machine (onnx/openvino/rknn/...). Done in the background
-                                # so boot/run stay non-blocking; the .pt runs until the
-                                # optimized artifact is ready.
-                                # Values: "off" (disabled), "auto" (auto-detect), "onnx", "rknn", "openvino", "tflite", "engine", "coreml"
                                 "optimize": "off",
                                 "quantize": False,
-                                # Optional PnP for pose (translation stored on
-                                # Box; rotation stored as roll/pitch/yaw on
-                                # Box). Enable to get 3D position + orientation
-                                # from 2D keypoints, and to render a 3D human
-                                # skeleton in the web viewer (when
-                                # keypoints_3d is present on the Object).
-                                # "pnp": {
-                                #     # Canonical COCO 17-keypoint skeleton
-                                #     # (~1.8 m tall, origin at mid-hip).
-                                #     "object_points": [...],
-                                #     "camera_matrix": [[fx, 0, cx], ...],
-                                #     "dist_coeffs": [0, 0, 0, 0, 0],
-                                #     "min_keypoint_conf": 0.5,
-                                #     # "mode": "flexible" | "rigid"
-                                # },
                             },
                         },
                     },
                 }
             },
-            # saved model-backed pipeline settings, keyed pipeline -> profile name.
-            # cameras auto-save their validated pipeline settings here so the
-            # "Load Profile" tab can re-apply them to another camera verbatim.
             "model_profiles": {},
-            # always-on rollback recorder, configured at the top level because
-            # it is core code and not an add-on you can toggle off in /addons
             "rollback": {
                 "enabled": True,
-                # stays "VideoRecordings" so recordings from the old
-                # plugin-based recorder dont end up orphaned
                 "data_dir": "VideoRecordings",
                 "fps": 30.0,
-                # one entry carries every camera's frame for a tick, so this is
-                # the stall budget at 30fps - keep it around two seconds
                 "max_queue": 60,
                 "downsample": 1,
                 "segment_minutes": 5,
                 "max_total_mb": 2048,
             },
-            # Editor/runtime routing for shared utility nodes.  Each utility
-            # maps to the camera lanes whose tracker detections it receives.
-            # An absent top-level block keeps the legacy behavior: every
-            # utility receives detections from every camera.
             "utility_sources": {},
             "plugins": {
-                # enabled add-ons only - presence == enabled, no flag. each entry maps
-                # a name to that add-on's own settings (schema defaults apply at runtime).
-                # "trackers": {"FRC/object_tracker": {"distance_threshold": 0.5}},
-                # "utilities": {"FRC/network_table_handler": {"network_tables_ip": "10.0.0.2"}},
                 "trackers": {},
                 "utilities": {},
                 "frame_processors": {},
@@ -490,8 +389,6 @@ class iSpyConfig:
         utilities = plugins.setdefault("utilities", {})
         frame_processors = plugins.setdefault("frame_processors", {})
 
-        # legacy add-on names that moved under a namespace keep working:
-        # move any old-name entry (with its settings) to the new name.
         for old_name, addon_type, new_name in _ADDON_RENAMES:
             target = {
                 "trackers": trackers,
@@ -529,11 +426,6 @@ class iSpyConfig:
                     addon_name, {}
                 )
 
-        # the health_reporter/status_reporter add-ons were merged into the
-        # always-on HealthModule web module; their stale_threshold setting
-        # lives at the top level as health_stale_threshold now. An explicit
-        # legacy value overrides the default; migration is idempotent since
-        # the old keys are removed below and never re-written.
         migrated_stale = None
         for gone_name in _MERGED_HEALTH_ADDONS:
             gone = utilities.pop(gone_name, None)
@@ -548,33 +440,20 @@ class iSpyConfig:
         if migrated_stale is not None:
             self.config["health_stale_threshold"] = migrated_stale
 
-        # same story for RollBack: it is a core service now, so the old
-        # utilities entries and the legacy record_dir key fold into the
-        # top-level "rollback" block and the entries are dropped. A value the
-        # user already set there wins - but "rollback" is seeded from
-        # default_config before this runs, so presence means nothing; compare
-        # against the shipped default to tell the two apart. Idempotent: the
-        # plugin entries are gone after the first load, so there is nothing
-        # left to carry over.
         rollback = self.config.setdefault("rollback", {})
         rollback_defaults = self.default_config.get("rollback", {})
         carried = {}
         for gone_name in _MERGED_ROLLBACK_ADDONS:
             gone = utilities.pop(gone_name, None)
             if isinstance(gone, dict):
-                # first entry wins - video_recorder is the older of the two
                 for key, value in gone.items():
-                    # the oldest video_recorder build spelled it record_dir
                     if key == "record_dir":
                         key = "data_dir"
                     carried.setdefault(key, value)
-        # record_dir predates both plugin names, so it only fills a gap
         legacy_dir = self.config.get("record_dir")
         if legacy_dir is not None:
             carried.setdefault("data_dir", legacy_dir)
         for key, value in carried.items():
-            # skip keys the core service doesnt know about (a stale
-            # output_key, say) rather than smuggling them into the new block
             if key not in rollback_defaults:
                 continue
             if rollback.get(key, rollback_defaults[key]) == rollback_defaults[key]:
@@ -671,17 +550,12 @@ class iSpyConfig:
 
     def load_from_file(self, file_path: str):
         try:
-            # utf-8-sig strips a UTF-8 BOM, which editors like Notepad add on
-            # save - json.load() would otherwise fail at char 0 with a bogus
-            # "Expecting value: line 1 column 1" error.
             with open(file_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if isinstance(data, dict) and "vision_model" in data:
                 self._migrate_legacy_vision_model(data)
             self._update_config(data)
         except json.JSONDecodeError as e:
-            # bad config is an error - boot never silently regenerates it.
-            # first-run setup is explicitly the job of `boot -f`.
             raise RuntimeError(
                 f"Config at {file_path} is invalid JSON ({e}). Fix it or run "
                 "'boot -f' to start from a fresh default configuration."
@@ -714,10 +588,6 @@ class iSpyConfig:
             target.parent.mkdir(parents=True, exist_ok=True)
             payload = json.dumps(self.config, indent=4).encode("utf-8")
 
-            # Atomic write: dump to a temp file in the same directory, fsync it,
-            # then os.replace() over the real config so a power cut mid-write can
-            # never leave a truncated/corrupt config.json behind. Everything runs
-            # under the module-wide lock so concurrent savers can't interleave.
             with _CONFIG_WRITE_LOCK:
                 fd, tmp_name = tempfile.mkstemp(
                     dir=str(target.parent), prefix=target.name + ".", suffix=".tmp"
@@ -747,11 +617,6 @@ class iSpyConfig:
             return val
         except (KeyError, TypeError):
             return default
-
-    # add-on config helpers
-    #
-    # plugins.<type> is a dict of enabled add-on name -> its settings.
-    # presence == enabled; the value is the add-on's own settings dict.
 
     def addon_entries(self, addon_type: str) -> dict:
         if addon_type not in _ADDON_TYPES:
@@ -835,13 +700,6 @@ class iSpyConfig:
         if save:
             self.save()
 
-    # model-profile config helpers
-    #
-    # model_profiles.<pipeline> maps a profile name to the pipeline settings
-    # dict snapshot it was saved from. the web UI auto-saves every validated
-    # model-backed camera here (see CamerasModule) and loads a profile back
-    # into the add/edit form - no manual create/update endpoints involved.
-
     def model_profiles(self, pipeline: str) -> dict:
         profiles = self.get("model_profiles", {})
         if not isinstance(profiles, dict):
@@ -865,8 +723,6 @@ class iSpyConfig:
         entries = profiles.setdefault(str(pipeline), {})
         if not isinstance(entries, dict):
             entries = {}
-        # snapshot - the profile must never mutate when the camera it was
-        # saved from changes later
         entries[str(name)] = json.loads(json.dumps(settings if isinstance(settings, dict) else {}))
         profiles[str(pipeline)] = entries
         if save:
@@ -892,7 +748,6 @@ class iSpyConfig:
             target = target[key]
         target[keys[-1]] = value
         if keys[-1] == "camera_configs":
-            # whole-dict replace orphans the wrapper views - rebuild em
             self._rebuild_camera_configs()
 
     def _update_config(self, data: dict, current_dict: dict = None):
@@ -903,8 +758,6 @@ class iSpyConfig:
             and "vision_model" in data
             and current_dict is self.config
         ):
-            # model settings live per-cam under pipeline.settings now - a top-level
-            # key is either a stale UI payload or a legacy config.
             raise ValueError(
                 "A top-level 'vision_model' key is no longer supported - "
                 "model settings are configured per camera under "
@@ -915,13 +768,10 @@ class iSpyConfig:
                 if not isinstance(value, dict):
                     continue
                 if current_dict is not self.config:
-                    # _compare() merges on a scratch copy - keep the raw entries
-                    # so the diff sees what was actually sent.
                     current_dict[key] = value
                 else:
                     self.config[key] = json.loads(json.dumps(value))
                     ensure_camera_entries_ready(self.config[key])
-                    # fresh deep copy orphaned the wrappers - rebuild em
                     self._rebuild_camera_configs()
             elif (
                 isinstance(value, dict)
@@ -935,8 +785,6 @@ class iSpyConfig:
     def _configure_logging(self):
         level_str = self.config.get("log_level", "INFO")
         level = getattr(logging, str(level_str).upper(), logging.INFO)
-        # getattr can hand back a non-level attribute for a junk value
-        # (e.g. log_level: "handlers"), which setLevel would reject.
         if not isinstance(level, int):
             level = logging.INFO
 
@@ -944,11 +792,6 @@ class iSpyConfig:
         root.handlers.clear()
         root.setLevel(logging.NOTSET)  # let children decide
 
-        # The configured level belongs on the "iSpy" parent, not on root or the
-        # handlers: children inherit it, but a module that sets its own level
-        # (iSpy.py quieting werkzeug, for one) still wins. Boot and the game
-        # loop pin this to INFO before the config is read, so applying it here
-        # is also what lets the setting survive both entrypoints.
         logging.getLogger("iSpy").setLevel(level)
 
         fmt = logging.Formatter(
@@ -999,7 +842,6 @@ class iSpyConfig:
             raise AttributeError(f"No config attribute or key named '{item}'")
         return val
 
-
 class iSpyCameraConfig:
     DEFAULTS = {
         "name": "default",
@@ -1029,10 +871,6 @@ class iSpyCameraConfig:
         if config_dict:
             self.data.update(config_dict)
 
-    # pipeline (pipeline: {name, settings}) accessors. legacy flat entries
-    # (bare-string pipeline + settings spread on the cam) migrate lazily on
-    # first touch.
-
     def pipeline_entry(self) -> dict:
         p = self.data.get("pipeline")
         if isinstance(p, dict):
@@ -1060,7 +898,6 @@ class iSpyCameraConfig:
         settings = self.pipeline_entry()["settings"]
         if key in settings:
             return settings[key]
-        # legacy flat layout - the setting may still live directly on the cam entry
         if key not in _CAMERA_CORE_KEYS and key in self.data:
             return self.data[key]
         return default
@@ -1076,7 +913,6 @@ class iSpyCameraConfig:
 
     def __contains__(self, key):
         return key in self.data
-
 
 class iSpyAddonConfig:
     def __init__(self, settings: dict | None = None, defaults: dict | None = None):

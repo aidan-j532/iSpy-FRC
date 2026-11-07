@@ -8,7 +8,6 @@ from flask import jsonify, render_template
 from iSpy.core import performance
 from iSpy.web.Backend.WebModule import WebModule
 
-
 class MetricsModule(WebModule):
     plugin_name = "metrics"
 
@@ -17,10 +16,6 @@ class MetricsModule(WebModule):
         "inference_s": ("Inference time", "ms", 1000.0),
         "camera_lag_s": ("Camera lag", "ms", 1000.0),
     }
-    # built-in, always-present breakdown parts: {key: (label, color)}.
-    # Display-only, never written to the saved file. Add-ons can register extra
-    # parts at runtime via set_code_parts() so any addon (tracker, utility,
-    # frame processor, vision pipeline) can show up here if it wants to.
     CODE_PARTS = {
         "vision": ("Vision", "#e63946"),
         "trackers": ("Trackers", "#f4a261"),
@@ -28,9 +23,6 @@ class MetricsModule(WebModule):
         "web": ("Web", "#9b5de5"),
     }
     MAX_POINTS = 600  # ring buffer, keeps memory bounded on long runs
-    # the metrics page saves on every unload (sendBeacon), so without a cap
-    # a long-lived tab left open/closed repeatedly fills Outputs with
-    # metrics_*.json forever. Keep only the most recent snapshots.
     MAX_SAVED_FILES = 20
 
     def __init__(self, context: dict):
@@ -42,7 +34,6 @@ class MetricsModule(WebModule):
             k: deque(maxlen=self.MAX_POINTS) for k in self._code_parts
         }
         self._start = time.perf_counter()
-        # last accepted sample (perf_counter) for the profile's sample-rate cap
         self._last_sample = 0.0
 
     def set_code_parts(self, parts: dict):
@@ -131,8 +122,6 @@ class MetricsModule(WebModule):
         )
 
     def _save_to_disk(self) -> bool:
-        # level 0 (and a run where nothing was ever sampled) must not drop an
-        # empty metrics_*.json into Outputs on shutdown
         if not self._has_data():
             return False
         os.makedirs("Outputs", exist_ok=True)

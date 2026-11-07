@@ -2,7 +2,6 @@ from flask import jsonify, render_template
 from iSpy.web.Backend.WebModule import WebModule
 from iSpy.validations.recommendations import get_structured_recommendations
 
-
 class RecommendationsModule(WebModule):
     plugin_name = "recommendations"
 

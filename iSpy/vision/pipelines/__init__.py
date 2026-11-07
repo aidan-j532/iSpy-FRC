@@ -16,6 +16,5 @@ PIPELINES: dict[str, type] = {
     "yolo_world": YoloWorldPipeline,
 }
 
-
 def get_pipeline_classes() -> dict[str, type]:
     return dict(PIPELINES)

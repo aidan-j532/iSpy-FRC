@@ -22,10 +22,8 @@ from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
 
-
 def _is_local_request() -> bool:
     return request.remote_addr in ("127.0.0.1", "::1", "localhost")
-
 
 def require_local_or_token(f):
     @wraps(f)
@@ -44,12 +42,8 @@ def require_local_or_token(f):
 
     return wrapper
 
-
 _PLUGIN_ROOT = Path(_plugins_pkg.__file__).resolve().parent
 
-# vision pipelines are imported directly + registered in a static dict
-# (iSpy/vision/pipelines/__init__.py), not scanned via load_plugins(). The
-# _TYPE_MAP entry below shows them in /addons as read-only built-ins.
 _TYPE_MAP = {
     "tracker": ("trackers", TrackerBase, "TrackerBase", "update"),
     "utility": ("utilities", UtilityBase, "UtilityBase", "update"),
@@ -70,8 +64,6 @@ _ADDON_TYPES_FROM_PTYPE = {
     "frame_processor": "frame_processors",
 }
 
-# core frame_data keys offered as NetworkTables publish sources; detections
-# keeps its special-case struct[] handling
 _CORE_PUBLISH_SOURCES = [
     {"source": "fps", "label": "fps"},
     {"source": "loop_s", "label": "loop_s"},
@@ -83,7 +75,6 @@ _CORE_PUBLISH_SOURCES = [
     {"source": "robot_pose.y", "label": "robot_pose.y"},
     {"source": "robot_pose.heading", "label": "robot_pose.heading"},
 ]
-
 
 def _coerce_setting_value(value, defn: dict):
     if not isinstance(defn, dict):
@@ -107,7 +98,6 @@ def _coerce_setting_value(value, defn: dict):
             raise ValueError(
                 f"'{defn.get('label', 'value')}' must be a number, got {value!r}"
             ) from None
-        # numbers stay ints when the JSON payload was an int
         return (
             int(num) if isinstance(value, int) and not isinstance(value, bool) else num
         )
@@ -135,8 +125,6 @@ def _coerce_setting_value(value, defn: dict):
                 ) from None
         lo = min(max(nums[0], lo_bound), hi_bound)
         hi = min(max(nums[1], lo_bound), hi_bound)
-        # a wrapped range (hue) is allowed to run lo > hi, it just means the
-        # band wraps through 0
         if lo > hi and not defn.get("wrap"):
             raise ValueError(f"'{label}' low end must not be above the high end")
         if isinstance(defn.get("step", 1), int):
@@ -160,14 +148,10 @@ def _coerce_setting_value(value, defn: dict):
         return clean
     return value
 
-
 @functools.lru_cache(maxsize=3)
 def _build_vision_pipeline_payloads(admin=None):
     from iSpy.vision.pipelines import get_pipeline_classes
 
-    # Experimental pipelines that are only offered to admins.
-    # admin=True shows exactly these; admin=False hides them; admin=None (no
-    # admin setting, i.e. existing callers/tests) shows everything.
     _ADMIN_ONLY_PIPELINES = ("qr_code", "optical_flow")
 
     pipelines = []
@@ -216,7 +200,6 @@ def _build_vision_pipeline_payloads(admin=None):
         pipelines.append(payload)
     return pipelines
 
-
 def _active_pipeline_names(config) -> set:
     names = set()
     try:
@@ -231,9 +214,6 @@ def _active_pipeline_names(config) -> set:
         logger.warning("Failed to read active camera pipelines")
     return names
 
-
-# evaluate an add-on's declared internet needs for the addons page. one entry
-# per camera; settings-aware, so a cached model needs nothing
 def _network_info(cls, settings_list: list[dict]) -> dict:
     critical: list[str] = []
     optional: list[str] = []
@@ -251,12 +231,9 @@ def _network_info(cls, settings_list: list[dict]) -> dict:
         "needs_internet": bool(critical or optional),
         "critical": critical,
         "optional": optional,
-        # the loader skips critical add-ons while offline, optional needs only
-        # turn one feature off
         "skipped": offline and bool(critical),
         "degraded": offline and not critical and bool(optional),
     }
-
 
 def _pipeline_settings_list(config, name: str) -> list[dict]:
     out: list[dict] = []
@@ -268,14 +245,8 @@ def _pipeline_settings_list(config, name: str) -> list[dict]:
         out = []
     return out or [{}]
 
-
-# libraries that only ever exist to talk to the internet - uploaded add-on
-# code importing one of these with no offline declaration gets a warning
 _NETWORK_IMPORT_ROOTS = ("requests", "urllib", "httpx", "aiohttp")
 
-
-# best-effort AST scan for a networked add-on with no offline declaration. a
-# warning, never a rejection - worst case the socket guard stops it anyway
 def _offline_declaration_warning(code: str) -> str | None:
     try:
         tree = ast.parse(code)
@@ -318,7 +289,6 @@ def _offline_declaration_warning(code: str) -> str | None:
         "network_requirements() so offline mode can gate it."
     )
 
-
 class PluginStatusModule(WebModule):
     plugin_name = "plugin_status"
 
@@ -326,7 +296,6 @@ class PluginStatusModule(WebModule):
         flask_app.add_url_rule(
             "/addons", "addons_page", lambda: render_template("addons.html")
         )
-        # Back-compat alias
         flask_app.add_url_rule(
             "/plugins", "plugins_page", lambda: render_template("addons.html")
         )
@@ -379,8 +348,6 @@ class PluginStatusModule(WebModule):
             self._publish_sources,
         )
 
-    # read
-
     def _status(self):
         vision = self.context.get("vision_instance")
         if not vision:
@@ -407,8 +374,6 @@ class PluginStatusModule(WebModule):
         return jsonify(pipelines=_build_vision_pipeline_payloads())
 
     def _network(self):
-        # base.html polls this for the offline banner, skipped/degraded grow as
-        # boot and the run loop record them
         return jsonify(network_policy.get_report())
 
     def _available(self):
@@ -418,8 +383,6 @@ class PluginStatusModule(WebModule):
         available = []
         for ptype, (subdir, base_cls, _, _) in _TYPE_MAP.items():
             if ptype == "vision_pipeline":
-                # built-in pipelines are core code, listed from the static
-                # registry instead of a dir scan - shown read-only
                 from iSpy.vision.pipelines import get_pipeline_classes
 
                 for name, cls in sorted(get_pipeline_classes().items()):
@@ -457,10 +420,6 @@ class PluginStatusModule(WebModule):
                     logger.warning("Failed to load config schema for add-on '%s'", name)
                     schema = {}
                 filename = self._filename_for(subdir, name)
-                # files under <subdir>/BuiltIn/ are iSpy's bundled add-ons:
-                # toggleable/configureable but not deletable. Template add-ons
-                # (example_*) also ship with iSpy, so they get the same
-                # built-in treatment instead of reading as user-authored.
                 is_builtin = bool(filename and filename.startswith("BuiltIn/")) or bool(
                     getattr(cls, "template", False)
                 )
@@ -533,8 +492,6 @@ class PluginStatusModule(WebModule):
         )
 
     def _filename_for(self, subdir: str, plugin_name: str) -> str | None:
-        # best-effort: find the file whose plugin_name matches so the UI
-        # can offer delete/edit without re-parsing modules itself
         base_cls_map = {v[0]: v[1] for v in _TYPE_MAP.values()}
         base_cls = base_cls_map.get(subdir)
         if not base_cls:
@@ -561,8 +518,6 @@ class PluginStatusModule(WebModule):
                 "their source is not viewable from the web UI."
             ), 403
         subdir = info[0]
-        # resolve the real file by plugin name - handles both custom
-        # add-ons in <subdir>/ and bundled ones under <subdir>/BuiltIn/
         rel = self._filename_for(subdir, name)
         if not rel:
             return jsonify(error="Not found"), 404
@@ -575,8 +530,6 @@ class PluginStatusModule(WebModule):
         if not path.exists():
             return jsonify(error="Not found"), 404
         return jsonify(source=path.read_text(errors="ignore"), filename=rel)
-
-    # toggle (enable/disable in config)
 
     def _toggle(self):
         data = request.get_json(force=True)
@@ -602,8 +555,6 @@ class PluginStatusModule(WebModule):
         if not config:
             return jsonify(error="No config available"), 500
 
-        # plugins.<type> is a dict of enabled add-on -> settings; presence IS
-        # the enabled state, so toggling adds/removes the entry
         config_type = {
             "tracker": "trackers",
             "utility": "utilities",
@@ -611,9 +562,6 @@ class PluginStatusModule(WebModule):
         }[plugin_type]
 
         if enable:
-            # write the schema defaults into the config entry so settings
-            # show up in Config/config.json right away (not an empty {}
-            # that only fills in after a manual save)
             defaults = {}
             try:
                 schema = discovered[name].config_schema() or {}
@@ -633,8 +581,6 @@ class PluginStatusModule(WebModule):
             enabled=config.is_addon_enabled(config_type, name),
             needs_restart=True,
         )
-
-    # settings (edit an enabled add-on's settings)
 
     def _save_settings(self):
         data = request.get_json(force=True)
@@ -673,8 +619,6 @@ class PluginStatusModule(WebModule):
                 f"its settings."
             ), 409
 
-        # validate + coerce against the schema so bad values never hit config;
-        # unknown keys are rejected (typo-proof)
         try:
             schema = cls.config_schema() or {}
         except Exception:
@@ -706,11 +650,8 @@ class PluginStatusModule(WebModule):
             needs_restart=True,
         )
 
-    # create / upload / delete
-
     def _resolve_safe_path(self, subdir: str, filename: str) -> Path | None:
         base = (_PLUGIN_ROOT / subdir).resolve()
-        # never touch BuiltIn/ (reserved for iSpy's own bundled add-ons)
         stem = Path(filename).stem
         if not _NAME_RE.match(stem):
             return None
@@ -729,7 +670,6 @@ class PluginStatusModule(WebModule):
         if len(code) > 200_000:
             return "File too large."
 
-        # Reject dangerous builtins before AST parsing
         _DANGEROUS = (
             "eval(",
             "exec(",
@@ -743,7 +683,6 @@ class PluginStatusModule(WebModule):
             if pat in code:
                 return f"Add-on source contains forbidden pattern: {pat.rstrip('(')}"
 
-        # Use AST to confirm a class genuinely subclasses the expected base
         try:
             tree = ast.parse(code)
         except SyntaxError as exc:
@@ -770,7 +709,6 @@ class PluginStatusModule(WebModule):
                 f"Add-on must subclass {base_name} (import it from iSpy.plugins.bases)."
             )
 
-        # Check plugin_name is assigned inside the subclass body
         has_plugin_name = False
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
@@ -906,8 +844,6 @@ class PluginStatusModule(WebModule):
         if "BuiltIn" in path.parts:
             return jsonify(error="Cannot delete a built-in add-on."), 403
 
-        # if its enabled in config, disable it first so we dont leave a
-        # dangling ref the loader cant resolve
         config = self.context.get("config")
         discovered = load_plugins(_PLUGIN_ROOT / subdir, base_cls)
         plugin_name = None

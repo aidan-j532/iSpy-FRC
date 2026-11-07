@@ -1,15 +1,3 @@
-"""Lane-based node editor backend.
-
-The editor is deliberately additive: it reads and writes the existing
-``camera_configs`` / ``plugins`` structures, and only keeps lane/viewport
-metadata in the namespaced ``editor_graph`` block.  Runtime objects are never
-touched, so every save reports that a restart is required.
-
-The graph is not free-form.  A camera owns one horizontal lane and the columns
-are always Camera -> Frame Processor -> Pipeline -> Tracker -> Utility.  The
-backend is authoritative for that model; the browser only renders the returned
-columns, lanes and edges.
-"""
 
 from __future__ import annotations
 
@@ -90,7 +78,6 @@ _DEVICE_CACHE_SECONDS = 5.0
 _CORE_ARTIFACT_TYPES = frozenset({"model", "source", "browse"})
 _MODEL_PATH_KEYS = ("file_path", "source_pt", "path")
 
-
 def _finite(value, default=0.0) -> float:
     try:
         number = float(value)
@@ -98,14 +85,11 @@ def _finite(value, default=0.0) -> float:
         return float(default)
     return number if math.isfinite(number) else float(default)
 
-
 def _clamp(value, low, high):
     return max(low, min(high, value))
 
-
 def _deep(value):
     return copy.deepcopy(value)
-
 
 def _label_for(cls, name: str) -> str:
     return str(
@@ -114,10 +98,8 @@ def _label_for(cls, name: str) -> str:
         or name
     )
 
-
 def _doc_for(cls) -> str:
     return (getattr(cls, "__doc__", None) or "").strip()[:400]
-
 
 def _defaults_from_schema(schema: dict, *, pipeline_name: str | None = None) -> dict:
     defaults = {}
@@ -135,7 +117,6 @@ def _defaults_from_schema(schema: dict, *, pipeline_name: str | None = None) -> 
         defaults[key] = value
     return defaults
 
-
 def _explicit_settings(schema: dict, source: dict | None) -> dict:
     source = source if isinstance(source, dict) else {}
     return {
@@ -143,7 +124,6 @@ def _explicit_settings(schema: dict, source: dict | None) -> dict:
         for key in (schema or {})
         if key in source
     }
-
 
 def _plugin_catalog() -> dict[str, dict[str, dict]]:
     catalog = {}
@@ -182,7 +162,6 @@ def _plugin_catalog() -> dict[str, dict[str, dict]]:
         catalog[ptype] = entries
     return catalog
 
-
 def _pipeline_catalog(config) -> dict[str, dict]:
     admin = config.get("admin") if config is not None else None
     entries = {}
@@ -209,7 +188,6 @@ def _pipeline_catalog(config) -> dict[str, dict]:
         entries[name] = item
     return entries
 
-
 def _camera_catalog() -> dict[str, dict]:
     entries = {}
     for cam_type, cls in get_camera_classes().items():
@@ -230,7 +208,6 @@ def _camera_catalog() -> dict[str, dict]:
         }
     return entries
 
-
 def _claimed_sources(config) -> set[str]:
     claimed = set()
     raw = config.get("camera_configs", {}) if config is not None else {}
@@ -246,9 +223,7 @@ def _claimed_sources(config) -> set[str]:
             claimed.add(str(entry.get("path")))
     return claimed
 
-
 def _detected_devices(config, *, refresh: bool = False) -> list[dict]:
-    """Probe physical cameras through the same discovery used by Cameras."""
     global _DEVICE_CACHE, _DEVICE_CACHE_TS
     now = time.monotonic()
     with _DEVICE_LOCK:
@@ -272,7 +247,6 @@ def _detected_devices(config, *, refresh: bool = False) -> list[dict]:
             if str(item.get("path")) not in claimed
         ]
 
-
 def _source_value(raw):
     if isinstance(raw, int):
         return raw
@@ -281,10 +255,8 @@ def _source_value(raw):
         return int(text)
     return text
 
-
 def _device_name(device: dict) -> str:
     return str(device.get("name") or device.get("path") or "Camera").strip()
-
 
 def _unique_name(base: str, used: set[str]) -> str:
     name = base or "Camera"
@@ -294,7 +266,6 @@ def _unique_name(base: str, used: set[str]) -> str:
     while f"{name} {index}" in used:
         index += 1
     return f"{name} {index}"
-
 
 def _replay_sessions(config) -> list[dict]:
     raw = config.get("rollback", {}) if config is not None else {}
@@ -321,7 +292,6 @@ def _replay_sessions(config) -> list[dict]:
         return sessions
     except OSError:
         return []
-
 
 def _palette(config, *, refresh: bool = False) -> dict:
     pipelines = _pipeline_catalog(config)
@@ -429,7 +399,6 @@ def _palette(config, *, refresh: bool = False) -> dict:
         "admin": admin,
     }
 
-
 def _camera_calibrated(entry: dict) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -439,7 +408,6 @@ def _camera_calibrated(entry: dict) -> bool:
         or calib.get("focal_length_pixels")
         or _finite(calib.get("fov"), 0) > 0
     )
-
 
 def _clean_layout(raw, config=None) -> dict:
     raw = raw if isinstance(raw, dict) else {}
@@ -463,16 +431,12 @@ def _clean_layout(raw, config=None) -> dict:
         layout["utility_order"] = [
             str(name) for name in utility_order if isinstance(name, str) and name
         ]
-    # Version-1 layouts stored per-node coordinates.  They are intentionally
-    # discarded; only lane/utility order and the viewport survive migration.
     return layout
-
 
 def _layout_from_config(config) -> dict:
     if config is None:
         return _clean_layout({})
     return _clean_layout(config.get("editor_graph", {}))
-
 
 def _camera_order(config, layout: dict | None = None) -> list[str]:
     raw = config.get("camera_configs", {}) if config is not None else {}
@@ -481,7 +445,6 @@ def _camera_order(config, layout: dict | None = None) -> list[str]:
     ordered = [name for name in saved if name in names]
     ordered.extend(name for name in names if name not in ordered)
     return ordered
-
 
 def _utility_order(config, layout: dict | None = None) -> list[str]:
     plugins = config.get("plugins", {}) if config is not None else {}
@@ -495,7 +458,6 @@ def _utility_order(config, layout: dict | None = None) -> list[str]:
     ordered = [name for name in saved if name in names]
     ordered.extend(name for name in names if name not in ordered)
     return ordered
-
 
 def _utility_sources(config, utility_name: str, cameras: list[str]) -> tuple[list[str], bool]:
     raw = config.get("utility_sources") if config is not None else None
@@ -512,12 +474,10 @@ def _utility_sources(config, utility_name: str, cameras: list[str]) -> tuple[lis
             sources.append(name)
     return sources, True
 
-
 def _node_geometry(column: str, index: int, *, utility_index: int | None = None):
     if column == "utility":
         return COLUMN_X[column], UTILITY_TOP + (utility_index or 0) * UTILITY_GAP
     return COLUMN_X[column], index
-
 
 def _make_node(
     *,
@@ -556,7 +516,6 @@ def _make_node(
     node.update(extra)
     return node
 
-
 def _edge_state(source: dict | None, target: dict | None) -> str:
     if not source or not target:
         return "invalid"
@@ -565,7 +524,6 @@ def _edge_state(source: dict | None, target: dict | None) -> str:
     ):
         return "complete"
     return "incomplete"
-
 
 def _make_edge(source: dict, target: dict, kind: str, warning: str | None = None) -> dict:
     edge = {
@@ -581,7 +539,6 @@ def _make_edge(source: dict, target: dict, kind: str, warning: str | None = None
     if warning:
         edge["warning"] = warning
     return edge
-
 
 def _derive_edges(nodes: list[dict]) -> list[dict]:
     cameras = [node for node in nodes if node["type"] == "camera"]
@@ -628,7 +585,6 @@ def _derive_edges(nodes: list[dict]) -> list[dict]:
                 add(tracker, utility, "tracker_utility")
     return edges
 
-
 def _column_counts(nodes: list[dict]) -> dict:
     counts = {}
     for column in COLUMNS:
@@ -641,9 +597,7 @@ def _column_counts(nodes: list[dict]) -> dict:
         counts[column] = count
     return counts
 
-
 def build_graph(config) -> dict:
-    """Build the canonical graph from executable config, never from layout."""
     raw_cams = config.get("camera_configs", {}) if config is not None else {}
     raw_plugins = config.get("plugins", {}) if config is not None else {}
     raw_cams = raw_cams if isinstance(raw_cams, dict) else {}
@@ -696,8 +650,6 @@ def build_graph(config) -> dict:
         if not isinstance(fp_names, list):
             fp_names = list(fp_bucket)
         else:
-            # The Add-ons page owns enable/disable.  A stale lane assignment
-            # must not resurrect a disabled processor.
             fp_names = [name for name in fp_names if name in fp_bucket]
         tracker_names = entry.get("trackers")
         if not isinstance(tracker_names, list):
@@ -914,7 +866,6 @@ def build_graph(config) -> dict:
     }
     return graph
 
-
 def _coerce_settings(
     schema: dict,
     provided: dict | None,
@@ -927,7 +878,6 @@ def _coerce_settings(
             continue
         out[key] = _coerce_setting_value(provided[key], defn)
     return out
-
 
 def _normalize_model(settings: dict) -> None:
     value = settings.get("vision_model")
@@ -942,7 +892,6 @@ def _normalize_model(settings: dict) -> None:
             value.setdefault("file_path", path.strip())
             value.setdefault("source_pt", path.strip())
 
-
 def _model_paths(settings: dict) -> list[str]:
     model = settings.get("vision_model") if isinstance(settings, dict) else None
     if isinstance(model, str):
@@ -956,7 +905,6 @@ def _model_paths(settings: dict) -> list[str]:
             paths.append(value.strip())
     return paths
 
-
 def _node_camera(raw: dict, node_type: str) -> str:
     camera = raw.get("camera")
     if isinstance(camera, str) and camera.strip():
@@ -969,7 +917,6 @@ def _node_camera(raw: dict, node_type: str) -> str:
         return parts[1]
     return ""
 
-
 def _node_plugin(raw: dict) -> str:
     plugin = raw.get("plugin")
     if isinstance(plugin, str) and plugin.strip():
@@ -977,7 +924,6 @@ def _node_plugin(raw: dict) -> str:
     node_id = str(raw.get("id") or "")
     parts = node_id.split(":")
     return parts[-1].strip() if parts else ""
-
 
 def _source_is_url_or_file(source) -> bool:
     text = str(source if source is not None else "").strip()
@@ -1006,7 +952,6 @@ def _source_is_url_or_file(source) -> bool:
     except OSError:
         return False
 
-
 def _camera_is_detected(config, *, source, device_id) -> bool:
     if _source_is_url_or_file(source):
         return True
@@ -1020,13 +965,11 @@ def _camera_is_detected(config, *, source, device_id) -> bool:
             return True
     return False
 
-
 def _validate_edges(
     edges,
     nodes_by_id: dict,
     active_pipelines: set | None = None,
 ) -> list[dict]:
-    """Validate edge direction, lane ownership, support, and cycles."""
     errors = []
     if not isinstance(edges, list):
         return [{"code": "edges_invalid", "message": "edges must be a list."}]
@@ -1124,7 +1067,6 @@ def _validate_edges(
                 continue
         valid_edges.append((source, target))
 
-    # Cycle detection over the structurally valid connections.
     adjacency = {}
     for source, target in valid_edges:
         adjacency.setdefault(source["id"], []).append(target["id"])
@@ -1155,7 +1097,6 @@ def _validate_edges(
             )
             break
     return errors
-
 
 def _duplicate_errors(nodes: list[dict]) -> list[dict]:
     errors = []
@@ -1211,7 +1152,6 @@ def _duplicate_errors(nodes: list[dict]) -> list[dict]:
             )
     return errors
 
-
 def _settings_completion_errors(node: dict) -> list[dict]:
     progress = node.get("completion") or completion_for_schema(
         node.get("schema", {}), node.get("settings", {})
@@ -1237,9 +1177,7 @@ def _settings_completion_errors(node: dict) -> list[dict]:
         }
     ]
 
-
 def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict]]:
-    """Validate a lane graph and turn it into executable config structures."""
     errors: list[dict] = []
     warnings: list[dict] = []
     payload = payload if isinstance(payload, dict) else {}
@@ -1318,7 +1256,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
         lane_by_camera[name] = lane
         camera_entries.append((lane, name, raw))
 
-    # Build normalized nodes by column.
     nodes: list[dict] = []
     nodes_by_id: dict[str, dict] = {}
     camera_nodes: dict[str, dict] = {}
@@ -1489,8 +1426,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
         nodes_by_id[node_id] = node
         nodes.append(node)
 
-    # Shared plugin settings are global by plugin name, exactly like the Add-ons
-    # page.  Merge explicit keys from every lane before completion is checked.
     for node in nodes:
         if node["type"] in {"frame_processor", "tracker", "utility"}:
             merged = settings_by_plugin.get((node["type"], node["plugin"]))
@@ -1595,8 +1530,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
 
     errors.extend(_duplicate_errors(list(nodes_by_id.values())))
 
-    # Completion is explicit-value based.  Defaults never count until the
-    # browser confirms them or the user presses "Use Defaults".
     for node in nodes_by_id.values():
         node["completion"] = completion_for_schema(
             node.get("schema", {}), node.get("settings", {})
@@ -1604,8 +1537,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
         node["required"] = node["completion"]["required"]
         errors.extend(_settings_completion_errors(node))
 
-    # Lane completeness: one Camera, Frame Processor, Pipeline and Tracker per
-    # lane.  Utilities are shared and validated separately below.
     for lane, name, raw in camera_entries:
         camera_node = camera_nodes.get(name)
         if camera_node is None:
@@ -1662,8 +1593,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
                         }
                     )
 
-    # Utility sources come from explicit tracker -> utility edges in the
-    # payload, falling back to the utility node's saved source list.
     raw_edges = payload.get("edges")
     supplied_edges = raw_edges if isinstance(raw_edges, list) else []
     if supplied_edges:
@@ -1710,7 +1639,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
         node["shared_with"] = list(sources)
         node["shared_count"] = len(sources)
 
-    # Every tracker must feed at least one utility.
     for tracker in tracker_nodes:
         if not any(
             tracker.get("camera") in utility_sources.get(utility.get("plugin"), [])
@@ -1727,7 +1655,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
                 }
             )
 
-    # A supplied edge list must still contain the five-column structural chain.
     if supplied_edges:
         supplied_keys = {
             (str(edge.get("from")), str(edge.get("to")))
@@ -1756,7 +1683,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
                         }
                     )
 
-    # Build executable structures.
     new_cams = {}
     for lane, name, raw in camera_entries:
         camera_node = camera_nodes.get(name)
@@ -1837,9 +1763,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
         payload.get("layout") if isinstance(payload.get("layout"), dict) else payload,
         config,
     )
-    # Utilities do not own a lane, so their vertical order can only come from
-    # the saved utility order (the browser keeps node objects in canvas order
-    # and also sends this list explicitly).
     requested_utilities = requested_layout.get("utility_order") or []
     utility_rank = {
         name: index for index, name in enumerate(requested_utilities)
@@ -1910,7 +1833,6 @@ def _normalize_graph(payload: dict, config) -> tuple[dict, list[dict], list[dict
         warnings,
     )
 
-
 def _validation_payload(payload: dict, config) -> tuple[dict, int]:
     normalized, errors, warnings = _normalize_graph(payload, config)
     completion = {
@@ -1929,15 +1851,7 @@ def _validation_payload(payload: dict, config) -> tuple[dict, int]:
         200 if not errors else 400,
     )
 
-
 def _require_config_write(view):
-    """Match the Cameras/Add-ons config-write policy.
-
-    Config saves are allowed from loopback and, when the documented
-    ``allow_remote_restart`` setting permits it, from the robot LAN.  A valid
-    ``ISPY_ADMIN_TOKEN`` is always honored.  Upload/create/delete routes keep
-    the stricter ``require_local_or_token`` policy.
-    """
 
     @wraps(view)
     def wrapper(self, *args, **kwargs):
@@ -1960,7 +1874,6 @@ def _require_config_write(view):
         )
 
     return wrapper
-
 
 class EditorModule(WebModule):
     plugin_name = "editor"
@@ -1995,13 +1908,6 @@ class EditorModule(WebModule):
         return self.context.get("config")
 
     def _save_graph_guarded(self):
-        """Authorize then save.
-
-        The authorization wrapper is kept as a method rather than wrapping the
-        already-bound view function: Flask calls the registered function as a
-        plain callable, while ``@wraps(bound_method)`` can make its signature
-        look bound and lead to the instance being supplied twice.
-        """
         config = self._config()
         allow_remote = (
             allow_remote_restart(config) if config is not None else True

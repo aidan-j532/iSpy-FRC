@@ -32,17 +32,13 @@ if (_REPO_CHECKOUT_ROOT / "iSpy" / "__init__.py").exists() and str(
     sys.path.insert(0, str(_REPO_CHECKOUT_ROOT))
 _PROJECT_ROOT = Path.cwd()
 
-
 def _repo_root() -> Path | None:
-    # cwd is unreliable here - colab runs it from /content with the repo nested
-    # below. walk up from this file instead, same as tests/compare_models.py.
     for base in (Path(__file__).resolve().parent, _PROJECT_ROOT):
         for d in (base, *base.parents):
             if (d / "iSpy").is_dir() and (d / "pyproject.toml").is_file():
                 return d
     return None
 
-# This is a URL to a real calibration dataset, provided by the Ultralytics repository.
 _CALIB_ZIP_URL = (
     "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128.zip"
 )
@@ -58,7 +54,6 @@ def _count_images(folder: Path) -> int:
     return sum(
         1 for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in _IMG_EXTS
     )
-
 
 def _download_real_calibration_dataset() -> Path | None:
     dest = _PROJECT_ROOT / "QuantizeDataset" / "coco128"
@@ -89,7 +84,6 @@ def _download_real_calibration_dataset() -> Path | None:
             for name in zf.namelist():
                 p = Path(name)
                 if p.suffix.lower() in _IMG_EXTS:
-                    # flatten + use the basename
                     (dest / p.name).write_bytes(zf.read(name))
     except Exception as exc:
         print(f"Calibration download failed: {exc}")
@@ -125,7 +119,6 @@ def _download_real_calibration_dataset() -> Path | None:
 
     return dest if _count_images(dest) >= _MIN_REAL_IMAGES else None
 
-
 def _real_calibration_dataset(explicit: str | None = None) -> Path | None:
     if explicit:
         p = Path(explicit)
@@ -141,7 +134,6 @@ def _real_calibration_dataset(explicit: str | None = None) -> Path | None:
     root = _PROJECT_ROOT / "QuantizeDataset"
     if root.is_dir():
         for d in sorted(root.iterdir()):
-            # "default" is the synthetic-noise fallback wqhich isnt real caus eit causes quatnizaiton errors
             if d.is_dir() and d.name not in ("default", "valid", "Trash"):
                 if _count_images(d) >= _MIN_REAL_IMAGES:
                     result = d
@@ -160,7 +152,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
-
 @contextlib.contextmanager
 def _quiet():
     with (
@@ -169,13 +160,11 @@ def _quiet():
     ):
         yield
 
-
 def _file_fingerprint(path: Path) -> tuple[int, str]:
     size = path.stat().st_size
     with open(path, "rb") as f:
         head = f.read(4096)
     return (size, hashlib.sha256(head).hexdigest())
-
 
 def _install_plan_dependencies(active: dict) -> None:
     from iSpy.boot.backend_deps import ensure_backends
@@ -193,7 +182,6 @@ def _install_plan_dependencies(active: dict) -> None:
         )
     for item in report.manual_requirements:
         print(f"  {item.backend} needs manual setup: {item.detail or item.status}")
-
 
 def find_pt_files() -> list[Path]:
     raw: list[Path] = []
@@ -252,7 +240,6 @@ def find_pt_files() -> list[Path]:
         unique.append(p)
     return sorted(unique, key=lambda p: p.name)
 
-
 def _add_model_paths_from_config(vm: dict, out: list[Path]):
     for key in ("file_path", "source_pt"):
         p = vm.get(key)
@@ -264,15 +251,10 @@ def _add_model_paths_from_config(vm: dict, out: list[Path]):
         if p.suffix == ".pt" and p.exists():
             out.append(p.resolve())
 
-
-# nothing to test with and no --model, so grab stock yolov8n - same
-# checkpoint/license as the _default_detect.pt boot downloads (ultralytics,
-# AGPL-3.0). not bundled, only fetched when there is literally nothing else
 _DEFAULT_BENCH_MODEL_NAME = "_default_detect.pt"
 _DEFAULT_BENCH_MODEL_URL = (
     "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt"
 )
-
 
 def _download_default_bench_model() -> Path | None:
     target_dir = _PROJECT_ROOT / "YoloModels" / "pytorch"
@@ -318,7 +300,6 @@ def _download_default_bench_model() -> Path | None:
 
     return target
 
-
 def _npu_masks() -> list[tuple[int, str]]:
     import glob
 
@@ -327,7 +308,6 @@ def _npu_masks() -> list[tuple[int, str]]:
     if n >= 3:
         masks += [(4, "NPU-core2"), (3, "NPU-cores0+1"), (7, "NPU-all3")]
     return masks
-
 
 def _cuda_devices() -> list[tuple[int, str]]:
     try:
@@ -356,27 +336,16 @@ def _cuda_devices() -> list[tuple[int, str]]:
         pass
     return [(0, "CUDA-0")]
 
-
 def _openvino_devices() -> list[str]:
-    # what openvino actually reports for this box. the plan gets built before
-    # --install-deps runs, so if the wheel isn't in yet just say "auto" and let
-    # GenericYolo re-resolve at load time instead of pinning a device we cant see
     try:
         from openvino import Core
 
         devices = [str(d) for d in Core().available_devices]
     except Exception:
         return ["auto"]
-    # resolve_openvino_device() only honours a request that already looks like
-    # intel:gpu / intel:cpu - a bare "GPU" would get stomped to whatever it
-    # prefers, so map to that scheme if we want each device benched separately
     return [f"intel:{d.lower()}" for d in devices] or ["auto"]
 
-
 def _has_openvino() -> bool:
-    # hardware says its there, or the wheel is already in. cant only check the
-    # import - auto-opt / --install-deps adds it *after* the plan is built,
-    # which is exactly the igpu laptop case
     from iSpy.config.AutoOpt import has_intel_gpu, has_intel_vpu
 
     if has_intel_gpu() or has_intel_vpu():
@@ -388,11 +357,7 @@ def _has_openvino() -> bool:
     except Exception:
         return False
 
-
 def _ort_gpu_provider() -> str | None:
-    # onnxruntime silently falls back to CPU when the requested GPU EP isn't
-    # compiled in, so ask ORT what it can actually run before labelling a run
-    # "CUDA". Returns the EP name that would really execute, else None.
     try:
         import onnxruntime as ort
 
@@ -404,11 +369,7 @@ def _ort_gpu_provider() -> str | None:
             return ep
     return None
 
-
 def detect_test_plan() -> dict:
-    # --all-backends: prospect every backend this box can run, not just the one
-    # backend auto-opt would pick. every gate is a hardware check, so a backend
-    # still counts when its runtime dep is only installed by --install-deps
     plan: dict[str, tuple] = {}
     if has_rockchip_npu():
         plan["rknn"] = ("rknn", 0, _npu_masks())
@@ -430,8 +391,6 @@ def detect_test_plan() -> dict:
             dev, label = cuda_devs[0]
             plan[f"engine_{label.lower()}"] = ("engine", dev, [(None, "TensorRT")])
     if _has_openvino():
-        # every device openvino reports, so an intel laptop gets real GPU numbers
-        # instead of silently testing nothing but torch/onnx on the cpu
         for dev in _openvino_devices():
             name = dev.split(":", 1)[-1]
             plan[f"openvino_{name}"] = (
@@ -440,7 +399,6 @@ def detect_test_plan() -> dict:
                 [(None, f"OpenVINO-{name.upper()}")],
             )
     if (has_arm() and not has_nvidia()) or has_edge_tpu():
-        # same tflite backend auto-opt picks on arm / edge-tpu boxes
         if exporter_supported("tflite"):
             plan["tflite"] = ("tflite", "cpu", [(None, "TFLite")])
         else:
@@ -454,27 +412,17 @@ def detect_test_plan() -> dict:
         plan["onnx_cpu"] = ("onnx", "cpu", [(None, "ONNX-CPU")])
     return plan
 
-
-# rknn/tflite are int8-only, engine/openvino get a real int8 build from the
-# calibration dataset. ispy-bench wants max fps, so never a float32 fallback
 _QUANTIZABLE_FORMATS = {"rknn", "tflite"}
 
 def _recommended_backend_plan() -> dict[str, tuple]:
-    # the exact backend normal iSpy would pick for this machine (AutoOpt.recommend_format)
-    # at default settings. formats GenericYolo cant live-run fall back to onnx
     from iSpy.config.AutoOpt import recommend_format, resolve_openvino_device
 
     fmt = recommend_format(ignore_dependencies=True)
     if fmt == "engine" and not has_tensorrt():
-        # normal iSpy needs TensorRT installed to build *and* run an engine -
-        # without it recommend_format is wrong, fall back to onnx like the
-        # optimizer's own engine failure path does
         fmt = "onnx"
     if fmt in ("coreml", "hailo", "qnn"):
         fmt = "onnx"
     if fmt == "tflite" and not exporter_supported("tflite"):
-        # Auto-opt can still recommend tflite for *inference* on ARM, but this
-        # box cannot export a .pt to .tflite (LiteRT is x86_64/macOS only).
         print(
             "  [note] TFLite export is unavailable on this platform - "
             "benchmarking ONNX instead (a cached .tflite would still run)"
@@ -510,7 +458,6 @@ def _recommended_backend_plan() -> dict[str, tuple]:
         label = "Auto/TPU"
     return {fmt: (fmt, dev, [(None, label)])}
 
-
 def _ensure_calibration_dataset(fmt) -> Path:
     from iSpy.dataset.dataset import (
         calib_count_for_format,
@@ -525,9 +472,7 @@ def _ensure_calibration_dataset(fmt) -> Path:
     )
     return ds
 
-
 def get_or_convert(pt_path, fmt, input_size=(640, 640), calib_dataset=None):
-    """Convert *pt_path* to *fmt* (or reuse cached). Returns (artifact, report)."""
     if fmt in ("tpu", "pt"):
         return pt_path, None
     quantize = fmt in _QUANTIZABLE_FORMATS
@@ -558,9 +503,7 @@ def get_or_convert(pt_path, fmt, input_size=(640, 640), calib_dataset=None):
         }
     return result, None
 
-
 def _conversion_failure_result(model_name, fmt, device, report) -> dict:
-    """Build an ok=False result entry for a failed conversion."""
     return {
         "model": model_name,
         "backend": f"Auto/{fmt.upper()}",
@@ -597,8 +540,6 @@ def make_base_config(pt_path, model_path, device, batch_size=1) -> dict:
 _BENCH_IMAGE_PATH: Path | None = None
 
 def _bench_source_image() -> Path:
-    # is_image=True sources make the preprocess worker feed the queue continuously,
-    # so what we time is real per-frame inference and not a one-shot drain
     global _BENCH_IMAGE_PATH
     if _BENCH_IMAGE_PATH is not None:
         return _BENCH_IMAGE_PATH
@@ -631,7 +572,6 @@ def _bench_source_image() -> Path:
     _BENCH_IMAGE_PATH = out
     return out
 
-
 def _benchmark_frames() -> list:
     import cv2
 
@@ -654,7 +594,6 @@ def _benchmark_frames() -> list:
         raise RuntimeError("could not read benchmark input image")
     return [fallback]
 
-
 def _percentile(values: list[float], percent: int) -> float:
     if not values:
         return 0.0
@@ -662,11 +601,9 @@ def _percentile(values: list[float], percent: int) -> float:
     index = round((len(ordered) - 1) * percent / 100)
     return ordered[index]
 
-
 def _sync_camera(camera) -> None:
     if getattr(camera.model, "model_type", None) == "tpu":
         camera.model._tpu_sync()
-
 
 def _drain_pipeline(camera) -> None:
     if not camera._use_pipeline:
@@ -694,16 +631,13 @@ def _drain_pipeline(camera) -> None:
             break
     _sync_camera(camera)
 
-
 def _require_benchmark_model(camera) -> None:
     if camera.model is None:
         raise RuntimeError("model failed to load")
 
-
 def _require_benchmark_count(count: int) -> None:
     if count < 1:
         raise RuntimeError("no inference completed during benchmark")
-
 
 def _benchmark_model_forward(model, frames: list, batch_size: int) -> dict | None:
     import numpy as np
@@ -833,7 +767,6 @@ def _benchmark_model_forward(model, frames: list, batch_size: int) -> dict | Non
         "model_forward_fps": 1000.0 / frame_ms,
     }
 
-
 def _benchmark_stream(
     model_config: dict,
     core_mask,
@@ -887,9 +820,6 @@ def _benchmark_stream(
         provider = getattr(model, "provider", None) or getattr(
             model, "model_type", str(getattr(model, "device", "unknown"))
         )
-        # never let a run labelled for the GPU quietly report CPU numbers: if
-        # the caller asked for a CUDA device but ORT fell back to CPU, fail
-        # loudly with the effective providers so the report is honest
         if (
             getattr(model, "model_type", None) == "onnx"
             and isinstance(getattr(model, "device", None), int)
@@ -1016,7 +946,6 @@ def _benchmark_stream(
     finally:
         camera.destroy()
 
-
 def benchmark(
     model_config,
     core_mask,
@@ -1056,7 +985,6 @@ def benchmark(
             runs = [future.result() for future in futures]
 
     return _combine_benchmark_runs(runs)
-
 
 def _combine_benchmark_runs(runs: list[dict]) -> dict:
     count = sum(run["frames"] for run in runs)
@@ -1109,7 +1037,6 @@ def _combine_benchmark_runs(runs: list[dict]) -> dict:
         result["model_forward_error"] = "; ".join(dict.fromkeys(forward_errors))
     return result
 
-
 def _local_tpu_core_count() -> int:
     try:
         import torch_xla.runtime as xr
@@ -1127,7 +1054,6 @@ def _local_tpu_core_count() -> int:
     except Exception:
         return 0
 
-
 def _tpu_core_worker(index, task, result_queue) -> None:
     import torch_xla.core.xla_model as xm
 
@@ -1141,7 +1067,6 @@ def _tpu_core_worker(index, task, result_queue) -> None:
         streams=task["streams"],
     )
     result_queue.put(result)
-
 
 def _benchmark_tpu_cores(task: dict) -> dict | None:
     try:
@@ -1166,7 +1091,6 @@ def _benchmark_tpu_cores(task: dict) -> dict | None:
     result["tpu_cores"] = count
     return result
 
-
 def _fmt_result(r: dict) -> str:
     if r.get("ok") and r.get("fps"):
         config = (
@@ -1188,7 +1112,6 @@ def _fmt_result(r: dict) -> str:
             f"{model_forward}"
         )
     return f"{r['backend']:20s} ERROR: {r.get('error', 'unknown')}"
-
 
 def _run_benchmark_task(task: dict) -> dict:
     result = {
@@ -1253,7 +1176,6 @@ def _run_benchmark_task(task: dict) -> dict:
         )
     return result
 
-
 def _positive_int(value: str) -> int:
     try:
         parsed = int(value)
@@ -1262,7 +1184,6 @@ def _positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
-
 
 def _parse_batch_sizes(value: str) -> tuple[int, ...]:
     try:
@@ -1276,7 +1197,6 @@ def _parse_batch_sizes(value: str) -> tuple[int, ...]:
     if not sizes:
         raise argparse.ArgumentTypeError("provide at least one batch size")
     return sizes
-
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Benchmark inference backends")
@@ -1349,7 +1269,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "(default: a real dataset under QuantizeDataset/, else COCO128 is downloaded)",
     )
     return parser
-
 
 def main(argv=None):
     parser = _build_parser()
@@ -1426,17 +1345,11 @@ def main(argv=None):
             )
             fallback_fmt = None
             if model_path is None and not args.all_backends and fmt != "onnx":
-                # recommended backend couldn't build (e.g. tensorrt absent) -
-                # normal iSpy would fall back to onnx too, so still report a
-                # number instead of silently skipping the model
                 fallback_fmt, model_path, conversion_report = (
                     "onnx",
                     *get_or_convert(pt_path, "onnx"),
                 )
             if model_path is None:
-                # Record the exact reason instead of silently dropping the
-                # model from the report (benchmarks must never imply a backend
-                # benchmarked when its conversion failed).
                 if conversion_report is None:
                     conversion_report = {
                         "status": "conversion",
@@ -1447,7 +1360,6 @@ def main(argv=None):
                 )
                 continue
             if fallback_fmt:
-                # only claim CUDA when this onnxruntime can really run it
                 use_ort_gpu = bool(has_nvidia() and _ort_gpu_provider())
                 device = _cuda_devices()[0][0] if use_ort_gpu else "cpu"
                 fmt = fallback_fmt
@@ -1492,9 +1404,6 @@ def main(argv=None):
             all_results = list(executor.map(_run_benchmark_task, tasks))
     else:
         all_results = [_run_benchmark_task(task) for task in tasks]
-    # Failed conversions produce explicit ok=False entries so the report and
-    # JSON never imply a backend was benchmarked when only its .pt fallback
-    # ran.
     all_results = all_results + conversion_failures
 
     best: dict[str, dict] = {}
@@ -1547,7 +1456,6 @@ def main(argv=None):
         if png:
             print(f"Chart saved to {png}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

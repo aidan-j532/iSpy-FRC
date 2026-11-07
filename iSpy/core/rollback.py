@@ -14,17 +14,11 @@ import numpy as np
 from iSpy.core import performance
 from iSpy.plugins.bases import UtilityBase
 
-# recording pauses while the volume has less slack than this, so a filling SD
-# card stops cleanly instead of leaving a pile of unplayable half-written files
 _MIN_FREE_BYTES = 100 * 1024 * 1024
 
-# MJPG in an AVI container: every frame is a keyframe, so frame-accurate
-# seeking works in a browser and in any desktop player
 _CODEC = "MJPG"
 _EXT = ".avi"
 
-# the pre-2.0 recorder wrote recording_<ts>.mp4 - those still list, still
-# replay and still count against the retention cap
 _READ_EXTS = (".avi", ".mp4")
 _SEGMENT_PREFIXES = ("rollback_", "recording_")
 
@@ -33,9 +27,7 @@ _SESSION_FILE = "session.json"
 _PINNED_FILE = "PINNED"
 _SIDECAR_EXT = ".json"
 
-# the implicit session that holds loose segment files sitting in data_dir
 _LEGACY_SESSION = "_legacy"
-
 
 def _sanitize_cam(name) -> str:
     keep = []
@@ -44,11 +36,7 @@ def _sanitize_cam(name) -> str:
     cleaned = "".join(keep).strip("_")
     return cleaned or "cam"
 
-
 def _serialize_detections(detections) -> list:
-    # detections arrive as Object instances, but a pipeline may hand back plain
-    # dicts - accept either. an object that cannot describe itself is skipped
-    # rather than taking the writer thread down with it
     out = []
     for det in detections or []:
         if isinstance(det, dict):
@@ -62,11 +50,7 @@ def _serialize_detections(detections) -> list:
                 continue
     return out
 
-
 def _json_default(value):
-    # default=str turns a numpy float32 sitting in a detection's vis_meta into
-    # the *string* "1.5", and the player then reads a string where it expects a
-    # number. unwrap the numpy scalars and arrays properly instead
     item = getattr(value, "item", None)
     if callable(item):
         try:
@@ -80,7 +64,6 @@ def _json_default(value):
         except Exception:
             pass
     return str(value)
-
 
 def _dir_bytes(path) -> int:
     total = 0
@@ -96,19 +79,10 @@ def _dir_bytes(path) -> int:
         pass
     return total
 
-
-# the header is written before the first record, so it is always whole in a
-# file a power cut truncated - which is what lets a listing read a segment's
-# cameras without parsing the megabytes of records behind them
 _HEADER_PREFIX_BYTES = 8192
 _HEADER_KEYS = ("stem", "session", "cams", "started", "fps")
 
-
 def read_sidecar_header(path) -> dict:
-    # the header only. anything that just wants to know which cameras a segment
-    # holds, or when it started, must not pay for the records array: five
-    # minutes at 30fps with detections is several MB of JSON per segment, and
-    # the Recordings list sums over every segment on the card
     try:
         with open(path, "r", encoding="utf-8") as f:
             head = f.read(_HEADER_PREFIX_BYTES)
@@ -125,7 +99,6 @@ def read_sidecar_header(path) -> dict:
         except ValueError:
             pass
 
-    # a crash inside the header itself - salvage whatever keys still parse
     out = {}
     for key in _HEADER_KEYS:
         key_marker = f'"{key}": '
@@ -139,21 +112,11 @@ def read_sidecar_header(path) -> dict:
         out[key] = value
     return out
 
-
 def _sidecar_cams(path: Path) -> list:
-    # only the header is needed here, and _iter_segments runs over every
-    # segment on every listing - so read a prefix and stop rather than parsing
-    # a records array that can hold thousands of entries. a crashed sidecar has
-    # no closing brace at all, which is exactly why this is not a json.loads
     cams = read_sidecar_header(path).get("cams")
     return [str(c) for c in cams] if isinstance(cams, list) else []
 
-
 def read_sidecar(path) -> dict:
-    # tolerant reader for a sidecar written by the streaming writer. a clean
-    # stop closes the array and the object, but a power cut leaves a truncated
-    # JSON document - which is the whole case rollback exists for, so the
-    # records written before the crash are recovered rather than thrown away
     try:
         text = Path(path).read_text(encoding="utf-8")
     except (OSError, ValueError):
@@ -169,7 +132,6 @@ def read_sidecar(path) -> dict:
     pos = text.find(marker)
     if pos < 0:
         return {}
-    # everything before the records array is the header, which is always whole
     try:
         header = json.loads(text[:pos].rstrip().rstrip(",") + "}")
     except ValueError:
@@ -184,16 +146,12 @@ def read_sidecar(path) -> dict:
         try:
             rec, i = dec.raw_decode(text, i)
         except ValueError:
-            break  # the last record is the partial one the crash cut off
+            break
         records.append(rec)
     header["records"] = records
     return header
 
-
 def _iter_segments(directory):
-    # segments in a directory, oldest first. a segment is a shared-stem group -
-    # <stem>.json sidecar plus one <stem>_<cam>.avi per camera. a file with no
-    # sidecar is its own segment, which is exactly the legacy flat shape
     try:
         root = Path(directory)
         if not root.is_dir():
@@ -232,12 +190,7 @@ def _iter_segments(directory):
 
     return sorted(segments, key=lambda seg: seg["stem"])
 
-
 def _iter_sessions(data_dir):
-    # every recording session in data_dir, oldest first by name. a session dir
-    # is one iSpy process start. loose segment files sitting directly in
-    # data_dir predate sessions and are reported as a single implicit
-    # "_legacy" session - pinning it uses <data_dir>/PINNED
     try:
         root = Path(data_dir)
         if not root.is_dir():
@@ -281,14 +234,12 @@ def _iter_sessions(data_dir):
 
     return sorted(sessions, key=lambda s: s["name"])
 
-
 def _session_started(path: Path):
     try:
         data = json.loads((path / _SESSION_FILE).read_text())
     except Exception:
         return None
     return data.get("started") if isinstance(data, dict) else None
-
 
 def _session_size(session) -> int:
     if session.get("loose"):
@@ -300,7 +251,6 @@ def _session_size(session) -> int:
                 continue
         return total
     return _dir_bytes(session["path"])
-
 
 def _delete_session(session) -> bool:
     try:
@@ -317,7 +267,6 @@ def _delete_session(session) -> bool:
         return True
     except OSError:
         return False
-
 
 class RollBack(UtilityBase):
     plugin_name = "rollback"
@@ -346,9 +295,6 @@ class RollBack(UtilityBase):
             "max_queue": {
                 "type": "number",
                 "label": "Max Queue",
-                # one entry holds every camera's frame for a tick, so this is
-                # the stall budget in seconds at 30fps - 60 is about 2s, and
-                # a bigger buffer only buys latency, at ~1MB/frame/camera of RAM
                 "hint": "Maximum buffered frames before dropping.",
                 "default": 60,
             },
@@ -377,21 +323,16 @@ class RollBack(UtilityBase):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
         vision = self.context.get("vision_instance")
-        # the performance profile can turn the recorder off for the run (level 0),
-        # in which case update() returns before _start_recorder opens a session
         profile = performance.get_profile()
         self._enabled = bool(self.config.get("enabled", True)) and not bool(
             getattr(vision, "replay_mode", False)
         )
         if not profile.rollback_recorder:
             self._enabled = False
-        # remembered so the UI/health can say WHY recording is off
         self._disabled_by_profile = not profile.rollback_recorder
         self._video_output_dir = self.config.get("data_dir", "VideoRecordings")
         self._fps = float(self.config.get("fps", 30.0))
         self._max_queue = int(self.config.get("max_queue", 60))
-        # the profile can raise the stride (keep fewer frames) but never lower
-        # it below what the user configured
         self._downsample = max(
             1,
             int(self.config.get("downsample", 1)),
@@ -402,9 +343,6 @@ class RollBack(UtilityBase):
             int(self.config.get("max_total_mb", 2048)) * 1024 * 1024
         )
 
-        # one queue item carries every camera's frame for that tick plus the
-        # record that describes it, so a multi-cam tick is dropped as a unit
-        # and can never end up half-written in one camera's file
         self._queue = queue.Queue(maxsize=self._max_queue)
         self._writers = {}
         self._thread = None
@@ -431,21 +369,11 @@ class RollBack(UtilityBase):
         try:
             os.makedirs(self._video_output_dir, exist_ok=True)
         except OSError as e:
-            # not fatal - _disk_problem() reports the same thing every tick and
-            # the recorder simply stays idle until the path is usable
             self.logger.error(
                 "Rollback output directory %s is unusable: %s",
                 self._video_output_dir,
                 e,
             )
-
-        # the session directory is NOT created here. every boot - including a
-        # watchdog crash-loop, or a run whose cameras never came up - used to
-        # leave behind an empty session folder that then had to be listed,
-        # sized and deleted by the retention pass. it is created lazily by
-        # _start_recorder, on the first frame actually worth recording
-
-    # session bookkeeping
 
     def _camera_meta(self) -> dict:
         cams = {}
@@ -481,9 +409,6 @@ class RollBack(UtilityBase):
     def _open_session(self) -> bool:
         try:
             stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            # a session is one process start, so a second start in the same
-            # second must not merge into the first one's directory - it would
-            # interleave two runs' segments under one name
             name = f"{_SESSION_PREFIX}{stamp}"
             attempt = 0
             while (Path(self._video_output_dir) / name).exists():
@@ -505,12 +430,6 @@ class RollBack(UtilityBase):
         return True
 
     def _write_session_meta(self) -> bool:
-        # session.json is what the player reads camera calibration and geometry
-        # from, so it is rewritten at every segment open: the cameras are live
-        # by then, and the offsets/calibration may have been set (or fixed)
-        # while the process was starting. the snapshot taken at construction
-        # time was frequently "not calibrated yet" on a run that recorded the
-        # whole match
         if self._session_dir is None:
             return False
 
@@ -576,12 +495,6 @@ class RollBack(UtilityBase):
             )
 
     def _schedule_retention(self):
-        # sizing every session means an rglob over the whole card. run from
-        # _open_segment that walk happens on the encoder thread, and on a big
-        # SD card it can outlast the queue's whole stall budget and drop a
-        # burst of frames. it never touches the session being written, so it is
-        # safe to hand to a detached thread - which _stop_recorder then waits
-        # for, so a shutdown cannot leave it walking (or deleting) the card
         if self._retention_thread is not None and self._retention_thread.is_alive():
             return
 
@@ -608,13 +521,9 @@ class RollBack(UtilityBase):
         else:
             self._retention_thread = None
 
-    # recording
-
     def start(self):
         pass
 
-    # false when the loop should skip its per-camera frame copies: the recorder
-    # is the only consumer, and copying for nothing wastes a frame copy per tick
     def wants_raw_frames(self) -> bool:
         return self._enabled and not self._disk_paused
 
@@ -628,8 +537,6 @@ class RollBack(UtilityBase):
 
         self._frame_counter += 1
 
-        # the guard has to run mid-session too: a card that fills up an hour in
-        # would otherwise keep appending until every write starts failing
         if self._started and self._frame_counter % 150 == 0:
             self._disk_paused = bool(self._disk_problem())
         if self._disk_paused:
@@ -653,20 +560,6 @@ class RollBack(UtilityBase):
             if not self._start_recorder(w, h, raw_frames.keys()):
                 return
         else:
-            # only a camera that JOINS needs a rotation: a per-camera file that
-            # starts halfway through a segment would be unplayable, so the new
-            # set goes to the worker and it rotates on the next tick.
-            #
-            # a camera that goes AWAY does not. _raw_frames drops a camera whose
-            # frame is over a second old, so a flaky USB camera used to rotate
-            # out, rotate back in, rotate out again - one segment per blip. the
-            # open files keep being written from the last good frame instead
-            # (_write_segment pads them), and the segment's cam list still
-            # matches the files, so every sidecar record lines up with a frame.
-            #
-            # the set is the union, never the reduced one: shrinking it here
-            # left _cams_pending pointing at a set the worker could adopt before
-            # it rotated, quietly dropping the camera from the recording
             cams = sorted(raw_frames)
             merged = sorted(set(self._cams) | set(cams))
             if merged != self._cams and merged != self._cams_pending:
@@ -691,9 +584,6 @@ class RollBack(UtilityBase):
         return np.ascontiguousarray(frame)
 
     def _disk_problem(self) -> str | None:
-        # the dir itself is checked first: free space on some *other* path is
-        # meaningless, and __init__'s makedirs may have failed (or been
-        # pointed at a file) without that being fatal
         if not Path(self._video_output_dir).is_dir():
             return f"output directory {self._video_output_dir} is not a usable folder"
         if not os.access(self._video_output_dir, os.W_OK):
@@ -718,8 +608,6 @@ class RollBack(UtilityBase):
 
         problem = self._disk_problem()
         if problem:
-            # update() runs at camera rate, so an unguarded warning here fills
-            # the log with 30 identical lines a second
             now = time.monotonic()
             if now - self._idle_logged_at >= 30:
                 self._idle_logged_at = now
@@ -729,8 +617,6 @@ class RollBack(UtilityBase):
         if self._session_dir is None and not self._open_session():
             return False
 
-        # the camera set is seeded from the first tick. cameras that come up or
-        # drop out later are adopted by the worker at the next rotation
         self._cams = sorted(cams)
         self._cams_pending = None
         self._size = (width, height)
@@ -738,9 +624,6 @@ class RollBack(UtilityBase):
         self._stopped = False
         self._last_clean = {}
 
-        # never stack workers: if a previous stop() failed to reap its thread,
-        # join it before starting a replacement (guard against the sentinel
-        # never having been delivered)
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2)
 
@@ -749,17 +632,12 @@ class RollBack(UtilityBase):
         return True
 
     def _worker(self):
-        # the writers live entirely inside this thread - opening, rotating and
-        # releasing them here is what keeps rotation from racing the write path
         try:
             self._open_segment()
             while True:
                 item = self._queue.get()
                 if item is None:
                     break
-                # a failure while encoding one tick must not take the thread
-                # down: the recorder would stay _started while silently writing
-                # nothing for the rest of the run
                 try:
                     if self._stem is not None and self._should_rotate():
                         self._close_segment()
@@ -779,18 +657,10 @@ class RollBack(UtilityBase):
                 self._thread = None
 
     def _write_segment(self, item):
-        # each camera is written in its own try/except. a raise from camera B
-        # after camera A had already written used to skip the sidecar record
-        # entirely, leaving the two permanently out of step: every subsequent
-        # record describes a frame earlier than the one in the clip
         for cam, writer in self._writers.items():
             try:
                 clean = self._clean_frame(item["frames"].get(cam), self._size)
                 if clean is None:
-                    # a camera with no usable frame this tick still has to
-                    # produce one, or its clip ends up a frame shorter than the
-                    # sidecar and every later frame is compared against the
-                    # wrong record
                     clean = self._last_clean.get(cam)
                     if clean is None:
                         clean = np.zeros(
@@ -803,27 +673,15 @@ class RollBack(UtilityBase):
                     "Rollback could not write frame for camera %s", cam
                 )
 
-        # the record is written whatever happened above - the other cameras'
-        # frames are already on disk, so skipping it would desync them too
         self._write_sidecar(item["record"])
 
     def _clip_fps(self) -> float:
-        # the stored clip's playback rate, not the camera's. update() keeps one
-        # frame in every self._downsample, so the writer has to be told the
-        # reduced rate - telling it self._fps makes a downsample=2 clip play at
-        # 2x speed. (the player paces itself off the sidecar timestamps, so it
-        # is unaffected; this matters for the downloaded clip)
         return max(self._fps / max(1, self._downsample), 0.1)
 
     def _sidecar_path(self) -> Path:
-        # one sidecar per segment, sharing the stem with the per-camera avis so
-        # _iter_segments can group them back together
         return self._session_dir / f"{self._stem}{_SIDECAR_EXT}"
 
     def _open_sidecar(self):
-        # streamed rather than buffered: the records array is opened here and
-        # each record appended as it is written, so a long segment does not sit
-        # in memory and a crash still leaves the avis playable
         self._sidecar_records = 0
         try:
             handle = open(self._sidecar_path(), "w", encoding="utf-8")
@@ -860,9 +718,6 @@ class RollBack(UtilityBase):
                 self._sidecar.write(",")
             self._sidecar.write(json.dumps(record, default=_json_default))
             self._sidecar_records += 1
-            # the file is only closed on a clean stop, so a crash would throw
-            # away every buffered record. a periodic flush bounds that loss to
-            # half a second of footage
             if self._sidecar_records % 30 == 0:
                 self._sidecar.flush()
         except OSError as e:
@@ -890,10 +745,6 @@ class RollBack(UtilityBase):
         return (time.time() - self._segment_opened_at) >= self._segment_seconds
 
     def _should_rotate(self) -> bool:
-        # a pending camera set means the segment's cam list no longer matches
-        # what is being recorded, so rotate now rather than waiting out the
-        # timer. an empty set is ignored - that just means every camera dropped
-        # for a tick, and rotating to zero writers would strand the segment
         return self._segment_expired() or bool(self._cams_pending)
 
     def _adopt_pending_cams(self):
@@ -916,9 +767,6 @@ class RollBack(UtilityBase):
 
         self._schedule_retention()
 
-        # the cameras are live now, and the calibration the player projects with
-        # may have been set after the process started - so the session
-        # description is refreshed rather than left as the boot-time snapshot
         self._write_session_meta()
 
         width, height = self._size
@@ -978,11 +826,6 @@ class RollBack(UtilityBase):
             return
 
         try:
-            # make room by evicting the OLDEST tick: keeping the newest frames
-            # is worth more than keeping the stalest ones when the disk stalls.
-            # task_done() is required here, not just in _stop_recorder - an
-            # unaccounted-for get leaves unfinished_tasks above zero forever
-            # and any join() on the queue never returns
             if self._queue.full():
                 try:
                     self._queue.get_nowait()
@@ -999,12 +842,6 @@ class RollBack(UtilityBase):
         was_started = self._started
         self._stopped = True
 
-        # Leak-proof shutdown: the sentinel can only be read once, so if the
-        # queue is full a put_nowait(None) silently fails and the worker stays
-        # blocked forever (leaking a thread + open VideoWriters). Evict the
-        # OLDEST frame to make room rather than draining the whole backlog -
-        # flushing is bounded by the join below either way, and a shutdown
-        # should not throw away ten seconds of recorded footage.
         if _thread is not None and _thread.is_alive():
             while self._queue.full():
                 try:
@@ -1020,9 +857,6 @@ class RollBack(UtilityBase):
             if _thread is not threading.current_thread():
                 _thread.join(timeout=15)
 
-        # the writers are the worker's to release - _close_segment() in its
-        # finally block is what finalises the files
-
         self._started = False
         self._thread = None
         self._cams_pending = None
@@ -1036,9 +870,6 @@ class RollBack(UtilityBase):
             )
 
     def get_health(self) -> dict:
-        # picked up by the Health page for free - the module only looks for
-        # get_health() on live utilities and pipelines. a disk the recorder
-        # cannot write to has to show up there, not only on the Rollback tab
         problem = None
         try:
             problem = self._disk_problem()

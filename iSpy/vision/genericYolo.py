@@ -19,7 +19,6 @@ import numpy as np
 from iSpy.vision.engine_utils import execute_engine, read_engine_plan
 from iSpy.vision.ModelInspector import fill_missing_config
 
-
 def torch_load(path, trusted: bool = True):
     import torch
 
@@ -33,7 +32,6 @@ def torch_load(path, trusted: bool = True):
         return torch.load(str(path), map_location="cpu", weights_only=True)
     return torch.load(str(path), map_location="cpu", weights_only=False)
 
-
 def _checkpoint_pickle_bytes(path) -> bytes:
     if zipfile.is_zipfile(str(path)):
         with zipfile.ZipFile(str(path)) as zf:
@@ -45,7 +43,6 @@ def _checkpoint_pickle_bytes(path) -> bytes:
         return Path(path).read_bytes()
     except OSError as e:
         raise RuntimeError(f"checkpoint could not be read: {e}") from e
-
 
 def _safe_globals_for_checkpoint(raw: bytes):
     try:
@@ -61,8 +58,6 @@ def _safe_globals_for_checkpoint(raw: bytes):
                 if sep:
                     globals_in_file.add((module.strip(), name.strip()))
             elif op.name == "STACK_GLOBAL":
-                # protocol-4+ pickles emit STACK_GLOBAL and then push the two
-                # strings (module, name) for the referenced global.
                 waiting_stack_global = 2
             elif waiting_stack_global and isinstance(arg, str):
                 stack_global_parts[2 - waiting_stack_global] = arg
@@ -82,13 +77,10 @@ def _safe_globals_for_checkpoint(raw: bytes):
         entries.append((obj, f"{_torch_global_path(module)}.{name}"))
     return entries
 
-
 class _AllowedByDefault:
     pass
 
-
 _ALLOWED_BY_DEFAULT = _AllowedByDefault()
-
 
 @functools.lru_cache(maxsize=1)
 def _torch_default_allowed() -> set:
@@ -96,12 +88,10 @@ def _torch_default_allowed() -> set:
 
     return set(_get_allowed_globals())
 
-
 def _torch_global_path(module: str) -> str:
     from torch._utils import IMPORT_MAPPING
 
     return IMPORT_MAPPING.get(module, module)
-
 
 def _resolve_safe_global(module: str, name: str):
     from torch._utils import IMPORT_MAPPING, NAME_MAPPING
@@ -117,12 +107,6 @@ def _resolve_safe_global(module: str, name: str):
         return _ALLOWED_BY_DEFAULT
 
     if module == "builtins" and name == "getattr":
-        # ``getattr`` only ever read attributes off objects the sandbox already
-        # produced (shim classes / torch.nn containers / torch builtins). It is
-        # not itself a code-execution gadget here: torch still refuses REDUCE /
-        # NEWOBJ / BUILD on anything that is not allowlisted, and no reachable
-        # object exposes a side-effecting attribute-get, so offering ``getattr``
-        # cannot escalate to arbitrary calls.
         return getattr
 
     if module.startswith("ultralytics"):
@@ -154,10 +138,8 @@ def _resolve_safe_global(module: str, name: str):
 
     raise RuntimeError(f"checkpoint references non-allowlisted global {full_path}")
 
-
 class ModelFileError(RuntimeError):
     pass
-
 
 def _validate_model_file(path: str) -> None:
     p = Path(path)
@@ -173,10 +155,7 @@ def _validate_model_file(path: str) -> None:
             f"Model file '{p}' is only {size} bytes - empty or truncated"
         )
 
-
 try:
-    # rknnlite clobbers stdlib logging level names on import, which breaks
-    # torch's setLevel('WARNING') bootstrap later - use the guarded importer
     from iSpy.vision._safe_imports import import_rknnlite
 
     RKNNLite = import_rknnlite()
@@ -195,7 +174,6 @@ try:
             return
         _rknn_log_set = True
         _lib = None
-        # Search rknnlite package directory for librknnrt.so
         _pkg_dir = _os.path.dirname(__import__("rknnlite").__file__)
         try:
             _rknn_pkg_files = _os.listdir(_pkg_dir)
@@ -209,7 +187,6 @@ try:
                     break
                 except (AttributeError, OSError):
                     _lib = None
-        # Fallback: try standard dlopen search
         if _lib is None:
             for _name in ("librknnrt.so", "librknnmrt.so"):
                 try:
@@ -233,7 +210,6 @@ except ImportError:
 
     def _set_rknn_log_level(level: int) -> None:
         pass
-
 
 class _ONNXInferencePool:
     def __init__(self, model_file: str, devices: list[int], providers_template):
@@ -287,7 +263,6 @@ class _ONNXInferencePool:
         for _ in range(self._n):
             self._in_q.put(None)
 
-
 class _GPUInferencePool:
     def __init__(
         self,
@@ -320,7 +295,6 @@ class _GPUInferencePool:
         )
 
     def _worker(self, device):
-        # Load model INSIDE the worker thread so TensorRT creates a context on this GPU
         import torch
 
         from .yolo_pt import load_yolo_pt
@@ -366,7 +340,6 @@ class _GPUInferencePool:
         for idx, frame in enumerate(frames):
             self._in_q.put((idx, frame))
 
-        # results come back out of order
         results = [None] * num_frames
         for _ in range(num_frames):
             idx, res = self._out_q.get()
@@ -377,7 +350,6 @@ class _GPUInferencePool:
     def stop(self):
         for _ in range(self._n):
             self._in_q.put(None)
-
 
 def normalize_model_config(model_config: dict) -> dict:
     cfg = dict(model_config)
@@ -415,7 +387,6 @@ def normalize_model_config(model_config: dict) -> dict:
 
     return cfg
 
-
 def _validate_input_block(inp: dict) -> dict:
     layout = inp.get("layout")
     if layout not in ("nhwc", "nchw"):
@@ -432,7 +403,6 @@ def _validate_input_block(inp: dict) -> dict:
     if inp["normalize"] and "scale" not in inp:
         raise ValueError("input.scale is required when input.normalize is true.")
     return inp
-
 
 def _validate_output_block(out: dict, task: str, num_classes: int) -> None:
     fmt = out.get("format")
@@ -476,7 +446,6 @@ def _validate_output_block(out: dict, task: str, num_classes: int) -> None:
             if key not in out:
                 raise ValueError(f"output.{key} is required for task='pose'.")
 
-
 class Box:
     def __init__(
         self, xyxy, conf, cls_id=0, translation=None, rotation=None, keypoints_3d=None
@@ -484,13 +453,11 @@ class Box:
         self.xyxy = xyxy
         self.conf = conf
         self.cls_id = cls_id
-        # PnP results, both None for detect-only models
         self.translation = translation  # (x, y, z) metres in camera frame
         self.rotation = rotation  # (roll, pitch, yaw) radians in camera frame
         self.keypoints_3d = (
             keypoints_3d  # list of [x,y,z] per keypoint in camera frame or None
         )
-
 
 class Results:
     def __init__(
@@ -526,7 +493,6 @@ class Results:
             if not all(math.isfinite(v) for v in box.xyxy):
                 continue
             x1, y1, x2, y2 = map(int, box.xyxy)
-            # confidence-based color: green >= 0.7, yellow >= 0.4, red < 0.4
             if box.conf >= 0.7:
                 color = (0, 255, 0)
             elif box.conf >= 0.4:
@@ -579,7 +545,6 @@ class Results:
 
     def __str__(self):
         return f"Results(boxes={len(self.boxes)}, keypoints={len(self.keypoints)})"
-
 
 class GenericYolo:
     def __init__(self, model_config: dict, core_mask=None, iSpy_config=None):
@@ -741,9 +706,6 @@ class GenericYolo:
             or "openvino_model" in self.model_file
             or self.model_file.endswith(".xml")
         ):
-            # Compiled accelerator formats (TensorRT / OpenVINO), converted from
-            # an onnx source by optimizer.convert_model() - NOT raw checkpoints,
-            # so they bypass the ".pt never live-runs" ModelFileError guard.
             self._require_input_block()
             if self.model_file.endswith(".engine"):
                 self.model_type = "engine"
@@ -753,10 +715,6 @@ class GenericYolo:
                 self._load_openvino(self.model_file)
 
         elif self.model_file.endswith(".mlpackage"):
-            # CoreML stays unimplemented for runtime inference (Apple Silicon
-            # has no CI coverage). recommend_format(..., runtime_supported=False)
-            # avoids ever recommending coreml for a load-and-run path; if one is
-            # still handed to us, raise like the old compiled-format guard did.
             raise ValueError(
                 "Runtime loading of .mlpackage (CoreML) requires coremltools "
                 "export tooling and is not supported; use a .pt model (loaded "
@@ -885,11 +843,6 @@ class GenericYolo:
             providers = ["CPUExecutionProvider"]
         else:
             try:
-                # onnxruntime-qnn (Qualcomm NPU on Rubik Pi / QCS6490) ships as an
-                # execution-provider PLUGIN: it only appears in
-                # get_available_providers() after its shared library is registered
-                # by name. Register it first; if the wheel isn't installed the
-                # import fails and we simply never offer the provider.
                 try:
                     import onnxruntime_qnn as _qnn_plugin
 
@@ -924,8 +877,6 @@ class GenericYolo:
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         )
         cpu_count = os.cpu_count() or 4
-        # leave a core free for the camera reader / preprocess threads instead
-        # of letting ORT claim every logical core for intra-op parallelism
         sess_options.intra_op_num_threads = max(1, cpu_count - 1)
         sess_options.inter_op_num_threads = 1
         sess_options.enable_mem_pattern = True
@@ -953,15 +904,12 @@ class GenericYolo:
                     "running on CPU.",
                     actual_providers,
                 )
-            # if no GPU providers but hardware exists - mark potential fallback
             if has_nvidia() and "CPUExecutionProvider" in actual_providers and len(actual_providers) == 1:
                 self._onnx_cpu_fallback = True
         except Exception:
             pass
 
     def _load_hailo(self, model_file: str):
-        # HailoRT wrapper over the .hef. The python API is stable across
-        # recent bindings: VDevice -> configure -> activate -> InferVStreams.
         try:
             from hailo_platform import (
                 HEF,
@@ -1004,8 +952,6 @@ class GenericYolo:
             self._hailo_network_group = network_group
             self._hailo_group_params = group_params
             self._hailo_hef = hef
-            # arm the network once and hold the activation for the lifetime of
-            # this session so per-frame infer() has zero activation overhead
             self._hailo_activation = network_group.activate(group_params)
             self._hailo_activation.__enter__()
             self.logger.info(
@@ -1033,9 +979,6 @@ class GenericYolo:
         vals = [np.asarray(v) for v in raw_outputs.values()]
         if not vals:
             return Results([], orig_shape)
-        # baked-NMS compile -> single output; a multi-output build (raw tail
-        # convs) would need the same merge the rknn path does. Fail loud rather
-        # than silently parsing the wrong tensor.
         if len(vals) > 1:
             raise ValueError(
                 f"Hailo .hef returned {len(vals)} output(s) "
@@ -1046,9 +989,6 @@ class GenericYolo:
         tensor = vals[0]
         if not self._hailo_fmt_checked:
             self._hailo_fmt_checked = True
-            # per-class grouped NMS is distinguishable by a trailing '5' axis
-            # (num_classes, max_dets, 5) - anything else means the sidecar's
-            # output format contract and the .hef disagree.
             last = tensor.shape[-1] if tensor.ndim else 0
             actual_fmt = "hardware_nms" if (tensor.ndim >= 2 and last == 5) else "raw"
             if actual_fmt != self.output["format"]:
@@ -1099,9 +1039,6 @@ class GenericYolo:
         self._tflite_out = self.model.get_output_details()
 
     def _load_engine(self, model_file: str) -> None:
-        # TensorRT .engine artifact, converted from an onnx source by
-        # optimizer.convert_model(). Deserialize once; create context and
-        # preallocate buffers once for performance.
         try:
             import tensorrt as trt
         except ImportError as exc:
@@ -1137,17 +1074,11 @@ class GenericYolo:
         )
 
     def _load_openvino(self, model_file: str) -> None:
-        # OpenVINO IR (.xml + .bin) artifact. mirror the resolve/fallback
-        # pattern from depth_anything._load_openvino (cache dir + device
-        # registration fallback), but reuse self.device which GenericYolo.__init__
-        # already resolved via resolve_openvino_device.
         try:
             import openvino as ov
         except ImportError as exc:
             raise ImportError("openvino is required for .xml models.") from exc
 
-        # model_file is usually the *directory* produced by the optimizer
-        # (YoloModels/openvino/<stem>_openvino_model/) - resolve the actual IR.
         model_path = Path(model_file)
         if model_path.is_dir():
             ir_xml = model_path / f"{model_path.name}.xml"
@@ -1219,10 +1150,6 @@ class GenericYolo:
             return core.compile_model(str(ir_xml), "AUTO")
 
     def _align_openvino_input(self, ov_shape: tuple, ov_dtype) -> None:
-        # The pipeline's input metadata is inherited from the source .pt
-        # (nhwc uint8), but Ultralytics' OpenVINO export is NCHW float32.
-        # The GPU plugin enforces an exact shape/dtype match, so align the
-        # preprocessor to the IR's real input before any prediction runs.
         if self.input is None or not isinstance(self.input, dict) or len(ov_shape) != 4:
             return
         inp = dict(self.input)
@@ -1247,14 +1174,6 @@ class GenericYolo:
         )
 
     def _align_openvino_output(self, ov_out_shape: tuple) -> None:
-        # The IR metadata is a verbatim copy of the .pt metadata
-        # (hardware_nms / anchors_first / xyxy), but Ultralytics' OpenVINO
-        # export emits a raw head tensor [1, F, N] (N anchors, features
-        # first, F = 4 + score columns, plus keypoints for pose models;
-        # coords in cxcywh pixel space). The old config sent that tensor to
-        # the hardware-NMS parser, which read the wrong axis and produced
-        # misplaced boxes. Re-derive the parser config from the IR's real
-        # output instead.
         if (
             self.output is None
             or not isinstance(self.output, dict)
@@ -1271,14 +1190,6 @@ class GenericYolo:
         out["format"] = "raw_detect"
         out["layout"] = "features_first"
         out["box_format"] = "xywh"
-        # The IR's real feature width is (4 + score columns), plus the
-        # keypoint block for pose. A single-class detect model keeps
-        # score_mode='objectness' (5 columns); a pose head is wider even
-        # with nc=1 because of its keypoints, so don't mistake it for a
-        # multi-class detect head. Anything that really is wider than
-        # 4 + num_classes must use 'multi_class', otherwise
-        # _feature_width() disagrees with the tensor and verification
-        # fails with "Tensor shape ... vs feature width ...".
         if (
             not is_pose
             and int(ov_out_shape[1]) != 5
@@ -1287,7 +1198,6 @@ class GenericYolo:
             out["score_mode"] = "multi_class"
         if out.get("score_mode") not in ("objectness", "classwise", "multi_class"):
             out["score_mode"] = "classwise"
-        # Ultralytics heads emit sigmoid-activated class probabilities.
         out["scores_are_logits"] = False
         out["apply_software_nms"] = True
         out["nms_iou"] = float(out.get("nms_iou") or 0.45)
@@ -1327,9 +1237,6 @@ class GenericYolo:
             self._engine_stream = torch.cuda.Stream(device=cuda_device)
             self._engine_buffers = {}  # name -> torch tensor, reused across calls
 
-        # feed the same preprocessed frame to every declared input; real
-        # engines are single-input but multi-input plans shouldn't silently
-        # bind an empty name
         inputs = {name: inp for name in self._engine_input_names}
         output_names = bind_engine_io(
             engine, context, inputs, self._engine_buffers, device=device_index
@@ -1534,8 +1441,6 @@ class GenericYolo:
         return np.ascontiguousarray(img_rgb, dtype=np.uint8)
 
     def _tpu_sync(self, wait: bool = True, output=None) -> None:
-        # xla work is async - a timer that doesn't block measures dispatch
-        # overhead, not inference, so the benchmark path must actually wait
         import torch_xla
         import torch_xla.core.xla_model as xm
 
@@ -1544,13 +1449,9 @@ class GenericYolo:
             try:
                 sync(wait=wait)
             except TypeError:
-                # old torch_xla.sync() has no wait kwarg; it still blocks
                 sync()
             return
 
-        # torch_xla < 2.0 only has mark_step(), which does NOT guarantee the
-        # device finished - force completion via a real data read instead of
-        # pretending the dispatch time was the latency
         xm.mark_step()
         if output is not None:
             output.cpu()
@@ -1596,8 +1497,6 @@ class GenericYolo:
             output = self.model(tensor)
         if isinstance(output, (list, tuple)):
             output = output[0]
-        # hand the output over so the legacy mark_step() path can force a real
-        # device wait (materializing the tensor) instead of just dispatching
         self._tpu_sync(output=output)
         output = output.to(dtype=torch.float32).cpu().numpy()
         return output[:actual_size]
@@ -1668,7 +1567,6 @@ class GenericYolo:
                 t = t[0]
             if t.ndim != 2:
                 raise ValueError(f"Expected 2D RKNN output slice, got shape {t.shape}.")
-            # Normalize to features_first (C, N).
             if t.shape[0] > t.shape[1]:
                 t = t.T
             parts.append(t)
@@ -1779,20 +1677,13 @@ class GenericYolo:
         return self._parse_raw_pose(tensor, orig_shape)
 
     def _parse_hailo_nms(self, tensor: np.ndarray, orig_shape) -> Results:
-        # Hailo's baked-NMS output is grouped per class: (num_classes,
-        # max_dets, 5) with each row [y1, x1, y2, x2, score] in COORDS
-        # NORMALIZED 0-1 (relative to the network input), not pixels - unlike
-        # the flat (N, 6+) tensor the generic _parse_hardware_nms expects.
         buf = np.asarray(tensor)
-        # drop a leading singleton batch axis if present
         while buf.ndim > 2 and buf.shape[0] == 1:
             buf = buf[0]
 
         if buf.ndim == 2 and buf.shape[1] == 5:
-            # single-class build already squeezed to (max_dets, 5)
             per_class = [buf]
         elif buf.ndim == 3 and buf.shape[1] == 5:
-            # (num_classes, 5, max_dets) layout - move the 5-axis last
             per_class = [buf[c].T for c in range(buf.shape[0])]
         elif buf.ndim == 3 and buf.shape[2] == 5:
             per_class = [buf[c] for c in range(buf.shape[0])]
@@ -1820,8 +1711,6 @@ class GenericYolo:
                 )
             valid = dets[(confs >= self.min_conf) & finite]
             for det in valid:
-                # normalized [y1, x1, y2, x2] -> pixel xyxy in the letterboxed
-                # input, then map back to the original frame
                 y1, x1, y2, x2 = (
                     float(det[0]),
                     float(det[1]),
@@ -1839,8 +1728,6 @@ class GenericYolo:
         while isinstance(tensor, (list, tuple)) and len(tensor) > 0:
             tensor = tensor[0]
         if self.model_type == "hailo":
-            # per-class grouped NMS output - keep it exactly as the NPU
-            # produced it; the hailo parser knows its layout
             self._output_verified = True
             return tensor
         if tensor.ndim == 3 and tensor.shape[0] == 1:
@@ -2038,13 +1925,8 @@ class GenericYolo:
         R, _ = cv2.Rodrigues(rvec)
 
         if mode == "rigid":
-            # rigid: the fitted pose is the whole story - return the canonical
-            # model transformed by (R, tvec) so keypoints trace the real 3D shape
             keypoints_3d = [(R @ pt + tvec).tolist() for pt in object_points]
         else:
-            # flexible/deformable: keep every observed 2D keypoint but inflate it to
-            # 3D on a plane at the shared PnP depth, preserving the detected pose
-            # shape instead of forcing a rigid template
             depth_z = float(tvec[2])
             fx = camera_matrix[0, 0]
             fy = camera_matrix[1, 1]
@@ -2244,7 +2126,6 @@ class GenericYolo:
             for k in range(0, kpts_raw.shape[1], kd):
                 kpts_raw[:, k] *= kpt_coord_scale  # x
                 kpts_raw[:, k + 1] *= kpt_coord_scale  # y
-                # k+2 (confidence) intentionally left unscaled
 
         if self.output["keypoint_scores_are_logits"]:
             kd = self.output["keypoint_dims"]
@@ -2322,7 +2203,6 @@ class GenericYolo:
                 except Exception:
                     pass
         elif self.model_type in ("engine", "openvino"):
-            # drop refs to free the CUDA context / compiled blob
             del self.model
         pool = getattr(self, "_pool", None)
         if pool is not None:

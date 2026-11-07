@@ -6,7 +6,6 @@ import os
 
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
-
 def _configure_quiet_logging() -> None:
     root = logging.getLogger()
     for handler in list(root.handlers):
@@ -41,7 +40,6 @@ def _configure_quiet_logging() -> None:
         if name != "__main__" and not name.startswith("iSpy"):
             logging.getLogger(name).setLevel(logging.WARNING)
 
-
 _configure_quiet_logging()
 
 from iSpy.iSpy import iSpy
@@ -49,14 +47,10 @@ from iSpy.config.iSpyConfig import iSpyConfig
 
 logger = logging.getLogger("iSpy.core.game_loop")
 
-
 def _init_offline_mode(config) -> None:
-    # both launch paths (ispy start, and the service daemon running this module
-    # directly) end up here - the daemon never calls boot.on_boot
     from iSpy.core import network_policy
 
     if network_policy.is_offline():
-        # boot already armed it (Game Mode) or ISPY_OFFLINE came from a parent
         return
     try:
         enabled = bool(config.get("offline_mode", False))
@@ -65,10 +59,7 @@ def _init_offline_mode(config) -> None:
     if enabled:
         network_policy.set_offline(True, "config")
 
-
 def _init_performance_level(config) -> None:
-    # same reason as _init_offline_mode: the daemon path never calls on_boot,
-    # so the level has to be resolved here too
     try:
         from iSpy.core import performance
 
@@ -78,10 +69,7 @@ def _init_performance_level(config) -> None:
             "Could not resolve the performance profile - running at Full Features."
         )
 
-
 def main(config=None, dry=False):
-    # a replay passes the config boot already built in memory; anything else
-    # loads its own from disk
     if config is None:
         parser = argparse.ArgumentParser(description="iSpy vision loop")
         parser.add_argument(
@@ -99,12 +87,9 @@ def main(config=None, dry=False):
     _init_offline_mode(config)
     _init_performance_level(config)
     if dry:
-        # keep the web UI reachable even if the configured performance level
-        # would normally turn it off
         os.environ.setdefault("ISPY_FORCE_WEB", "1")
     vision = iSpy(config, dry=dry)
     vision.run()
-
 
 if __name__ == "__main__":
     main()

@@ -7,11 +7,9 @@ from iSpy.vision.Object import Object
 
 _EMA_ALPHA = 0.3
 
-
 class ObjectTracker(TrackerBase):
     plugin_name = "FRC/object_tracker"
 
-    # show this add-on as its own "Code Breakdown" series on the Metrics page
     breakdown_label = "Object tracker"
     breakdown_color = "#f4a261"
 
@@ -60,16 +58,10 @@ class ObjectTracker(TrackerBase):
         robot_z: float = 0.0,
     ) -> list[Object]:
 
-        # age + cleanup
         for obj in self.tracked_objects:
             obj.update()
 
         self.tracked_objects = [o for o in self.tracked_objects if not o.destroyed]
-
-        # Transforms (e.g. robot-pose-based) are applied by transform
-        # providers before tracking; trackers just merge in the current frame.
-        # The robot_* params are retained for backwards compatibility and
-        # ignored.
 
         self._merge(new_detections)
 
@@ -79,9 +71,6 @@ class ObjectTracker(TrackerBase):
         for det in detections:
             if not self._exists_and_update(det):
                 det.alive_time = self.stale_threshold
-                # the object may have just been filtered out as destroyed -
-                # reset_time() clears destroyed/alive so re-appending gives it
-                # a fresh age clock instead of an instantly-dead track
                 det.reset_time()
                 self.tracked_objects.append(det)
 
@@ -89,12 +78,6 @@ class ObjectTracker(TrackerBase):
         if not self.tracked_objects:
             return False
 
-        # A persistent detection keeps a stable id across ticks (the voxel
-        # world reuses one Object). When the tracked entry already carries
-        # that id it IS the same object - re-gating it by distance when its
-        # centroid jumps (a moving robot re-measures the map's mean) would
-        # spawn a ghost duplicate and then let the original die on its stale
-        # timer.
         for existing in self.tracked_objects:
             if existing.id == new_det.id:
                 existing.reset_time()
@@ -106,21 +89,15 @@ class ObjectTracker(TrackerBase):
             existing_pos = np.array(existing.get_position())
 
             if np.linalg.norm(new_pos - existing_pos) < self.distance_threshold:
-                # distance alone is not enough - a cone 30cm from a robot
-                # must never merge into the robot. only merge detections of
-                # the same class/name (empty names on both sides are treated
-                # as equal for backwards compatibility)
                 if not self._same_identity(new_det, existing):
                     continue
 
                 existing.reset_time()
 
-                # EMA smoothing on position
                 existing.x += _EMA_ALPHA * (new_det.x - existing.x)
                 existing.y += _EMA_ALPHA * (new_det.y - existing.y)
                 existing.z += _EMA_ALPHA * (new_det.z - existing.z)
 
-                # EMA smoothing on angles (shortest-path wrapping)
                 d_roll = (new_det.roll - existing.roll + math.pi) % (
                     2 * math.pi
                 ) - math.pi

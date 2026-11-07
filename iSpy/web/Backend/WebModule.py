@@ -2,10 +2,7 @@ import shutil
 from abc import ABC
 from pathlib import Path
 
-# Uploads that would leave the filesystem with less than this much free space
-# are rejected up-front instead of corrupting/failing mid-write.
 _MIN_FREE_BYTES = 100 * 1024 * 1024
-
 
 def ensure_disk_space(dest: Path, required_bytes: int = 0) -> str | None:
     try:
@@ -24,7 +21,6 @@ def ensure_disk_space(dest: Path, required_bytes: int = 0) -> str | None:
             f"free (a {margin_mb} MB safety margin is required)."
         )
     return None
-
 
 class WebModule(ABC):
     plugin_name = "base_web_module"

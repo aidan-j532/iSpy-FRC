@@ -30,18 +30,10 @@ from iSpy.web.modules.support import SupportModule
 
 _WEB_ROOT = Path(__file__).resolve().parent.parent
 
-# modules that must run on every vision tick regardless of the performance
-# profile: health's staleness check is how /health knows the loop is alive
 _ALWAYS_UPDATE = {"health", "rollback"}
 
-
 def _get_version() -> str:
-    # The version actually running on this board. Deliberately offline: boards
-    # sit on an isolated field LAN, so reaching out to PyPI here would just
-    # stall the request until it times out - and it answered the wrong question
-    # anyway (latest published release, not what this process is running).
     return __version__
-
 
 class iSpyWebApp:
     def __init__(self, cameras, config):
@@ -53,9 +45,6 @@ class iSpyWebApp:
             template_folder=str(_WEB_ROOT / "templates"),
             static_folder=str(_WEB_ROOT / "static"),
         )
-        # Bound upload/request bodies so an oversized payload (model, dataset
-        # images, plugin) can't be buffered unboundedly into process memory.
-        # Model weights (.pt) can approach 1 GB, hence the generous ceiling.
         self.flask_app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
         context = {
             "config": config,
@@ -66,8 +55,6 @@ class iSpyWebApp:
 
         self.context = context
 
-        # Make the admin flag available to every template (base.html uses it to
-        # gate the (Pre-Alpha) nav entries).
         self.flask_app.context_processor(self._template_context)
 
         self.modules: dict[str, WebModule] = {
@@ -105,9 +92,6 @@ class iSpyWebApp:
         self.flask_app.add_url_rule(
             "/api/version", "api_version", lambda: jsonify(version=_get_version())
         )
-        # The supervisor serves these same paths while the child is booting or
-        # stopped. Keeping the URL stable is what lets an already-open page
-        # notice a restart without being pointed at a second port.
         self.flask_app.add_url_rule(
             "/api/supervisor/state",
             "api_supervisor_state",
@@ -164,8 +148,6 @@ class iSpyWebApp:
         interval = (1.0 / profile.web_update_hz) if profile.web_update_hz > 0 else 0.0
         now = time.perf_counter()
         for name, mod in self.modules.items():
-            # the profile caps how often the expensive modules rebuild their
-            # payloads, health and rollback stay tick-rate on purpose
             if interval and name not in _ALWAYS_UPDATE:
                 last = self._last_update.get(name)
                 if last is not None and (now - last) < interval:
@@ -176,8 +158,6 @@ class iSpyWebApp:
             except Exception:
                 self.logger.exception("Web module '%s' update failed", name)
 
-    # is any browser page consuming annotated frames? the loop uses this to decide
-    # if plot()/debug drawing is worth doing. rollback isn't a watcher (raw frames)
     def anyone_watching(self) -> bool:
         now = time.monotonic()
         for mod in self.modules.values():
@@ -188,7 +168,6 @@ class iSpyWebApp:
                 if checker(now):
                     return True
             except Exception:
-                # a broken watcher must not blank the feeds
                 return True
         return False
 
@@ -206,9 +185,6 @@ class iSpyWebApp:
 
     def run(self, host="0.0.0.0", port=5000):
         self.start()
-        # Under `ispy start`, ask the supervisor to close its status listener
-        # before binding. serve_flask() retries EADDRINUSE for the hand-off
-        # window and otherwise falls back to the normal direct bind.
         update_service_state(phase="serving web UI", web_enabled=True)
         serve_flask(self.flask_app, host=host, port=port)
 
@@ -234,7 +210,6 @@ class iSpyWebApp:
         except Exception:
             admin = False
         return {"admin": admin, "is_admin": admin}
-
 
 def create_app(cameras, config) -> iSpyWebApp:
     return iSpyWebApp(cameras, config)

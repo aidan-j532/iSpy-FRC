@@ -37,12 +37,12 @@ _PROJECT_ROOT = Path.cwd().resolve()
 _READINESS_POLL_S = 2.0
 _READINESS_WAIT_TIMEOUT_S = 1200
 
-# grab real stdout/stderr before anything swaps sys.stdout so silencing 3rd-party libs cant kill my logging
+# grab real stdout/stderr before anything swaps sys.stdout so silencing 3rd-party
+# libs cant kill my logging
 _REAL_STDOUT_FD = os.dup(1)
 _REAL_STDERR_FD = os.dup(2)
 _REAL_STDOUT = os.fdopen(_REAL_STDOUT_FD, "w", buffering=1, closefd=False)
 _REAL_STDERR = os.fdopen(_REAL_STDERR_FD, "w", buffering=1, closefd=False)
-
 
 def _remove_path_for_cleanup(path: Path) -> None:
     def onerror(func, p, exc_info):
@@ -53,7 +53,6 @@ def _remove_path_for_cleanup(path: Path) -> None:
             pass
 
     shutil.rmtree(str(path), onerror=onerror)
-
 
 def _bootstrap_default_camera(config: iSpyConfig):
     from iSpy.web.modules.cameras import CamerasModule
@@ -71,18 +70,16 @@ def _bootstrap_default_camera(config: iSpyConfig):
         )
         return
 
-    # Option A: rank cameras by FPS and pick the best one
+    # option A: rank cameras by fps and pick the best one
     best_dev = None
     best_fps = 0
 
     for dev in devices:
         path = dev.get("path")
         name = dev.get("name", f"Camera {path}")
-        # Try to open and measure FPS
         cap = cv2.VideoCapture(path, cv2.CAP_DSHOW)
         if not cap.isOpened():
             continue
-        # Warmup frames
         for _ in range(3):
             cap.read()
         start = time.perf_counter()
@@ -104,7 +101,7 @@ def _bootstrap_default_camera(config: iSpyConfig):
             best_fps = fps
             best_dev = dev
 
-    # Fallback to Option B if no camera could be opened
+    # fallback to option B if no camera could be opened
     if best_dev is None:
         logger.warning(
             "No cameras accessible at first boot - proceeding without default camera. "
@@ -129,11 +126,8 @@ def _bootstrap_default_camera(config: iSpyConfig):
         best_fps,
     )
 
-
-
 _USB_ID_RE = re.compile(r"VID_[0-9A-F]+&PID_[0-9A-F]+(?:&MI_\d+)?", re.IGNORECASE)
 _IMAGE_SOURCE_EXTS = (".png", ".jpg", ".jpeg", ".bmp")
-
 
 def _usb_signature(device_id) -> str | None:
     if not isinstance(device_id, str):
@@ -141,13 +135,12 @@ def _usb_signature(device_id) -> str | None:
     m = _USB_ID_RE.search(device_id.upper())
     return m.group(0) if m else None
 
-
 def _is_non_device_source(source) -> bool:
-    # network streams and image files are not pluggable hardware, dont report a camera just because no local capture device matches them
+    # network streams and image files arent pluggable hardware, dont report a
+    # camera just because no local capture device matches them
     if not isinstance(source, str):
         return False
     return "://" in source or source.lower().endswith(_IMAGE_SOURCE_EXTS)
-
 
 def _camera_present(
     cam_cfg: dict, probed_ids: set, probed_paths: set, probed_sigs: set
@@ -169,7 +162,6 @@ def _camera_present(
         # path-like sources (/dev/video0) are more are stable ids
         return os.path.exists(source)
     return not device_id
-
 
 def cleanup_missing_cameras(config: iSpyConfig) -> None:
     cams = {
@@ -208,7 +200,8 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
     if not missing:
         return
 
-    # never retire everythin,  validate_system and the vision core both need at least one configured camera to boot
+    # never retire everythin, validate_system and the vision core both need at
+    # least one configured camera to boot
     if len(missing) >= len(cams):
         kept = next(iter(cams))
         missing = [name for name in missing if name != kept]
@@ -237,10 +230,10 @@ def cleanup_missing_cameras(config: iSpyConfig) -> None:
     write("camera_profiles", profiles)
     config.save()
 
-
-# read offline_mode straight off disk before setup_files pulls the default
-# models (that runs before the full iSpyConfig exists); failures fall through
 def _arm_offline_mode_early() -> None:
+    # read offline_mode straight off disk before setup_files pulls the default
+    # models (that runs before the full ispyconfig exists); failures fall
+    # through
     from iSpy.core import network_policy
 
     if network_policy.is_offline():
@@ -256,10 +249,9 @@ def _arm_offline_mode_early() -> None:
     except Exception:
         return
 
-
-# arm the policy from the loaded config. game mode (or an inherited
-# ISPY_OFFLINE) may have turned it on already - never downgrade that
 def _apply_offline_mode(config: iSpyConfig) -> None:
+    # arm the policy from the loaded config. game mode (or an inherited
+    # ISPY_OFFLINE) may have turned it on already - never downgrade that
     from iSpy.core import network_policy
 
     if network_policy.is_offline():
@@ -267,9 +259,8 @@ def _apply_offline_mode(config: iSpyConfig) -> None:
     if config.get("offline_mode", False):
         network_policy.set_offline(True, "config")
 
-
 def _consume_game_mode_web_off(config: iSpyConfig) -> None:
-    # This is the one time turn off web mode for gaem
+    # this is the one time turn off web mode for gaem
     backup = config.get("game_mode_app_mode_backup")
     if backup is not None:
         config.config["app_mode"] = backup
@@ -285,8 +276,8 @@ def _consume_game_mode_web_off(config: iSpyConfig) -> None:
         return
 
     logger.warning("Game Mode: web UI disabled for this run only.")
-    # offline is forced for the run, in-memory only - a crash mid-run must never
-    # leave offline_mode stuck on in config.json
+    # offline is forced for the run, in-memory only - a crash mid-run must
+    # never leave offline_mode stuck on in config.json
     from iSpy.core import network_policy
 
     network_policy.set_offline(True, "game_mode")
@@ -294,7 +285,6 @@ def _consume_game_mode_web_off(config: iSpyConfig) -> None:
     config.config["app_mode"] = False
     config.set("game_mode_web_off_next_run", False)
     config.save(quiet=True)
-
 
 def _close_logging_handlers() -> None:
     root = logging.getLogger()
@@ -305,7 +295,6 @@ def _close_logging_handlers() -> None:
             handler.close()
         except Exception:
             pass
-
 
 def _configure_quiet_logging() -> None:
     _close_logging_handlers()
@@ -321,7 +310,8 @@ def _configure_quiet_logging() -> None:
 
     formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
-    # bind to the real stdout captured before sys.stdout gets swapped, so silencing 3rd-party libs cant kill my logging
+    # bind to the real stdout captured before sys.stdout gets swapped, so
+    # silencing 3rd-party libs cant kill my logging
     stream_handler = logging.StreamHandler(_REAL_STDOUT)
     stream_handler.setLevel(logging.INFO)
     stream_handler.setFormatter(formatter)
@@ -341,7 +331,6 @@ def _configure_quiet_logging() -> None:
         if name != "__main__" and not name.startswith("iSpy"):
             logging.getLogger(name).setLevel(logging.WARNING)
 
-
 def search_for_config():
     config_dir = _PROJECT_ROOT / "Config"
     if not config_dir.exists():
@@ -353,7 +342,6 @@ def search_for_config():
     chosen = non_default[0] if non_default else config_files[0]
     logger.info("Found config: %s -> using %s", len(config_files), chosen)
     return str(chosen)
-
 
 def setup_files(fresh: bool = False):
     yolo_dir = _PROJECT_ROOT / "YoloModels"
@@ -376,7 +364,7 @@ def setup_files(fresh: bool = False):
 
     pytorch_dir = yolo_dir / "pytorch"
 
-    # Default models (detect, pose, v26 fuel) are no longer bundled in the repo
+    # default models (detect, pose, v26 fuel) are no longer bundled in the repo
     from iSpy.boot.default_models import (
         download_default_models,
         write_default_models_license,
@@ -385,7 +373,7 @@ def setup_files(fresh: bool = False):
     download_default_models(fresh=fresh)
     write_default_models_license()
 
-    # Ensure every .pt in the pytorch directory has a metadata sidecar
+    # ensure every .pt in the pytorch dir has a metadata sidecar
     for pt_file in pytorch_dir.glob("*.pt"):
         meta_path = metadata_path_for(pt_file)
         try:
@@ -400,7 +388,6 @@ def setup_files(fresh: bool = False):
 
         except Exception as e:
             logger.warning("Could not generate metadata for %s: %s", pt_file.name, e)
-
 
 def _wait_for_pipeline_ready(
     config: iSpyConfig, pipeline_classes: dict[str, type]
@@ -493,7 +480,6 @@ def _wait_for_pipeline_ready(
                         exc_info=True,
                     )
 
-
 def _recorded_cameras(session_path: str | Path) -> list[str]:
     from iSpy.core.rollback import _iter_segments
 
@@ -506,7 +492,6 @@ def _recorded_cameras(session_path: str | Path) -> list[str]:
             if name not in cameras:
                 cameras.append(name)
     return cameras
-
 
 def build_replay_camera_configs(
     config: iSpyConfig,
@@ -596,7 +581,6 @@ def build_replay_camera_configs(
 
     return built
 
-
 def _configure_replay(
     config: iSpyConfig,
     source: str,
@@ -614,7 +598,7 @@ def _configure_replay(
     if isinstance(utilities, dict):
         # drop utilities that declare themselves disabled in replay mode
         # (e.g. the network table handler) without hard-coding their names.
-        # Discovery is best-effort; fall back to the well-known name.
+        # discovery is best-effort; fall back to the well-known name
         to_drop = []
         try:
             from iSpy.plugins._loader import load_plugins
@@ -650,7 +634,6 @@ def _configure_replay(
         speed,
         loop,
     )
-
 
 def cleanup_broken_images(config: iSpyConfig) -> None:
     # delte/move broken images
@@ -695,10 +678,6 @@ def cleanup_broken_images(config: iSpyConfig) -> None:
 
             shutil.move(str(file), str(destination))
 
-
-
-
-
 def _runtime_dependency_backends(config) -> list[str]:
 
     from iSpy.boot.backend_deps import backends_for_config
@@ -708,14 +687,12 @@ def _runtime_dependency_backends(config) -> list[str]:
         data = {}
     backends = backends_for_config(data)
     if not backends:
-        # No model-backed camera (or a config we could not inspect): keep the
-        # documented .pt baseline usable rather than silently leaving torch out.
+        # no model-backed camera (or a config we couldnt inspect): keep the
+        # documented .pt baseline usable rather than silently leaving torch out
         backends = ["pytorch"]
     return backends
 
-
 def _provision_runtime_dependencies(config, *, fresh: bool):
-
 
     from iSpy.boot import backend_deps
     from iSpy.core import network_policy
@@ -723,10 +700,10 @@ def _provision_runtime_dependencies(config, *, fresh: bool):
     online = not network_policy.is_offline()
     auto_install = bool(fresh and online)
     if fresh:
-        # On a fresh install, provision inference runtimes for EVERY backend
-        # so that all backends tested by `ispy-bench --all-backends` work
-        # out of the box.  The registry's resolvers already handle platform
-        # compatibility (unsupported/manual backends are skipped, not errors).
+        # on a fresh install, provision inference runtimes for every backend so
+        # all backends tested by ispy-bench --all-backends work out of the box.
+        # the registry's resolvers already handle platform compatibility
+        # (unsupported/manual backends are skipped, not errors)
         backends = backend_deps.all_backend_names()
         logger.info(
             "Fresh install: provisioning inference runtimes for all backends: %s",
@@ -771,7 +748,6 @@ def _provision_runtime_dependencies(config, *, fresh: bool):
         )
     return report
 
-
 def on_boot(
     install_service: bool = False,
     fresh: bool = False,
@@ -791,7 +767,7 @@ def on_boot(
         )
 
     # offline mode must be known before setup_files downloads default models
-    # (a full iSpyConfig does not exist yet at that point)
+    # (a full ispyconfig does not exist yet at that point)
     _arm_offline_mode_early()
 
     if fresh:
@@ -801,8 +777,8 @@ def on_boot(
         config = iSpyConfig(config_path, create=True)
         _bootstrap_default_camera(config)
 
-        # The unified setup/repair path.  Mandatory/actionable failures raise
-        # DependencyProvisionError instead of being logged and forgotten.
+        # the unified setup/repair path. mandatory/actionable failures raise
+        # DependencyProvisionError instead of being logged and forgotten
         logger.info("First-boot dependency provisioning starting...")
         _provision_runtime_dependencies(config, fresh=True)
     else:
@@ -815,14 +791,14 @@ def on_boot(
             )
         logger.info("Using existing config: %s", config_path)
         config = iSpyConfig(config_path, create=False)
-        # Verify (do not install) on ordinary boots; -f is the repair entry.
+        # verify (do not install) on ordinary boots; -f is the repair entry
         _provision_runtime_dependencies(config, fresh=False)
 
     _consume_game_mode_web_off(config)
     _apply_offline_mode(config)
 
-    # resolve the performance profile once, in memory - the web-on/off
-    # decision, the vision loop and every web module read this one value.
+    # resolve the performance profile once, in memory - the web-on/off decision,
+    # the vision loop and every web module read this one value
     from iSpy.core import performance
 
     performance.arm_from_config(config)
@@ -839,7 +815,7 @@ def on_boot(
     config.save(quiet=True)
     logger.info("Boot sequence complete.")
 
-    # Start UDP announce beacon so tools/find_ispy.py can locate this board
+    # start udp announce beacon so tools/find_ispy.py can locate this board
     try:
         from iSpy.boot.announce import start_announcer
 
@@ -861,7 +837,6 @@ def on_boot(
         logger.info("Skipping service installation. Run with -s to install.")
 
     return config
-
 
 def main():
     parser = argparse.ArgumentParser(description="iSpy boot sequence")
@@ -909,12 +884,11 @@ def main():
 
         game_loop_main(config, dry=args.dry)
 
-    # Flush everything and hard-exit to avoid Segfualt stuff.
     logging.shutdown()
     sys.stdout.flush()
     sys.stderr.flush()
+    # flush everything and hard-exit to avoid segfualt stuff
     os._exit(0)
-
 
 if __name__ == "__main__":
     main()

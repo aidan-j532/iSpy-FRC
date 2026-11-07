@@ -27,10 +27,8 @@ METADATA_SCHEMA = {
     "kpt_coord_scale": float,
 }
 
-
 def metadata_path_for(model_path: Path) -> Path:
     return model_path.parent / f"{model_path.stem}_metadata.yaml"
-
 
 def write_metadata(path: Path, meta: dict[str, Any]) -> None:
     try:
@@ -42,7 +40,6 @@ def write_metadata(path: Path, meta: dict[str, Any]) -> None:
     with open(path, "w") as f:
         yaml.dump(meta, f)
 
-
 def read_metadata(model_path: Path) -> dict[str, Any] | None:
     mp = metadata_path_for(model_path)
     if not mp.exists():
@@ -53,7 +50,6 @@ def read_metadata(model_path: Path) -> dict[str, Any] | None:
         return YAML(typ="safe").load(mp) or {}
     except Exception:
         return None
-
 
 def metadata_from_pt(pt_path: Path, trusted: bool = True) -> dict[str, Any]:
     import torch
@@ -89,9 +85,6 @@ def metadata_from_pt(pt_path: Path, trusted: bool = True) -> dict[str, Any]:
 
     try:
         imgsz = 640
-        # Ultralytics stores the training resolution as model.model.args["imgsz"].
-        # The dependency-free loader rebuilds the raw graph (no .args), so fall
-        # back to the same value persisted in the checkpoint's train_args.
         if hasattr(model, "model") and hasattr(model.model, "args"):
             imgsz = model.model.args.get("imgsz", 640)
         else:
@@ -129,7 +122,6 @@ def metadata_from_pt(pt_path: Path, trusted: bool = True) -> dict[str, Any]:
         try:
             kpt = getattr(model, "kpt_shape", None)
             if kpt is None and hasattr(model, "model") and len(model.model):
-                # authoritative source: the pose head carries kpt_shape
                 kpt = getattr(model.model[-1], "kpt_shape", None)
             if kpt is not None:
                 meta["kpt_shape"] = [int(kpt[0]), int(kpt[1])]
@@ -139,7 +131,6 @@ def metadata_from_pt(pt_path: Path, trusted: bool = True) -> dict[str, Any]:
             meta["kpt_shape"] = [17, 3]
 
     return meta
-
 
 def derive_format_metadata(
     pt_meta: dict[str, Any], target_format: str
@@ -236,9 +227,6 @@ def derive_format_metadata(
             "input_normalize": True,
             "input_scale": 255.0,
         },
-        # HailoRT .hef: baked NMS output grouped per class
-        # (num_classes, max_dets, 5). Coordinates are normalized 0-1 in yxyx
-        # order; the runtime scales them to pixel xyxy before parsing.
         "hailo": {
             "output_format": "hardware_nms",
             "output_layout": "anchors_first",

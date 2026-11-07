@@ -1,11 +1,4 @@
-// shared robot <-> three.js viewer transform. the robot frame is +X right,
-// +Y forward, +Z up (that's what every vision pipeline ships). the three.js
-// scene is +X right, +Y up, +Z out of screen, so going robot -> viewer is the
-// proper rotation (x, y, z) -> (x, z, -y). don't swap two axes here, that
-// flips handedness and folds tilted detections into the wrong plane.
 
-// rotation matrix helpers; column-vector convention like three.js. row-major
-// flattened ([r00,r01,r02, r10,r11,r12, r20,r21,r22]) so index math is boring.
 const M = [1, 0, 0, 0, 0, -1, 0, 1, 0]; // Rx(-90): +Y->+Z, +Z->-Y, +X stays
 
 function matRx(a) {
@@ -28,7 +21,6 @@ function matMul(A, B) {
   ];
 }
 
-// Shepperd's method: 3x3 rotation -> quaternion [x, y, z, w].
 function matToQuat(R) {
   const tr = R[0] + R[4] + R[8];
   if (tr > 0) {
@@ -47,14 +39,10 @@ function matToQuat(R) {
   return [(R[2] + R[6]) / s, (R[5] + R[7]) / s, s / 4, (R[3] - R[1]) / s];
 }
 
-// robot (x,y,z) -> three.js (x,z,-y). positions and kpt clouds both use this.
 export function robotToViewer(x, y, z) {
   return [x, z, -y];
 }
 
-// object roll/pitch/yaw in robot frame -> viewer quaternion [x,y,z,w].
-// the pipeline eulers reconstruct R = Rz(yaw)*Ry(pitch)*Rx(roll), the exact
-// order _matrix_to_euler decodes in april_tag, so compose that with M.
 export function robotToViewerQuat(roll, pitch, yaw) {
   const R_robot = matMul(matRz(yaw), matMul(matRy(pitch), matRx(roll)));
   return matToQuat(matMul(M, R_robot));

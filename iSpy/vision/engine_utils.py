@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-
 def read_engine_plan(path: Path) -> bytes:
     data = path.read_bytes()
     if len(data) < 5:
@@ -18,7 +17,6 @@ def read_engine_plan(path: Path) -> bytes:
     if not isinstance(header, dict):
         return data
     return data[header_end:]
-
 
 def execute_engine(engine, context, inputs: dict[str, object], device=0) -> list:
     import numpy as np
@@ -75,10 +73,7 @@ def execute_engine(engine, context, inputs: dict[str, object], device=0) -> list
 
         return [buffer.cpu().numpy() for buffer in output_buffers]
 
-
 def engine_io_names(engine) -> tuple[list[str], list[str]]:
-    # split engine tensors into (input_names, output_names) once so callers
-    # don't each re-walk num_io_tensors
     import tensorrt as trt
 
     inputs, outputs = [], []
@@ -90,13 +85,7 @@ def engine_io_names(engine) -> tuple[list[str], list[str]]:
             outputs.append(name)
     return inputs, outputs
 
-
 def bind_tensor_addresses(context, engine, addresses: dict) -> None:
-    # execute_async_v3 (the tensor-name API) reads/writes whatever device
-    # address was last bound to each tensor name. It does NOT use the old
-    # bindings list, so if we forget set_tensor_address for even one tensor it
-    # silently reads garbage / writes to a dangling pointer instead of failing.
-    # Bind every tensor and check each return so a false one raises.
     for index in range(engine.num_io_tensors):
         name = engine.get_tensor_name(index)
         if name not in addresses:
@@ -108,16 +97,9 @@ def bind_tensor_addresses(context, engine, addresses: dict) -> None:
                 f"TensorRT set_tensor_address returned false for {name!r}"
             )
 
-
 def bind_engine_io(
     engine, context, inputs: dict, buffers: dict, device=0
 ) -> list[str]:
-    # Prepare device buffers for one execute_async_v3 pass and bind every
-    # tensor address. Shared by the runtime (_run_engine) and the forward-only
-    # benchmark so both exercise the exact same execution path. Input/output
-    # buffers are allocated lazily into `buffers` (reused across calls, resized
-    # when a shape changes) so we don't reallocate every frame. Returns the
-    # ordered output tensor names.
     import numpy as np
     import tensorrt as trt
     import torch
@@ -153,8 +135,6 @@ def bind_engine_io(
                 torch_dtype = torch.from_numpy(np.empty((), dtype=dtype)).dtype
                 buffer = buffers.get(name)
                 if buffer is None or tuple(buffer.shape) != array.shape:
-                    # shape changed (batch/resolution) - the old buffer would
-                    # be the wrong size, so reallocate instead of trusting it
                     buffer = torch.empty(
                         array.shape, dtype=torch_dtype, device=cuda_device
                     )
@@ -190,9 +170,6 @@ def bind_engine_io(
 
     return output_names
 
-
 def execute_bound_async_v3(context, stream_handle) -> None:
-    # run one already-bound execute_async_v3 pass, checking the return so a
-    # failed enqueue raises instead of leaving stale outputs to be read
     if not context.execute_async_v3(stream_handle=stream_handle):
         raise RuntimeError("TensorRT execute_async_v3 returned false")

@@ -18,14 +18,11 @@ _FORMAT_CALIB_COUNTS = {
     "coreml": 0,  # float16, no calibration needed
 }
 
-
 def calib_count_for_format(target_format: str, default: int = _CALIB_COUNT) -> int:
     return _FORMAT_CALIB_COUNTS.get(target_format, default)
 
-
 def get_active_dataset_dir(default_root: str = "QuantizeDataset") -> Path:
     return Path.cwd() / default_root
-
 
 def _generate_synthetic_images(
     folder: Path,
@@ -94,7 +91,6 @@ def _generate_synthetic_images(
 
     return generated
 
-
 def _generate_synthetic_images_pil(
     folder: Path,
     count: int,
@@ -137,13 +133,11 @@ def _generate_synthetic_images_pil(
 
     return generated
 
-
 def _find_images(folder: Path):
     imgs = []
     for ext in _IMAGE_EXTS:
         imgs.extend(folder.rglob(ext))
     return sorted(imgs)
-
 
 def _rebuild_dataset_txt(ds: Path, root: Path | None = None):
     search_root = root or ds
@@ -159,7 +153,6 @@ def _rebuild_dataset_txt(ds: Path, root: Path | None = None):
         return True
     return False
 
-
 def add_image_to_dataset_txt(ds_root: Path, rel_path: str):
     txt = ds_root / "dataset.txt"
     existing = txt.read_text().splitlines() if txt.exists() else []
@@ -167,13 +160,11 @@ def add_image_to_dataset_txt(ds_root: Path, rel_path: str):
         existing.append(rel_path)
         txt.write_text("\n".join(existing) + "\n")
 
-
 def remove_image_from_dataset_txt(ds_root: Path, rel_path: str):
     txt = ds_root / "dataset.txt"
     if txt.exists():
         lines = [l for l in txt.read_text().splitlines() if l.strip() != rel_path]
         txt.write_text("\n".join(lines) + ("\n" if lines else ""))
-
 
 def add_validate_images(
     dataset_path: str | Path,
@@ -211,10 +202,8 @@ def add_validate_images(
 
     return validation_dir
 
-
 def _find_train_images(ds: Path) -> list[Path]:
     return [p for p in _find_images(ds) if "valid" not in p.relative_to(ds).parts]
-
 
 def prepare_quantization_dataset(
     dataset_path: str = "dataset",
@@ -253,7 +242,6 @@ def prepare_quantization_dataset(
         "Quantization dataset ready at %s (%d images)", ds.resolve(), final_count
     )
     return ds
-
 
 def validate_quantization_dataset(dataset_path: str = "dataset") -> dict:
     ds = Path(dataset_path)

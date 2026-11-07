@@ -13,10 +13,8 @@ _MODEL_PATTERN = re.compile(
     r"[a-zA-Z0-9_\-]+.*\.(pt|onnx|tflite|rknn|bin|xml|yaml|engine)$"
 )
 
-
 def is_valid_model_path(path: str) -> bool:
     return bool(_MODEL_PATTERN.match(path.replace("\\", "/")))
-
 
 def validate_model_files() -> None:
     model_dir = Path("YoloModels")
@@ -39,7 +37,6 @@ def validate_model_files() -> None:
 
     logger.info("All model file paths are valid.")
 
-
 def validate_config_files() -> None:
     config_dir = Path("Config")
     if not config_dir.exists():
@@ -55,17 +52,11 @@ def validate_config_files() -> None:
 
     logger.info("All config files are valid.")
 
-
 _unit_tests_running = False
-
 
 def run_unit_tests() -> bool:
     global _unit_tests_running
     if _unit_tests_running:
-        # validate_system() runs this suite, and a regression test calls
-        # validate_system() from inside the suite (after os.chdir into a temp
-        # dir). Re-entering would recurse forever and explode temp dirs / CWD
-        # cleanup on Windows - short-circuit the nested run instead.
         logger.debug("run_unit_tests re-entered - skipping nested run.")
         return True
 
@@ -79,11 +70,6 @@ def run_unit_tests() -> bool:
     import unittest
     import logging
 
-    # Suppress logging during unit tests to avoid spam in boot output.
-    # Setting the root level is not enough: iSpy.* loggers get an explicit
-    # INFO level in boot's quiet-logging setup, so their records ignore the
-    # root threshold. logging.disable() is a global tripwire that every
-    # logger respects regardless of its own level.
     logging.disable(logging.ERROR)
     try:
         loader = unittest.TestLoader()
@@ -98,7 +84,6 @@ def run_unit_tests() -> bool:
         logging.disable(logging.NOTSET)
         _unit_tests_running = False
 
-    # summarize after the finally block: logging.disable() above swallows INFO
     failed = len(result.failures) + len(result.errors)
     skipped = len(result.skipped)
     passed = result.testsRun - failed - skipped
@@ -108,12 +93,9 @@ def run_unit_tests() -> bool:
         failed,
         f", {skipped} skipped" if skipped else "",
     )
-    # the per-test runner output goes to devnull, so name the losers here or a
-    # failure at boot has no trace at all
     for case, _ in result.failures + result.errors:
         logger.warning("  failed: %s", case.id())
     return result.wasSuccessful()
-
 
 def get_addon_setting(
     config: dict, addon_type: str, addon_name: str, key: str, default=None
@@ -125,7 +107,6 @@ def get_addon_setting(
     if not isinstance(entry, dict):
         return default
     return entry.get(key, default)
-
 
 def validate_config_required_fields(config_path: str = "Config/config.json") -> None:
     import json
@@ -187,7 +168,6 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
                         f"Camera '{cam_name}' calibration missing: {field}"
                     )
 
-        # models live in the camera's pipeline settings (nested layout) - legacy flat entries are folded in lazily
         pipeline = cam_config.get("pipeline")
         if isinstance(pipeline, dict):
             pipeline_name = pipeline.get("name")
@@ -204,8 +184,6 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
 
         from iSpy.config.iSpyConfig import is_model_backed_pipeline
 
-        # only model-backed pipelines need a vision_model block - an HSV or
-        # AprilTag camera is perfectly valid without one
         if is_model_backed_pipeline(pipeline_name):
             needs_model = True
 
@@ -224,7 +202,6 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
     if needs_model and model_cameras == 0:
         raise ValueError("No camera has a vision_model configured")
 
-    # network_tables_ip is an add-on setting now (FRC/network_table_handler utility); only validated when the add-on is enabled
     ip = get_addon_setting(
         config, "utilities", "FRC/network_table_handler", "network_tables_ip"
     )
@@ -234,7 +211,6 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
             raise ValueError(f"Invalid network_tables_ip format: {ip}")
 
     logger.info("Config validation passed.")
-
 
 def get_recommendations(config_path: str = "Config/config.json") -> str:
     import json
@@ -250,7 +226,6 @@ def get_recommendations(config_path: str = "Config/config.json") -> str:
     config = data.get("config", data)
     recommendations = []
 
-    # Add-on settings live in plugins.<type>.<name>; absent add-on = disabled.
     dbscan_epsilon = get_addon_setting(config, "trackers", "path_planner", "epsilon")
     dbscan_min_samples = get_addon_setting(
         config, "trackers", "path_planner", "min_samples"
@@ -343,7 +318,6 @@ def get_recommendations(config_path: str = "Config/config.json") -> str:
                 "Consider setting fps_cap (e.g., 30) to reduce CPU load."
             )
 
-    # Models are configured per camera under their pipeline settings.
     seen_paths = set()
     for cam_name, cam_cfg in camera_configs.items():
         pipeline = cam_cfg.get("pipeline")
@@ -418,7 +392,6 @@ def get_recommendations(config_path: str = "Config/config.json") -> str:
 
     return output
 
-
 def validate_quantization_dataset_wrapper(
     dataset_path: str = "QuantizeDataset",
 ) -> bool:
@@ -426,7 +399,6 @@ def validate_quantization_dataset_wrapper(
 
     from iSpy.dataset.dataset import _find_images
 
-    # named datasets live at QuantizeDataset/<name>/ - reusable calibration picked per camera via its 'quantization_dataset' setting, never derived from a model filename. validate each one since that's what conversions actually use now
     per_model_dirs = (
         [
             d
@@ -437,15 +409,11 @@ def validate_quantization_dataset_wrapper(
         else []
     )
 
-    # _find_images rglobs, so images inside those named subdirs count here too.
-    # neither present means there is genuinely nothing to convert against.
     has_images = root.exists() and bool(_find_images(root))
     if not per_model_dirs and not has_images:
         logger.info("No quantization datasets found.")
         return True
 
-    # only reached when something is actually there: named subdirs if any,
-    # otherwise the flat legacy layout where root itself is the dataset
     logger.info("Quantization dataset(s) found: %d", len(per_model_dirs) or 1)
 
     if not per_model_dirs:
@@ -481,7 +449,6 @@ def validate_quantization_dataset_wrapper(
             all_valid = False
 
     return all_valid
-
 
 def validate_system() -> bool:
     try:

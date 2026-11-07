@@ -7,7 +7,6 @@ from wpimath.geometry import Pose2d, Rotation2d
 from iSpy.plugins.bases import UtilityBase, TransformProvider
 from iSpy.vision.transforms import transform_2d
 
-
 @wpiutil.wpistruct.make_wpistruct(name="Object")
 @dataclasses.dataclass
 class ObjectStruct:
@@ -18,10 +17,6 @@ class ObjectStruct:
     pitch: float = 0.0
     yaw: float = 0.0
 
-
-# vision_data is raw json - one string topic holding the full Object.to_dict()
-# list. every pipeline flattens to the same keys so the robot just picks what it
-# wants by name/vis_type. struct[] is still there for back-compat
 DEFAULT_PUBLISH = [
     {"name": "fps", "data_type": "number", "source": "fps", "nt_topic": "fps"},
     {
@@ -50,12 +45,8 @@ DEFAULT_PUBLISH = [
     },
 ]
 
-
 class NetworkTableHandler(UtilityBase, TransformProvider):
     plugin_name = "FRC/network_table_handler"
-    # NetworkTables publishing and robot-pose reads are meaningless during a
-    # replay (no robot attached), so the core skips constructing this add-on
-    # in replay mode.
     disabled_in_replay = True
 
     @classmethod
@@ -129,14 +120,10 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
         super().__init__(context)
         self.logger = logging.getLogger(__name__)
 
-
         ip = self.config.get("network_tables_ip", "10.0.0.2")
         self.inst = ntcore.NetworkTableInstance.getDefault()
         self.inst.setServer(ip)
         self.inst.startClient4("iSpy")
-        # startClient4 connects asynchronously in the background - never block
-        # boot for up to 15s waiting on a robot that may be off. connect state
-        # is reported transitionally from update() instead.
         self._conn_state = None
         self.logger.info(
             "NetworkTables client started (server %s) - connecting in the background.",
@@ -194,10 +181,6 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
                     "Robot", Pose2d
                 ).subscribe(Pose2d())
             pose = self._subscribers[sub_key].get()
-            # The robot publishes pose in WPILib's frame (X forward, Y left,
-            # heading CCW+). Convert to iSpy's field frame here so the core
-            # never has to know about WPILib conventions (iSpy X = -WPILib Y,
-            # iSpy Y = WPILib X). Dicts (e.g. test fakes) pass through.
             if isinstance(pose, Pose2d):
                 return Pose2d(
                     -pose.Y(),
@@ -210,8 +193,6 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
             return Pose2d()
 
     def transform_detections(self, detections):
-        # FRC-specific: read robot pose (WPILib frame), convert to iSpy frame,
-        # and apply the 2-D transform to each detection. Core stays agnostic.
         if not self.isConnected():
             return detections
         pose = self.get_robot_pose()
@@ -226,7 +207,6 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
         return detections
 
     def get_reference_pose(self):
-        # Generic reference pose as a plain dict; core wraps it opaquely.
         if not self.isConnected():
             return None
         pose = self.get_robot_pose()
@@ -342,8 +322,6 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
                 return None
         return obj
 
-    # internal helpers
-
     def _get_table(self, table_name: str):
         if table_name not in self._tables:
             self._tables[table_name] = self.inst.getTable(table_name)
@@ -390,8 +368,6 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
 
     def _send_boolean(self, value: bool, data_name: str, table_name: str):
         self._send_data(value, data_name, table_name)
-
-    # viewer overlay
 
     def _update_viewer_overlay(self, frame_data: dict):
         if self._viewer is None:

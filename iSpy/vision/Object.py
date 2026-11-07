@@ -5,7 +5,6 @@ import itertools
 
 _id_counter = itertools.count(1)
 
-
 class Object:
     def __init__(
         self,
@@ -41,9 +40,6 @@ class Object:
         self.ray_origin = ray_origin  # np.ndarray(3,) robot-frame, or None
         self.ray_direction = ray_direction  # np.ndarray(3,) unit vector, or None
         self.depth_source = depth_source
-        # Optional lane metadata.  Single-camera detections carry one source;
-        # triangulated and cross-lane detections carry every contributing
-        # camera so lane-specific trackers and utility routing can filter them.
         cameras = []
         if source_cameras:
             cameras.extend(str(name) for name in source_cameras if str(name).strip())
@@ -53,12 +49,8 @@ class Object:
         self.source_camera = str(source_camera) if source_camera else (
             self.source_cameras[0] if self.source_cameras else None
         )
-        # coordinate frame of self.x/y/z. "field" by default; "robot" when a
-        # robot-frame transform has been applied (e.g. via relative_to). kept
-        # generic so non-FRC consumers can reason about frames.
         self.frame = "field"
 
-        # vis_type -> renderer mapping (see VIS_RENDERERS in viewer3d.html)
         self.vis_type = vis_type
         self.vis_meta = vis_meta or {}
 
@@ -66,9 +58,6 @@ class Object:
         self.alive = 0
         self.destroyed = False
         self.alive_time = alive_time
-
-    # Coordinate transforms (robot -> field etc.) now live in
-    # iSpy.vision.transforms so Object stays a plain data container.
 
     def get_position(self) -> np.ndarray:
         return np.array([self.x, self.y, self.z])
@@ -81,10 +70,6 @@ class Object:
 
     def reset_time(self):
         self.start_time = time.perf_counter()
-        # "restarting the age clock" must also mean "no longer destroyed":
-        # VoxelWorldPipeline reuses one Object forever, so after it gets aged
-        # out (destroyed -> filtered -> re-appended) nothing would ever clear
-        # these without the reset, leaving it permanently destroyed.
         self.alive = 0
         self.destroyed = False
 
@@ -101,8 +86,6 @@ class Object:
         self.alive = time.perf_counter() - self.start_time
         if self.alive >= self.alive_time:
             self.destroyed = True
-
-    # universal output schema (see VisionPipeline.OUTPUT_SCHEMA)
 
     def to_dict(self) -> dict:
         return {

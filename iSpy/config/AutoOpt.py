@@ -20,7 +20,6 @@ SUPPORTED_FORMATS = {
     "qnn",
 }
 
-
 def _run(cmd: str) -> str:
     try:
         return subprocess.run(
@@ -34,7 +33,6 @@ def _run(cmd: str) -> str:
     except Exception:
         return ""
 
-
 def _run_powershell(cmd: str) -> str:
     try:
         return subprocess.run(
@@ -47,7 +45,6 @@ def _run_powershell(cmd: str) -> str:
     except Exception:
         return ""
 
-
 @lru_cache()
 def _windows_video_controller_names() -> str:
     out = _run_powershell("(Get-CimInstance Win32_VideoController).Name")
@@ -55,14 +52,12 @@ def _windows_video_controller_names() -> str:
         return out
     return _run("wmic path win32_videocontroller get name")
 
-
 @lru_cache()
 def _windows_pnp_device_names() -> str:
     out = _run_powershell("(Get-CimInstance Win32_PnPEntity).Name")
     if out.strip():
         return out
     return _run("wmic path win32_pnpentity get name")
-
 
 def _cmd_ok(cmd: str) -> bool:
     try:
@@ -79,7 +74,6 @@ def _cmd_ok(cmd: str) -> bool:
     except Exception:
         return False
 
-
 @lru_cache()
 def _lsusb_output() -> str:
     if os.name != "nt" and _cmd_ok("which lsusb"):
@@ -87,7 +81,6 @@ def _lsusb_output() -> str:
     if os.name == "nt":
         return _windows_pnp_device_names()
     return ""
-
 
 @lru_cache()
 def has_jetson() -> bool:
@@ -103,7 +96,6 @@ def has_jetson() -> bool:
             pass
     return False
 
-
 @lru_cache()
 def has_hailo_npu() -> bool:
     import glob
@@ -113,7 +105,6 @@ def has_hailo_npu() -> bool:
     if "hailo" in _lsusb_output():
         return True
     return _cmd_ok("hailortcli fw-control identify")
-
 
 @lru_cache()
 def has_qualcomm_npu() -> bool:
@@ -152,7 +143,6 @@ def has_qualcomm_npu() -> bool:
 
     return False
 
-
 @lru_cache()
 def has_nvidia() -> bool:
     if has_jetson():
@@ -165,12 +155,7 @@ def has_nvidia() -> bool:
     if _cmd_ok("nvidia-smi"):
         return True
     if os.name == "nt":
-        # wmi name check is cheap, importing torch costs seconds for a yes/no
         return "nvidia" in _windows_video_controller_names()
-    # Do not import torch in-process just to answer this.  On some aarch64
-    # hosts the CPU wheel is built against a different NumPy ABI and importing
-    # it prints a large warning even when no NVIDIA device exists.  A CUDA
-    # driver library is the only case where a torch probe can add information.
     try:
         import ctypes.util
 
@@ -196,7 +181,6 @@ def has_nvidia() -> bool:
         return False
     return proc.returncode == 0 and proc.stdout.strip().endswith("1")
 
-
 @lru_cache()
 def has_tensorrt() -> bool:
     try:
@@ -205,15 +189,10 @@ def has_tensorrt() -> bool:
         return True
     except ImportError:
         pass
-    # check system python too, in case we're in a venv without it
     return _cmd_ok("python3 -c 'import tensorrt' 2>/dev/null")
-
 
 @lru_cache()
 def has_tpu_hardware() -> bool:
-    # hardware probe that needs no torch_xla. recommend_format has to be able to
-    # answer "tpu" on a box where torch_xla is still missing, otherwise the
-    # installer can never pull it in.
     if os.environ.get("COLAB_TPU_ADDR") or os.environ.get("TPU_NAME"):
         return True
     if any(Path("/dev").glob("accel*")):
@@ -227,15 +206,12 @@ def has_tpu_hardware() -> bool:
         )
     )
 
-
 @lru_cache()
 def has_tpu() -> bool:
     try:
         import torch_xla
         import torch_xla.core.xla_model as xm
     except Exception as e:
-        # missing - install_special_dependencies puts it in when the hardware is
-        # there (BACKEND_DEPENDENCIES["tpu"])
         logger.debug("TPU check: torch_xla unavailable (%s)", e)
         return False
 
@@ -246,7 +222,6 @@ def has_tpu() -> bool:
             if xr.device_type() != "TPU":
                 return False
         except (ImportError, AttributeError):
-            # Older torch_xla versions do not expose runtime.device_type().
             if not has_tpu_hardware():
                 return False
         xm.xla_device()
@@ -260,13 +235,11 @@ def has_tpu() -> bool:
         )
         return False
 
-
 @lru_cache()
 def has_amd_gpu() -> bool:
     if os.name == "nt":
         return "amd" in _windows_video_controller_names()
     return "amd" in _run("lspci") or "radeon" in _run("lspci")
-
 
 @lru_cache()
 def has_intel_gpu() -> bool:
@@ -274,10 +247,6 @@ def has_intel_gpu() -> bool:
         return "intel" in _windows_video_controller_names()
     if "intel" in platform.processor().lower() or "intel" in _run("lspci"):
         return True
-    # wsl2 never pci-enumerates the gpu (paravirtualized via /dev/dxg) so lspci
-    # cant see it. openvino's own device list is the only thing that reports
-    # gpu/npu when the compute driver actually works - but backend auto-select
-    # runs before openvino gets pip-installed, hence the runtime lib sniff too.
     if os.path.exists("/dev/dxg"):
         try:
             from openvino import Core
@@ -290,7 +259,6 @@ def has_intel_gpu() -> bool:
         if _has_intel_gpu_runtime_libs():
             return True
     return False
-
 
 def _has_intel_gpu_runtime_libs() -> bool:
     import glob
@@ -310,24 +278,19 @@ def _has_intel_gpu_runtime_libs() -> bool:
             pass
     return False
 
-
 def has_arm() -> bool:
     return "arm" in platform.machine().lower() or "aarch" in platform.machine().lower()
 
-
 def has_apple_silicon() -> bool:
     return platform.system() == "Darwin" and has_arm()
-
 
 def has_intel_vpu() -> bool:
     usb = _lsusb_output()
     return "movidius" in usb or "03e7:2485" in usb
 
-
 def has_edge_tpu() -> bool:
     usb = _lsusb_output()
     return "18d1:9302" in usb or "1ac1:089a" in usb
-
 
 @lru_cache()
 def has_rockchip_npu() -> bool:
@@ -369,7 +332,6 @@ def has_rockchip_npu() -> bool:
 
     return False
 
-
 def resolve_openvino_device(requested_device=None) -> str:
     if isinstance(requested_device, str) and requested_device.startswith("intel:"):
         return requested_device
@@ -384,7 +346,6 @@ def resolve_openvino_device(requested_device=None) -> str:
     if "NPU" in available:
         return "intel:npu"
     return "intel:cpu"
-
 
 def recommend_format(
     ignore_dependencies: bool = False, runtime_supported: bool = True
@@ -410,19 +371,16 @@ def recommend_format(
         )
         return "tflite"
 
-    # apple ecosystem
     if has_apple_silicon() and runtime_supported:
         logger.info(
             "Apple Silicon detected - using Core ML format for hardware acceleration."
         )
         return "coreml"
 
-    # google TPU - pytorch via XLA
     if has_tpu() or (ignore_dependencies and has_tpu_hardware()):
         logger.info("Google TPU detected - using TPU format for hardware acceleration.")
         return "tpu"
 
-    # nvidia - tensorrt engine > onnx for max fps
     if has_nvidia():
         if (has_tensorrt() or ignore_dependencies) and runtime_supported:
             logger.info("NVIDIA GPU detected - using .engine format for maximum FPS.")
@@ -433,12 +391,6 @@ def recommend_format(
         )
         return "onnx"
 
-    # desktop hardware
-    # OpenVINO is a runtime-loadable format (GenericYolo can load and run the IR),
-    # so it stays a valid recommendation even when `runtime_supported=False` (the
-    # build-target path used by auto-opt / ispy-optimize). Only formats that
-    # cannot actually be loaded at runtime (CoreML) or need a separate compiled
-    # runtime that may be absent (TensorRT engine) stay gated on that flag.
     if os.name != "nt" and has_intel_vpu():
         logger.info(
             "Intel VPU detected - using OpenVINO format for hardware acceleration."
@@ -453,7 +405,6 @@ def recommend_format(
         logger.info("AMD GPU detected - using ONNX format for hardware acceleration.")
         return "onnx"  # rocm / directml exec providers
 
-    # arm edge (jetson, rpi, etc.)
     if has_arm():
         logger.info(
             "ARM edge device detected - using TFLite format for hardware acceleration."

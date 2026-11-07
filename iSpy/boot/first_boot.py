@@ -12,7 +12,6 @@ logging.basicConfig(
 _PROJECT_ROOT = Path.cwd().resolve()
 _CONFIG_PATH = _PROJECT_ROOT / "Config" / "config.json"
 
-
 def main() -> None:
     if _CONFIG_PATH.exists():
         logger.info("first_boot: Config/config.json already exists, nothing to do.")
@@ -21,7 +20,6 @@ def main() -> None:
     logger.info("first_boot: Config/config.json not found — running fresh install.")
     on_boot(install_service=False, fresh=True, wait=False)
     logger.info("first_boot: fresh install complete.")
-
 
 if __name__ == "__main__":
     try:

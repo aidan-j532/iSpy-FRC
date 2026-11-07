@@ -28,14 +28,12 @@ _REAL_STDERR_FD = os.dup(2)
 _REAL_STDOUT = os.fdopen(_REAL_STDOUT_FD, "w", buffering=1, closefd=False)
 _REAL_STDERR = os.fdopen(_REAL_STDERR_FD, "w", buffering=1, closefd=False)
 
-
 class _NullWriter(io.TextIOBase):
     def write(self, s):
         return len(s)
 
     def flush(self):
         pass
-
 
 @contextlib.contextmanager
 def _progress_spinner(label: str):
@@ -67,7 +65,6 @@ def _progress_spinner(label: str):
     finally:
         stop.set()
         t.join()
-
 
 @contextlib.contextmanager
 def _silence_third_party():
@@ -105,7 +102,6 @@ def _silence_third_party():
             lg.setLevel(_saved_levels[name])
             lg.disabled = _saved_disabled[name]
 
-
 _RKNN_QUANTIZE = True
 _RKNN_KNOWN_CHIPS = (
     "rk3588",
@@ -125,11 +121,9 @@ _ARCH = platform.machine().lower()
 _IS_AARCH64 = "aarch64" in _ARCH or "arm64" in _ARCH
 _PY_TAG = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
-
 def _model_supports_end2end(model: object) -> bool:
     model_impl = getattr(model, "model", None)
     return bool(getattr(model_impl, "end2end", False))
-
 
 def _find_lite_wheel_dir() -> Path:
     pkg_dir = _PACKAGE_ROOT.parent / "rknn_wheels"
@@ -143,9 +137,7 @@ def _find_lite_wheel_dir() -> Path:
                 return pkg
     except Exception:
         pass
-    # fall back to a user-dropped copy at the project root
     return _PACKAGE_ROOT.parent.parent / "rknn_wheels"
-
 
 _RKNN_LITE_DIR = _find_lite_wheel_dir()
 
@@ -195,7 +187,6 @@ _RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
     ): "rknn_toolkit_lite2-2.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
 }
 
-
 def _detect_rknn_target_platform() -> str | None:
     override = os.environ.get("ISPY_RKNN_TARGET_PLATFORM", "").strip().lower()
     if override:
@@ -238,7 +229,6 @@ def _detect_rknn_target_platform() -> str | None:
     )
     return None
 
-
 def _resolve_rknn_target_platform() -> tuple[str, bool]:
     target = _detect_rknn_target_platform()
     if target:
@@ -257,9 +247,7 @@ def _resolve_rknn_target_platform() -> tuple[str, bool]:
     logger.warning(message.strip())
     return "rk3588", False
 
-
 _CALIB_DOWNSCALE_SIZE = 320
-
 
 def _downscale_calib_images(
     dataset_path: Path, calib_size: int = _CALIB_DOWNSCALE_SIZE
@@ -316,12 +304,7 @@ def _downscale_calib_images(
     )
     return tmp_dir
 
-
 def _rknn_wheel_targets(report_missing: bool = True) -> list[tuple[str, str]]:
-    # normal runtime env only ever gets the lite *inference* wheel. the full
-    # toolkit2 is conversion-only and lives in the isolated rknn converter env
-    # (iSpy.boot._rknn_converter_env) - never here, the pinned numpy/protobuf
-    # stack would break runtime imports and the download is huge.
     key = ("aarch64" if _IS_AARCH64 else "x86_64", _PY_TAG)
     targets: list[tuple[str, str]] = []
 
@@ -343,12 +326,9 @@ def _rknn_wheel_targets(report_missing: bool = True) -> list[tuple[str, str]]:
         )
     return targets
 
-
 _BACKEND_DEPS_CACHE: dict[str, list[tuple]] | None = None
 
-
 def _backend_dependencies() -> dict[str, list[tuple]]:
-    """Backward-compatible view of the backend registry (lazy, cached)."""
 
     global _BACKEND_DEPS_CACHE
     if _BACKEND_DEPS_CACHE is None:
@@ -357,40 +337,23 @@ def _backend_dependencies() -> dict[str, list[tuple]]:
         _BACKEND_DEPS_CACHE = legacy_dependencies()
     return _BACKEND_DEPS_CACHE
 
-
 def __getattr__(name: str):
-    """Resolve ``BACKEND_DEPENDENCIES`` lazily.
-
-    Computing the registry at import time runs hardware probes (including a
-    torch import on some hosts), which is both slow and noisy.  Callers that
-    actually need the table still get it on first access.
-    """
     if name == "BACKEND_DEPENDENCIES":
         return _backend_dependencies()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-
-# Keep the historical private names as thin delegations.  The authoritative
-# selection/provisioning logic lives in iSpy.boot.backend_deps; these wrappers
-# exist so old imports and tests do not fork the install path again.
 def _ensure_cuda_torch() -> bool:
     from iSpy.boot.backend_deps import ensure_backend
 
     return ensure_backend("pytorch", auto_install=True).ok
-
 
 def _install_tensorrt() -> bool:
     from iSpy.boot.backend_deps import ensure_backend
 
     return ensure_backend("engine", auto_install=True).ok
 
-# Lazy handles to the converter-environment modules.  Kept as module attributes
-# so callers/tests can inject/mock the provisioning layer without importing the
-# heavy module chain eagerly.  RKNN deliberately stays on its compatibility
-# shim: existing tests and diagnostics patch that module's private helpers.
 _rknn_converter_env: object | None = None
 _converter_envs: object | None = None
-
 
 def _converter_env_module():
     global _rknn_converter_env
@@ -400,7 +363,6 @@ def _converter_env_module():
         _rknn_converter_env = _env
     return _rknn_converter_env
 
-
 def _generic_converter_env_module():
     global _converter_envs
     if _converter_envs is None:
@@ -409,16 +371,12 @@ def _generic_converter_env_module():
         _converter_envs = _env
     return _converter_envs
 
-
 def _converter_env_for(target_format: str):
-    """Return the module that can provide target_format worker Python."""
     if target_format == "rknn":
         return _converter_env_module()
     return _generic_converter_env_module()
 
-
 def _in_converter_env() -> bool:
-    """True when this interpreter is a provisioned converter environment."""
 
     if os.environ.get("ISPY_CONVERTER_ENV"):
         return True
@@ -437,17 +395,14 @@ def _in_converter_env() -> bool:
         pass
     return False
 
-
 def _is_installed(module_name: str) -> bool:
     return importlib.util.find_spec(module_name) is not None
-
 
 def _get_installed_version(package_name: str) -> str | None:
     try:
         return importlib.metadata.version(package_name)
     except Exception:
         return None
-
 
 def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None:
     converted_path = Path(converted_result)
@@ -506,25 +461,21 @@ def _run_optimized_model_comparison(pt_file: str, converted_result: str) -> None
     else:
         logger.info("Optimized model %s: READY.", converted_path.name)
 
-
 def _purge_pip_cache() -> bool:
     from iSpy.boot.backend_deps import purge_pip_cache
 
     return purge_pip_cache()
-
 
 def _looks_out_of_space(text: str) -> bool:
     from iSpy.boot.backend_deps import looks_out_of_space
 
     return looks_out_of_space(text)
 
-
 def _pip_install(
     install_target: str,
     force_reinstall: bool = False,
     extra_args: list[str] | None = None,
 ) -> bool:
-    """Compatibility wrapper for the runtime pip installer."""
 
     from iSpy.boot.backend_deps import pip_install
 
@@ -534,20 +485,15 @@ def _pip_install(
         extra_args=extra_args,
     )
 
-
 def _ensure_onnxruntime_variant() -> bool:
-    """Select the ORT wheel for this hardware."""
 
     from iSpy.boot.backend_deps import ensure_backend
 
     return ensure_backend("onnx", auto_install=True).ok
 
-
 def install_special_dependencies(
     auto_install: bool = False, backend: str | None = None
 ):
-    """Provision runtime dependencies for *backend* or the recommended one."""
-
 
     from iSpy.boot.backend_deps import ensure_backends
     from iSpy.config.AutoOpt import recommend_format
@@ -566,22 +512,15 @@ def install_special_dependencies(
             )
     return report
 
-
 _EXPORT_DEPS = (
     ("ultralytics", "ultralytics>=8.3.0"),
     ("onnxslim", "onnxslim>=0.1.87"),
     ("onnx", "onnx>=1.16.0,<1.17"),
 )
 
-
-# build modules an optimize/quantize would need that aren't installed locally -
-# the offline policy uses this to decide if the build could ever finish
 def _missing_build_modules(backend: str | None = None) -> list[str]:
     missing = [mod for mod, _ in _EXPORT_DEPS if not _is_installed(mod)]
     if backend:
-        # ``BACKEND_DEPENDENCIES`` is resolved lazily via module __getattr__;
-        # a function-local global lookup would bypass that, so ask for the
-        # table explicitly (while still honoring a test-patched attribute).
         deps = globals().get("BACKEND_DEPENDENCIES")
         if deps is None:
             deps = _backend_dependencies()
@@ -591,15 +530,11 @@ def _missing_build_modules(backend: str | None = None) -> list[str]:
                 missing.append(mod)
     return missing
 
-
 def _ensure_export_deps() -> bool:
     missing = [mod for mod, _ in _EXPORT_DEPS if not _is_installed(mod)]
     if not missing:
         return True
     if _in_converter_env():
-        # The converter env is provisioned with a pinned, verified dependency
-        # set.  Auto-installing an unpinned export dep here can pull a newer
-        # onnx/protobuf and break rknn.build() - rebuild the env instead.
         logger.error(
             "Converter environment %s is missing build-time export "
             "dependencies (%s). Refusing to pip-install into the pinned "
@@ -636,7 +571,6 @@ def _ensure_export_deps() -> bool:
             )
             return False
     return True
-
 
 def _export_ultralytics(
     model_file, target_format, input_size, data_yaml=None, device=0
@@ -733,10 +667,8 @@ def _export_ultralytics(
     with _silence_third_party():
         return model.export(**kwargs)
 
-
 def default_quantization_dataset_dir() -> Path:
     return _PROJECT_ROOT / "QuantizeDataset" / "default"
-
 
 def _export_rknn_metadata(
     pt_file: str,
@@ -804,10 +736,8 @@ def _export_rknn_metadata(
     except Exception as e:
         logger.warning("Failed to export RKNN metadata: %s", e)
 
-
 def _yolo_models_dir() -> Path:
     return _PROJECT_ROOT / "YoloModels"
-
 
 def _export_backend_metadata(
     pt_file: str,
@@ -818,9 +748,6 @@ def _export_backend_metadata(
     quantize=None,
     overrides: dict | None = None,
 ) -> None:
-    # General backend sidecar exporter (hailo/qnn/whatever comes next). RKNN
-    # keeps its own heavily-tuned _export_rknn_metadata untouched - don't unify
-    # one into the other without a full RKNN regression run.
     from iSpy.vision.metadata import (
         derive_format_metadata,
         metadata_from_pt,
@@ -854,12 +781,10 @@ def _export_backend_metadata(
     except Exception as e:
         logger.warning("Failed to export %s metadata: %s", target_format, e)
 
-
 def _format_output_dir(target_format: str) -> Path:
     if target_format == "pytorch":
         return _yolo_models_dir() / "pytorch"
     return _yolo_models_dir() / target_format
-
 
 def _artifact_name(pt_path: Path, target_format: str) -> str:
     stem = pt_path.stem
@@ -870,9 +795,6 @@ def _artifact_name(pt_path: Path, target_format: str) -> str:
     if target_format == "hailo":
         return f"{stem}.hef"
     if target_format == "qnn":
-        # qnn is the onnx artifact committed under the qnn/ dir - the format is
-        # distinguished by directory so cache/existing_artifact_for logic can
-        # round-trip it, not by a separate file extension.
         return f"{stem}.onnx"
     if target_format == "openvino":
         return f"{stem}_openvino_model"
@@ -883,7 +805,6 @@ def _artifact_name(pt_path: Path, target_format: str) -> str:
     if target_format == "tflite":
         return f"{stem}.tflite"
     return f"{stem}.{target_format}"
-
 
 def _desired_output_path(pt_path: Path, target_format: str) -> Path:
     out_dir = _format_output_dir(target_format)
@@ -911,8 +832,6 @@ def _engine_loads(path: Path) -> bool:
         )
         return False
 
-# optimized artifacts can be built for any of these - a camera runs whichever
-# backend is active, so "already built" means any of them
 _ARTIFACT_FORMATS = (
     "onnx",
     "rknn",
@@ -923,7 +842,6 @@ _ARTIFACT_FORMATS = (
     "hailo",
     "qnn",
 )
-
 
 def existing_artifact_for(
     source_pt: Path | str | None, target_format: str | None = None
@@ -945,9 +863,7 @@ def existing_artifact_for(
                 return str(out)
     return None
 
-
 from pathlib import Path
-
 
 def _remove_path_for_cleanup(path: Path) -> None:
     if not path.exists():
@@ -957,7 +873,6 @@ def _remove_path_for_cleanup(path: Path) -> None:
     else:
         path.unlink()
 
-
 def _find_tflite_artifact(saved_path: Path) -> Path | None:
     if saved_path.is_file() and saved_path.suffix == ".tflite":
         return saved_path
@@ -965,7 +880,6 @@ def _find_tflite_artifact(saved_path: Path) -> Path | None:
         candidates = list(saved_path.rglob("*.tflite"))
         return candidates[0] if candidates else None
     return None
-
 
 def _merge_rknn_build_outputs(outputs: list) -> object:
     import numpy as np
@@ -990,7 +904,6 @@ def _merge_rknn_build_outputs(outputs: list) -> object:
     merged = np.concatenate(ordered, axis=0)
     return merged[np.newaxis, ...]
 
-
 def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
     import numpy as np
     import onnx
@@ -1004,10 +917,6 @@ def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
             const_name = inp
             break
     if const_name is None:
-        # newer ultralytics exports bake stride multipliers into Constant nodes
-        # ('/model.23/Constant_15' -> output) instead of graph initializers -
-        # resolve those too or quantization proceeds with unnormalized box coords
-        # and confidence collapses
         for inp in node.input:
             producer = node_by_output.get(inp)
             if producer is not None and producer.op_type == "Constant":
@@ -1051,7 +960,6 @@ def _fold_scale_into_constant_input(graph, node, divisor, node_by_output):
         len(other_consumers),
     )
     return new_name
-
 
 def _normalize_box_coords_for_quantization(
     onnx_path: str, output_path: str, input_size
@@ -1166,7 +1074,6 @@ def _normalize_box_coords_for_quantization(
     onnx.save(model, output_path)
     return divisor, kpt_coord_scale
 
-
 def _find_pose_output_tensors(graph, concat_node):
     node_by_output = {out: n for n in graph.node for out in n.output}
     inputs = list(concat_node.input)
@@ -1183,7 +1090,6 @@ def _find_pose_output_tensors(graph, concat_node):
             "Ultralytics export structure may have changed - verify manually."
         )
     return box_name, conf_name, kpt_name
-
 
 def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
     from iSpy.dataset.dataset import _find_images as _find_ds_images
@@ -1210,7 +1116,6 @@ def _prepare_user_calibration_dataset(user_ds: Path) -> Path:
     )
     return dataset_txt
 
-
 def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
     from iSpy.vision.metadata import read_metadata
 
@@ -1235,7 +1140,6 @@ def _user_calibration_data_yaml(pt_file, user_ds: Path) -> str:
     logger.info("Calibration data.yaml written (nc=%d) at %s", nc, data_yaml)
     return str(data_yaml)
 
-
 def _resolve_calibration_dataset(dataset_path, count) -> tuple:
     from iSpy.dataset.dataset import prepare_quantization_dataset
 
@@ -1253,7 +1157,6 @@ def _resolve_calibration_dataset(dataset_path, count) -> tuple:
     ds_dir = default_quantization_dataset_dir()
     prepare_quantization_dataset(str(ds_dir), count=count)
     return ds_dir, False
-
 
 def _convert_rknn(
     pt_file, input_size, dataset_path=None, task="detect", quantize=None
@@ -1288,7 +1191,6 @@ def _convert_rknn(
     if not raw_onnx.exists():
         raise RuntimeError(f"Intermediate ONNX export failed: {raw_onnx}")
 
-    # Route intermediate ONNX to the onnx folder with its own sidecar
     onnx_path = _desired_output_path(pt_path, "onnx")
     try:
         if raw_onnx != onnx_path:
@@ -1307,9 +1209,6 @@ def _convert_rknn(
         logger.info("Intermediate ONNX routed to %s with sidecar", onnx_path)
     except Exception as e:
         logger.warning("Could not route intermediate ONNX: %s", e)
-        # fall back to whichever copy actually exists - the raw file may have
-        # already been moved to onnx_path before the metadata step failed, and
-        # pointing at raw_onnx then would strand the build on a dead path
         if not onnx_path.exists():
             if raw_onnx != onnx_path and raw_onnx.exists():
                 shutil.move(str(raw_onnx), str(onnx_path))
@@ -1322,16 +1221,9 @@ def _convert_rknn(
         repair_standard_log_levels()
         from rknn.api import RKNN
 
-        # rknn toolkits clobber the logging level-name table on import - put
-        # the canonical names back so a later torch import can't blow up
         repair_standard_log_levels()
         warnings.filterwarnings("ignore", category=UserWarning, module="rknnlite")
     except ImportError as exc:
-        # Preserve the real cause (numpy/scipy ABI mismatch, missing
-        # pkg_resources, ...) instead of misreporting it as a missing toolkit.
-        # Note: plain retries do NOT rebuild anything - the converter env is
-        # provisioned once and reused; if its dependency set is broken it must
-        # be rebuilt explicitly (delete the env dir / bump the depset version).
         raise ImportError(
             f"Failed to import RKNN Toolkit: {exc}. "
             "The converter environment may have been built with an "
@@ -1406,7 +1298,6 @@ def _convert_rknn(
                 if ret != 0:
                     raise RuntimeError(f"RKNN export failed with code {ret}")
 
-                # Detect actual output format by running a quick inference
                 try:
                     import numpy as np
 
@@ -1473,16 +1364,7 @@ def _convert_rknn(
     )
     return str(rknn_output)
 
-
 def _hailo_end_node_names(onnx_path: str) -> list[str]:
-    # Hailo's baked-NMS compile wants the detection-head conv outputs as
-    # --end-node-names (the box+cv2 and class+cv3 convs per scale - the Hailo
-    # model-zoo friendly cut, i.e. the raw tensors BEFORE ultralytics' Mul
-    # decode). Ultralytics names these nodes like
-    #   /model.22/cv2.0/cv2.0.2/Conv, /model.22/cv3.1/cv3.1.2/Conv
-    # (YOLOv8) / model.23 for YOLO11. Rather than hardcode a head depth, pull
-    # them from the graph by the cv<N>.2/Conv pattern and fail loud if the
-    # export structure has drifted so a stale build can never ship silently.
     import re
 
     import onnx
@@ -1506,7 +1388,6 @@ def _hailo_end_node_names(onnx_path: str) -> list[str]:
         )
     logger.info("Derived %d Hailo end-node names: %s", len(names), names)
     return names
-
 
 def _convert_hailo(
     pt_file,
@@ -1551,7 +1432,6 @@ def _convert_hailo(
     if not raw_onnx.exists():
         raise RuntimeError(f"Intermediate ONNX export failed: {raw_onnx}")
 
-    # Route intermediate ONNX to the onnx folder with its own sidecar
     onnx_path = _desired_output_path(pt_path, "onnx")
     try:
         if raw_onnx != onnx_path:
@@ -1665,7 +1545,6 @@ def _convert_hailo(
     )
     return str(hailo_path)
 
-
 def _convert_qnn(
     pt_file,
     input_size,
@@ -1673,11 +1552,6 @@ def _convert_qnn(
     task="detect",
     quantize=None,
 ):
-    # QNN is NOT a separate artifact format: the onnx artifact IS the qnn
-    # artifact, committed under YoloModels/qnn/. GenericYolo's existing onnx
-    # runtime then prefers the QNN Execution Provider when the NPU is present.
-    # We still keep the qnn/ dir + sidecar so 'auto' resolution, cache checks,
-    # and existing_artifact_for() can tell the two formats apart.
     if quantize is None:
         quantize = False
     if task != "detect":
@@ -1706,7 +1580,6 @@ def _convert_qnn(
         overrides={"quantize": quantize},
     )
     return str(qnn_path)
-
 
 def convert_model(
     model_file,
@@ -1848,10 +1721,6 @@ def convert_model(
                 logger.info("Cached %s model found: %s", target_format, desired)
                 return str(desired)
 
-    # A cached artifact above is still usable everywhere; only creating a new
-    # one is platform-limited.  Ultralytics 8.4.83+ uses LiteRT for TFLite and
-    # refuses Linux ARM64/Windows, so fail here instead of deep inside the
-    # exporter after provisioning a multi-GB environment.
     if target_format == "tflite" and not exporter_supported(target_format):
         logger.error(
             "TFLite export is not supported on %s/%s: Ultralytics uses the "
@@ -1877,9 +1746,6 @@ def convert_model(
                 data_yaml,
             )
         else:
-            # data.yaml lives inside the dataset folder that was just prepared -
-            # the root QuantizeDataset/data.yaml is never written, so pointing
-            # ultralytics int8 calibration at it would load nothing
             data_yaml = str(ds_dir / "data.yaml")
     else:
         Path(dataset_root).mkdir(parents=True, exist_ok=True)
@@ -1939,7 +1805,6 @@ def convert_model(
                     result_path = desired_path
 
             logger.info("%s export successful: %s", target_format, result_path)
-            # Write derived metadata for converted file based on source .pt
             try:
                 pt_meta = read_metadata(pt_path) or metadata_from_pt(pt_path)
                 format_meta = derive_format_metadata(pt_meta, target_format)
@@ -1961,14 +1826,11 @@ def convert_model(
     logger.warning("Conversion to %s failed, falling back to .pt", target_format)
     return model_file
 
-
 def _is_protobuf_onnx_mismatch(error: str | None) -> bool:
-    """True for the onnx 1.16 / protobuf >= 7 ``FieldDescriptor.label`` crash."""
     lowered = (error or "").lower()
     return "has no attribute 'label'" in lowered and (
         "fielddescriptor" in lowered or "strip_doc_string" in lowered
     )
-
 
 def _classify_worker_failure(
     returncode: int | None,
@@ -1978,8 +1840,6 @@ def _classify_worker_failure(
     if returncode is not None and returncode < 0:
         return "terminated"
     lowered = (error or "").lower()
-    # onnx 1.16 reads FieldDescriptor.label; protobuf 7 removed it.  This is a
-    # broken converter env, not a model/conversion problem.
     if _is_protobuf_onnx_mismatch(error):
         return "dependency"
     if error_type in ("ImportError", "ModuleNotFoundError") or any(
@@ -1998,7 +1858,6 @@ def _classify_worker_failure(
     ):
         return "resource"
     return "conversion"
-
 
 def _cached_rknn_artifact(
     pt_path: Path,
@@ -2036,14 +1895,12 @@ def _cached_rknn_artifact(
     logger.info("Cached rknn model found: %s", rknn_path)
     return rknn_path
 
-
 def _cached_converter_artifact(
     pt_path: Path,
     target_format: str,
     quantize: bool | None = None,
     force: bool = False,
 ) -> Path | None:
-    """Return an existing artifact for any env-backed conversion format."""
     if force:
         return None
     if target_format == "rknn":
@@ -2058,7 +1915,6 @@ def _cached_converter_artifact(
         return None
     logger.info("Cached %s model found: %s", target_format, artifact)
     return artifact
-
 
 def _convert_model_subprocess_report(
     model_file,
@@ -2085,10 +1941,6 @@ def _convert_model_subprocess_report(
 
     uses_converter_env = needs_env(target_format)
 
-    # A cached, config-matching artifact is used directly - no worker, no
-    # converter-env provisioning (fresh benchmarks rarely need a rebuild).
-    # This applies to every env-backed format, including manual-only Hailo: an
-    # existing .hef can be benchmarked without the vendor toolchain installed.
     if uses_converter_env:
         cached = _cached_converter_artifact(
             Path(model_file), target_format, quantize, force=force
@@ -2096,9 +1948,6 @@ def _convert_model_subprocess_report(
         if cached is not None:
             return cached, None
 
-    # Refuse before provisioning: on Linux ARM64/Windows the TFLite exporter
-    # cannot produce an artifact, so building tflite_env there only wastes
-    # several GiB and ends in an Ultralytics assertion.
     if uses_converter_env and not exporter_supported(target_format):
         report = {
             "status": "dependency",
@@ -2118,8 +1967,6 @@ def _convert_model_subprocess_report(
         )
         return Path(model_file), report
 
-    # Env-backed conversions run in their dedicated interpreter; formats whose
-    # registry entry is None continue to use the main runtime Python.
     worker_python = sys.executable
     worker_env = None
     if uses_converter_env:
@@ -2131,18 +1978,11 @@ def _convert_model_subprocess_report(
                 else env_mod.converter_python(target_format)
             )
             worker_env = os.environ.copy()
-            # only give the worker the source root, not the runtime paths
             worker_env["PYTHONPATH"] = str(env_mod.ispy_source_root())
             worker_env["PYTHONNOUSERSITE"] = "1"
-            # lets the worker refuse to mutate the pinned converter env
             worker_env["ISPY_CONVERTER_ENV"] = target_format
-            # Ultralytics calls check_requirements() during export and will
-            # pip-install into the active interpreter.  Inside the pinned
-            # converter env that can silently upgrade protobuf/onnx and break
-            # rknn.build() later, so disable its auto-installer.
             worker_env["YOLO_AUTOINSTALL"] = "false"
         except Exception as exc:
-            # no converter env: fall back to the .pt
             report = {
                 "status": "dependency",
                 "error": f"converter environment unavailable: {exc}",
@@ -2161,13 +2001,6 @@ def _convert_model_subprocess_report(
     env_rebuilt = False
 
     def _rebuild_broken_env(report: dict | None) -> bool:
-        """Rebuild a drifted converter env once, then let the caller retry.
-
-        A cached env can pass its manifest check yet carry protobuf >= 7 from
-        an earlier resolver/auto-install pass.  onnx 1.16 then fails inside
-        rknn.build() with ``FieldDescriptor has no attribute 'label'``.
-        Rebuilding is the only repair; the pin lives in the env spec.
-        """
         nonlocal env_rebuilt, worker_python
         if env_rebuilt or not uses_converter_env or report is None:
             return False
@@ -2216,17 +2049,12 @@ def _convert_model_subprocess_report(
             )
             last_code = proc.returncode
 
-            # surface the worker's own logging - it just runs in a subprocess,
-            # it shouldnt run silently
             if proc.stdout:
                 print(proc.stdout, file=_REAL_STDOUT, end="")
             if proc.stderr:
                 print(proc.stderr, file=_REAL_STDERR, end="")
 
             if proc.returncode != 0 or not os.path.exists(result_path):
-                # Prefer the worker's structured error (preserves nested
-                # import causes like numpy/scipy ABI mismatches or a missing
-                # pkg_resources) over a generic exit-code message.
                 error_text, error_type = "", None
                 if os.path.exists(result_path):
                     try:
@@ -2259,8 +2087,6 @@ def _convert_model_subprocess_report(
                 result_data = json.load(f)
             result_out = Path(result_data["result"])
             if result_out == Path(model_file):
-                # The worker itself degraded to the source .pt - no optimized
-                # artifact was produced.
                 report = {
                     "status": "conversion",
                     "error": (
@@ -2285,16 +2111,6 @@ def _convert_model_subprocess_report(
                 except OSError:
                     pass
 
-    # A killed/failed quantized build (rknn toolkit's int8 calibration is the
-    # usual OOM casualty - its worker dies with a signal exit code) degrades to
-    # an unquantized build before conceding to the .pt on-CPU fallback, so the
-    # NPU artifact still exists instead of silently running the model in torch.
-    #
-    # Only retry without quantization when the failure is a signal kill
-    # (negative return code, e.g. SIGKILL from the OOM killer) or an explicit
-    # resource error.  A dependency failure (import error, provision failure)
-    # or a plain conversion exception would fail identically on retry, so it is
-    # not retried.
     if quantize:
         result, report = _run_once(quantize, log_failure=False)
         if result is None and _rebuild_broken_env(report):
@@ -2340,7 +2156,6 @@ def _convert_model_subprocess_report(
         target_format,
     )
     return Path(model_file), report
-
 
 def _convert_model_subprocess(
     model_file,

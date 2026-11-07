@@ -11,17 +11,12 @@ logger = logging.getLogger(__name__)
 
 _PROC = Path("/proc")
 
-# marker for THIS install - any process holding a camera whose cmdline references
-# this path is ours and gets protected. falls back to the module package name
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
-# graceful-then-force timings
 _TERM_GRACE_S = 2.0
-
 
 def _is_linux() -> bool:
     return sys.platform.startswith("linux")
-
 
 def _devnode(target) -> Path:
     if isinstance(target, str) and target.startswith("/dev/video"):
@@ -32,14 +27,12 @@ def _devnode(target) -> Path:
         return Path(f"/dev/video{target}")
     return None
 
-
 def _process_cmdline(pid: int) -> str:
     try:
         raw = (_PROC / str(pid) / "cmdline").read_bytes().split(b"\x00")
         return " ".join(part.decode(errors="replace") for part in raw if part)
     except OSError:
         return ""
-
 
 def _is_ispy_process(cmdline: str) -> bool:
     if not cmdline:
@@ -48,7 +41,6 @@ def _is_ispy_process(cmdline: str) -> bool:
     if _REPO_ROOT and _REPO_ROOT.lower() in low:
         return True
     return "ispy" in low  # module/daemon names, watchdog, game_loop, boot, ...
-
 
 def _own_pids() -> set:
     pids = set()
@@ -62,7 +54,6 @@ def _own_pids() -> set:
         except (OSError, IndexError, ValueError):
             break
     return pids
-
 
 def _holders_via_fuser(devnode: Path) -> list[int]:
     try:
@@ -80,7 +71,6 @@ def _holders_via_fuser(devnode: Path) -> list[int]:
             pids.append(int(tok))
     return pids
 
-
 def _holders_via_proc(devnode: Path) -> list[int]:
     try:
         dev_str = str(devnode)
@@ -97,7 +87,6 @@ def _holders_via_proc(devnode: Path) -> list[int]:
             except OSError:
                 continue
     return holders
-
 
 def _kill_holder(pid: int) -> None:
     cmdline = _process_cmdline(pid)
@@ -124,14 +113,12 @@ def _kill_holder(pid: int) -> None:
     except OSError:
         pass
 
-
 def _killable(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except OSError:
         return False
     return True
-
 
 def free_camera_device(target, log_noop: bool = False) -> list[int]:
     if not _is_linux():

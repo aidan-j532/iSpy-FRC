@@ -10,7 +10,6 @@ import logging
 import threading
 from iSpy.config.iSpyConfig import _INCHES_TO_OUTPUT_UNIT
 
-
 class MultipleCameraHandler:
     def __init__(self, cameras: list[VisionPipeline], config=None):
         self.cameras = cameras
@@ -22,8 +21,6 @@ class MultipleCameraHandler:
         self._match_gate = (
             config.get("triangulation_match_distance", 2.0) if config else 2.0
         )
-        # Ray geometry and max_residual are in inches; detections and the
-        # match-distance gate are in the configured output unit.
         unit = str((config or {}).get("unit", "frc")).lower().strip()
         self._inches_to_output_unit = _INCHES_TO_OUTPUT_UNIT.get(
             unit, _INCHES_TO_OUTPUT_UNIT["frc"]
@@ -60,15 +57,7 @@ class MultipleCameraHandler:
         stop_event = self._stop_events[i]
         last_timestamp = None
         while not self._stopped and not stop_event.is_set():
-            # Synchronous pipelines (AprilTag, QR, optical flow, yolo_world,
-            # depth) return the moment they have processed the current frame.
-            # Without waiting for the camera to publish a new one they reprocess
-            # the same frame and peg a core. Async pipelines that queue their
-            # own work (object_detection) block until a fresh frame is ready, so
-            # by the time they return the timestamp has moved and this gate is a
-            # no-op for them.
             if getattr(camera, "is_image", False):
-                # static source - pace instead of hot-looping on the one frame
                 time.sleep(0.01)
             else:
                 timestamp = getattr(camera, "frame_timestamp", None)

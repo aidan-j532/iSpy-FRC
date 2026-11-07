@@ -18,11 +18,8 @@ from iSpy.vision import triangulation
 from iSpy.vision.Object import Object
 from iSpy.vision.pipelines.base import VisionPipeline
 
-
 class AprilTagPipeline(VisionPipeline):
     plugin_name = "april_tag"
-    # AprilTag pose is derived from the camera matrix, so the ChArUco board
-    # intrinsics calibration is all that's needed.
     calibration_sections = ["charuco"]
 
     @classmethod
@@ -48,7 +45,6 @@ class AprilTagPipeline(VisionPipeline):
             self.camera_pitch_angle = camera_config.get("pitch", 0.0)
 
             _pos_unit = config.get("unit", "frc")
-            # 'height' is the single mount-height field feeding triangulation
             self.camera_height = unit_to_inches(
                 camera_config.get("height", 0.0), _pos_unit
             )
@@ -113,7 +109,6 @@ class AprilTagPipeline(VisionPipeline):
             )
         self.detector = apriltag.AprilTagDetector()
         self.detector.addFamily("tag36h11")
-        # leave a core free, same pattern genericYolo.py uses for ONNX
         det_config = self.detector.getConfig()
         det_config.numThreads = max(1, (os.cpu_count() or 1) - 1)
         self.detector.setConfig(det_config)

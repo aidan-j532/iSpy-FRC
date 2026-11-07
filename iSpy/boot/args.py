@@ -1,13 +1,13 @@
-"""Boot/CLI argument definitions, kept free of the vision stack.
 
-`iSpy.cli` imports this instead of `iSpy.boot.boot`, so `ispy start` can hand
+"""boot/CLI argument definitions, kept free of the vision stack.
+
+ispy.cli imports this instead of iSpy.boot.boot, so ispy start can hand
 port 5000 to the supervisor before torch/OpenCV/Flask are imported.
 """
 
 from __future__ import annotations
 
 import argparse
-
 
 def add_boot_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(

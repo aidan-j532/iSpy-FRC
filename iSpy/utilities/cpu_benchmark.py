@@ -11,7 +11,6 @@ def pick_best_compressions_alg(cond: Literal["speed", "comp", "auto"] = "speed",
     DATA_SIZE = 512 * 1024  # 512 KB
     data = os.urandom(DATA_SIZE)
 
-    # Test LZ4
     try:
         import lz4.frame
 
@@ -22,7 +21,6 @@ def pick_best_compressions_alg(cond: Literal["speed", "comp", "auto"] = "speed",
     except ImportError:
         logger.warning("LZ4 not installed")
 
-    # Test ZStandard
     try:
         import zstandard as zstd
 
@@ -44,7 +42,6 @@ def pick_best_compressions_alg(cond: Literal["speed", "comp", "auto"] = "speed",
     elif cond == "comp":
         results.sort(key=lambda x: len(x[1])) # compression ratio
     elif cond == "auto":
-        # Pick the fastest Zstd level that is reasonably close to LZ4.
         fastest = min(results, key=lambda x: x[2])
         best_compression = min(results, key=lambda x: len(x[1]))
 

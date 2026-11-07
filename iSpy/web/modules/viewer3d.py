@@ -8,8 +8,6 @@ from iSpy.config.iSpyConfig import unit_to_inches
 from iSpy.core import performance
 from iSpy.web.Backend.WebModule import WebModule
 
-# inches -> config output unit scale, same literal duplicated across every
-# vision pipeline (see iSpy/vision/pipelines/object_detection.py self.conversions).
 _INCHES_TO_OUTPUT_UNIT = {
     "meter": 0.0254,
     "meters": 0.0254,
@@ -19,13 +17,10 @@ _INCHES_TO_OUTPUT_UNIT = {
     "feet": 1 / 12,
     "centimeter": 2.54,
     "centimeters": 2.54,
-    # FRC/WPILib convention: meters out (robot code), calibration in inches
     "frc": 0.0254,
 }
 
-# how long a recent poll keeps the viewer counted as open
 _VIEWER_GRACE_S = 5.0
-
 
 class Viewer3DModule(WebModule):
     plugin_name = "viewer3d"
@@ -36,15 +31,11 @@ class Viewer3DModule(WebModule):
         self._cached_num_keypoints = None
         self._cached_camera_names = None
         self._overlays: dict[str, dict] = {}
-        # when the viewer page last polled - the cheaper profiles only rebuild
-        # the per-tick object snapshot while it is open
         self._last_poll = 0.0
 
     def has_viewers(self, now: float = 0.0) -> bool:
         now = now or time.monotonic()
         return (now - self._last_poll) < _VIEWER_GRACE_S
-
-    # overlay API (called by add-ons)
 
     def add_overlay(self, overlay_id: str, overlay: dict) -> None:
         overlay["id"] = overlay_id
@@ -52,8 +43,6 @@ class Viewer3DModule(WebModule):
 
     def remove_overlay(self, overlay_id: str) -> None:
         self._overlays.pop(overlay_id, None)
-
-    # routes
 
     def register_routes(self, flask_app):
         flask_app.add_url_rule(
@@ -64,15 +53,11 @@ class Viewer3DModule(WebModule):
         )
         flask_app.add_url_rule("/api/overlays", "api_overlays", self._overlays_endpoint)
 
-    # update (called every vision tick)
-
     def update(self, frame_data: dict):
         if (
             performance.get_profile().viewer3d_open_only
             and (time.monotonic() - self._last_poll) >= _VIEWER_GRACE_S
         ):
-            # the viewer page polls /api/detections/latest every 200ms - nobody
-            # polling means building the snapshot every tick is pure waste
             return
         camera_names = {
             self._camera_display_name(cam) for cam in self.context.get("cameras", [])
@@ -101,7 +86,6 @@ class Viewer3DModule(WebModule):
         for idx, obj in enumerate(detections):
             if getattr(obj, "depth_source", "") == "optical_flow":
                 continue
-            # universal pipeline-output schema (iSpy/vision/pipelines/base.py)
             if hasattr(obj, "to_dict"):
                 obj_entry = obj.to_dict()
             else:  # legacy plain-object fallback
@@ -118,13 +102,6 @@ class Viewer3DModule(WebModule):
                     "vis_type": getattr(obj, "vis_type", "generic"),
                     "vis_meta": getattr(obj, "vis_meta", {}) or {},
                 }
-            # keep the Object's OWN stable id (to_dict's "id"). Overwriting it
-            # with this frame's list index churns the id every tick for fresh
-            # detections and - worse - splits persistent objects like the voxel
-            # world, whose centroid jumps enough to fail a tracker's distance
-            # gate, into ghost render groups that flicker until their
-            # stale_threshold expires. The legacy plain-object fallback above
-            # already tags those with idx.
             obj_entry["num_keypoints"] = num_kpts
             kpts = obj_entry.get("keypoints_3d")
             if kpts is None:
@@ -133,10 +110,7 @@ class Viewer3DModule(WebModule):
                     obj_entry["keypoints_3d"] = kpts
             self._latest_objects.append(obj_entry)
 
-    # -- internals ---------------------------------------------------------
-
     def _camera_display_name(self, cam) -> str:
-        # same as CamerasModule: config name if present, else source.
         if hasattr(cam, "config") and cam.config is not None:
             name = cam.config.get("name")
             if name:
@@ -144,8 +118,6 @@ class Viewer3DModule(WebModule):
         return str(getattr(cam, "source", "camera"))
 
     def _refresh_camera_overlays(self):
-        # static per-camera overlays - only rebuilt when camera set changes,
-        # not every tick. config yaw/pitch are degrees; renderers want radians.
         config = self.context.get("config")
         unit = config.get("unit", "frc") if config else "frc"
         scale = _INCHES_TO_OUTPUT_UNIT.get(unit, _INCHES_TO_OUTPUT_UNIT["frc"])

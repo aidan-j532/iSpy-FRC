@@ -9,10 +9,8 @@ from iSpy.vision.Object import Object
 from iSpy.vision import triangulation
 from iSpy.vision import calibration as cam_calibration
 
-
 class QRCodePipeline(VisionPipeline):
     plugin_name = "qr_code"
-    # QR pose uses the camera matrix -> ChArUco board intrinsics.
     calibration_sections = ["charuco"]
 
     @classmethod
@@ -38,14 +36,12 @@ class QRCodePipeline(VisionPipeline):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
 
-        # camera + calibration settings
         try:
             self.subsystem = camera_config.get("subsystem", "field")
             self.camera_bot_relative_yaw = camera_config.get("yaw", 0.0)
             self.camera_pitch_angle = camera_config.get("pitch", 0.0)
 
             _pos_unit = config.get("unit", "frc")
-            # 'height' is the single mount-height field feeding triangulation
             self.camera_height = unit_to_inches(
                 camera_config.get("height", 0.0), _pos_unit
             )
@@ -85,11 +81,9 @@ class QRCodePipeline(VisionPipeline):
 
         super().__init__(camera_config, (640, 480), self.grayscale)
 
-        # opencv qr detector
         self.detector = cv2.QRCodeDetector()
         self._last_objects: list[Object] = []
 
-        # 3D corners of the QR code (centered at origin)
         half = self.qr_size / 2.0
         self.obj_pts = np.array(
             [[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]],
@@ -107,8 +101,6 @@ class QRCodePipeline(VisionPipeline):
         configured = getattr(self, "focal_length_pixels", 0.0)
         if configured and configured > 1:
             return configured
-        # no calibration: assume a typical 60 deg horizontal FOV so PnP
-        # gives sensible distances
         return (img_w / 2.0) / math.tan(math.radians(60.0 / 2.0))
 
     def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
@@ -159,7 +151,6 @@ class QRCodePipeline(VisionPipeline):
                 if scale != 1.0:
                     points = [pts / scale for pts in points]
                 return points, list(decoded_info), scale
-            # single-QR fallback - detectAndDecodeMulti can miss lone codes
             try:
                 info, corners, _straight = self.detector.detectAndDecode(resized)
             except cv2.error:
@@ -177,8 +168,6 @@ class QRCodePipeline(VisionPipeline):
 
         detector = getattr(self, "detector", None)
         if detector is None:
-            # uninitialized instance (tests build via __new__) - show a
-            # placeholder viz instead of crashing
             self._last_objects = self.get_demo_objects(frame)
             return self._last_objects, frame
 
@@ -195,8 +184,6 @@ class QRCodePipeline(VisionPipeline):
         if points is not None:
             objects = self._build_objects(frame, points, decoded_info)
 
-        # keep the last decoded objects a few frames so a dropped frame
-        # doesnt make the code flicker out of existence
         if objects:
             self._stable = objects
             self._stability = getattr(self, "stability_frames", 3)
@@ -251,8 +238,6 @@ class QRCodePipeline(VisionPipeline):
                 )
 
                 tvec = tvec.reshape(3)
-                # solvePnP output is in obj_pts units (configured unit) but
-                # _camera_point_to_robot works in inches - convert first
                 to_inches = 1.0 / self.conversions.get(
                     self.unit, self.conversions["meter"]
                 )

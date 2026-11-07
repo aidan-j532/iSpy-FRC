@@ -8,13 +8,9 @@ from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
 
-
 class OpticalFlowPipeline(VisionPipeline):
     plugin_name = "optical_flow"
     beta = True
-    # velocity scale comes from the camera FOV (self.fov). The known-object
-    # focal/FOV wizard writes it directly, and the ChArUco intrinsics step also
-    # derives it (derive_fov_from_intrinsics), so both calibration tabs apply.
     calibration_sections = ["charuco", "focal"]
 
     @classmethod
@@ -110,8 +106,6 @@ class OpticalFlowPipeline(VisionPipeline):
         _pos_unit = config.get("unit", "frc")
         from iSpy.config.iSpyConfig import unit_to_inches
 
-        # 'height' is the single mount-height field (matches other pipelines);
-        # legacy 'z' is deprecated and ignored
         self.camera_height = unit_to_inches(camera_config.get("height", 0.0), _pos_unit)
         _legacy_z = camera_config.get("z")
         if _legacy_z not in (None, 0, 0.0):
@@ -255,7 +249,6 @@ class OpticalFlowPipeline(VisionPipeline):
             viz = {"kind": "lk", "arrows": arrows, "points": points, "scale": scale}
             return dx / scale, dy / scale, coverage, viz
 
-        # farneback (dense)
         win = max(3, int(self._setting("win_size", 15)))
         flow = cv2.calcOpticalFlowFarneback(
             prev,
@@ -334,8 +327,6 @@ class OpticalFlowPipeline(VisionPipeline):
 
         rng = self._range_inches()
         k = rng / f if f > 1 else 0.0
-        # robot +X is right, +Y is forward; ground features moving down the
-        # image (positive dy) mean forward motion, leftward flow means rightward motion
         vx = -dx_px * k * fps * scale
         vy = dy_px * k * fps * scale
         mag_px = math.hypot(dx_px, dy_px)
@@ -380,8 +371,6 @@ class OpticalFlowPipeline(VisionPipeline):
         )
         self._last_objects = [obj] if mag_px > 0.05 else []
         return self._last_objects, frame
-
-    # visualization (called by the run loop after run())
 
     def plot(self, frame):
         if frame is None:
@@ -485,7 +474,6 @@ class OpticalFlowPipeline(VisionPipeline):
             (230, 230, 230),
         )
 
-        # confidence bar
         conf = float(np.clip(motion.get("confidence", 0.0), 0.0, 1.0))
         bw = int((panel_w - 24) * conf)
         cv2.rectangle(

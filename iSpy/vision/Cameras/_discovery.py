@@ -10,7 +10,6 @@ import cv2
 
 _WINDOWS_CAMERA_CLASS_GUID = "e5323777-f976-4f5b-9b55-b94699c46e44"
 
-
 @contextlib.contextmanager
 def _silence_stderr():
     devnull = os.open(os.devnull, os.O_WRONLY)
@@ -23,8 +22,6 @@ def _silence_stderr():
         os.close(old_fd)
         os.close(devnull)
 
-
-# names windows hands out when it has nothing better - treat as unknown and keep digging
 _GENERIC_WINDOWS_NAMES = {
     "",
     "usb video device",
@@ -35,12 +32,10 @@ _GENERIC_WINDOWS_NAMES = {
     "usb2.0 camera",
 }
 
-# v4l2 capability bits (videodev2.h) - caps u32 lives at offset 84 in QUERYCAP
 _V4L2_CAP_VIDEO_CAPTURE = 0x00000001
 _V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
 _V4L2_CAP_VIDEO_M2M = 0x00004000
 _VIDIOC_QUERYCAP = 0x80685600
-
 
 def _v4l2_caps(video_path):
     try:
@@ -62,9 +57,7 @@ def _v4l2_caps(video_path):
             os.close(fd)
     return 0
 
-
 _LINUX_NON_CAMERA_KEYWORDS = {"codec", "encode", "decode", "radio", "loopback"}
-
 
 def _linux_is_known_non_camera(video_path):
     name = _linux_sysfs_name(video_path)
@@ -72,8 +65,6 @@ def _linux_is_known_non_camera(video_path):
         lower = name.lower()
         if any(kw in lower for kw in _LINUX_NON_CAMERA_KEYWORDS):
             return True
-    # e.g. /dev/video-dec0, /dev/video-enc0 — the part after "video-" starts
-    # with a non-digit which real camera nodes never do
     basename = os.path.basename(video_path).lower()
     if (
         basename.startswith("video-")
@@ -83,16 +74,13 @@ def _linux_is_known_non_camera(video_path):
         return True
     return False
 
-
 def _linux_is_capture_node(video_path):
     caps = _v4l2_caps(video_path)
     if caps == 0:
         return None
     if caps & _V4L2_CAP_VIDEO_M2M:
-        # m2m codecs (bcm2835-codec-decode) claim the capture bit but aint cameras
         return False
     return bool(caps & (_V4L2_CAP_VIDEO_CAPTURE | _V4L2_CAP_VIDEO_CAPTURE_MPLANE))
-
 
 def _linux_device_key(video_path):
     m = re.search(r"/video(?P<num>\d+)$", video_path)
@@ -108,7 +96,6 @@ def _linux_device_key(video_path):
         real = real[: -len(suffix)]
     return real
 
-
 def _linux_sysfs_name(video_path):
     m = re.search(r"/video(\d+)$", video_path)
     if not m:
@@ -122,7 +109,6 @@ def _linux_sysfs_name(video_path):
             return f.read().strip() or None
     except OSError:
         return None
-
 
 def _linux_device_groups():
     try:
@@ -155,7 +141,6 @@ def _linux_device_groups():
         groups.setdefault(key, []).append(path)
     return [(None, nodes) for nodes in groups.values()]
 
-
 def _windows_cameras_from_registry():
     devices = []
     try:
@@ -181,8 +166,6 @@ def _windows_cameras_from_registry():
             if "#{" not in iface:
                 continue
             raw_hw = iface[: iface.find("#{")]
-            # USB cameras expose two UVC interfaces (MI_00 video, MI_01 metadata)
-            # - strip &MI_XX so they collapse to the same physical device
             dedup_key = re.sub(r"&MI_\w+", "", raw_hw, flags=re.IGNORECASE)
             devices.append(
                 {
@@ -196,7 +179,6 @@ def _windows_cameras_from_registry():
     finally:
         winreg.CloseKey(key)
     return devices
-
 
 def _windows_camera_name(iface):
     try:
@@ -227,7 +209,6 @@ def _windows_camera_name(iface):
                 if not isinstance(name, str):
                     continue
                 if name.startswith("@"):
-                    # "inf_path,%desc%;Friendly Name" -> drop the locator, keep the friendly part
                     name = name.rsplit(";", 1)[-1] if ";" in name else ""
                 name = name.strip()
                 if name:
@@ -236,8 +217,6 @@ def _windows_camera_name(iface):
             winreg.CloseKey(key)
         return None
 
-    # Each # in the interface path maps to \ in the registry Enum path:
-    #   USB#VID_xxx&PID_yyy&MI_00#instance_id -> Enum\USB\VID_xxx&PID_yyy&MI_00\instance_id
     parts = body.split("#")
     if len(parts) < 3:
         return None
@@ -248,7 +227,6 @@ def _windows_camera_name(iface):
     if name and name.lower() not in _GENERIC_WINDOWS_NAMES:
         return name
 
-    # generic iface name -> real one usually lives on the parent usb node, not the uvc iface
     m = re.match(r"^USB\\(VID_\w+&PID_\w+)(?:&MI_\w+)?$", hw_id, re.IGNORECASE)
     if m:
         parent_hw = f"USB\\{m.group(1)}"
@@ -271,19 +249,10 @@ def _windows_camera_name(iface):
                 winreg.CloseKey(parent_key)
     return name or None
 
-
-# the DeviceClasses registry key keeps entries for cameras unplugged long ago -
-# those ghosts pollute the device list and shift every MSMF index. DIGCF_PRESENT
-# + SetupDiEnumDeviceInterfaces returns exactly what exists right now, and the
-# SP_DEVINFO_DATA gives us the instance id to match ghosts with.
-
 _DIGCF_PRESENT = 0x2
 _DIGCF_DEVICEINTERFACE = 0x10
 
-
 def _windows_present_camera_instance_ids():
-    # instance ids (USB\VID..&PID..&MI_00\..) of cameras plugged in right now,
-    # or None when we cant tell - caller falls back to the registry list
     try:
         import ctypes
         import ctypes.wintypes as wt
@@ -362,7 +331,6 @@ def _windows_present_camera_instance_ids():
                     hdevs, ctypes.byref(ifd), None, 0,
                     ctypes.byref(req), ctypes.byref(devinfo),
                 )
-                # '\\?\...' wide path, plus room for a long instance id
                 size = max(req.value, 2048)
                 buf = ctypes.create_string_buffer(size + 8)
                 (ctypes.c_uint.from_buffer(buf)).value = 8
@@ -378,16 +346,11 @@ def _windows_present_camera_instance_ids():
                     ids.add(instance.value.casefold())
         finally:
             setupapi.SetupDiDestroyDeviceInfoList(hdevs)
-        # empty result is ambiguous (no cameras? silent api failure?) - leave
-        # the caller to fall back to the registry list
         return ids or None
     except Exception:
         return None
 
-
 def _windows_camera_is_present(cam, present_ids):
-    # registry interface path:  ##?#USB#VID_x&PID_y&MI_00#instance#{guid}
-    # present instance id:      USB\VID_x&PID_y&MI_00\instance
     body = cam.get("hw_id") or ""
     if not body:
         return False
@@ -397,7 +360,6 @@ def _windows_camera_is_present(cam, present_ids):
             break
     return body.replace("#", "\\").casefold() in present_ids
 
-
 def _probe_index_devices(claimed):
     devices = []
     for i in range(0, 10):
@@ -405,9 +367,6 @@ def _probe_index_devices(claimed):
             devices.append({"path": str(i), "name": f"Camera {i}", "device_id": None})
             continue
         try:
-            # OpenCV prints some open failures via perror() straight to stderr
-            # (see _silence_stderr) - keep the UI probe log clean for the
-            # /dev/video* indices that aren't cameras.
             with _silence_stderr():
                 cap = cv2.VideoCapture(i, cv2.CAP_ANY)
                 if cap is not None and cap.isOpened():
@@ -426,16 +385,7 @@ def _probe_index_devices(claimed):
             continue
     return devices
 
-
 def _windows_dshow_device_names() -> list[str]:
-    """Return DirectShow video device names in the order OpenCV enumerates them.
-
-    The registry-based discovery below assumes its enumeration order matches
-    OpenCV's DirectShow index order, which is not always true (e.g. on some
-    laptops the built-in camera sorts before an attached USB camera in
-    DirectShow but not in the registry). Enumerating DirectShow directly gives
-    the authoritative order so source indices stop being swapped.
-    """
     try:
         import ctypes
 
@@ -492,7 +442,6 @@ def _windows_dshow_device_names() -> list[str]:
             return ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
 
         names = []
-        # CreateClassEnumerator
         CreateClassEnumerator = ctypes.WINFUNCTYPE(
             ctypes.c_long,
             ctypes.c_void_p,
@@ -524,7 +473,6 @@ def _windows_dshow_device_names() -> list[str]:
 
                 propbag = ctypes.c_void_p()
                 mon_vt = vt(moniker)
-                # BindToStorage is at index 9 in the IMoniker vtable
                 for idx in (8, 9, 10):
                     try:
                         BindToStorage = ctypes.WINFUNCTYPE(
@@ -575,22 +523,16 @@ def _windows_dshow_device_names() -> list[str]:
     except Exception:
         return []
 
-
 def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
     claimed = {str(s) for s in (claimed_sources or [])}
     devices = []
     system_name = platform.system()
 
     if system_name == "Linux":
-        # one entry per physical device, not per node: uvc cams have a
-        # metadata companion node (video0+video1) and codec/radio nodes
-        # pollute the glob - QUERYCAP filters + sysfs identity dedupes
         seen_keys = set()
         for label, nodes in _linux_device_groups():
             capture = [n for n in nodes if _linux_is_capture_node(n)]
             if not capture:
-                # nodes where caps couldn't be read - include only if sysfs
-                # name doesn't scream "not a camera" (codec/encoder/decoder)
                 capture = [
                     n
                     for n in nodes
@@ -598,7 +540,6 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
                     and not _linux_is_known_non_camera(n)
                 ]
             if not capture:
-                # all nodes confirmed non-capture (encoder/codec/radio...) - skip the group
                 continue
             node = sorted(capture)[0]
             key = _linux_device_key(node) or _linux_sysfs_name(node) or node
@@ -613,7 +554,6 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
                 }
             )
 
-        # catch whatever grouping missed - still drop non-capture nodes + dupes
         for path in sorted(glob.glob("/dev/video*")):
             is_capture = _linux_is_capture_node(path)
             if is_capture is False:
@@ -633,13 +573,6 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
             )
 
     elif system_name == "Windows":
-        # no index probing - MSMF cant open by index, every attempt spams
-        # "VIDEOIO(MSMF)..." to stderr, and discover reruns on refresh so
-        # it'd spam forever.
-        # DeviceClasses keeps entries for unplugged cameras (ghosts), so
-        # drop anything not physically present and renumber by position
-        # among present devices - once a USB camera is unplugged the
-        # registry order stops matching CAP_MSMF index order.
         present = _windows_present_camera_instance_ids()
         seen_interfaces = set()
         present_cams = []
@@ -652,9 +585,6 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
             seen_interfaces.add(dedup)
             present_cams.append(cam)
 
-        # Prefer DirectShow's own enumeration order, which is the order OpenCV
-        # uses for CAP_DSHOW indices. Fall back to registry order when DirectShow
-        # enumeration is unavailable.
         dshow_names = [n.strip().lower() for n in _windows_dshow_device_names()]
         name_to_index = {}
         for i, n in enumerate(dshow_names):
@@ -675,7 +605,6 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
             for dn, di in name_to_index.items():
                 dwords = _norm_words(dn)
                 overlap = len(cwords & dwords)
-                # ignore very generic tokens so a lone "camera" doesn't match everything
                 distinctive = (cwords & dwords) - {"camera", "usb", "video", "device"}
                 if distinctive and overlap > best_overlap:
                     best_overlap = overlap
@@ -687,8 +616,6 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
                     return di
             return None
 
-        # Assign each camera an index: matched -> its DirectShow position,
-        # unmatched -> the next free slot after all matched positions.
         assigned = []
         used = set()
         for cam in present_cams:
@@ -714,7 +641,6 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
             )
 
     else:
-        # macos / other: best-effort /dev/video glob + index probing
         for path in sorted(glob.glob("/dev/video*")):
             devices.append(
                 {
@@ -727,7 +653,6 @@ def probe_opencv_devices(claimed_sources: set | None = None) -> list[dict]:
         if not devices:
             devices = _probe_index_devices(claimed)
 
-    # dedupe
     seen = {}
     for dev in devices:
         key = dev.get("device_id") or dev.get("path")

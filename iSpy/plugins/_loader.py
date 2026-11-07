@@ -5,7 +5,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 def load_plugins(plugin_dir: Path, base_class) -> dict[str, type]:
     plugins = {}
 

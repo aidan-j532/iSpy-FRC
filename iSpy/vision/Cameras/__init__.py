@@ -18,10 +18,8 @@ CAMERA_TYPE_LABELS = {
     "replay": "Rollback Replay",
 }
 
-
 def get_camera_classes() -> dict[str, type[CameraBase]]:
     return dict(BUILTIN_CAMERAS)
-
 
 def get_camera_class(camera_type: str | None = None) -> type[CameraBase]:
     if camera_type is None:
@@ -33,7 +31,6 @@ def get_camera_class(camera_type: str | None = None) -> type[CameraBase]:
             f"{', '.join(sorted(BUILTIN_CAMERAS))}"
         )
     return cls
-
 
 def create_camera(
     camera_config,

@@ -46,47 +46,23 @@ COCO17_OBJECT_POINTS = [
 
 _STALE_EVICT_S = 10.0
 _FEED_TIMEOUT_S = 15.0
-# how long a recent MJPEG pull keeps counting as "someone is watching"
 _FEED_VIEWER_GRACE_S = 3.0
 
-# auto-capture loop: the wizard's live feed stores a board frame by itself once
-# it is complete enough and moved from every prior capture, and runs a rolling
-# solve for a live RMS readout - the user just keeps moving the board around in
-# front of the camera until they pause and calibrate intrinsics
 _AUTO_CAPTURE_MIN_SOLVE = 6
 _AUTO_COVERAGE_MIN = 0.6
 _AUTO_DIVERSITY_PX = 12.0
 
-# live calibration feed tuning: board detection is by far the most expensive
-# step, so it runs on a downscaled work copy (corners are mapped back to the
-# full-res pixel space the solve expects) and the served overlay feed is
-# capped in width so JPEG encode stays cheap. Detection runs at a higher res
-# than before (subpixel corner accuracy scales with detection resolution).
 _DETECT_MAX_DIM = 1280
 _FEED_MAX_DIM = 1280
-# overlay feeds hold their opening chunk until the detector's first tick (or
-# this deadline) so the first frame served is already annotated
 _CALIB_FEED_WARMUP_S = 1.5
-# the rolling solve is the other big periodic CPU spike - left unchecked it
-# re-runs a full bundle solve on every captured frame (every ~0.25-0.5s while
-# the board is being moved), which stutters the live feed. The native OpenCV
-# solver is ~30x faster than the scipy bundle, so the budget here is much
-# tighter than before: solve on a short cadence (RMS preview converges almost
-# as fast as captures accumulate) but still bound the number of frames.
 _AUTO_SOLVE_INTERVAL_S = 0.75
 _AUTO_SOLVE_MAX_CAPTURES = 10
-# how many captured-frame overlays to draw on each streamed frame (see
-# _draw_captured_overlays - captures never stop accumulating under auto capture)
 _MAX_OVERLAYS_DRAWN = 20
 
 logger = logging.getLogger(__name__)
 
-# legacy alias keys - dropped when the canonical key is present so old configs
-# dont carry dead twins around forever
 _SETTING_ALIASES = {"quantized": "quantize", "auto_opt": "optimize"}
 
-# image tuning knobs (sliders in the camera lightbox). these live on the cam
-# entry like the other capture keys; the live Camera applies them immediately
 _TUNING_KEYS = (
     "brightness",
     "contrast",
@@ -108,13 +84,11 @@ _TUNING_DEFAULTS = {
     "gain": 200,
 }
 
-
 def _to_float(value, default: float = 0.0) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
         return default
-
 
 def _camera_calibrated(entry: dict) -> bool:
     if not isinstance(entry, dict):
@@ -126,7 +100,6 @@ def _camera_calibrated(entry: dict) -> bool:
         or _to_float(calib.get("fov")) > 0
     )
 
-
 def _decode_base64_frame(image_b64):
     if isinstance(image_b64, str) and image_b64.startswith("data:"):
         image_b64 = image_b64.split(",", 1)[-1]
@@ -136,7 +109,6 @@ def _decode_base64_frame(image_b64):
         return cv2.imdecode(arr, cv2.IMREAD_COLOR)
     except Exception:
         return None
-
 
 def _pipeline_schema_keys(pipeline_name: str) -> set:
     try:
@@ -152,7 +124,6 @@ def _pipeline_schema_keys(pipeline_name: str) -> set:
     except Exception:
         return set()
     return set(schema) | {"vision_model"}
-
 
 def _prune_stale_pipeline_settings(entry: dict) -> None:
     if not isinstance(entry, dict):
@@ -181,7 +152,6 @@ def _prune_stale_pipeline_settings(entry: dict) -> None:
         if alias in settings and canonical in settings:
             del settings[alias]
 
-
 def _vision_model_target_format(settings: dict) -> str:
     fmt = str(settings.get("target_format") or "auto").strip().lower()
     if fmt and fmt != "auto":
@@ -193,7 +163,6 @@ def _vision_model_target_format(settings: dict) -> str:
     except Exception:
         return "onnx"
 
-
 def _vision_model_rel_path(path) -> str:
     p = Path(str(path or ""))
     if p.is_absolute():
@@ -202,7 +171,6 @@ def _vision_model_rel_path(path) -> str:
         except ValueError:
             return str(p)
     return p.as_posix()
-
 
 def _resolve_vision_model_files(settings: dict) -> None:
     vm = settings.get("vision_model")
@@ -220,7 +188,6 @@ def _resolve_vision_model_files(settings: dict) -> None:
     vm["source_pt"] = pt_rel
     vm["file_path"] = artifact or pt_rel
 
-
 def _profile_pipeline_class(pipeline_name: str):
     try:
         from iSpy.vision.pipelines import get_pipeline_classes
@@ -231,7 +198,6 @@ def _profile_pipeline_class(pipeline_name: str):
     if cls is None or not getattr(cls, "uses_model_profile", lambda: False)():
         return None
     return cls
-
 
 def _save_model_profile(config, pipeline_name: str, settings: dict) -> None:
     cls = _profile_pipeline_class(pipeline_name)
@@ -249,7 +215,6 @@ def _save_model_profile(config, pipeline_name: str, settings: dict) -> None:
     except Exception:
         pass
 
-
 _MEDIA_SUFFIXES = {
     ".png",
     ".jpg",
@@ -263,7 +228,6 @@ _MEDIA_SUFFIXES = {
     ".mov",
     ".mkv",
 }
-
 
 def _source_is_stream_or_file(source) -> bool:
     text = str(source if source is not None else "").strip()
@@ -280,13 +244,7 @@ def _source_is_stream_or_file(source) -> bool:
     except OSError:
         return False
 
-
 def _camera_source_available(config, source, device_id=None) -> bool:
-    """True when a new physical camera source is present right now.
-
-    Explicit streams and image/video files keep working without discovery;
-    bare device indexes and /dev/video paths must match a detected device.
-    """
     if _source_is_stream_or_file(source):
         return True
     claimed = set()
@@ -306,7 +264,6 @@ def _camera_source_available(config, source, device_id=None) -> bool:
         if str(device.get("path") or "").strip() == source_text:
             return True
     return False
-
 
 class CamerasModule(WebModule):
     plugin_name = "cameras"
@@ -328,8 +285,6 @@ class CamerasModule(WebModule):
         self._auto_discover_thread: threading.Thread | None = None
         self._sse_lock = threading.Lock()
         self._sse_clients: list = []
-        # last pull time per camera's MJPEG stream - the loop uses this (plus
-        # the page's device SSE) to decide what's worth building
         self._feed_seen: dict[str, float] = {}
 
     def has_viewers(self, now: float = 0.0) -> bool:
@@ -664,7 +619,6 @@ class CamerasModule(WebModule):
         has_intrinsics = bool(calib.get("camera_matrix") and calib.get("dist_coeffs"))
         existing_pnp = vm.get("pnp") if isinstance(vm, dict) else None
 
-        # Auto-fill COCO17 defaults for shipped pose models
         default_object_points = None
         if num_kpts == 17 and not existing_pnp:
             fp = (vm or {}).get("file_path", "") or ""
@@ -778,8 +732,6 @@ class CamerasModule(WebModule):
             performance.get_profile().skip_web_without_viewers
             and not self.has_viewers(now)
         ):
-            # nobody has the page (or a feed) open - holding every camera frame
-            # every tick feeds zero readers
             return
         with self.lock:
             if per_cam:
@@ -828,10 +780,6 @@ class CamerasModule(WebModule):
     def _get_profile(self, device_id):
         profiles = read("camera_profiles", {})
         return jsonify(profile=profiles.get(device_id))
-
-    # ------------------------------------------------------------------
-    # Camera image tuning (live sliders in the lightbox)
-    # ------------------------------------------------------------------
 
     def _tuning_values(self, entry: dict) -> dict:
         values = dict(_TUNING_DEFAULTS)
@@ -900,7 +848,6 @@ class CamerasModule(WebModule):
         )
 
     def _persist_live_settings(self, key: str, inst) -> dict:
-        # write settings changed by a camera action back to config
         taker = getattr(inst, "take_pending_settings", None)
         if not callable(taker):
             return {}
@@ -939,7 +886,6 @@ class CamerasModule(WebModule):
             }
         except Exception:
             declared = set()
-        # only dispatch actions the pipeline declared
         if action_id not in declared:
             return jsonify(error=f"Unknown action '{action_id}'"), 404
 
@@ -999,7 +945,6 @@ class CamerasModule(WebModule):
         if cls is None:
             return jsonify(error=f"Unknown pipeline '{pipeline_name}'"), 404
         schema = cls.config_schema() or {}
-        # only allow keys that exist in the schema
         allowed = {name: value for name, value in data.items() if name in schema}
         if not allowed:
             return jsonify(error="No pipeline settings provided"), 400
@@ -1048,7 +993,6 @@ class CamerasModule(WebModule):
             return jsonify(error="x and y must be numbers"), 400
 
         frame_h, frame_w = frame.shape[:2]
-        # click is in displayed pixels, map it back to the frame
         disp_w = _to_float(request.args.get("w"), frame_w) or frame_w
         disp_h = _to_float(request.args.get("h"), frame_h) or frame_h
         px = int(round(x * frame_w / disp_w))
@@ -1056,7 +1000,6 @@ class CamerasModule(WebModule):
         px = min(max(px, 0), frame_w - 1)
         py = min(max(py, 0), frame_h - 1)
 
-        # median of a small patch avoids hot pixels
         patch = frame[max(0, py - 2) : min(frame_h, py + 3), max(0, px - 2) : min(frame_w, px + 3)]
         if patch.size == 0:
             return jsonify(error="Sample is outside the frame"), 400
@@ -1073,8 +1016,6 @@ class CamerasModule(WebModule):
         )
 
     def _camera_schemas(self):
-        # Serve each camera-source's config_schema() straight from the backend
-        # so the frontend never hardcodes a second copy that can drift (BUG 5).
         from iSpy.vision.Cameras import get_camera_classes
 
         schemas = {}
@@ -1084,10 +1025,6 @@ class CamerasModule(WebModule):
             except Exception:
                 schemas[cam_type] = {}
         return jsonify(schemas=schemas)
-
-    # ------------------------------------------------------------------
-    # Model profiles (auto-saved pipeline settings, see _save_model_profile)
-    # ------------------------------------------------------------------
 
     def _model_profiles(self, pipeline):
         cls = _profile_pipeline_class(pipeline)
@@ -1132,10 +1069,6 @@ class CamerasModule(WebModule):
             return jsonify(error="Profile not found"), 404
         return jsonify(success=True)
 
-    # ------------------------------------------------------------------
-    # Camera calibration (web wizard)
-    # ------------------------------------------------------------------
-
     def _save_calibration(self, cam_name: str, calib_dict: dict):
         config = self.context["config"]
         cams, key, entry = self._find_camera_entry(cam_name)
@@ -1146,16 +1079,10 @@ class CamerasModule(WebModule):
         entry["calibration"] = merged
         config.set("camera_configs", cams)
         config.save()
-        # the running pipeline holds a snapshot of its camera config from
-        # vision start, so the config-only save above leaves it reporting
-        # "needs calibration" until a restart. poke the live copy so the
-        # status (and the detection gating) flip without one.
         self._push_calibration_live(key, merged)
         return merged
 
     def _live_camera_for(self, cam_key: str):
-        # live_cameras is keyed by display name, which can differ from the
-        # config key - match on the entry's name/source too
         cam = self.live_cameras.get(cam_key)
         if cam is not None:
             return cam
@@ -1227,8 +1154,6 @@ class CamerasModule(WebModule):
         entry["calibration"] = saved
         config.set("camera_configs", cams)
         config.save()
-        # same live-sync as the save path - a reset has to clear the running
-        # pipeline's snapshot too, or it keeps saying it's calibrated
         self._push_calibration_live(key, saved)
         return jsonify(success=True, calibration=saved)
 
@@ -1291,13 +1216,6 @@ class CamerasModule(WebModule):
         if cam is not None and hasattr(cam, "calibration_heartbeat"):
             cam.calibration_heartbeat()
         return jsonify(success=True)
-
-    # ------------------------------------------------------------------
-    # Auto capture: the live feed stores diverse board frames by itself and
-    # runs a rolling solve for a live RMS readout. It never stops or saves on
-    # its own - it keeps going until the user pauses, then the wizard's
-    # "Calibrate intrinsics" button saves over the captured frames.
-    # ------------------------------------------------------------------
 
     def _auto_set(self, cam_name):
         data = request.get_json(force=True) or {}
@@ -1497,9 +1415,6 @@ class CamerasModule(WebModule):
         with self.calib_lock:
             session = self.calib_sessions.get(key) or {}
             layers = session.get("charuco_overlays", [])
-            # captures accumulate for as long as auto capture is enabled, so
-            # cap what gets drawn per streamed frame - drawing every capture
-            # ever made would eventually starve the feed thread
             layers = list(layers[-_MAX_OVERLAYS_DRAWN:])
         if not layers:
             return frame
@@ -1581,9 +1496,6 @@ class CamerasModule(WebModule):
                             matched_pattern = cand
                             break
                     if not found:
-                        # nothing matched the session/requested layout - sweep
-                        # common layouts and dictionaries so a board printed
-                        # outside the defaults is still picked up live
                         afound, acorners, aids, amc, ami, _, apat, adict = (
                             cam_calibration.detect_charuco_auto(
                                 work,
@@ -1656,8 +1568,6 @@ class CamerasModule(WebModule):
             warmup_deadline = (
                 (time.monotonic() + _CALIB_FEED_WARMUP_S) if overlay == "charuco" else 0
             )
-            # hold chunks until the detector's first tick so the opening frame
-            # of an overlay feed is already annotated rather than raw
             while overlay == "charuco" and time.monotonic() < warmup_deadline:
                 with result_lock:
                     ready = latest["detect"] is not None
@@ -1691,9 +1601,6 @@ class CamerasModule(WebModule):
                     to_serve = self._draw_captured_overlays(
                         to_serve, cam_name, "charuco"
                     )
-                # overlay feeds are diagnostic - serve them capped in width so
-                # JPEG encode stays cheap. The plain feed (focal measurement)
-                # keeps full resolution: the UI reads the frame width from it.
                 serve_frame = to_serve
                 if overlay and _FEED_MAX_DIM:
                     w = to_serve.shape[1]
@@ -1730,9 +1637,6 @@ class CamerasModule(WebModule):
         preferred_pattern = session_pattern or tuple(
             cam_calibration.DEFAULT_CHARUCO_PATTERN
         )
-        # always sweep: a compatible-but-wrong grid can match the visible
-        # corners, so let the scan rank candidates instead of trusting the
-        # preferred layout blindly
         found, corners, ids, marker_corners, marker_ids, _, apat, adict = (
             cam_calibration.detect_charuco_auto(
                 frame,
@@ -1781,9 +1685,6 @@ class CamerasModule(WebModule):
             if frame is None:
                 return jsonify(error="Could not decode image"), 400
         else:
-            # no image posted - detect on the live camera's raw frame so the
-            # board detection runs on a clean frame instead of the overlaid
-            # one shown in the wizard feed
             cam = self.live_cameras.get(cam_name)
             if cam is None or not hasattr(cam, "get_raw_frame"):
                 return jsonify(error="Camera not live - start vision first"), 400
@@ -1883,7 +1784,6 @@ class CamerasModule(WebModule):
         source = data.get("source")
         camera_type = data.get("camera_type", "opencv")
 
-        # Auto-fill source for Tello cameras
         if camera_type == "tello" and (source is None or source == ""):
             video_port = data.get("tello_video_port", 11111)
             source = f"udp://0.0.0.0:{video_port}"
@@ -1910,7 +1810,6 @@ class CamerasModule(WebModule):
                 )
             ), 400
 
-        # refuse to add a device already claimed by another configured cam
         if device_id:
             for existing in cams.values():
                 if existing.get("device_id") == device_id:
@@ -1926,9 +1825,6 @@ class CamerasModule(WebModule):
             pipeline_name = str(raw_pipeline or "object_detection")
             pipeline_settings = {}
 
-        # calibration is edited through the dedicated wizard, not the add/edit
-        # form anymore - when re-adding a device that was removed before,
-        # carry its last saved calibration over from the profile
         calibration = data.get("calibration")
         if not calibration and device_id:
             profile = (read("camera_profiles", {}) or {}).get(device_id)
@@ -1937,7 +1833,6 @@ class CamerasModule(WebModule):
             ):
                 calibration = profile["calibration"]
 
-        # Build cam_entry from ALL core keys provided in data
         cam_entry = {
             "name": name,
             "source": source,
@@ -1947,20 +1842,16 @@ class CamerasModule(WebModule):
             or {"distance": 0, "game_piece_size": 0, "size": 0, "fov": 0},
             "pipeline": {"name": pipeline_name, "settings": pipeline_settings},
         }
-        # Copy all _CAMERA_CORE_KEYS from data if present (explicitly provided)
         for k in _CAMERA_CORE_KEYS:
             if k in data and data[k] is not None:
                 cam_entry[k] = data[k]
 
-        # model-backed pipelines crash at construction without a vision_model
-        # block - accept the picker dict, a raw path, or let ensure_camera_entries_ready drop one in
         vm = data.get("vision_model")
         if isinstance(vm, dict) and vm.get("file_path"):
             pipeline_settings["vision_model"] = vm
         elif isinstance(vm, str) and vm:
             pipeline_settings["vision_model"] = {"file_path": vm, "source_pt": vm}
 
-        # Anything not in core keys goes to pipeline settings
         handled = _CAMERA_CORE_KEYS | {"pipeline", "vision_model", "camera_type"}
         for k, v in data.items():
             if k not in handled:
@@ -1974,8 +1865,6 @@ class CamerasModule(WebModule):
         ensure_camera_entries_ready({name: cam_entry})
         _prune_stale_pipeline_settings(cam_entry)
         cams[name] = cam_entry
-        # validated model settings are remembered as a profile so another
-        # camera can re-use them verbatim from the Load Profile tab
         _save_model_profile(config, pipeline_name, get_pipeline_settings(cam_entry))
         config.set("camera_configs", cams)
         config.save()
@@ -2054,8 +1943,6 @@ class CamerasModule(WebModule):
                 else:
                     new_entry[key] = value
                 continue
-            # everything else is a pipeline settings-field - route it into
-            # pipeline.settings so stale top-level keys cant reappear
             pipeline_entry.setdefault("settings", {})[key] = value
 
         new_name = str(new_entry.get("name") or "").strip()
@@ -2083,8 +1970,6 @@ class CamerasModule(WebModule):
         except Exception:
             pass
 
-        # switching onto a model-backed pipeline needs a vision_model block
-        # or the new pipeline instance crashes at construction
         if is_model_backed_pipeline(pipeline_name) and not isinstance(
             pipeline_entry.get("settings", {}).get("vision_model"), dict
         ):
@@ -2092,8 +1977,6 @@ class CamerasModule(WebModule):
                 default_vision_model()
             )
 
-        # a model pick must move both source_pt and file_path together, or the
-        # camera keeps running the old model (stale artifact from a previous pick)
         if model_picked and is_model_backed_pipeline(pipeline_name):
             _resolve_vision_model_files(pipeline_entry.setdefault("settings", {}))
 
@@ -2106,7 +1989,6 @@ class CamerasModule(WebModule):
         config.set("camera_configs", cams)
         config.save()
 
-        # settings apply on the next vision start - never rebuild the running pipeline mid-run
         warning = None
         if (
             str(new_entry.get("camera_type") or "opencv") == "tello"
@@ -2208,14 +2090,7 @@ class CamerasModule(WebModule):
                 payload["streaming"] = True
                 cameras.append(payload)
 
-            # configured-but-idle cameras would otherwise vanish from the grid
-            # (they only ever appear while frames are flowing), which reads as
-            # "no cameras" on a machine whose camera is simply not streaming -
-            # list them so the page shows a card even before vision starts.
             for name, entry in configured.items():
-                # a camera streams under its display name, which can differ
-                # from the config key (name "Front Camera" under key "front") -
-                # don't list it twice (once live, once "Not streaming")
                 if name in streamed or (entry.get("name") and entry.get("name") in streamed):
                     continue
                 payload = {
@@ -2249,8 +2124,6 @@ class CamerasModule(WebModule):
                 self._discover_cache = devices
                 self._discover_cache_ts = now
 
-        # a discovered device is active when its device_id (or raw source if
-        # resolution failed) matches a configured cam
         config = self.context.get("config")
         configured_device_ids = set()
         configured_sources = set()
@@ -2308,15 +2181,11 @@ class CamerasModule(WebModule):
         )
 
     def _generate(self, camera_name):
-        # the profile owns the preview pace: fps, quality and an optional width
-        # cap, all shrinking the encode+network cost per open viewer
         profile = performance.get_profile()
         target_interval = 1.0 / max(profile.mjpeg_fps, 0.1)
         quality = int(profile.mjpeg_quality)
         max_width = profile.mjpeg_max_width
         last_frame_time = time.monotonic()
-        # count the pull now, or the frame store keeps skipping writes (nobody
-        # watching) while this generator waits for one
         self._feed_seen[camera_name] = time.monotonic()
         try:
             while True:

@@ -1,4 +1,5 @@
-"""Persistent, isolated environments for model conversion."""
+
+"""persistent, isolated environments for model conversion."""
 
 from __future__ import annotations
 
@@ -18,18 +19,14 @@ from typing import Callable
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Registry types
-# ---------------------------------------------------------------------------
-
 WheelResolver = Callable[[str, str], str | None]
 
-# RKNN full toolkit + torch is roughly 1-2 GiB; 6 GiB leaves room for pip's
-# unpack/temp copies.  The old 8 GiB floor rejected 8 GB boards even though
-# the install fits.
+# rknn full toolkit + torch is roughly 1-2 GiB; 6 GiB leaves room for pip's
+# unpack/temp copies. the old 8 GiB floor rejected 8 GB boards even though the
+# install fits
 DEFAULT_MIN_FREE_BYTES = 6 * 1024 ** 3
-# TensorFlow 2.19 + onnx2tf + torch is a ~4 GiB install, so TFLite gets its
-# own slightly lower floor instead of inheriting the RKNN one.
+# tensorflow 2.19 + onnx2tf + torch is a ~4 GiB install, so tflite gets its
+# own slightly lower floor instead of inheriting the rknn one
 _TFLITE_MIN_FREE_BYTES = 5 * 1024 ** 3
 _LIGHT_VERIFY_INTERVAL = 24 * 60 * 60
 _SPACE_ERRORS = (
@@ -48,20 +45,17 @@ _PIP_INSTALL_TIMEOUT = 1800
 _VERIFY_TIMEOUT = 300
 _LIGHT_VERIFY_TIMEOUT = 120
 
-
 class ConverterEnvError(RuntimeError):
-    """Raised when a converter environment cannot be provisioned or found."""
-
+    # raised when a converter env cant be provisioned or found
+    pass
 
 @dataclass(frozen=True)
 class EnvSpec:
-    """Description of one conversion-only environment.
-
-    ``wheel_resolver`` is optional: formats whose vendor wheel is not on PyPI
-    can prepend a direct URL before the normal requirements.  A spec with a
-    non-empty ``manual_install_hint`` is registry-visible and ``needs_env`` is
-    true, but it is never auto-provisioned with pip.
-    """
+    # description of one conversion-only env.
+    # wheel_resolver optional: formats whose vendor wheel isnt on pypi can
+    # prepend a direct url before the normal requirements. a spec with a
+    # non-empty manual_install_hint is registry-visible and needs_env is true,
+    # but never auto-provisioned with pip
 
     format: str
     reason: str
@@ -75,11 +69,6 @@ class EnvSpec:
     supported: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     manual_install_hint: str = ""
     light_verify_interval: int = _LIGHT_VERIFY_INTERVAL
-
-
-# ---------------------------------------------------------------------------
-# RKNN toolkit details
-# ---------------------------------------------------------------------------
 
 RKNN_TOOLKIT_VERSION = "2.3.2"
 _RKNN_FULL_BASE = (
@@ -95,25 +84,25 @@ RKNN_FULL_WHEELS: dict[tuple[str, str], str] = {
     ("x86_64", "cp312"): f"rknn_toolkit2-{RKNN_TOOLKIT_VERSION}-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
 }
 
+# match rknn-toolkit2 2.3.2's own metadata exactly. ranges here let a later
+# resolver pass replace protobuf with 5/6/7, and onnx 1.16 then crashes
+# inside rknn.build() because FieldDescriptor.label is gone
 _RKNN_REQUIREMENTS: tuple[str, ...] = (
-    # Match rknn-toolkit2 2.3.2's own METADATA exactly.  Ranges here let a
-    # later resolver pass replace protobuf with 5/6/7, and onnx 1.16 then
-    # crashes inside rknn.build() because FieldDescriptor.label is gone.
     "numpy==1.26.4",
     "scipy>=1.10.0,<1.15",
     "onnx==1.16.1",
     "protobuf==4.25.4",
-    # setuptools 82 removed pkg_resources; the toolkit still imports it.
+    # setuptools 82 removed pkg_resources; the toolkit still imports it
     "setuptools>=64,<82",
-    # torchvision 0.17.x is the matching build for torch 2.2.0; without the
-    # pin pip can pull a newer torchvision that upgrades torch past the
-    # version rknn-toolkit2 2.3.2 declares support for.
     "torch==2.2.0",
+    # torchvision 0.17.x is the matching build for torch 2.2.0; without the pin
+    # pip can pull a newer torchvision that upgrades torch past the version
+    # rknn-toolkit2 2.3.2 declares support for
     "torchvision==0.17.0",
-    # The toolkit wheel is installed with --no-deps, so its remaining METADATA
+    # the toolkit wheel is installed with --no-deps, so its remaining metadata
     # requirements must be listed here or rknn.build() fails at runtime.
-    # onnxruntime 1.23.0 is the newest release that still supports CPython
-    # 3.10 and does not require protobuf>=4.25.8 (which would break onnx 1.16).
+    # onnxruntime 1.23.0 is the newest release that still supports cpython 3.10
+    # and does not require protobuf>=4.25.8 (which would break onnx 1.16)
     "onnxruntime==1.23.0",
     "fast-histogram==0.14",
     "psutil>=5.9.0",
@@ -130,9 +119,9 @@ _RKNN_VERIFY_SCRIPT = "\n".join(
         "import numpy; assert numpy.__version__ == '1.26.4', numpy.__version__",
         "import scipy",
         "import onnx; assert onnx.__version__ == '1.16.1', onnx.__version__",
-        # Exercise the exact API rknn.build() uses.  onnx 1.16 reads
+        # exercise the exact api rknn.build() uses. onnx 1.16 reads
         # FieldDescriptor.label; protobuf builds that dropped it (>=7) fail
-        # here instead of deep inside the toolkit.
+        # here instead of deep inside the toolkit
         "onnx.helper.strip_doc_string(onnx.ModelProto())",
         "import google.protobuf; assert google.protobuf.__version__ == '4.25.4', google.protobuf.__version__",
         "from ruamel.yaml import YAML",
@@ -163,13 +152,12 @@ _RKNN_LIGHT_VERIFY_SCRIPT = "\n".join(
         "import torch; assert torch.__version__.split('+')[0] == '2.2.0', torch.__version__",
         "torch.from_numpy(numpy.zeros(1, dtype=numpy.float32))",
         # rknn.build() imports onnxruntime lazily during constant folding, so a
-        # missing wheel only surfaces deep inside the toolkit.  Probe it here.
+        # missing wheel only surfaces deep inside the toolkit. probe it here
         "import onnxruntime; assert onnxruntime.__version__ == '1.23.0', onnxruntime.__version__",
         "from rknn.api import RKNN",
         "print('OK')",
     ]
 )
-
 
 def _rknn_wheel_url(arch: str, python_tag: str) -> str:
     key = (arch, python_tag)
@@ -183,29 +171,17 @@ def _rknn_wheel_url(arch: str, python_tag: str) -> str:
         )
     return f"{_RKNN_FULL_BASE}/{filename}"
 
-
-# ---------------------------------------------------------------------------
-# TFLite exporter details
-# ---------------------------------------------------------------------------
-
-# The TFLite exporter is driven by Ultralytics and ultimately by onnx2tf and
-# TensorFlow.  Ultralytics 8.3/8.4 checks for these exact packages; pinning the
-# pair avoids silently accepting TensorFlow 2.20+ (which Ultralytics rejects).
-#
-# Keep this env internally coherent: TensorFlow 2.19 accepts NumPy
-# >=1.26,<2.2, while torch 2.2.0 is the matching build for NumPy 1.26.4.
-# onnx 1.16.1 still reads FieldDescriptor.label, so protobuf stays on 4.25.4
-# here too (protobuf 7 removed it).
-#
-# The env itself still builds on aarch64 because Depth Anything converts ONNX
-# to TFLite with onnx2tf directly.  YOLO .pt export is gated separately by
-# exporter_supported() - Ultralytics' LiteRT exporter only runs on Linux
-# x86_64 and macOS.
+# the tflite exporter is driven by ultralytics and ultimately by onnx2tf and
+# tensorflow. ultralytics 8.3/8.4 checks for these exact packages; pinning the
+# pair avoids silently accepting tensorflow 2.20+ (which ultralytics rejects).
+# keep this env internally coherent: tensorflow 2.19 accepts numpy >=1.26,<2.2,
+# while torch 2.2.0 is the matching build for numpy 1.26.4. onnx 1.16.1 still
+# reads FieldDescriptor.label, so protobuf stays on 4.25.4 here too
 _TFLITE_REQUIREMENTS: tuple[str, ...] = (
     "numpy==1.26.4",
     "protobuf==4.25.4",
-    # setuptools 82 removed pkg_resources, which TensorBoard (pulled in by
-    # TensorFlow) still imports.  Keep the build env's tooling stable.
+    # setuptools 82 removed pkg_resources, which tensorboard (pulled in by
+    # tensorflow) still imports. keep the build env's tooling stable
     "setuptools>=64,<82",
     "tensorflow==2.19.0",
     "tf_keras==2.19.0",
@@ -278,8 +254,6 @@ _HAILO_MANUAL_HINT = (
     "benchmark an existing .hef but never auto-installs vendor SDKs."
 )
 
-#: Explanatory text for every registry entry.  EnvSpec carries its own copy for
-#: env-backed formats; None entries use this table so every format has a reason.
 CONVERTER_ENV_REASONS: dict[str, str] = {
     "rknn": (
         "Full rknn-toolkit2 conversion pins NumPy 1.x, SciPy, protobuf 4.25.x "
@@ -322,18 +296,17 @@ CONVERTER_ENV_REASONS: dict[str, str] = {
     ),
 }
 
-
 CONVERTER_ENVS: dict[str, EnvSpec | None] = {
     "rknn": EnvSpec(
         format="rknn",
         reason=CONVERTER_ENV_REASONS["rknn"],
         toolkit_version=RKNN_TOOLKIT_VERSION,
-        # v9: v8 plus the toolkit's remaining METADATA requirements
-        # (onnxruntime 1.23.0, fast-histogram 0.14, psutil, Pillow).  The
+        # v9: v8 plus the toolkit's remaining metadata requirements
+        # (onnxruntime 1.23.0, fast-histogram 0.14, psutil, pillow). the
         # wheel is installed with --no-deps, so without these rknn.build()
-        # dies in GraphOptimizer.fold_constant with "No module named
-        # 'onnxruntime'".  v8 envs pass their manifest but are missing the
-        # package, so the identity must change to force a rebuild.
+        # dies in GraphOptimizer.fold_constant with "no module named
+        # 'onnxruntime'". v8 envs pass their manifest but are missing the
+        # package, so the identity must change to force a rebuild
         depset_version=9,
         requirements=_RKNN_REQUIREMENTS,
         wheel_resolver=_rknn_wheel_url,
@@ -380,29 +353,21 @@ CONVERTER_ENVS: dict[str, EnvSpec | None] = {
     "coreml": None,
 }
 
-
 def _normalize_format(fmt: str | None) -> str:
     return str(fmt or "").strip().lower()
 
-
 def get_env_spec(fmt: str | None) -> EnvSpec | None:
-    """Return the EnvSpec for *fmt*, or None when conversion stays in-process."""
     return CONVERTER_ENVS.get(_normalize_format(fmt))
 
-
 def needs_env(fmt: str | None) -> bool:
-    """True when conversion for *fmt* runs in a dedicated environment."""
     return isinstance(get_env_spec(fmt), EnvSpec)
 
-
 def converter_env_reason(fmt: str | None) -> str:
-    """Human-readable reason the format does (or does not) have an env."""
     name = _normalize_format(fmt)
     spec = get_env_spec(name)
     if spec is not None and spec.reason:
         return spec.reason
     return CONVERTER_ENV_REASONS.get(name, "unknown conversion format")
-
 
 def _require_env_spec(fmt: str | None) -> EnvSpec:
     name = _normalize_format(fmt)
@@ -416,14 +381,8 @@ def _require_env_spec(fmt: str | None) -> EnvSpec:
         raise ConverterEnvError(f"unknown conversion format: {name or '<empty>'}")
     return spec
 
-
-# ---------------------------------------------------------------------------
-# Paths / identity
-# ---------------------------------------------------------------------------
-
-
 def _cache_root() -> Path:
-    """Return the platform-appropriate base cache directory."""
+    # return the platform-appropriate base cache dir
     override = os.environ.get("ISPY_CONVERTER_ENV_HOME", "").strip()
     if not override:
         override = os.environ.get("ISPY_RKNN_CONVERTER_HOME", "").strip()
@@ -437,7 +396,6 @@ def _cache_root() -> Path:
     xdg = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
     return Path(xdg) / "ispy-frc"
 
-
 def _arch_key() -> str:
     machine = platform.machine().lower()
     if "aarch64" in machine or "arm64" in machine:
@@ -446,36 +404,28 @@ def _arch_key() -> str:
         return "x86_64"
     return machine
 
-
 def _python_tag() -> str:
     return f"cp{sys.version_info.major}{sys.version_info.minor}"
 
-
 def exporter_supported(fmt: str | None) -> bool:
-    """True when the *export toolchain* for *fmt* can run on this platform.
-
-    This is narrower than :func:`needs_env`.  TFLite inference still works on
-    every platform, and the depth-estimation ONNX->TFLite worker calls
-    onnx2tf directly, but the YOLO ``.pt`` exporter cannot run on Linux ARM64:
-    Ultralytics 8.4.83+ replaced its TensorFlow/onnx2tf path with LiteRT,
-    which asserts ``MACOS or (LINUX and not ARM64)``.
-    """
+    # true when the export toolchain for fmt can run on this platform. narrower
+    # than needs_env. tflite inference still works on every platform, and the
+    # depth-estimation onnx->tflite worker calls onnx2tf directly, but the yolo
+    # .pt exporter cannot run on linux arm64: ultralytics 8.4.83+ replaced its
+    # tensorflow/onnx2tf path with litert, which asserts macos or (linux and
+    # not arm64)
     name = _normalize_format(fmt)
     if name == "tflite":
-        # macOS ARM64 is explicitly supported by the LiteRT exporter.
         if sys.platform == "darwin":
             return True
         return _arch_key() != "aarch64"
     return True
 
-
 def _spec_hash(spec: EnvSpec) -> str:
-    """Fingerprint of the dependency set and probes, not just the toolkit.
-
-    Changing a pin or a verify probe must create a new environment
-    automatically.  Relying on a hand-bumped ``depset_version`` is how a
-    stale env can survive a dependency drift on one board but not another.
-    """
+    # fingerprint of the dependency set and probes, not just the toolkit.
+    # changing a pin or a verify probe must create a new env automatically.
+    # relying on a hand-bumped depset_version is how a stale env can survive a
+    # dependency drift on one board but not another
     payload = json.dumps(
         {
             "requirements": list(spec.requirements),
@@ -487,7 +437,6 @@ def _spec_hash(spec: EnvSpec) -> str:
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
-
 def _identity(spec: EnvSpec) -> dict[str, str]:
     return {
         "python_tag": _python_tag(),
@@ -497,47 +446,33 @@ def _identity(spec: EnvSpec) -> dict[str, str]:
         "spec_hash": _spec_hash(spec),
     }
 
-
 def _identity_hash(identity: dict[str, str]) -> str:
     payload = json.dumps(identity, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
-
 def _env_root(spec: EnvSpec) -> Path:
     return _cache_root() / f"{spec.format}_env"
-
 
 def _env_dir(spec: EnvSpec, identity: dict[str, str] | None = None) -> Path:
     identity = identity or _identity(spec)
     return _env_root(spec) / _identity_hash(identity)
 
-
 def env_dir_for(fmt: str, identity: dict[str, str] | None = None) -> Path:
-    """Public path helper used by the CLI and diagnostics."""
     spec = _require_env_spec(fmt)
     return _env_dir(spec, identity)
 
-
 def _manifest_path(env_dir: Path) -> Path:
     return env_dir / "env-manifest.json"
-
 
 def _is_py(env_dir: Path) -> Path:
     if sys.platform == "win32":
         return env_dir / "Scripts" / "python.exe"
     return env_dir / "bin" / "python"
 
-
 def _lock_path(spec: EnvSpec) -> Path:
-    # One lock per format, so RKNN and TFLite can build concurrently while two
-    # callers of the same format still serialize.
+    # one lock per format, so rknn and tflite can build concurrently while two
+    # callers of the same format still serialize
     return _env_root(spec) / "build.lock"
-
-
-# ---------------------------------------------------------------------------
-# Locking
-# ---------------------------------------------------------------------------
-
 
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
@@ -561,10 +496,8 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         return False
 
-
 @contextlib.contextmanager
 def _build_lock(lock_path: Path, timeout: float = 600.0, label: str = "converter"):
-    """Cross-process mutual exclusion for one format's environment build."""
     deadline = time.monotonic() + timeout
     acquired = False
     while time.monotonic() < deadline:
@@ -600,18 +533,11 @@ def _build_lock(lock_path: Path, timeout: float = 600.0, label: str = "converter
         except OSError:
             pass
 
-
-# ---------------------------------------------------------------------------
-# Manifest / validation
-# ---------------------------------------------------------------------------
-
-
 def _read_manifest(env_dir: Path) -> dict | None:
     try:
         return json.loads(_manifest_path(env_dir).read_text())
     except (OSError, ValueError):
         return None
-
 
 def _env_is_current(spec: EnvSpec, env_dir: Path) -> bool:
     if not _is_py(env_dir).exists():
@@ -625,7 +551,6 @@ def _env_is_current(spec: EnvSpec, env_dir: Path) -> bool:
             return False
     return True
 
-
 def _cleanup_orphans(spec: EnvSpec, current_hash: str) -> None:
     root = _env_root(spec)
     if not root.is_dir():
@@ -635,12 +560,6 @@ def _cleanup_orphans(spec: EnvSpec, current_hash: str) -> None:
             continue
         shutil.rmtree(entry, ignore_errors=True)
         logger.info("Removed stale %s converter environment: %s", spec.format, entry)
-
-
-# ---------------------------------------------------------------------------
-# Provisioning helpers
-# ---------------------------------------------------------------------------
-
 
 def _pip_failure_message(spec: EnvSpec, returncode: int, tail: str) -> str:
     lowered = tail.lower()
@@ -690,18 +609,15 @@ def _pip_failure_message(spec: EnvSpec, returncode: int, tail: str) -> str:
     )
     return message
 
-
 def _looks_out_of_space(text: str) -> bool:
     lowered = (text or "").lower()
     return any(sig in lowered for sig in _SPACE_ERRORS)
 
-
 def _proc_text(proc) -> str:
     return f"{proc.stdout or ''}\n{proc.stderr or ''}"
 
-
 def _purge_pip_cache() -> bool:
-    """Blow away the pip download cache so a full disk has room to retry."""
+    # blow away the pip download cache so a full disk has room to retry
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pip", "cache", "purge"],
@@ -719,7 +635,6 @@ def _purge_pip_cache() -> bool:
     logger.info("Purged the pip cache to free disk space.")
     return True
 
-
 def _pip_install(
     spec: EnvSpec,
     py: Path,
@@ -727,7 +642,6 @@ def _pip_install(
     no_deps: bool = False,
     purge_cache: Callable[[], bool] | None = None,
 ) -> None:
-    """Install *requirements* into *py* with one disk-full retry."""
     purge_cache = purge_cache or _purge_pip_cache
     cmd = [
         str(py),
@@ -770,7 +684,6 @@ def _pip_install(
         tail = "\n".join((proc.stderr or proc.stdout or "").strip().splitlines()[-30:])
         raise ConverterEnvError(_pip_failure_message(spec, proc.returncode, tail))
 
-
 def _verify(spec: EnvSpec, py: Path) -> None:
     if not spec.verify_script:
         return
@@ -796,11 +709,9 @@ def _verify(spec: EnvSpec, py: Path) -> None:
             "Use 'ispy env rebuild <format>' to rebuild it."
         )
 
-
 def _light_verify(
     spec: EnvSpec, py: Path, env_dir: Path, interval: int | None = None
 ) -> bool:
-    """Cheap daily sanity check before reusing a cached converter env."""
     stamp = env_dir / ".verified"
     interval = spec.light_verify_interval if interval is None else interval
     if stamp.exists():
@@ -834,10 +745,8 @@ def _light_verify(
         )
     return ok
 
-
 def _supported_text(spec: EnvSpec) -> str:
     return ", ".join(f"{a} {p}" for a, p in spec.supported)
-
 
 def _ensure_supported(spec: EnvSpec) -> None:
     if not spec.supported:
@@ -851,19 +760,16 @@ def _ensure_supported(spec: EnvSpec) -> None:
             "the source .pt model."
         )
 
-
 def _wheel_url(spec: EnvSpec, arch: str | None = None, tag: str | None = None) -> str | None:
     if spec.wheel_resolver is None:
         return None
     return spec.wheel_resolver(arch or _arch_key(), tag or _python_tag())
-
 
 def _safe_wheel_url(spec: EnvSpec) -> str | None:
     try:
         return _wheel_url(spec)
     except Exception:
         return None
-
 
 def _free_bytes(env_dir: Path) -> tuple[int, Path] | None:
     parent = env_dir.parent
@@ -874,13 +780,10 @@ def _free_bytes(env_dir: Path) -> tuple[int, Path] | None:
             continue
     return None
 
-
 def _effective_min_free_bytes(spec: EnvSpec) -> int:
-    """Return the format's disk floor, honoring a per-format override.
-
-    ``ISPY_RKNN_MIN_FREE_GIB`` / ``ISPY_TFLITE_MIN_FREE_GIB`` let an operator
-    adjust the estimate for an unusual filesystem without changing code.
-    """
+    # return the format's disk floor, honoring a per-format override.
+    # ISPY_RKNN_MIN_FREE_GIB / ISPY_TFLITE_MIN_FREE_GIB let an operator
+    # adjust the estimate for an unusual filesystem without changing code
     override = os.environ.get(
         f"ISPY_{spec.format.upper()}_MIN_FREE_GIB", ""
     ).strip()
@@ -898,14 +801,11 @@ def _effective_min_free_bytes(spec: EnvSpec) -> int:
         )
     return spec.min_free_bytes
 
-
 def min_free_bytes(fmt: str) -> int:
-    """Effective build floor for *fmt*; 0 when no auto-provisioned env is used."""
     spec = get_env_spec(fmt)
     if spec is None or spec.manual_install_hint:
         return 0
     return _effective_min_free_bytes(spec)
-
 
 def _check_disk_space(
     spec: EnvSpec,
@@ -947,7 +847,6 @@ def _check_disk_space(
         "ISPY_CONVERTER_ENV_HOME at a different location."
     )
 
-
 def _provision(
     spec: EnvSpec,
     env_dir: Path,
@@ -957,7 +856,7 @@ def _provision(
     verify: Callable[[Path], None] | None = None,
     check_disk_space: Callable[[Path], None] | None = None,
 ) -> Path:
-    """Create and populate one converter environment at *env_dir*."""
+    # create and populate one converter env at env_dir
     env_dir.parent.mkdir(parents=True, exist_ok=True)
     if env_dir.exists():
         shutil.rmtree(env_dir, ignore_errors=True)
@@ -994,9 +893,9 @@ def _provision(
         if verify is None:
             verify = lambda path: _verify(spec, path)  # noqa: E731
 
-        # 1. Optional vendor wheel first, without dependencies.  The pinned
-        #    dependency set follows from PyPI at versions the runtime must not
-        #    receive (RKNN's full toolkit is the canonical example).
+        # 1. optional vendor wheel first, without dependencies. the pinned
+        #    dependency set follows from pypi at versions the runtime must not
+        #    receive (rknn's full toolkit is the canonical example)
         if spec.wheel_resolver is not None:
             url = (
                 wheel_url(spec, _arch_key(), _python_tag())
@@ -1006,14 +905,14 @@ def _provision(
             if url:
                 pip_install(py, url, no_deps=True)
 
-        # 2. The pinned conversion dependency set.
+        # 2. the pinned conversion dependency set
         if spec.requirements:
             pip_install(py, *spec.requirements)
 
-        # 3. Verify the environment can actually import the conversion stack.
+        # 3. verify the env can actually import the conversion stack
         verify(py)
 
-        # 4. Record the manifest only after a fully successful build.
+        # 4. record the manifest only after a fully successful build
         manifest = _identity(spec)
         manifest["format"] = spec.format
         manifest["created"] = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -1029,16 +928,8 @@ def _provision(
         shutil.rmtree(env_dir, ignore_errors=True)
         raise
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 def ispy_source_root() -> Path:
-    """Return the directory that contains the ``iSpy`` package."""
     return Path(__file__).resolve().parents[2]
-
 
 def _offline_error(spec: EnvSpec) -> ConverterEnvError:
     return ConverterEnvError(
@@ -1048,9 +939,7 @@ def _offline_error(spec: EnvSpec) -> ConverterEnvError:
         "over), or turn offline mode off and reboot."
     )
 
-
 def converter_python(fmt: str = "rknn") -> Path:
-    """Return the Python executable of a ready converter environment."""
     spec = _require_env_spec(fmt)
     if spec.manual_install_hint:
         raise ConverterEnvError(
@@ -1088,9 +977,7 @@ def converter_python(fmt: str = "rknn") -> Path:
         _cleanup_orphans(spec, _identity_hash(identity))
         return py
 
-
 def rebuild_env(fmt: str) -> Path:
-    """Force a clean rebuild of *fmt*'s current environment."""
     spec = _require_env_spec(fmt)
     if spec.manual_install_hint:
         raise ConverterEnvError(
@@ -1111,9 +998,7 @@ def rebuild_env(fmt: str) -> Path:
         _cleanup_orphans(spec, _identity_hash(identity))
         return py
 
-
 def remove_env(fmt: str) -> bool:
-    """Delete all identities and files for one format."""
     spec = _require_env_spec(fmt)
     root = _env_root(spec)
     if not root.exists():
@@ -1143,13 +1028,12 @@ def remove_env(fmt: str) -> bool:
         pass
     return removed
 
-
 def _dir_size(path: Path) -> int:
     if not path.exists():
         return 0
     total = 0
     for root, dirs, files in os.walk(path):
-        # Do not follow directory symlinks out of the env.
+        # do not follow directory symlinks out of the env
         dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
         for name in files:
             try:
@@ -1157,7 +1041,6 @@ def _dir_size(path: Path) -> int:
             except OSError:
                 continue
     return total
-
 
 def _last_verified(env_dir: Path) -> str:
     stamp = env_dir / ".verified"
@@ -1168,9 +1051,7 @@ def _last_verified(env_dir: Path) -> str:
     except OSError:
         return ""
 
-
 def converter_env_status(fmt: str = "rknn") -> dict:
-    """Return a JSON-serialisable status dict for *fmt*."""
     name = _normalize_format(fmt)
     spec = get_env_spec(name)
     base = {
@@ -1218,7 +1099,5 @@ def converter_env_status(fmt: str = "rknn") -> dict:
     )
     return base
 
-
 def list_converter_envs() -> list[dict]:
-    """Status for every registry entry, in registry order."""
     return [converter_env_status(name) for name in CONVERTER_ENVS]

@@ -1,5 +1,4 @@
-/* Pipeline Editor.  Flat GitHub-style surfaces built from design.css tokens.
-   Completion rings and animated flow edges are the only decorative layers. */
+
 
 #editor-page {
   --ed-line: var(--border);
@@ -326,8 +325,7 @@
   pointer-events: none;
   transition: stroke 0.18s ease, stroke-width 0.18s ease, filter 0.18s ease;
 }
-/* Red = incomplete, half = one configured endpoint, green = both configured.
-   The dash animations make incomplete connections read as "not flowing yet". */
+
 #editor-page .edge.state-dashed {
   stroke: var(--ed-bad);
   stroke-dasharray: 7 6;
@@ -350,7 +348,7 @@
   stroke-dasharray: 2 5;
   animation: editor-edge-invalid 1.3s ease-in-out infinite;
 }
-/* The solid green half of a half-complete connection. */
+
 #editor-page .edge-half-fill {
   fill: none;
   stroke: var(--ed-ok);
@@ -410,8 +408,7 @@
 #editor-page .node.drop-dim { opacity: 0.22; }
 #editor-page .node.drop-target { outline: 1px dashed var(--accent); outline-offset: 2px; }
 
-/* Completion ring: the track is always the full outline; progress is the
-   percentage of required settings filled in. Category colors are untouched. */
+
 #editor-page .node-ring {
   position: absolute;
   inset: 0;

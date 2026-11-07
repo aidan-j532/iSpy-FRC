@@ -5,7 +5,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-
 def inspect_model(model_path: str, task: str = "detect") -> dict:
     ext = Path(model_path).suffix.lower()
     suffix = Path(model_path).name
@@ -29,7 +28,6 @@ def inspect_model(model_path: str, task: str = "detect") -> dict:
         return _inspect_ultralytics(model_path, task)
     else:
         raise ValueError(f"Unsupported model extension: {ext}")
-
 
 def print_detected_config(result: dict) -> None:
     certain = result.pop("_certain_fields", [])
@@ -56,7 +54,6 @@ def print_detected_config(result: dict) -> None:
     print("\n  Copy the block above into your config under 'vision_model'.")
     print("=" * 65 + "\n")
 
-
 def _inspect_onnx(model_path: str, task: str) -> dict:
     try:
         import onnxruntime as ort
@@ -74,7 +71,6 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 
     certain, detected, manual, warnings = [], [], [], []
 
-    # sidecar written during conversion
     meta_path = Path(model_path).parent / f"{Path(model_path).stem}_metadata.yaml"
     meta_task = task
     meta_nc = None
@@ -137,7 +133,6 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
         feat_width, task, warnings
     )
 
-    # hardware_nms detection from col count is reliable; raw format inference is not
     if fmt == "hardware_nms":
         certain.append("output.format")
     else:
@@ -163,7 +158,6 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
         "true if custom/raw export without sigmoid)"
     )
 
-    # Override tensor-inferred values with ground-truth metadata when available
     if meta_nc is not None:
         num_classes = meta_nc
         certain.append("num_classes")
@@ -246,7 +240,6 @@ def _inspect_onnx(model_path: str, task: str) -> dict:
 
     return cfg
 
-
 def _inspect_rknn(model_path: str, task: str) -> dict:
     from pathlib import Path
     from typing import Any
@@ -299,13 +292,11 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
 
             meta = YAML(typ="safe").load(meta_path)
             if isinstance(meta, dict):
-                # task
                 rknn_task = meta.get("task", "")
                 if rknn_task:
                     result["task"] = rknn_task
                     certain_fields.append("task")
 
-                # pose keypoints
                 if rknn_task == "pose":
                     kpt_shape = meta.get("kpt_shape")
                     if kpt_shape and len(kpt_shape) == 2:
@@ -322,7 +313,6 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                             "output.score_mode",
                         ]
 
-                # num_classes -> drives score_mode
                 names = meta.get("names")
                 if isinstance(names, dict):
                     nc = len(names)
@@ -333,7 +323,6 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                     )
                     certain_fields.append("output.score_mode")
 
-                # output format fields written by _export_rknn_metadata
                 for meta_key, cfg_path in (
                     ("output_format", "output.format"),
                     ("output_layout", "output.layout"),
@@ -352,7 +341,6 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
                         d[parts[-1]] = val
                         certain_fields.append(cfg_path)
 
-                # input_size - now saved by updated _export_rknn_metadata
                 saved_size = meta.get("input_size")
                 if saved_size and len(saved_size) == 2:
                     result["input_size"] = [int(x) for x in saved_size]
@@ -420,7 +408,6 @@ def _inspect_rknn(model_path: str, task: str) -> dict:
     result["_manual_fields"] = manual
     result["_warnings"] = warnings_list
     return result
-
 
 def fill_missing_config(model_config: dict) -> dict:
     from iSpy.vision.metadata import read_metadata
@@ -527,7 +514,6 @@ def fill_missing_config(model_config: dict) -> dict:
             )
         out["score_mode"] = "multi_class"
 
-    # RKNN-specific guard
     if model_path.endswith(".rknn"):
         merged_out = merged.get("output", {})
         if merged_out.get("format") == "raw" and not merged_out.get(
@@ -540,14 +526,11 @@ def fill_missing_config(model_config: dict) -> dict:
 
     return merged
 
-
 def _apply_metadata_to_config(sidecar: dict, model_config: dict) -> dict:
     nc = int(sidecar.get("nc", 1))
     score_mode = sidecar.get("score_mode")
     if score_mode is None:
         score_mode = "objectness" if nc == 1 else "multi_class"
-    # A sidecar that claims 'objectness' for a multi-class model is stale/wrong;
-    # the raw detect tensor has (4 + nc) feature columns, not 5.
     if nc > 1 and score_mode == "objectness":
         score_mode = "multi_class"
 
@@ -641,7 +624,6 @@ def _apply_metadata_to_config(sidecar: dict, model_config: dict) -> dict:
 
     return result
 
-
 def _flatten_config_to_metadata(cfg: dict) -> dict:
     meta: dict = {}
     meta["task"] = cfg.get("task")
@@ -674,7 +656,6 @@ def _flatten_config_to_metadata(cfg: dict) -> dict:
         if inp.get("scale") is not None:
             meta["input_scale"] = inp.get("scale")
 
-    # Pose-specific
     if out.get("num_keypoints") is not None and out.get("keypoint_dims") is not None:
         meta["kpt_shape"] = [
             int(out.get("num_keypoints")),
@@ -682,7 +663,6 @@ def _flatten_config_to_metadata(cfg: dict) -> dict:
         ]
 
     return meta
-
 
 def _inspect_hailo(model_path: str, task: str) -> dict:
     from pathlib import Path as _Path
@@ -787,7 +767,6 @@ def _inspect_hailo(model_path: str, task: str) -> dict:
     result["_manual_fields"] = manual
     result["_warnings"] = warnings_list
     return result
-
 
 def _inspect_tflite(model_path: str, task: str) -> dict:
     certain, detected, manual, warnings = [], [], [], []
@@ -899,12 +878,10 @@ def _inspect_tflite(model_path: str, task: str) -> dict:
 
     return cfg
 
-
 def _inspect_ultralytics(model_path: str, task: str) -> dict:
     try:
         from .yolo_pt import load_yolo_pt
 
-        # load_yolo_pt handles its own inference; here we only read metadata.
         model = load_yolo_pt(str(model_path), task=task)
         model_task = model.task or task
         try:
@@ -935,7 +912,6 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
         num_keypoints, keypoint_dims = None, None
         input_size = [640, 640]
 
-    # The dependency-free loader handles its own inference - all of these are reliable
     certain = [
         "task",
         "num_classes",
@@ -990,7 +966,6 @@ def _inspect_ultralytics(model_path: str, task: str) -> dict:
     ]
     return base
 
-
 def _parse_input_shape(shape) -> tuple[str, int, int, int]:
     def _to_int(v, fallback=640):
         try:
@@ -1010,7 +985,6 @@ def _parse_input_shape(shape) -> tuple[str, int, int, int]:
         return "nhwc", d[1], d[2], d[3]
     return "nchw", d[2], d[3], d[1]
 
-
 def _parse_output_shape(shape) -> tuple[str, int, int]:
     def _to_int(v, fallback=1):
         try:
@@ -1018,7 +992,6 @@ def _parse_output_shape(shape) -> tuple[str, int, int]:
         except (TypeError, ValueError):
             return fallback
 
-    # Strip batch dim if present
     if len(shape) == 3:
         shape = shape[1:]  # (N, F) or (F, N) after batch removal
     if len(shape) != 2:
@@ -1030,7 +1003,6 @@ def _parse_output_shape(shape) -> tuple[str, int, int]:
         return "anchors_first", d0, d1
     else:
         return "features_first", d1, d0
-
 
 def _detect_output_format(
     feat_width: int, task: str, warnings: list
@@ -1046,7 +1018,6 @@ def _detect_output_format(
         )
         return "raw", 1, "objectness", "cxcywh", "fallback"
 
-    # 1 score col -> objectness (single class)
     if score_cols == 1:
         num_classes = 1
         score_mode = "objectness"
@@ -1054,12 +1025,9 @@ def _detect_output_format(
         num_classes = score_cols
         score_mode = "multi_class"
 
-    # yolo always uses cxcywh internally (even when xyxy in ultralytics output);
-    # raw onnx exports preserve that internal encoding
     box_format = "cxcywh"
 
     return "raw", num_classes, score_mode, box_format, "inferred from feat_width"
-
 
 def _ort_type_to_quantization(ort_type: str) -> str:
     if "int8" in ort_type:
@@ -1067,7 +1035,6 @@ def _ort_type_to_quantization(ort_type: str) -> str:
     if "uint8" in ort_type:
         return "uint8"
     return "none"
-
 
 def _get_dotpath(d: dict, dotpath: str):
     val = d
@@ -1077,7 +1044,6 @@ def _get_dotpath(d: dict, dotpath: str):
         val = val[key]
     return val
 
-
 def _set_dotpath(d: dict, dotpath: str, value) -> None:
     keys = dotpath.split(".")
     for key in keys[:-1]:
@@ -1085,7 +1051,6 @@ def _set_dotpath(d: dict, dotpath: str, value) -> None:
             d[key] = {}
         d = d[key]
     d[keys[-1]] = value
-
 
 def _deep_merge_missing(base: dict, override: dict) -> dict:
     result = dict(base)
@@ -1095,7 +1060,6 @@ def _deep_merge_missing(base: dict, override: dict) -> dict:
         else:
             result[k] = v
     return result
-
 
 def _print_dict(
     d: dict, indent: int, certain_fields: list, detected_fields: list, prefix: str = ""

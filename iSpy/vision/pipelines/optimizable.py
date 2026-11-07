@@ -2,8 +2,6 @@ import functools
 import logging
 from pathlib import Path
 
-# every backend a model-backed pipeline can build; 'auto' resolution has to
-# pick from this set or fall back to onnx
 SUPPORTED_TARGET_FORMATS = (
     "onnx",
     "rknn",
@@ -16,10 +14,7 @@ SUPPORTED_TARGET_FORMATS = (
     "qnn",
 )
 
-
 def _profile_hardware_warning(target_format: str) -> str | None:
-    # onnx/tflite always run on cpu so they never warn, only formats that need
-    # real hardware are worth checking
     if not target_format or target_format in ("auto", "onnx", "tflite"):
         return None
     try:
@@ -42,16 +37,12 @@ def _profile_hardware_warning(target_format: str) -> str | None:
         return "OpenVINO needs an Intel GPU/VPU - this profile will fall back to CPU."
     return None
 
-
 @functools.lru_cache(maxsize=1)
 def _recommended_format_cached() -> str:
     from iSpy.config.AutoOpt import recommend_format
 
     return recommend_format(ignore_dependencies=True, runtime_supported=False)
 
-
-# internet needs of an optimize/quantize request. a build with missing deps can never
-# finish offline (pipeline would sit at "optimizing" forever), so the camera gets skipped
 def offline_build_requirements(settings: dict) -> list:
     optimize = settings.get("optimize", settings.get("auto_opt", False))
     if isinstance(optimize, str) and optimize.strip().lower() in (
@@ -79,7 +70,6 @@ def offline_build_requirements(settings: dict) -> list:
             resolved = "onnx"
 
     if resolved == "tpu":
-        # the TPU path runs the .pt directly via torch_xla - no export build
         return []
 
     if resolved == "rknn":
@@ -122,19 +112,11 @@ def offline_build_requirements(settings: dict) -> list:
         ]
     return []
 
-
 class OptimizableModelPipeline:
-    # extra config-schema keys surfaced by get_optimization_options()
     _OPT_OPTIONS_EXTRA: tuple[str, ...] = ()
 
-    # hardware targets a model-backed pipeline can route its inference onto.
-    # the active one is resolved from the loaded model at runtime by
-    # active_hardware() (RKNN->NPU, TPU->TPU, TensorRT/CoreML/OpenVINO->GPU,
-    # ONNX/TFLite/pytorch->CPU or GPU)
     hardware: tuple[str, ...] = ("cpu", "gpu", "npu", "tpu")
 
-    # resolved-format -> hardware label. 'format' is the _path_format() token
-    # for the active model artifact/file
     _HARDWARE_BY_FORMAT = {
         "rknn": "npu",
         "hailo": "npu",  # Hailo NPU
@@ -170,8 +152,6 @@ class OptimizableModelPipeline:
                 break
         if path:
             fmt = self._path_format(str(path))
-            # pytorch/onnx can run on either CPU or CUDA - check the loaded
-            # model's device rather than hard-coding CPU.
             if fmt in ("pytorch", "onnx"):
                 device = getattr(model, "device", "cpu")
                 return "gpu" if (device is not None and str(device) != "cpu") else "cpu"
@@ -186,8 +166,6 @@ class OptimizableModelPipeline:
             return "cpu"
         return None
 
-    # config schema
-
     @classmethod
     def _optimization_schema(
         cls,
@@ -200,8 +178,6 @@ class OptimizableModelPipeline:
             "optimize": {
                 "type": "select",
                 "label": "Optimize/Convert",
-                # HAILO DISABLED - see <reason>
-                # original: ["auto", "onnx", "hef", "off"]
                 "options": ["auto", "onnx", "off"],
                 "default": "off",
                 "optimize_toggle": True,
@@ -273,8 +249,6 @@ class OptimizableModelPipeline:
         ) + self._OPT_OPTIONS_EXTRA
         return {key: schema[key] for key in keys if key in schema}
 
-    # target format resolution
-
     def _resolve_target_format(self) -> str:
         explicit = str(getattr(self, "_requested_format", "") or "").strip().lower()
         auto_opt_fmt = self._auto_opt_to_target_format()
@@ -312,8 +286,6 @@ class OptimizableModelPipeline:
         if self._target_format is None:
             self._target_format = self._resolve_target_format()
         return self._target_format
-
-    # build state
 
     def _optimization_requested(self) -> bool:
         vm_getter = getattr(self, "_current_vm_config", None)
@@ -382,9 +354,6 @@ class OptimizableModelPipeline:
         p = str(path).lower()
         if "openvino_model" in p or p.endswith(".xml"):
             return "openvino"
-        # QNN artifacts are .onnx files committed under a 'qnn' output dir -
-        # sniff the directory before the generic .onnx suffix, or they'd be
-        # mislabelled as plain onnx and the format wouldn't round-trip.
         if "\\qnn\\" in p or "/qnn/" in p:
             return "qnn"
         for ext, fmt in (
@@ -405,22 +374,6 @@ class OptimizableModelPipeline:
         if not self._optimized_active():
             self._optimize_error = status
         self._set_status(status)
-
-    # stale-artifact guard (resync-on-boot)
-    #
-    # vision_model.file_path can drift from source_pt when the model was
-    # re-picked in the UI: it may point at an artifact built for an older
-    # model, which would silently keep that old model running. the source
-    # .pt is authoritative - load its already-built artifact when one
-    # exists, else the .pt itself (the background optimizer swaps file_path
-    # once its fresh build lands).
-    #
-    # only pipelines with a persisted, user-picked source model have a
-    # resync that can actually fire (object_detection today). the other
-    # model-backed pipelines still implement the three helpers - their
-    # paths are derived from config at boot, so _source_model_path()
-    # resolves to None and the guard exits immediately - so this stays
-    # safely callable everywhere instead of an AttributeError landmine.
 
     def _resync_stale_model_file_path(self, config) -> None:
         source = self._source_model_path()

@@ -8,7 +8,6 @@ from iSpy.dataset.dataset import (
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
-
 def _is_safe_path(base: Path, target: Path) -> bool:
     try:
         target.resolve().relative_to(base.resolve())
@@ -16,11 +15,9 @@ def _is_safe_path(base: Path, target: Path) -> bool:
     except ValueError:
         return False
 
-
 def _validate_filename(name: str) -> str:
     cleaned = "".join(c for c in name if c.isalnum() or c in "._- ")
     return cleaned.strip(". ") or "unnamed"
-
 
 def _count_images_in_dir(folder: Path) -> int:
     if not folder.is_dir():
@@ -31,7 +28,6 @@ def _count_images_in_dir(folder: Path) -> int:
         )
     except PermissionError:
         return 0
-
 
 class DatasetsModule(WebModule):
     plugin_name = "datasets"
@@ -81,7 +77,6 @@ class DatasetsModule(WebModule):
         )
 
     def _images_dir(self, name: str) -> Path:
-        # datasets live flat: QuantizeDataset/<name>/img1.png ...
         return self.dataset_root / name
 
     def _list(self):
@@ -117,8 +112,6 @@ class DatasetsModule(WebModule):
         except Exception:
             return jsonify(error="Invalid path"), 400
 
-        # the picker only ever needs the project folder; without this any
-        # client on port 5000 could walk the whole host filesystem tree
         if not _is_safe_path(Path.cwd(), base):
             return jsonify(error="Outside project folder"), 403
 
@@ -145,8 +138,6 @@ class DatasetsModule(WebModule):
 
     def _list_images(self, name):
         d = self._images_dir(name)
-        # `name` comes straight from the URL, so `..` would otherwise escape
-        # the dataset root and list an arbitrary folder
         if not _is_safe_path(self.dataset_root, d):
             return jsonify(error="Invalid path"), 400
         if not d.exists():

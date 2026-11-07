@@ -18,7 +18,6 @@ for fmt, exts in MODEL_FORMATS.items():
     for ext in exts:
         ALL_EXTENSIONS[ext.lower()] = fmt
 
-
 class ModelValidationResult:
     def __init__(self):
         self.valid_organized_models: Dict[str, Dict] = {}  # Path -> details
@@ -53,7 +52,6 @@ class ModelValidationResult:
                 warning_desc += "..."
             parts.append(f"Warnings: {len(self.warnings)} ({warning_desc})")
         return ", ".join(parts) if parts else "No models found."
-
 
 def validate_model_organization(repo_root: Path) -> ModelValidationResult:
     result = ModelValidationResult()
@@ -91,7 +89,6 @@ def validate_model_organization(repo_root: Path) -> ModelValidationResult:
 
     return result
 
-
 def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) -> Dict:
     try:
         ext = model_path.suffix.lower()
@@ -115,7 +112,6 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
                 "size_mb": size_mb,
             }
 
-        # YoloModels/[format]/[size]/...
         parts = model_path.relative_to(yolo_dir).parts
 
         if len(parts) < 2:
@@ -173,7 +169,6 @@ def _validate_single_model(model_path: Path, yolo_dir: Path, repo_root: Path) ->
             "size_mb": 0,
         }
 
-
 def _check_for_standalone_models(
     repo_root: Path, result: ModelValidationResult
 ) -> None:
@@ -209,11 +204,9 @@ def _check_for_standalone_models(
                     f"[STANDALONE] {rel_path} - Cannot infer YOLO parameters - move to organized directory"
                 )
 
-
 def validate_config_model_paths(
     config: Dict, repo_root: Path, validation_result: ModelValidationResult
 ) -> str:
-    # The model lives in the first model-backed camera's pipeline settings.
     from iSpy.config.iSpyConfig import get_pipeline_settings
 
     config_model_path = ""
@@ -272,7 +265,6 @@ def validate_config_model_paths(
         logger.error(f"Model not found: {config_model_path}")
         return None
 
-
 def _is_in_organized_structure(model_path: Path, yolo_dir: Path) -> bool:
     try:
         rel = model_path.relative_to(yolo_dir)
@@ -291,15 +283,12 @@ def _is_in_organized_structure(model_path: Path, yolo_dir: Path) -> bool:
     except ValueError:
         return False
 
-
 def enforce_model_organization(repo_root: Path, config: Dict) -> Tuple[bool, str]:
     from iSpy.config.iSpyConfig import (
         get_pipeline_name,
         is_model_backed_pipeline,
     )
 
-    # a rig running only cv pipelines (hsv, april tag, qr) has no model to
-    # organize - that is a valid setup, not an error
     has_model_backed = any(
         is_model_backed_pipeline(get_pipeline_name(cam))
         for cam in (config.get("camera_configs") or {}).values()
@@ -326,7 +315,6 @@ def enforce_model_organization(repo_root: Path, config: Dict) -> Tuple[bool, str
         logger.error("No valid model path determined")
         return False, None
 
-
 def cmd_validate_models() -> int:
     result = validate_model_organization(Path.cwd())
 
@@ -349,7 +337,6 @@ def cmd_validate_models() -> int:
             logger.error("Validation failed with errors")
             return 1
         return 0
-
 
 def cmd_check_organization() -> int:
     result = validate_model_organization(Path.cwd())
@@ -381,7 +368,6 @@ def cmd_check_organization() -> int:
     print()
 
     return 0
-
 
 if __name__ == "__main__":
     import sys

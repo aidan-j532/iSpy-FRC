@@ -28,10 +28,8 @@ _WORLD_MODEL_URLS = {
     "l": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8l-worldv2.pt",
 }
 
-
 class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
     plugin_name = "yolo_world"
-    # zero-shot detection needs no intrinsics calibration - disable the default tab
     calibration_sections = []
 
     _OPT_OPTIONS_EXTRA = ("input_size",)
@@ -79,7 +77,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         elif downloaded.exists() and downloaded.stat().st_size >= 1024:
             weights = downloaded
         if weights is None:
-            # nothing else matters until the base weights exist on disk
             return [
                 network_policy.NetworkRequirement(
                     name="YOLO World weights",
@@ -91,8 +88,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 )
             ]
 
-        # the prompt gets baked into the weights in a subprocess that imports
-        # Ultralytics, so the bake can't happen offline without it installed
         classes = cls._parse_classes(str(settings.get("prompt") or "A dog."))
         classes_key = hashlib.sha1("|".join(classes).encode("utf-8")).hexdigest()[:8]
         fixed = _WORLD_MODEL_DIR / "world" / f"{weights.stem}-{classes_key}.pt"
@@ -119,7 +114,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         return reqs
 
     def is_ready(self) -> tuple[bool, str]:
-        # pure status report - never triggers/blocks on optimization
         if not self._optimization_requested():
             if self._preparing():
                 self._set_status("downloading (model weights)")
@@ -228,9 +222,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             raw_quantize = raw_quantize.strip().lower() in ("1", "true", "yes", "on")
         self.quantize = bool(raw_quantize)
 
-        # same name the mixin contract expects (_requested_format); the raw
-        # setting ("auto" allowed) - resolution happens lazily via
-        # _target_format_cached()
         self._requested_format = str(
             camera_config.get_pipeline_setting("target_format") or "auto"
         ).lower()
@@ -259,20 +250,15 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             camera_config, (640, 480), camera_config.get("grayscale", False)
         )
 
-        # file_path drift guard - see OptimizableModelPipeline._resync_stale_model_file_path
         if self._optimization_requested():
             self._resync_stale_model_file_path(config)
 
-        # optimization requested + no active artifact yet -> kick off the
-        # build on a bg thread so the app keeps running
         if self._optimization_requested() and not self._optimized_active():
             self.logger.info(
                 "Camera '%s': optimization requested - building %s artifact",
                 self.config.get("name", "?"),
                 self._target_format_cached(),
             )
-            # import torch now so the bg thread doesn't race the main thread's
-            # scipy.stats -> torch import (partial module / clobbered logging)
             ensure_torch_imported()
             threading.Thread(
                 target=self._optimize_runner,
@@ -297,8 +283,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         self._optimizing = True
         self._set_status("optimizing (backend build)")
         try:
-            # reuse a cached artifact matching the target format;
-            # only a full rebuild re-exports and re-quantizes
             self._load_quantized_model(force=False)
             if not self._optimized_active():
                 self._load_quantized_model(force=True)
@@ -355,11 +339,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         elif auto_opt_fmt:
             target = auto_opt_fmt
         else:
-            # same resolution _target_format_cached() agrees with so
-            # readiness matches the artifact that actually gets built
-            # (deliberately NOT ignore_dependencies - unlike the other
-            # model-backed pipelines, a dependency-less guess here could
-            # disagree with the artifact the quantized build produces)
             from iSpy.config.AutoOpt import recommend_format
 
             target = recommend_format()
@@ -383,18 +362,8 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return False
         return self._path_format(path) == self._target_format_cached()
 
-    # stale-artifact resync hooks (see OptimizableModelPipeline)
-    #
-    # yolo_world derives every model path from config at boot (model_size
-    # -> weights -> class-hashed reparameterization -> artifact), so there
-    # is no persisted file_path that can drift the way object_detection's
-    # vision_model.file_path can. the hooks exist so the boot guard is
-    # callable on every model-backed pipeline instead of raising
-    # AttributeError if a future refactor adds persisted state.
-
     @property
     def yolo_model_file(self):
-        # mixin-facing alias: the artifact currently loaded/selected
         return getattr(self, "_model_path", None)
 
     @yolo_model_file.setter
@@ -410,9 +379,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         return p
 
     def _source_model_path(self) -> Path | None:
-        # authoritative source = the reparameterized .pt for the CURRENT
-        # model_size/class set. Existence-check only - never download or
-        # build here; nothing on disk yet means nothing to sync against.
         asset = Path(__file__).resolve().parents[2] / "assets" / "yolo-world.pt"
         weights = asset if asset.exists() else None
         if weights is None:
@@ -431,10 +397,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         return None
 
     def _persist_file_path(self, file_path: str, config: iSpyConfig | None):
-        # no model path is stored in config - loads are re-derived from
-        # model_size/classes on every boot, so there is nothing to write;
-        # the mixin's in-memory correction via the yolo_model_file alias
-        # already keeps the running session consistent.
         pass
 
     def _ensure_world_model(self, size: str) -> str | None:
@@ -446,8 +408,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return str(target)
 
         if not self.network_allowed:
-            # no partial download attempt and no retry loop - the weights are
-            # fetched once on a networked boot, then cached
             self.logger.warning(
                 "Offline mode: YOLO World weights %s are not on disk and "
                 "cannot be downloaded - this camera needs one networked run "
@@ -491,7 +451,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         return self._ensure_world_model(self.model_size)
 
     def _reparameterize_world(self, weights: str) -> str | None:
-        # build-only; runtime uses the fixed .pt without Ultralytics
         classes_key = hashlib.sha1("|".join(self.classes).encode("utf-8")).hexdigest()[
             :8
         ]
@@ -518,7 +477,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
         return str(fixed)
 
     def _reparameterize_world_subprocess(self, weights: str, output: Path) -> None:
-        # same subprocess pattern as optimizer.py
         outputs_dir = Path(__file__).resolve().parents[3] / "Outputs"
         outputs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -604,10 +562,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return
 
         try:
-            # bake classes into the weights and load the result as a plain
-            # fixed-vocab detector. the on-device loader (load_yolo_pt) never
-            # touches Ultralytics - only the optional build-time
-            # _reparameterize_world step does.
             fixed = self._reparameterize_world(weights)
             if not fixed:
                 self._set_load_error("failed to reparameterize YOLO World model")
@@ -663,21 +617,8 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                 self.model = None
                 return
 
-            # AGPL isolation (like _reparameterize_world): every format this
-            # path can produce is exported via optimizer._export_ultralytics(),
-            # which imports ultralytics (AGPL-3.0) in-process if reached
-            # directly. ensure_quantized_model()/convert_model() do exactly
-            # that, so the quantized build is pushed into a subprocess via
-            # optimizer._convert_model_subprocess - the same pattern
-            # ObjectDetectionPipeline.optimize() uses. The network-serving
-            # process never imports ultralytics.
-            #
-            # cached resolved format (not the raw "auto" setting) so the
-            # artifact built here is always the one _optimized_active()
-            # expects to find
             target_format = self._target_format_cached()
             if target_format == "tpu":
-                # TPU runs the .pt directly via torch_xla - no conversion
                 artifact, converted = fixed, True
             else:
                 from iSpy.vision.optimizer import _convert_model_subprocess
@@ -690,9 +631,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
                     force=force,
                     dataset_path=self._quantization_dataset,
                 )
-                # _convert_model_subprocess falls back to the source .pt when
-                # conversion is skipped or fails; reclaim ensure_quantized_model's
-                # (artifact, converted) contract from the returned path.
                 artifact = str(converted_path)
                 converted = artifact != str(fixed)
             if not converted:
@@ -739,9 +677,6 @@ class YoloWorldPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
             return [], frame
 
         try:
-            # self.model is always a GenericYolo (both full-precision and
-            # quantized paths) whose predict() returns Results with iterable
-            # boxes + plot(); no Ultralytics objects are ever involved.
             results = self.model.predict(frame, orig_shape=frame.shape)
             objects: list[Object] = []
             annotated = frame.copy()

@@ -1,6 +1,7 @@
-"""Runtime backend registry and provisioner.
 
-Routes install paths (boot, setup, optimize) to the right wheels for the current platform. PyTorch is never pulled from generic PyPI on CPU-only ARM64. Conversion envs stay in iSpy.boot.converter_envs.
+"""runtime backend registry and provisioner.
+
+routes install paths (boot, setup, optimize) to the right wheels for the current platform. pytorch is never pulled from generic PyPI on CPU-only ARM64. conversion envs stay in iSpy.boot.converter_envs.
 """
 
 from __future__ import annotations
@@ -24,15 +25,11 @@ from packaging.version import InvalidVersion, Version
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Tunables
-# ---------------------------------------------------------------------------
-
-#: Free space we want to keep *after* a small runtime wheel installs.
+# free space we want to keep after a small runtime wheel installs
 DEFAULT_MIN_FREE_BYTES = 1 * 1024 ** 3
-#: PyTorch brings its own shared libraries; leave room for the wheel + unpack.
+# pytorch brings its own shared libs; leave room for the wheel + unpack
 TORCH_MIN_FREE_BYTES = 3 * 1024 ** 3
-#: TensorRT + its CUDA runtime wheels are considerably larger.
+# tensorrt + its cuda runtime wheels are considerably larger
 TENSORRT_MIN_FREE_BYTES = 5 * 1024 ** 3
 
 VERIFY_TIMEOUT = 300
@@ -52,8 +49,8 @@ _SPACE_ERRORS = (
     "0x80070070",
 )
 
-#: Generic PyPI torch wheels can leave nvidia/triton behind after a CPU install.
-#: On ARM64/CPU-only boards these are useless and can be hundreds of MB.
+# generic pypi torch wheels can leave nvidia/triton behind after a cpu install.
+# on arm64/cpu-only boards these are useless and can be hundreds of MB
 _CUDA_ONLY_DISTS = {
     "triton",
     "pytorch-triton",
@@ -72,10 +69,6 @@ _JETSON_TORCH_HINT = (
     "and rerun 'ispy-boot -f'."
 )
 
-# ---------------------------------------------------------------------------
-# Platform description
-# ---------------------------------------------------------------------------
-
 def _normalize_machine(machine: str) -> str:
     value = (machine or "").strip().lower()
     return {
@@ -91,7 +84,7 @@ def _normalize_machine(machine: str) -> str:
 
 @dataclass(frozen=True)
 class PlatformInfo:
-    """Everything the registry is allowed to branch on."""
+    # everything the registry is allowed to branch on
 
     system: str
     machine: str
@@ -134,7 +127,7 @@ class PlatformInfo:
 
     @property
     def has_cuda(self) -> bool:
-        """NVIDIA hardware *and* a driver that nvidia-smi can talk to."""
+        # nvidia hardware and a driver that nvidia-smi can talk to
 
         return self.has_nvidia and self.cuda_major is not None
 
@@ -167,7 +160,7 @@ class PlatformInfo:
         return " ".join(bits)
 
 def _call_autoopt(name: str, default: bool = False) -> bool:
-    """Read one hardware probe from AutoOpt without making it mandatory."""
+    # read one hardware probe from AutoOpt without making it mandatory
 
     try:
         from iSpy.config import AutoOpt
@@ -200,7 +193,7 @@ def _python_tag() -> str:
 
 @lru_cache(maxsize=1)
 def detect_platform() -> PlatformInfo:
-    """Describe the running interpreter, respecting image-build overrides."""
+    # describe the running interpreter, respecting image-build overrides
 
     target_os = os.environ.get("ISPY_TARGET_OS", "").strip()
     target_arch = os.environ.get("ISPY_TARGET_ARCH", "").strip()
@@ -243,13 +236,8 @@ def detect_platform() -> PlatformInfo:
 def clear_platform_cache() -> None:
     detect_platform.cache_clear()
 
-# ---------------------------------------------------------------------------
-# Registry types
-# ---------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class PackageSpec:
-    """One concrete pip distribution to try."""
 
     dist: str
     requirement: str
@@ -266,7 +254,6 @@ class PackageSpec:
 
 @dataclass(frozen=True)
 class Resolution:
-    """How a backend resolves on one platform."""
 
     mode: str
     packages: tuple[PackageSpec, ...] = ()
@@ -283,13 +270,9 @@ class BackendSpec:
     resolver: Resolver
     hardware: tuple[str, ...] = ()
     fallback: str | None = None
-    #: The rich registry record for this backend.  Kept as a separate field so
-    #: diagnostics can print it without invoking the resolver.
+    # rich registry record for this backend; kept separate so diagnostics can
+    # print it without invoking the resolver
     notes: str = ""
-
-# ---------------------------------------------------------------------------
-# Individual resolvers
-# ---------------------------------------------------------------------------
 
 _TORCH_NUMPY_PROBE = (
     "import warnings\n"
@@ -368,8 +351,8 @@ def _resolve_torch(p: PlatformInfo) -> Resolution:
             min_free_bytes=TORCH_MIN_FREE_BYTES,
             note=f"NVIDIA CUDA {tag} build",
         )
-        # Keep a CPU fallback so a driver/wheel mismatch degrades instead of
-        # leaving an unusable .pt baseline.
+        # keep a cpu fallback so a driver/wheel mismatch degrades instead of
+        # leaving an unusable .pt baseline
         return Resolution(mode="install", packages=(cuda, _torch_cpu_package()))
     return Resolution(mode="install", packages=(_torch_cpu_package(),))
 
@@ -385,9 +368,8 @@ def _ort_package(dist: str, provider: str, *, extra: str = "") -> PackageSpec:
         dist=dist,
         requirement=f"{dist}>=1.16.0",
         module="onnxruntime",
-        # Variant wheels overwrite the same package directory, so remove all
-        # known variants before switching.  This only runs when an install is
-        # actually needed.
+        # variant wheels overwrite the same package dir, so remove all known
+        # variants before switching. only runs when an install is actually needed
         uninstall_first=_ORT_VARIANTS,
         verify_script=_ORT_PROVIDER_SCRIPT.format(provider=provider),
         note=extra,
@@ -410,8 +392,6 @@ def _resolve_onnx(p: PlatformInfo) -> Resolution:
             ),
         )
     if p.has_nvidia and p.cuda_major is not None:
-        # onnxruntime-gpu is published for Windows x86_64 only; Linux also has
-        # aarch64 CUDA wheels, but Windows ARM64 does not.
         if p.is_windows and p.machine != "x86_64":
             return Resolution(
                 mode="unsupported",
@@ -490,9 +470,9 @@ def _resolve_qnn(p: PlatformInfo) -> Resolution:
         ),
     )
 
-#: RKNN Lite is shipped inside the iSpy wheel; only the inference runtime is
-#: ever installed in the main environment.  The full toolkit2 stays in the
-#: isolated converter env.
+# rknn lite is shipped inside the ispy wheel; only the inference runtime is
+# ever installed in the main env. the full toolkit2 stays in the isolated
+# converter env
 RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
     ("aarch64", "cp310"): (
         "rknn_toolkit_lite2-2.3.2-cp310-cp310-manylinux_2_17_aarch64."
@@ -509,7 +489,6 @@ RKNN_LITE_FILENAMES: dict[tuple[str, str], str] = {
 }
 
 def rknn_lite_wheel_dir() -> Path:
-    """Directory containing the bundled RKNN Lite wheels."""
 
     package_root = Path(__file__).resolve().parent.parent
     for candidate in (
@@ -568,8 +547,8 @@ def _resolve_rknn(p: PlatformInfo) -> Resolution:
     )
 
 def _resolve_tflite(p: PlatformInfo) -> Resolution:
-    # tflite-runtime is the light, stable ABI through cp311.  Newer Python
-    # versions are served by Google's ai-edge-litert successor.
+    # tflite-runtime is the light, stable abi through cp311. newer python
+    # versions are served by google's ai-edge-litert successor
     if (
         p.system == "Linux"
         and p.machine in ("x86_64", "aarch64", "armv7l")
@@ -755,8 +734,8 @@ def _resolve_tpu(p: PlatformInfo) -> Resolution:
     return Resolution(
         mode="install",
         packages=(
-            # Installing CPU torch first keeps torch_xla's torch==X.Y.Z
-            # dependency from resolving to the generic CUDA-enabled wheel.
+            # installing cpu torch first keeps torch_xla's torch==X.Y.Z
+            # dependency from resolving to the generic cuda-enabled wheel
             _torch_cpu_package(),
             PackageSpec(
                 dist="torch-xla",
@@ -771,10 +750,6 @@ def _resolve_tpu(p: PlatformInfo) -> Resolution:
             ),
         ),
     )
-
-# ---------------------------------------------------------------------------
-# The registry
-# ---------------------------------------------------------------------------
 
 BACKEND_REGISTRY: dict[str, BackendSpec] = {
     "pytorch": BackendSpec(
@@ -878,7 +853,7 @@ BACKEND_REGISTRY: dict[str, BackendSpec] = {
     ),
 }
 
-#: User-facing aliases that may come from a model filename.
+# user-facing aliases that may come from a model filename
 BACKEND_ALIASES = {
     "pt": "pytorch",
     "pytorch": "pytorch",
@@ -912,20 +887,15 @@ def normalize_backend(name: str | None) -> str:
     key = str(name or "").strip().lower()
     return BACKEND_ALIASES.get(key, key)
 
-
-#: Backends that are conversion-only or never provisioned from the boot path.
-#: CoreML conversion needs coremltools on macOS but the .mlpackage runtime is
-#: unsupported, so it is never auto-installed from boot.
+# backends that are conversion-only or never provisioned from the boot path.
+# coreml conversion needs coremltools on macos but the .mlpackage runtime is
+# unsupported, so never auto-installed from boot
 _RUNTIME_BACKEND_EXCLUDE = frozenset({"coreml"})
 
-
 def all_backend_names() -> list[str]:
-    """Return every backend whose inference runtime can be provisioned by boot.
-
-    Used by ``ispy-boot -f`` so that all backends tested by
-    ``ispy-bench --all-backends`` are available out of the box instead of
-    requiring a manual ``pip install`` per backend.
-    """
+    # return every backend whose inference runtime can be provisioned by boot.
+    # used by ispy-boot -f so all backends tested by ispy-bench --all-backends
+    # are available out of the box instead of a manual pip install per backend
     return [name for name in BACKEND_REGISTRY if name not in _RUNTIME_BACKEND_EXCLUDE]
 
 def get_backend_spec(name: str | None) -> BackendSpec | None:
@@ -945,10 +915,6 @@ def resolve_backend(
         )
     return spec.resolver(platform_info or detect_platform())
 
-# ---------------------------------------------------------------------------
-# Model/config -> backend selection
-# ---------------------------------------------------------------------------
-
 _MODEL_PATH_KEYS = ("file_path", "path")
 
 def backend_for_model_path(path: str | Path | None) -> str | None:
@@ -964,7 +930,6 @@ def backend_for_model_path(path: str | Path | None) -> str | None:
 def backends_for_config(
     config: dict | None, platform_info: PlatformInfo | None = None
 ) -> list[str]:
-    """Return the runtime backends the configured models actually need."""
 
     found: set[str] = set()
 
@@ -983,24 +948,20 @@ def backends_for_config(
 
     _visit(config or {})
 
-    # A QNN model is stored as .onnx; the plugin is an extra runtime dependency.
     p = platform_info or detect_platform()
     if "onnx" in found and p.has_qualcomm:
+        # a qnn model is stored as .onnx; the plugin is an extra runtime dep
         found.add("qnn")
-    # CoreML cannot be loaded at runtime; do not provision its conversion tools
-    # from a boot path.  ispy-optimize asks for it explicitly when converting.
+    # coreml cannot be loaded at runtime; dont provision its conversion tools
+    # from a boot path. ispy-optimize asks for it explicitly when converting
     found.discard("coreml")
     order = list(BACKEND_REGISTRY)
     return [name for name in order if name in found]
 
-# ---------------------------------------------------------------------------
-# Legacy mapping (kept for callers that only need module/target pairs)
-# ---------------------------------------------------------------------------
-
 def legacy_dependencies(
     platform_info: PlatformInfo | None = None,
 ) -> dict[str, list[tuple]]:
-    """Return {backend: [(module, target, extra_args?) ...]}."""
+    # return {backend: [(module, target, extra_args?) ...]}
 
     p = platform_info or detect_platform()
     result: dict[str, list[tuple]] = {}
@@ -1024,18 +985,12 @@ def legacy_dependencies(
     return result
 
 def __getattr__(name: str):
-    """Resolve the compatibility view lazily.
-
-    Building it runs platform/hardware probes.  Importing a module that merely
-    wants a helper should not import torch or touch the hardware.
-    """
+    # resolve the compat view lazily. building it runs platform/hardware probes.
+    # importing a module that merely wants a helper shouldnt import torch or
+    # touch hardware
     if name == "BACKEND_DEPENDENCIES":
         return legacy_dependencies()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-# ---------------------------------------------------------------------------
-# Pip plumbing
-# ---------------------------------------------------------------------------
 
 def _in_virtualenv() -> bool:
     return hasattr(sys, "real_prefix") or (
@@ -1073,7 +1028,6 @@ def pip_install(
     no_cache: bool = False,
     timeout: int = INSTALL_TIMEOUT,
 ) -> bool:
-    """Install *install_target* with the running interpreter."""
 
     try:
         from iSpy.core import network_policy
@@ -1149,7 +1103,6 @@ def pip_install(
         return False
 
 def uninstall_packages(names: Sequence[str]) -> bool:
-    """Uninstall existing distributions, ignoring ones that are not present."""
 
     present = [name for name in names if installed_version(name) is not None]
     if not present:
@@ -1182,10 +1135,6 @@ def uninstall_packages(names: Sequence[str]) -> bool:
     logger.info("Removed conflicting distributions: %s", ", ".join(present))
     return True
 
-# ---------------------------------------------------------------------------
-# Verification
-# ---------------------------------------------------------------------------
-
 def installed_version(dist: str) -> str | None:
     try:
         return importlib.metadata.version(dist)
@@ -1198,8 +1147,8 @@ def _satisfies_version(pkg: PackageSpec, version: str | None) -> bool:
     try:
         requirement = Requirement(pkg.requirement)
     except (InvalidRequirement, ValueError):
-        # Local wheel / direct URL: any installed distribution is acceptable;
-        # the import check below is the real gate.
+        # local wheel / direct url: any installed distribution is acceptable;
+        # the import check below is the real gate
         return True
     if requirement.name.lower().replace("_", "-") != pkg.dist.lower().replace(
         "_", "-"
@@ -1211,7 +1160,7 @@ def _satisfies_version(pkg: PackageSpec, version: str | None) -> bool:
         return True
 
 def verify_package(pkg: PackageSpec, timeout: int = VERIFY_TIMEOUT) -> tuple[bool, str]:
-    """Import and exercise *pkg* in a fresh interpreter."""
+    # import and exercise pkg in a fresh interpreter
 
     if installed_version(pkg.dist) is None and not _module_present(pkg.module):
         return False, "not installed"
@@ -1249,10 +1198,6 @@ def _module_present(module: str) -> bool:
     except (ImportError, AttributeError, ValueError):
         return False
 
-# ---------------------------------------------------------------------------
-# Disk awareness
-# ---------------------------------------------------------------------------
-
 def _minimum_free_bytes(path: Path) -> int | None:
     try:
         return shutil.disk_usage(str(path)).free
@@ -1277,10 +1222,6 @@ def check_disk_space(
             )
     return True, ""
 
-# ---------------------------------------------------------------------------
-# ARM CUDA cleanup
-# ---------------------------------------------------------------------------
-
 def _cuda_related_distributions() -> list[str]:
     names: set[str] = set()
     for dist in importlib.metadata.distributions():
@@ -1296,7 +1237,7 @@ def remove_forbidden_cuda_packages(
     platform_info: PlatformInfo,
     uninstaller: Callable[[Sequence[str]], bool] | None = None,
 ) -> list[str]:
-    """Strip CUDA-only packages from CPU-only Linux ARM64 environments."""
+    # strip cuda-only packages from cpu-only linux arm64 environments
 
     if (
         platform_info.system != "Linux"
@@ -1317,10 +1258,6 @@ def remove_forbidden_cuda_packages(
         logger.error("Could not remove CUDA-only packages: %s", ", ".join(found))
         return []
     return found
-
-# ---------------------------------------------------------------------------
-# Provisioning
-# ---------------------------------------------------------------------------
 
 Installer = Callable[[PackageSpec, bool], bool]
 Verifier = Callable[[PackageSpec], tuple[bool, str]]
@@ -1362,7 +1299,7 @@ class ProvisionReport:
 
     @property
     def actionable_failures(self) -> list[BackendResult]:
-        """Failures an install/repair run can actually fix."""
+        # failures an install/repair run can actually fix
 
         return [
             result
@@ -1393,7 +1330,7 @@ class ProvisionReport:
         return lines
 
 class DependencyProvisionError(RuntimeError):
-    """An install/repair failure that the caller must not report as success."""
+    # an install/repair failure the caller must not report as success
 
     def __init__(self, message: str, report: ProvisionReport):
         super().__init__(message)
@@ -1421,7 +1358,7 @@ def _default_install(pkg: PackageSpec, force: bool) -> bool:
 def _verify_managed_backend(
     backend: str, title: str, verifier: Verifier
 ) -> BackendResult | None:
-    """Verify a vendor/system-managed package when it is already importable."""
+    # verify a vendor/system-managed package when it is already importable
 
     spec = BACKEND_REGISTRY.get(backend)
     module = spec.module if spec else ""
@@ -1457,7 +1394,7 @@ def _install_one(
     if resolution.mode == "unsupported":
         return BackendResult(backend, title, "unsupported", resolution.reason)
     if resolution.mode == "system":
-        # Verify a system-managed runtime if it is present; never pip-install it.
+        # verify a system-managed runtime if present; never pip-install it
         result = _verify_managed_backend(backend, title, verifier)
         if result is not None:
             return result
@@ -1504,8 +1441,8 @@ def _install_one(
             )
             result.status = "missing"
             result.detail = last_detail
-            # Keep walking the ordered candidates: on a CUDA machine the
-            # fallback CPU torch may be the valid, already-installed build.
+            # keep walking the ordered candidates: on a cuda machine the
+            # fallback cpu torch may be the valid, already-installed build
             continue
 
         free_ok, free_detail = check_disk_space(
@@ -1528,8 +1465,8 @@ def _install_one(
             logger.error("Not enough disk space for %s: %s", pkg.dist, free_detail)
             continue
 
-        # A version mismatch can be fixed with a normal upgrade; a broken
-        # import needs the files replaced, so force only in that case.
+        # a version mismatch can be fixed with a normal upgrade; a broken
+        # import needs the files replaced, so force only in that case
         force = version is not None and satisfies
         logger.info(
             "Provisioning %s %s for backend %s%s",
@@ -1623,13 +1560,12 @@ def ensure_backend(
 def ensure_backends(
     names: Iterable[str],
     *,
-    platform_info: PlatformInfo | None = None,
     auto_install: bool = True,
     installer: Installer | None = None,
     verifier: Verifier | None = None,
     uninstaller: Uninstaller | None = None,
 ) -> ProvisionReport:
-    """Provision every requested backend, reusing valid installs."""
+    # provision every requested backend, reusing valid installs
 
     p = platform_info or detect_platform()
     normalized: list[str] = []
@@ -1682,10 +1618,6 @@ def raise_for_actionable_failures(report: ProvisionReport) -> None:
         "Runtime dependency provisioning failed: " + summary,
         report,
     )
-
-# ---------------------------------------------------------------------------
-# Diagnostics
-# ---------------------------------------------------------------------------
 
 def registry_snapshot(platform_info: PlatformInfo | None = None) -> list[dict]:
     p = platform_info or detect_platform()

@@ -8,30 +8,29 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_MODEL_DIR = _PROJECT_ROOT / "YoloModels" / "pytorch"
 
-# Same size floor as genericYolo.py._validate_model_file.
+# same size floor as genericYolo.py._validate_model_file
 _MIN_MODEL_BYTES = 1024
 
-# Download URLs for the three stock default models.
+# download urls for the three stock default models
 _DEFAULT_MODEL_URLS = {
     "_default_detect.pt": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt",
     "_default_pose.pt": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n-pose.pt",
     "_default_v26_detect_for_fuel.pt": "https://github.com/aidan-j532/iSpy-FRC/releases/download/Fuel_Detect_Model/fuel_detection_v26.pt", # Mine :)
 }
 
-# Per-model license status. All three default checkpoints are AGPL-3.0:
+# per-model license status. all three default checkpoints are agpl-3.0
 _MODEL_LICENSE_STATUS = {name: "AGPL-3.0" for name in _DEFAULT_MODEL_URLS}
-
 
 def _session() -> requests.Session:
     sess = requests.Session()
-    # TLS verification stays ON (requests default) - models come from the same GitHub/HTTPS endpoints I already trust for calibration images.
+    # tls verification stays on (requests default) - models come from the same
+    # github/https endpoints i already trust for calibration images
     for scheme in ("http://", "https://"):
         adapter = sess.get_adapter(scheme)
         adapter.max_retries = requests.adapters.Retry(
             total=1, backoff_factor=0.5, raise_on_status=False
         )
     return sess
-
 
 def _download_one(name: str, url: str, target: Path) -> bool:
     tmp = target.with_suffix(target.suffix + ".part")
@@ -73,7 +72,6 @@ def _download_one(name: str, url: str, target: Path) -> bool:
     logger.info("Downloaded default model %s -> %s", name, target)
     return True
 
-
 def download_default_models(fresh: bool = False) -> dict[str, Path]:
     from iSpy.core import network_policy
 
@@ -112,7 +110,6 @@ def download_default_models(fresh: bool = False) -> dict[str, Path]:
 
     return present
 
-
 def default_models_license_text() -> str:
     lines = [
         "Default model license notices",
@@ -134,7 +131,6 @@ def default_models_license_text() -> str:
         lines.append(f"- {name}: {_MODEL_LICENSE_STATUS[name]}")
     lines.append("")
     return "\n".join(lines)
-
 
 def write_default_models_license() -> Path:
     path = _PROJECT_ROOT / "YoloModels" / "LICENSE.txt"

@@ -10,14 +10,12 @@ _SCHEMA_TYPE_FALLBACK = {
     float: "number",
 }
 
-
 def default_settings_from_schema(config_schema: dict) -> dict:
     defaults = {}
     for key, defn in config_schema.items():
         if isinstance(defn, dict) and "default" in defn:
             defaults[key] = defn["default"]
     return defaults
-
 
 class StatusMixin:
     def __init__(self):
@@ -29,15 +27,14 @@ class StatusMixin:
     def get_status(self) -> str:
         return getattr(self, "_status", "unknown")
 
-
-# offline-mode plumbing shared by add-ons and pipelines: needs_internet = True
+# offline-mode stuff shared by add-ons and pipelines. needs_internet = True
 # or network_requirements(); require_network/try_online guard online-only actions
 class NetworkMixin:
-    # shortcut for add-ons whose every feature needs the internet. a subclass
-    # that overrides network_requirements() replaces this entirely
+    # shortcut for add-ons that need internet for everything. override
+    # network_requirements() to replace this entirely
     needs_internet = False
 
-    # what this add-on needs the internet for, judged from its settings
+    # what this add-on needs internet for, from its settings
     @classmethod
     def network_requirements(cls, settings: dict) -> list:
         if getattr(cls, "needs_internet", False):
@@ -54,16 +51,16 @@ class NetworkMixin:
     def network_allowed(self) -> bool:
         return not network_policy.is_offline()
 
-    # raises OfflineError when the feature would need the internet - call it
-    # before an optional online action so it fails loud instead of hanging
+    # raises OfflineError if the feature needs internet - call before an
+    # optional online action so it fails loud instead of hanging
     def require_network(self, feature: str) -> None:
         if network_policy.is_offline():
             raise network_policy.OfflineError(
                 f"offline mode: {feature} needs the internet"
             )
 
-    # runs fn when online, else records one degraded note and returns fallback.
-    # flaky connections land here too so a dead network can't kill the tick
+    # runs fn when online, else logs one degraded note and returns fallback.
+    # flaky connections land here too so a dead network cant kill the tick
     def try_online(self, feature: str, fn, fallback=None):
         if not self.network_allowed:
             self._record_offline_feature(feature, "offline mode")
@@ -82,8 +79,8 @@ class NetworkMixin:
             reason,
         )
 
-    # schema fields marked requires_network get reset to their default while
-    # offline, so an online-only knob can't stay on and keep reaching out
+    # schema fields marked requires_network reset to default while offline, so
+    # an online-only knob cant stay on and keep reaching out
     def _ignore_offline_settings(self) -> None:
         if not network_policy.is_offline():
             return
@@ -103,7 +100,6 @@ class NetworkMixin:
                 self._record_offline_feature(
                     key, "setting needs the internet - ignored while offline"
                 )
-
 
 class AddonBase(NetworkMixin, StatusMixin):
     # a camera assigned a pipeline not listed here is flagged incompatible
@@ -152,11 +148,10 @@ class AddonBase(NetworkMixin, StatusMixin):
     def get_actions(self) -> list[dict]:
         return []
 
-    # the route only forwards ids that get_actions() declared, so an action
-    # that is not currently offered can never be dispatched
+    # the route only forwards ids get_actions() declared, so an action not
+    # currently offered can never be dispatched
     def invoke_action(self, action_id: str, value=None) -> dict:
         return {"ok": False, "error": "unsupported"}
-
 
 class TrackerBase(AddonBase):
     def __init__(self, context: dict):
@@ -171,7 +166,6 @@ class TrackerBase(AddonBase):
     def stop(self):
         pass
 
-
 class FrameProcessorBase(AddonBase):
     def __init__(self, context: dict):
         AddonBase.__init__(self, context)
@@ -184,7 +178,6 @@ class FrameProcessorBase(AddonBase):
 
     def stop(self):
         pass
-
 
 class UtilityBase(AddonBase):
     def __init__(self, context: dict):
@@ -224,7 +217,6 @@ class UtilityBase(AddonBase):
     def stop(self):
         pass
 
-
 def validate_output_key(raw) -> tuple[str | None, str | None]:
     if raw is None:
         return None, None
@@ -237,7 +229,6 @@ def validate_output_key(raw) -> tuple[str | None, str | None]:
         return None, "Output Key cannot contain dots"
     return key, None
 
-
 def find_duplicate_output_keys(utilities: dict) -> dict[str, list[str]]:
     seen: dict[str, list[str]] = {}
     for name, inst in utilities.items():
@@ -247,24 +238,20 @@ def find_duplicate_output_keys(utilities: dict) -> dict[str, list[str]]:
         seen.setdefault(declared, []).append(name)
     return {key: names for key, names in seen.items() if len(names) > 1}
 
-
 class TransformProvider:
-    """Generic interface for components that transform detection coordinates
-
-    from a measurement frame into a reference frame (e.g. a robot-pose-based
-    conversion). Core stays agnostic: it only calls transform_detections() on
-    any registered provider and never assumes what the transform means. FRC
-    plugins implement this to apply robot/WPILib-specific conversions.
-    """
+    \"\"\"generic interface for components that transform detection coords
+    from a measurement frame into a reference frame (robot-pose-based
+    conversion). core stays agnostic: only calls transform_detections() on
+    any registered provider, never assumes what the transform means. frc
+    plugins implement this for robot/wpilib-specific conversions.\"\"\"
 
     def transform_detections(self, detections):
         return detections
 
     def get_reference_pose(self):
-        # Optional: return a generic reference pose (plain dict with x/y/heading
-        # or None). Core treats it opaquely.
+        # optional: return a generic reference pose (plain dict with x/y/heading
+        # or None). core treats it opaquely.
         return None
-
 
 class VisionBase(NetworkMixin, ABC):
     plugin_name = "base"

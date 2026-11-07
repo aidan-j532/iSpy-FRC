@@ -145,7 +145,6 @@ async function go() {
 </body>
 </html>"""
 
-
 class SetupWizardModule(WebModule):
     plugin_name = "setup_wizard"
 
@@ -163,9 +162,6 @@ class SetupWizardModule(WebModule):
             config = self.context["config"]
             if "unit" in data:
                 config.set("unit", data["unit"])
-            # legacy wizard payloads had use_network_tables / network_tables_ip as
-            # top-level keys. NetworkTables is now an add-on - enabling it
-            # just means the FRC/network_table_handler utility is in the config
             if "use_network_tables" in data or "network_tables_ip" in data:
                 if data.get("use_network_tables"):
                     config.update_addon_settings(
@@ -186,8 +182,6 @@ class SetupWizardModule(WebModule):
                         "utilities", "FRC/network_table_handler", save=False
                     )
             config.set("camera_configs", data["camera_configs"])
-            # normalize entries (nested pipeline layout, default vision_model
-            # for model-backed pipelines) so the first run is valid
             from iSpy.config.iSpyConfig import ensure_camera_entries_ready
 
             ensure_camera_entries_ready(config.get("camera_configs", {}))

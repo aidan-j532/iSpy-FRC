@@ -6,14 +6,12 @@ import time
 import ntcore
 from wpimath.geometry import Pose2d, Rotation2d
 
-
 def make_fake_pose(t: float, radius: float = 2.0, period_s: float = 20.0) -> Pose2d:
     omega = 2 * math.pi / period_s
     x = radius * math.cos(omega * t)
     y = radius * math.sin(omega * t)
     heading = omega * t  # face the direction of travel
     return Pose2d(x, y, Rotation2d(heading))
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -41,7 +39,6 @@ def main():
 
     inst = ntcore.NetworkTableInstance.getDefault()
 
-    # pyntcore API differs across versions - try known startServer/startServer4 signatures in order
     started = False
     for attempt in (
         lambda: inst.startServer(
@@ -72,11 +69,9 @@ def main():
         "Point iSpy's network_tables_ip at 127.0.0.1 (or this machine's IP if iSpy runs elsewhere)."
     )
 
-    # publisher: robot pose, same topic NetworkTableHandler.get_robot_pose() reads
     odom_table = inst.getTable("AdvantageKit/RealOutputs/Odometry")
     pose_pub = odom_table.getStructTopic("Robot", Pose2d).publish()
 
-    # subscribers: everything NetworkTableHandler.update() publishes
     vision_table = inst.getTable("VisionData")
     fuel_sub = vision_table.getStringTopic("vision_data").subscribe("")
     fps_sub = vision_table.getDoubleTopic("fps").subscribe(0.0)
@@ -100,7 +95,6 @@ def main():
             )
             pose_pub.set(pose)
 
-            # print vision data on change, else once/sec so you know its still alive
             try:
                 fuels = json.loads(fuel_sub.get() or "[]")
             except (TypeError, ValueError):
@@ -132,7 +126,6 @@ def main():
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\nStopping fake robot server.")
-
 
 if __name__ == "__main__":
     main()

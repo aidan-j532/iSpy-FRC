@@ -1,11 +1,3 @@
-// Pure helpers for the lane-based pipeline editor.  This file is shared by
-// the browser and `node --test`, so it has no imports and no DOM access.
-//
-// A lane owns exactly one node per column:
-//   Camera -> Frame Processor -> Pipeline -> Tracker -> Utility
-// Cameras are horizontal lanes; utilities are global cards in the last
-// column.  Geometry is always derived from lane/column, never from a stored
-// x/y on the node.
 
 export const COLUMNS = [
   "camera",
@@ -125,8 +117,6 @@ export function settingIsRequired(schema, settings = {}, key) {
   if (defn.nullable) return false;
   if (CORE_ARTIFACT_TYPES.has(defn.type)) return true;
   if (!hasOwn(defn, "default")) return true;
-  // A meaningful default is still a value the user must confirm.  A blank
-  // default (an empty text field, empty list, ...) stays optional.
   return !valueIsBlank(defn.default, defn);
 }
 
@@ -253,9 +243,6 @@ export function assignLaneIndices(nodes) {
   return cameras;
 }
 
-// Places every node at its column/lane.  Extra frame processors/trackers in
-// the same lane stack inside that lane so legacy multi-node configs remain
-// editable until the user removes the duplicates.
 export function layoutNodes(nodes) {
   const cameras = assignLaneIndices(nodes);
   const utilities = sortedUtilities(nodes);
@@ -411,9 +398,6 @@ export function deriveEdges(nodes) {
   return edges;
 }
 
-// Edge ids that make up one lane's flow: all five-column edges plus every
-// branch from that lane into shared utilities.  Other lanes feeding the same
-// utility are intentionally excluded.
 export function connectedFlow(edges, edgeId) {
   const edge = edges.find((item) => item.id === edgeId);
   if (!edge) return new Set();

@@ -24,10 +24,6 @@ from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.vision.pipelines.optimizable import OptimizableModelPipeline
 from iSpy.vision._safe_imports import ensure_torch_imported
 
-# pipeline-settings keys that sit as siblings of vision_model in the config but
-# have to be visible on every read. a ui save strips them out of the sub-dict on
-# purpose (_normalize_vision_model_settings), so the raw block alone stops
-# reflecting the users optimize/quantize/format choices - merge them back in
 _VM_PIPELINE_SETTING_KEYS = (
     "quantize",
     "min_conf",
@@ -38,9 +34,7 @@ _VM_PIPELINE_SETTING_KEYS = (
     "batch_size",
     "tpu_dtype",
 )
-# legacy aliases, consulted when the canonical key is unset
 _VM_PIPELINE_SETTING_LEGACY = {"quantize": "quantized", "optimize": "auto_opt"}
-
 
 def _put_latest(target: queue.Queue, item) -> None:
     try:
@@ -57,7 +51,6 @@ def _put_latest(target: queue.Queue, item) -> None:
     except queue.Full:
         pass
 
-
 def _merge_vm_pipeline_settings(vm: dict, camera_config: iSpyCameraConfig) -> dict:
     merged = dict(vm)
     for key in _VM_PIPELINE_SETTING_KEYS:
@@ -70,14 +63,8 @@ def _merge_vm_pipeline_settings(vm: dict, camera_config: iSpyCameraConfig) -> di
             merged[key] = value
     return merged
 
-
 class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
     plugin_name = "object_detection"
-    # detector models get the known-object focal/FOV wizard (freeze a frame,
-    # drag to measure a known-size object) on top of the universal ChArUco
-    # intrinsics. Pose models instead get the "pnp" keypoint tab: the frontend
-    # swaps the "focal" tab for "pnp" (3D xyz per keypoint) when the configured
-    # model reports pose keypoints - see cameras.html openCalibrationWizardFor.
     calibration_sections = ["charuco", "focal"]
 
     @classmethod
@@ -95,10 +82,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
     @classmethod
     def check_profile(cls, settings: dict) -> dict:
-        # profile status = can this saved model config actually load on this
-        # machine? touches only files on disk (stat + metadata sidecar) and
-        # never builds anything. a missing artifact for a requested format
-        # warns (the .pt still runs) but a missing model/sidecar errors.
         vm = settings.get("vision_model")
         if not isinstance(vm, dict):
             return {
@@ -178,8 +161,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
     @classmethod
     def network_requirements(cls, settings: dict) -> list:
-        # weights load from local disk; only an optimize/quantize build with
-        # missing deps could need the internet (pip install / RKNN converter)
         from iSpy.vision.pipelines.optimizable import offline_build_requirements
 
         return offline_build_requirements(settings)
@@ -222,8 +203,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             self.camera_pitch_angle = camera_config["pitch"]
 
             _pos_unit = config.get("unit", "frc")
-            # single source of truth for ray-origin/triangulation height:
-            # the user-facing "height" field (Mount height in the UI)
             self.camera_height = unit_to_inches(camera_config["height"], _pos_unit)
             self.camera_x = unit_to_inches(camera_config["x"], _pos_unit)
             self.camera_y = unit_to_inches(camera_config["y"], _pos_unit)
@@ -239,9 +218,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         except KeyError as e:
             raise ValueError(f"Missing camera config key: {e}")
 
-        # Model architecture fields come only from metadata sidecars, not config.
-        # Config holds user-preference fields; vision_model is per-camera
-        # pipeline settings (migrated from the old top-level key).
         self.object_heights = self._parse_object_heights(
             camera_config.get_pipeline_setting("object_heights")
         )
@@ -253,16 +229,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 f"Camera '{self._cam_name}' uses pipeline 'object_detection' "
                 "but has no vision_model block in its pipeline settings."
             )
-        # schema fields set via the config UI live in pipeline settings; merge
-        # them into the model config. Merge on a copy so the persisted
-        # vision_model keeps only model identity - otherwise every setting
-        # gets duplicated on the next save.
         vm_cfg = _merge_vm_pipeline_settings(vm_cfg, camera_config)
-        # Malformed metadata sidecars (e.g. a non-integer nc) make
-        # fill_missing_config raise ValueError instead of degrading. Keep the
-        # camera alive: fall back to the raw config so the pipeline can still
-        # boot, and let the GenericYolo block below report / disable the model
-        # if it cannot be built at all.
         try:
             vm_filled = fill_missing_config(dict(vm_cfg))
         except (ModelFileError, ValueError, TypeError, OSError) as e:
@@ -276,8 +243,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         self.margin = vm_filled.get("margin", vm_cfg.get("margin", 0))
         raw_min_conf = vm_filled.get("min_conf", vm_cfg.get("min_conf", 0.5))
         self.min_confidence = float(raw_min_conf) if raw_min_conf is not None else 0.5
-        # "size_based" | "ground_plane". Schema field lives in pipeline
-        # settings; fall back to the legacy vision_model dict value.
         self.z_mode = str(
             camera_config.get_pipeline_setting(
                 "z_mode", vm_cfg.get("z_mode", "ground_plane")
@@ -321,7 +286,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             "feet": 1 / 12,
             "centimeter": 2.54,
             "centimeters": 2.54,
-            # FRC/WPILib convention: meters out (robot code), calibration in inches
             "frc": 0.0254,
         }
 
@@ -347,8 +311,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
         super().__init__(camera_config, self.input_size, self.grayscale)
 
-        # file_path can drift from source_pt when the model was re-picked in
-        # the UI (see OptimizableModelPipeline._resync_stale_model_file_path)
         if self._optimization_requested():
             self._resync_stale_model_file_path(config)
         try:
@@ -404,8 +366,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         if self._tpu_pipeline:
             self._start_tpu_workers()
 
-        # optimization requested + no active artifact yet -> kick off the
-        # build on a bg thread so the app keeps running
         self._optimizing = False
         self._optimize_error: str | None = None
         if self._optimization_requested() and not self._optimized_active():
@@ -414,8 +374,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 self._cam_name,
                 self._target_format_cached(),
             )
-            # import torch now so the bg thread doesn't race the main thread's
-            # scipy.stats -> torch import (partial module / clobbered logging)
             ensure_torch_imported()
             threading.Thread(
                 target=self._optimize_runner,
@@ -529,7 +487,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 },
             },
         }
-        # input_size comes from the model metadata sidecar here, not config
         schema.update(cls._optimization_schema(target_formats=("auto", "onnx")))
         return schema
 
@@ -578,9 +535,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         expected = self._optimized_artifact_path()
         if expected is not None:
             return self._resolve_model_path(path) == expected
-        # artifact for this source not built yet (or built under a name that
-        # no longer matches). A leftover artifact from an older model must be
-        # rejected, not trusted, or an old model silently keeps running.
         src = self._source_model_path()
         if src is not None:
             from iSpy.vision.optimizer import _artifact_name
@@ -596,7 +550,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         return task == "pose"
 
     def is_ready(self) -> tuple[bool, str]:
-        # pure status report - never triggers/blocks on optimization
         cal_level, cal_msg = self.calibration_status()
         if not self._optimization_requested():
             model_ok = self.model is not None
@@ -648,7 +601,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         try:
             target = self._target_format_cached()
             if target == "tpu":
-                # TPU runs the .pt directly via torch_xla, no conversion
                 self.logger.info(
                     "Camera '%s': TPU backend - keeping .pt, no conversion.",
                     self._cam_name,
@@ -660,11 +612,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
             from iSpy.vision.optimizer import _convert_model_subprocess
 
-            # self.quantize is the authoritative value computed in __init__ from
-            # the merged pipeline settings and is kept in sync by
-            # _activate_optimized_model(). _current_vm_config() merges the
-            # sibling settings for status/format reads, but the instance
-            # value must not be clobbered here on a rebuild.
             converted = _convert_model_subprocess(
                 str(source_pt),
                 target,
@@ -701,12 +648,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                 "file_path": getattr(self, "yolo_model_file", ""),
                 "input_size": list(getattr(self, "input_size", (640, 640))),
             }
-        # the persisted vision_model block alone no longer carries the
-        # optimize/quantize/target_format/... keys (a UI save strips them -
-        # see _normalize_vision_model_settings), so merge the sibling pipeline
-        # settings back in or _optimization_requested()/_target_format_cached()
-        # would always read the off/default values and the optimize thread
-        # would never start.
         return _merge_vm_pipeline_settings(vm, self.config)
 
     def _activate_optimized_model(
@@ -714,9 +655,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
     ):
         vm = self._current_vm_config()
         vm["file_path"] = artifact_path
-        # prefer the already-normalized self.quantize (merged from pipeline
-        # settings in __init__) - the raw vision_model block may lack the key
-        # after a UI save and must not clobber the user's setting with False.
         quantize = bool(
             getattr(
                 self,
@@ -1023,8 +961,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         }
 
     def _focal_length_px_fov(self, img_w: int) -> float:
-        # FOV-derived intrinsic - doesnt rely on a game piece's known size.
-        # A ChArUco-calibrated camera matrix is the most accurate source.
         intr = cam_calibration.intrinsics_for_frame(
             self.config.get("calibration", {}), img_w, 1
         )
@@ -1063,7 +999,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             return False
         if h_px == 0:
             return False
-        # no aspect filter on purpose, partial objects/rectangles still count
         return True
 
     def _box_to_robot_point(
@@ -1075,19 +1010,12 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         *,
         return_source: bool = False,
     ):
-        # unified depth model: cast the bottom-center ray and intersect it with
-        # the horizontal plane the object is assumed to sit on. ground_z=0
-        # (ground plane) is the default; per-class heights come from the
-        # object_heights pipeline setting (inches). size-based heuristic is
-        # only a fallback for when the ray runs parallel to that plane.
         x1, y1, x2, y2 = box.xyxy
         ray = self._pixel_ray((x1 + x2) / 2.0, y2, img_w, img_h)
         gp = triangulation.ground_plane_intersection(ray, ground_z=ground_z)
         sb = self._size_based_point(box, img_w, img_h, ground_z=ground_z)
         scale = self.conversions.get(self.unit, self.conversions["meter"])
 
-        # z_mode picks which method is primary; the other is the fallback.
-        # method string is surfaced as the Object's depth_source.
         if self.z_mode == "ground_plane":
             if gp is not None:
                 result = (gp * scale, "ground_plane")
@@ -1136,8 +1064,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         pixel_offset_x = pixel_x - img_w / 2.0
         horizontal_angle_rad = math.atan(pixel_offset_x / self.focal_length_pixels)
 
-        # vertical offset between the camera and the assumed object plane;
-        # an elevated object shrinks this triangle leg vs the ground plane
         vertical_delta = max(self.camera_height - obj_height_z, 0.0)
         if vertical_delta > 0 and distance_los > vertical_delta:
             true_horiz = math.sqrt(distance_los**2 - vertical_delta**2)
@@ -1147,7 +1073,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         left_right = true_horiz * math.sin(horizontal_angle_rad)
         forward = true_horiz * math.cos(horizontal_angle_rad)
 
-        # +X right, +Y forward, +Z up; yaw 0 = facing +Y, positive yaw turns right.
         yaw_rad = math.radians(self.camera_bot_relative_yaw)
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
         x_rot = left_right * cos_y + forward * sin_y
@@ -1257,9 +1182,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         )
 
     def _pnp_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
-        # solvePnP output is in the units of pnp.object_points (meters, ~1.8m
-        # tall COCO skeleton), but the rest of the pipeline works in inches -
-        # without this conversion things render ~39x too small
         meters_to_inches = 1.0 / self.conversions["meter"]
         return self._camera_point_to_robot(
             (
@@ -1296,8 +1218,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
     def _euler_to_robot_frame(
         self, roll: float, pitch: float, yaw: float
     ) -> tuple[float, float, float]:
-        # solvePnP euler comes out in the camera frame; convert it the same way
-        # the april_tag pipeline does so every Object ships robot-frame eulers.
         R_cam = self._euler_to_matrix(roll, pitch, yaw)
         R_robot = triangulation.camera_rotation_to_robot(
             R_cam, self.camera_bot_relative_yaw, self.camera_pitch_angle
@@ -1311,7 +1231,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         bottom_y = box.xyxy[3]
         ray = self._pixel_ray(bottom_x, bottom_y, img_w, img_h)
         class_name = self._class_names.get(box.cls_id, f"class_{box.cls_id}")
-        # per-class assumed plane height (inches, ray frame); 0 = ground plane
         obj_plane_z = float(self.object_heights.get(class_name, 0.0))
         scale = self.conversions.get(self.unit, self.conversions["meter"])
 
@@ -1324,8 +1243,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             )
             if pt is None:
                 return None
-            # depth model assumes the object sits on its configured plane,
-            # so z is that plane's height
             pt = np.array([pt[0], pt[1], obj_plane_z * scale])
 
         roll, pitch, yaw = 0.0, 0.0, 0.0

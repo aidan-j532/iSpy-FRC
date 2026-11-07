@@ -1,6 +1,5 @@
 import time
 
-
 class SelectionState:
     def __init__(self):
         self.selected_id: int | None = None

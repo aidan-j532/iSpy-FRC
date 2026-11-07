@@ -17,7 +17,6 @@ from iSpy.web.Backend.WebModule import WebModule
 
 logger = logging.getLogger(__name__)
 
-
 def _camera_vision_model(cam) -> dict | None:
     if not isinstance(cam, dict):
         return None
@@ -27,7 +26,6 @@ def _camera_vision_model(cam) -> dict | None:
         return model_cfg
     return None
 
-
 def _is_safe_path(base: Path, target: Path) -> bool:
     try:
         target.resolve().relative_to(base.resolve())
@@ -35,13 +33,11 @@ def _is_safe_path(base: Path, target: Path) -> bool:
     except ValueError:
         return False
 
-
 def _model_rel_path(path: Path) -> str:
     try:
         return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return str(path)
-
 
 def _target_format(settings: dict) -> str:
     fmt = str(settings.get("target_format") or "auto").strip().lower()
@@ -53,7 +49,6 @@ def _target_format(settings: dict) -> str:
         return ObjectDetectionPipeline.recommended_format()
     except Exception:
         return "onnx"
-
 
 class ModelsModule(WebModule):
     plugin_name = "models"
@@ -80,7 +75,6 @@ class ModelsModule(WebModule):
         return names
 
     def _get_current_model(self) -> str | None:
-        # for the "active" badge - basename of the first model-backed cam's file_path
         config = self.context.get("config")
         if not config:
             return None
@@ -205,10 +199,6 @@ class ModelsModule(WebModule):
         config = self.context.get("config")
         if not config:
             return jsonify(error="No config available"), 500
-        # model selection = the per-camera vision_model block of every model-backed cam.
-        # source_pt always points at the .pt; file_path points at an already-built
-        # optimized artifact for it so the camera keeps running the picked model
-        # (a stale artifact from a previous pick must not win).
         from iSpy.vision.optimizer import existing_artifact_for
 
         updated = []

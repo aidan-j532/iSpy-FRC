@@ -12,22 +12,18 @@ from iSpy.vision import triangulation
 from iSpy.vision.Object import Object
 from iSpy.vision.pipelines.base import VisionPipeline
 
-# presets replace hue/sat/val at runtime. red wraps around the hue wheel
 _PRESETS = {
     "orange": ((5, 25), (110, 255), (80, 255)),
     "yellow": ((25, 40), (110, 255), (80, 255)),
     "red": ((170, 10), (100, 255), (70, 255)),
     "green": ((40, 85), (90, 255), (60, 255)),
     "blue": ((85, 130), (90, 255), (60, 255)),
-    # white is low saturation, high value
     "white": ((0, 179), (0, 60), (180, 255)),
 }
 
 _MASK_STYLES = ("color", "binary")
 
-
 def _auto_gamma_lut(mean_v: float) -> np.ndarray:
-    # pull the mean toward the middle so harsh light stops eating one end of V
     mean = max(float(mean_v), 1.0) / 255.0
     if 0.02 < mean < 0.98:
         gamma = math.log(0.5) / math.log(mean)
@@ -36,7 +32,6 @@ def _auto_gamma_lut(mean_v: float) -> np.ndarray:
     gamma = min(max(gamma, 0.4), 2.5)
     values = np.arange(256, dtype=np.float64) / 255.0
     return np.clip((values**gamma) * 255.0, 0, 255).astype(np.uint8)
-
 
 @dataclass(frozen=True)
 class HSVParams:
@@ -70,7 +65,6 @@ class HSVParams:
     mask_style: str
     draw_labels: bool
 
-
 @dataclass(frozen=True)
 class _HSVRuntime:
     params: HSVParams
@@ -82,7 +76,6 @@ class _HSVRuntime:
     merge_kernel: np.ndarray | None
     blur_size: tuple | None
     clahe: object | None
-
 
 class HSVDetectionPipeline(VisionPipeline):
     plugin_name = "hsv_detection"
@@ -338,7 +331,6 @@ class HSVDetectionPipeline(VisionPipeline):
             self.camera_pitch_angle = camera_config.get("pitch", 0.0)
 
             _pos_unit = config.get("unit", "frc")
-            # height is the single mount-height field feeding triangulation
             self.camera_height = unit_to_inches(
                 camera_config.get("height", 0.0), _pos_unit
             )
@@ -375,8 +367,6 @@ class HSVDetectionPipeline(VisionPipeline):
 
     def needs_calibration_to_run(self) -> bool:
         return False
-
-    # bad settings fall back to defaults
 
     def _warn_setting(self, key: str, value, fallback) -> None:
         self.logger.warning(
@@ -502,7 +492,6 @@ class HSVDetectionPipeline(VisionPipeline):
         upper_a = np.array([h_hi, s_hi, v_hi], dtype=np.uint8)
         lower_b = upper_b = None
 
-        # wrapped hue needs two inRange passes: [lo, 179] plus [0, hi]
         if h_lo > h_hi:
             upper_a = np.array([179, s_hi, v_hi], dtype=np.uint8)
             lower_b = np.array([0, s_lo, v_lo], dtype=np.uint8)
@@ -523,7 +512,6 @@ class HSVDetectionPipeline(VisionPipeline):
 
         merge_kernel = None
         if params.merge_distance_px > 0:
-            # close then open restores the outline
             distance = max(1, int(round(params.merge_distance_px * params.process_scale)))
             size = 2 * distance + 1
             merge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
@@ -550,8 +538,6 @@ class HSVDetectionPipeline(VisionPipeline):
             clahe=clahe,
         )
 
-    # live tuning
-
     def take_pending_settings(self) -> dict:
         with self._settings_lock:
             pending = dict(self._pending_persist)
@@ -559,7 +545,6 @@ class HSVDetectionPipeline(VisionPipeline):
         return pending
 
     def current_settings(self) -> dict:
-        # the parsed values, so the tuning panel shows what is actually running
         return asdict(self._runtime.params)
 
     def update_settings(self, partial: dict) -> dict:
@@ -573,12 +558,9 @@ class HSVDetectionPipeline(VisionPipeline):
             merged = dict(self._raw_settings)
             merged.update(allowed)
             runtime = self._build_runtime(merged)
-            # one attribute swap, so run() never sees half of an update
             self._runtime = runtime
             self._raw_settings = merged
         return {key: getattr(runtime.params, key) for key in allowed}
-
-    # action buttons
 
     def get_actions(self) -> list[dict]:
         try:
@@ -624,8 +606,6 @@ class HSVDetectionPipeline(VisionPipeline):
 
         return {"ok": False, "error": "unsupported"}
 
-    # geometry
-
     def _focal_length_px_fov(self, img_w: int) -> float:
         intr = cam_calibration.intrinsics_for_frame(
             self.config.get("calibration", {}), img_w, 1
@@ -637,7 +617,6 @@ class HSVDetectionPipeline(VisionPipeline):
         configured = getattr(self, "focal_length_pixels", 0.0)
         if configured and configured > 1:
             return float(configured)
-        # no calibration: assume 60 deg fov
         return (img_w / 2.0) / math.tan(math.radians(60.0 / 2.0))
 
     def _pixel_ray(self, pixel_x: float, pixel_y: float, img_w: int, img_h: int):
@@ -660,7 +639,6 @@ class HSVDetectionPipeline(VisionPipeline):
         f = max(self._focal_length_px_fov(img_w), 1e-6)
         horizontal_angle_rad = math.atan((pixel_x - img_w / 2.0) / f)
 
-        # account for camera height
         vertical_delta = max(self.camera_height - obj_height_z, 0.0)
         if vertical_delta > 0 and distance_los > vertical_delta:
             true_horiz = math.sqrt(distance_los**2 - vertical_delta**2)
@@ -694,8 +672,6 @@ class HSVDetectionPipeline(VisionPipeline):
             [base[0], base[1], params.plane_height_in * scale], dtype=np.float64
         )
 
-    # detection
-
     def _detect(self, frame, params, runtime):
         img_h, img_w = frame.shape[:2]
         scale = params.process_scale
@@ -718,7 +694,6 @@ class HSVDetectionPipeline(VisionPipeline):
             )
 
         if runtime.blur_size is not None:
-            # blur s/v only; blurring h mixes colors
             hsv[:, :, 1] = cv2.blur(hsv[:, :, 1], runtime.blur_size)
             hsv[:, :, 2] = cv2.blur(hsv[:, :, 2], runtime.blur_size)
 
@@ -801,7 +776,6 @@ class HSVDetectionPipeline(VisionPipeline):
                 cx = (bx + bw / 2.0) * inv
                 cy = (by + bh / 2.0) * inv
 
-            # blend fill and shape match into confidence
             if params.shape_hint == "circle":
                 shape_score = circularity
             elif params.shape_hint == "rect":
@@ -834,7 +808,6 @@ class HSVDetectionPipeline(VisionPipeline):
 
     def _make_object(self, detection, params, img_w, img_h):
         _, _contour, cx, cy, box, _circularity, confidence = detection
-        # spheres center on the plane; others sit on their bottom edge
         pixel_y = cy if params.shape_hint == "circle" else box[1] + box[3]
         ray = self._pixel_ray(cx, pixel_y, img_w, img_h)
         on_plane = triangulation.ground_plane_intersection(
@@ -876,8 +849,6 @@ class HSVDetectionPipeline(VisionPipeline):
             },
         )
 
-    # rendering
-
     def _render(self, frame, mask, detections, params):
         if params.view_mode == "mask":
             if params.mask_style == "binary":
@@ -911,7 +882,6 @@ class HSVDetectionPipeline(VisionPipeline):
         if frame is None:
             return [], None
 
-        # one read so a live update can swap the whole runtime underneath us
         runtime = self._runtime
         params = runtime.params
 
@@ -946,7 +916,6 @@ class HSVDetectionPipeline(VisionPipeline):
         return self._last_objects
 
     def plot(self, frame):
-        # run() already drew the view
         return frame
 
     def destroy(self):

@@ -20,26 +20,16 @@ _ASSETS_DIR = _PACKAGE_ROOT.parents[1] / "assets"
 try:
     cv2.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
 except AttributeError:
-    # Older OpenCV versions don't have setLogLevel
     pass
-
 
 class CameraOpenTimeout(ValueError):
     pass
 
-
-# a missing or wedged camera retries every few seconds and each abandoned thread
-# lingers until the driver returns, so without a cap they pile up unbounded. the
-# slot frees only when the worker actually exits
 _OPEN_WORKER_MAX = 4
 _open_worker_guard = threading.Lock()
 _open_worker_live = 0
 
-# v4l2-ctl prints the format it actually applied after --set-fmt-video. UVC
-# drivers may silently adjust an unsupported size, so read the result back
-# instead of trusting the requested width/height.
 _V4L2_SIZE_RE = re.compile(r"Width/Height\s*:\s*(\d+)\s*/\s*(\d+)")
-
 
 class CameraBase:
     camera_type = "generic"
@@ -47,10 +37,8 @@ class CameraBase:
     _PLACEHOLDER_W = 640
     _PLACEHOLDER_H = 480
 
-    # first-frame timeout (MSMF is slow to start)
     _STREAM_START_TIMEOUT = 1.5
 
-    # max time cv2.VideoCapture() can block before we give up
     _CAP_OPEN_TIMEOUT = 15.0
 
     _READ_RETRY_DELAY = 0.05
@@ -59,16 +47,10 @@ class CameraBase:
 
     _CALIBRATION_HEARTBEAT_TIMEOUT = 10.0
 
-    # how long to wait between reconnect attempts when the device is missing
     _RECONNECT_RETRY_DELAY = 3.0
-    # poll `stopped` at most every this long while sleeping so a leaked reader
-    # never keeps polling a bogus source (e.g. /dev/video99) through interpreter
-    # shutdown and races native (RKNN/OpenCV) teardown.
     _RECONNECT_POLL_S = 0.05
-    # warn about the missing device at most every N attempts (~30s)
     _RECONNECT_WARN_EVERY = 10
 
-    # reported frame age while the device is missing (JSON-safe "very stale")
     _DISCONNECTED_AGE_S = 1e6
 
     @staticmethod
@@ -96,8 +78,6 @@ class CameraBase:
         **kwargs,
     ):
         self.logger = logging.getLogger(__name__)
-        # Keep the raw entry so runtime wiring can read optional per-camera
-        # assignments (frame_processors) without guessing by source.
         self._camera_config = camera_config
 
         if input_size is None:
@@ -106,9 +86,6 @@ class CameraBase:
         self.grayscale = bool(grayscale)
         self._cap_w = input_size[0]
         self._cap_h = input_size[1]
-        # Set on Linux once v4l2-ctl reports the size the driver actually
-        # accepted, so _configure_capture does not ask for an unsupported
-        # model-input size and make OpenCV negotiate something larger.
         self._negotiated_capture_size = None
 
         self.source = camera_config["source"]
@@ -155,10 +132,6 @@ class CameraBase:
         except (TypeError, ValueError):
             self._fps_cap = 0.0
 
-        # Rate requested from the capture device. 0 means "no explicit
-        # request": fall back to fps_cap (the historical behavior) and then to
-        # whatever mode the driver picked. Drivers default to 30 FPS for many
-        # UVC cameras, so set this above 30 to use a high-speed camera mode.
         try:
             self._capture_fps = max(
                 0, float(camera_config.get("capture_fps", 0) or 0)
@@ -181,8 +154,6 @@ class CameraBase:
                 self._open_camera()
                 self._connected = True
             except Exception as exc:
-                # Don't fall back to a static image forever - stay in camera
-                # mode and keep searching for the device in the reader thread.
                 self.logger.warning(
                     "Camera source '%s' could not be opened (%s) - showing "
                     "placeholder and searching for the device in the background.",
@@ -203,7 +174,6 @@ class CameraBase:
                 atexit.register(self.destroy)
             except Exception:
                 pass
-
 
     def _open_capture(self, extra_backends: bool = False, prefer_dshow: bool = False):
         if self._is_url_source:
@@ -257,9 +227,6 @@ class CameraBase:
 
     def _open_capture_bounded(self, backend):
         global _open_worker_live
-        # Check stopped before taking a slot: every slot taken below must be
-        # released by the worker (or by the start() failure path); raising
-        # from here would otherwise strand one permanently.
         if self.stopped:
             raise CameraOpenTimeout(
                 f"Camera {self.source}: stopping - aborting open with backend {backend}"
@@ -290,10 +257,6 @@ class CameraBase:
                 with _open_worker_guard:
                     _open_worker_live -= 1
 
-        # Build the thread before taking a slot: the increment below must be
-        # paired with a release on every path. The worker releases the slot in
-        # its finally block once it has started; start() failure is handled
-        # here, and constructing the Thread above cannot strand a slot.
         opener = threading.Thread(
             target=_worker,
             daemon=True,
@@ -346,9 +309,6 @@ class CameraBase:
         deadline = time.perf_counter() + timeout
         while time.perf_counter() < deadline:
             try:
-                # Some UVC drivers (e.g. Microsoft LifeCam Cinema under
-                # DirectShow) report grab() == False even though read() returns a
-                # valid frame, so prefer read() and fall back to grab/retrieve.
                 ret, frame = cap.read()
                 if ret and frame is not None and frame.size > 0 and frame.max() >= 1:
                     return True
@@ -379,7 +339,6 @@ class CameraBase:
 
             actual_fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
             if actual_fourcc != requested_fourcc:
-                # driver didn't actually accept MJPG, let it use native format (i had a bunch of decoding issues cause of it)
                 self.logger.info(
                     "Camera %s: MJPG not accepted by driver - using native format.",
                     self.source,
@@ -394,8 +353,6 @@ class CameraBase:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_w)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_h)
 
-        # Never impose a rate the user did not ask for; a hardcoded 30 here
-        # silently capped every source, including cameras that support 60+.
         if self._capture_fps > 0:
             cap.set(cv2.CAP_PROP_FPS, self._capture_fps)
             self._request_v4l2_capture_fps()
@@ -403,8 +360,6 @@ class CameraBase:
         self._apply_capture_controls(cap, allow_reopen=False)
 
     def _request_v4l2_capture_fps(self):
-        """Also set VIDIOC_S_PARM directly; some UVC drivers ignore OpenCV's
-        CAP_PROP_FPS request and stay on their default 30 FPS mode."""
         if (
             platform.system() != "Linux"
             or self._is_url_source
@@ -475,9 +430,6 @@ class CameraBase:
                     )
                     if result.returncode == 0:
                         _fmt_ok = True
-                        # The driver may adjust the requested size; query the
-                        # applied format so OpenCV keeps that mode instead of
-                        # renegotiating to the model's square input size.
                         output = (result.stdout or "") + (result.stderr or "")
                         try:
                             check = subprocess.run(
@@ -538,10 +490,6 @@ class CameraBase:
             time.sleep(0.15)
 
         if platform.system() == "Windows":
-            # MSMF raw-open can hang indefinitely when invoked from a worker
-            # thread on some UVC webcams (Framework laptops), starving the feed
-            # for the full open timeout. DirectShow opens instantly and is
-            # thread-safe, so prefer it on first open - MSMF stays as fallback.
             self.cap = self._open_capture(extra_backends=True, prefer_dshow=True)
         else:
             try:
@@ -741,7 +689,6 @@ class CameraBase:
 
     def get_frame(self) -> np.ndarray | None:
         if not self.is_image and not self._connected:
-            # device missing - serve the placeholder untouched
             return self._placeholder_frame.copy()
         if self.is_image:
             frame = self.image.copy() if self.image is not None else None

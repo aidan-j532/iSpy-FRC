@@ -12,7 +12,6 @@ from iSpy.core.control_channel import SupervisorControlClient, state_file_path
 
 logger = logging.getLogger(__name__)
 
-
 def _setup_log_file() -> None:
     try:
         log_file = Path.cwd() / "Outputs" / "log.txt"
@@ -27,7 +26,6 @@ def _setup_log_file() -> None:
         logging.getLogger().addHandler(handler)
     except Exception:
         pass
-
 
 class VisionSupervisor:
     def __init__(self, entry_point: str):
@@ -171,14 +169,14 @@ class VisionSupervisor:
                 "last_error": self.last_error,
             }
 
-
 def create_service_app(entry_point: str) -> Flask:
     app = Flask(__name__)
     # service control endpoints take no request body, so this rejects bad payloads
     app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
     sup = VisionSupervisor(entry_point)
 
-    # start/stop/restart/pause/resume can kill the vision pipeline or the whole thing, so only trust localhost or token
+    # start/stop/restart/pause/resume can kill the vision pipeline or the whole
+    # thing, so only trust localhost or token
     from iSpy.web.Backend.PluginStatus import require_local_or_token
 
     @app.route("/service/status")
@@ -211,7 +209,6 @@ def create_service_app(entry_point: str) -> Flask:
         return jsonify(sup.resume())
 
     return app
-
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

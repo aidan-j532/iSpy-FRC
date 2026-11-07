@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 from iSpy.plugins.bases import UtilityBase
 
-
 class DatasetManager(UtilityBase):
     plugin_name = "dataset_manager"
 

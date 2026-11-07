@@ -9,7 +9,6 @@ from iSpy.vision.Cameras.base import CameraBase
 
 _VIDEO_EXTS = (".avi", ".mp4")
 
-
 class _SegmentCapture:
     def __init__(self, paths: list[Path], loop: bool):
         self.paths = paths
@@ -50,7 +49,6 @@ class _SegmentCapture:
         if self.capture is not None:
             self.capture.release()
             self.capture = None
-
 
 class ReplayCamera(CameraBase):
     camera_type = "replay"

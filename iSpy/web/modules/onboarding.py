@@ -2,7 +2,6 @@ from flask import jsonify, request
 
 from iSpy.web.Backend.WebModule import WebModule
 
-
 class OnboardingModule(WebModule):
     plugin_name = "onboarding"
 

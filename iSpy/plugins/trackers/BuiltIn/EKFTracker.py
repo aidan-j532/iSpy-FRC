@@ -9,11 +9,9 @@ from iSpy.algorithms.KalmanTrack import KalmanTrack
 
 _EMA_ALPHA = 0.3
 
-
 class EKFTracker(TrackerBase):
     plugin_name = "ekf_tracker"
 
-    # show this add-on as its own "Code Breakdown" series on the Metrics page
     breakdown_label = "EKF tracker"
     breakdown_color = "#f4a261"
 
@@ -55,7 +53,6 @@ class EKFTracker(TrackerBase):
         self.logger = logging.getLogger(__name__)
 
         self.tracked_objects: list[Object] = []
-        # track id -> (KalmanTrack, last update monotonic time)
         self._filters: dict[int, tuple[KalmanTrack, float]] = {}
 
         raw_threshold = self.config.get("distance_threshold", 0.5)
@@ -84,20 +81,13 @@ class EKFTracker(TrackerBase):
         robot_z: float = 0.0,
     ) -> list[Object]:
 
-        # age + cleanup
         for obj in self.tracked_objects:
             obj.update()
 
         self.tracked_objects = [o for o in self.tracked_objects if not o.destroyed]
 
-        # Transforms are applied by transform providers before tracking.
-        # The robot_* params are retained for backwards compatibility and
-        # ignored.
-
-        # merge new detections into existing tracks (or spawn new ones)
         self._merge(new_detections)
 
-        # velocity-extrapolate any track that missed a detection this tick
         self._extrapolate_missing()
 
         return self.tracked_objects
@@ -106,9 +96,6 @@ class EKFTracker(TrackerBase):
         for det in detections:
             if not self._exists_and_update(det):
                 det.alive_time = self.stale_threshold
-                # the object may have just been filtered out as destroyed -
-                # reset_time() clears destroyed/alive so re-appending gives it
-                # a fresh age clock instead of an instantly-dead track
                 det.reset_time()
                 self.tracked_objects.append(det)
                 now = time.monotonic()
@@ -125,12 +112,6 @@ class EKFTracker(TrackerBase):
         if not self.tracked_objects:
             return False
 
-        # Same stable-id rule as ObjectTracker: a persistent detection (e.g.
-        # the voxel world's single reused Object) must re-attach to its own
-        # track regardless of how far its centroid moved between ticks, or a
-        # ghost duplicate gets spawned and the original dies on its stale timer.
-        # The Kalman smoothing is skipped for this case on purpose - the
-        # pipeline re-anchors the position every tick anyway.
         for existing in self.tracked_objects:
             if existing.id == new_det.id:
                 existing.reset_time()
@@ -145,17 +126,11 @@ class EKFTracker(TrackerBase):
                 continue
 
             if np.linalg.norm(new_pos - existing_pos) < self.distance_threshold:
-                # distance alone is not enough - a cone 30cm from a robot
-                # must never merge into the robot. only merge detections of
-                # the same class/name (empty names on both sides are treated
-                # as equal for backwards compatibility)
                 if not self._same_identity(new_det, existing):
                     continue
 
                 existing.reset_time()
 
-                # Kalman predict+update on the merged track's position using
-                # the elapsed wall-clock time since its last observation
                 now = time.monotonic()
                 filt, last_t = self._filters.get(existing.id, (None, None))
                 if filt is None:
@@ -172,8 +147,6 @@ class EKFTracker(TrackerBase):
                 existing.y = float(smoothed[1])
                 existing.z = float(smoothed[2])
 
-                # EMA smoothing on angles (shortest-path wrapping) - angles
-                # are not the point of this feature, keep ObjectTracker's cue
                 d_roll = (new_det.roll - existing.roll + np.pi) % (2 * np.pi) - np.pi
                 existing.roll = (existing.roll + _EMA_ALPHA * d_roll) % (2 * np.pi)
 

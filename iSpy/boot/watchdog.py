@@ -4,7 +4,8 @@ import logging
 import sys
 from pathlib import Path
 
-# make the iSpy package importable when this file is run directly with a bare python
+# make the ispy package importable when this file is run directly with a bare
+# python
 if str(Path(__file__).resolve().parents[2]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -13,7 +14,6 @@ from iSpy.boot._venv import read_marked_python, resolve_launch_python
 logger = logging.getLogger(__name__)
 
 MAX_RESTARTS = 5
-
 
 def main(argv=None) -> int:
     logging.basicConfig(
@@ -62,7 +62,6 @@ def main(argv=None) -> int:
         if restarts < MAX_RESTARTS:
             time.sleep(5)
     return 1
-
 
 if __name__ == "__main__":
     sys.exit(main())

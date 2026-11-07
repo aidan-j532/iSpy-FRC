@@ -2,13 +2,9 @@ import logging
 
 from iSpy.plugins.bases import UtilityBase
 
-
 class YourUtility(UtilityBase):
     plugin_name = "example/example_utility"
     template = True
-
-    # set needs_internet = True to skip the add-on while offline, or override
-    # network_requirements() when only some settings need the internet
 
     @classmethod
     def config_schema(cls) -> dict:
@@ -28,7 +24,6 @@ class YourUtility(UtilityBase):
 
     def __init__(self, context: dict):
         super().__init__(context)
-        # self.config is this plugin's settings view, defaults already merged
         self.logger = logging.getLogger(__name__)
         self.flask_app = context.get("flask_app")
         self._ticks = 0
@@ -40,7 +35,6 @@ class YourUtility(UtilityBase):
         return self.config.get("greeting", "hello from my dashboard :)")
 
     def update(self, frame_data: dict):
-        # expose a runtime value every tick under addon_data[<output_key>]
         self._ticks += 1
         self.publish_output(frame_data, self._ticks)
 

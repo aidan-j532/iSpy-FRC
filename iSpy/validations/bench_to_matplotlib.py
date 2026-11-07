@@ -7,12 +7,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Match the web dashboard so the chart feels like part of iSpy.
 _BG, _PANEL, _TEXT, _DIM = "#0d1117", "#161b22", "#e6edf3", "#9198a1"
 _ACCENT, _OK, _BAD, _WARN = "#2f81f7", "#3fb950", "#f85149", "#d29922"
 
 _SUSPECT_MS = 0.5
-
 
 def collect_system_info() -> dict:
     info = {
@@ -45,15 +43,12 @@ def collect_system_info() -> dict:
         pass
     return info
 
-
 def _is_error(r) -> bool:
     return bool(r.get("error")) or not r.get("fps") or r.get("ok") is False
-
 
 def _is_suspect(r) -> bool:
     ms = r.get("inference_ms")
     return ms is not None and ms < _SUSPECT_MS
-
 
 def _number(value) -> float | None:
     try:
@@ -62,11 +57,9 @@ def _number(value) -> float | None:
         return None
     return number if math.isfinite(number) else None
 
-
 def _display_ms(value) -> str:
     number = _number(value)
     return f"{number:.1f}" if number is not None else "-"
-
 
 def _label(r, multi_model: bool) -> str:
     parts = []
@@ -92,7 +85,6 @@ def _label(r, multi_model: bool) -> str:
         parts.append(" · ".join(config))
     return textwrap.fill("\n".join(parts), width=32, break_long_words=True)
 
-
 def _latency_text(r) -> str:
     values = [r.get("inference_ms")]
     percentiles = r.get("latency_ms")
@@ -102,14 +94,12 @@ def _latency_text(r) -> str:
     )
     return " / ".join(_display_ms(value) for value in values)
 
-
 def _stage_text(r) -> str:
     stages = r.get("stage_ms")
     return " / ".join(
         _display_ms(stages.get(stage)) if isinstance(stages, dict) else "-"
         for stage in ("preprocess", "device", "postprocess")
     )
-
 
 def _detail_text(r) -> str:
     if _is_error(r):
@@ -130,7 +120,6 @@ def _detail_text(r) -> str:
         details.append("suspect latency")
     return " · ".join(details)
 
-
 def _style(ax):
     ax.set_facecolor(_PANEL)
     ax.tick_params(colors=_DIM, labelsize=8)
@@ -138,7 +127,6 @@ def _style(ax):
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_color("#30363d")
-
 
 def render_report(payload: dict, out_path, title: str = "iSpy benchmark"):
     try:

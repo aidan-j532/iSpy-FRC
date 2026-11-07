@@ -5,16 +5,12 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-
-# opencv 4.9+ moved the aruco helpers into the main cv2 namespace and deleted
-# the old aliases, so resolve from whichever one the installed build exposes
 def _pick_aruco(*names: tuple) -> callable:
     for obj, name in names:
         fn = getattr(obj, name, None)
         if fn is not None:
             return fn
     raise AttributeError(f"no cv2 binding found for any of {[n for _, n in names]}")
-
 
 _draw_detected_markers = _pick_aruco(
     (cv2, "drawDetectedMarkers"), (cv2.aruco, "drawDetectedMarkers")
@@ -23,13 +19,10 @@ _draw_detected_corners_charuco = _pick_aruco(
     (cv2, "drawDetectedCornersCharuco"), (cv2.aruco, "drawDetectedCornersCharuco")
 )
 
-
 def _calibrate_charuco_via_calibrate_camera(
     all_corners: list, all_ids: list, board, img_size
 ):
     try:
-        # detectBoard ids index straight into getChessboardCorners() (row-major
-        # grid layout), so map each corner index to its 3D object point.
         obj_by_id = {}
         for idx, oc in enumerate(
             np.asarray(board.getChessboardCorners(), dtype=np.float32).reshape(-1, 3)
@@ -57,9 +50,7 @@ def _calibrate_charuco_via_calibrate_camera(
     except cv2.error as exc:
         logger.exception("cv2.calibrateCamera failed: %s", exc)
         return None
-    # match calibrateCameraCharuco's 5-tuple shape
     return rms, cam_mat, dist, None, None
-
 
 def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
     for obj, name in (
@@ -75,7 +66,6 @@ def _calibrate_camera_charuco(all_corners, all_ids, board, img_size, *extra):
     if result is None:
         raise cv2.error("ChArUco calibration unavailable in this OpenCV build")
     return result
-
 
 def _build_obj_img_pairs(all_corners, all_ids, board):
     try:
@@ -99,7 +89,6 @@ def _build_obj_img_pairs(all_corners, all_ids, board):
         all_obj.append(np.asarray(obj, dtype=np.float64))
         all_img.append(np.asarray(img, dtype=np.float64))
     return all_obj, all_img
-
 
 def _estimate_initial_intrinsics(all_obj, all_img, img_size):
     w, h = img_size
@@ -126,7 +115,6 @@ def _estimate_initial_intrinsics(all_obj, all_img, img_size):
         dtype=np.float64,
     )
 
-
 def _estimate_initial_extrinsics(all_obj, all_img, K):
     rvecs = []
     tvecs = []
@@ -144,7 +132,6 @@ def _estimate_initial_extrinsics(all_obj, all_img, K):
             tvecs.append(np.zeros(3))
     return np.array(rvecs), np.array(tvecs)
 
-
 def _pack_params(K, dist, rvecs, tvecs):
     fx, fy = K[0, 0], K[1, 1]
     cx, cy = K[0, 2], K[1, 2]
@@ -155,7 +142,6 @@ def _pack_params(K, dist, rvecs, tvecs):
     extr = np.column_stack([rvecs, tvecs]).ravel()
     return np.concatenate([header, extr])
 
-
 def _unpack_params(params, n_images):
     fx, fy, cx, cy, k1, k2, p1, p2, k3 = params[:9]
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
@@ -165,7 +151,6 @@ def _unpack_params(params, n_images):
     tvecs = extr[:, 3:]
     return K, dist, rvecs, tvecs
 
-
 def _calibrate_scipy_residuals(params, all_obj, all_img, n_images):
     K, dist, rvecs, tvecs = _unpack_params(params, n_images)
     residuals = []
@@ -174,7 +159,6 @@ def _calibrate_scipy_residuals(params, all_obj, all_img, n_images):
         err = proj.reshape(-1, 2) - all_img[i]
         residuals.append(err.ravel())
     return np.concatenate(residuals)
-
 
 def _calibrate_scipy(all_corners, all_ids, board, img_size):
     pairs = _build_obj_img_pairs(all_corners, all_ids, board)
@@ -217,32 +201,25 @@ def _calibrate_scipy(all_corners, all_ids, board, img_size):
     rms = float(np.sqrt(total_err / max(total_pts, 1)))
     return rms, K, dist, None, None
 
-
 DEFAULT_CHARUCO_PATTERN = (7, 9)  # squares wide x squares tall
 DEFAULT_CHARUCO_DICT = cv2.aruco.DICT_4X4_50
-# square/marker lengths only need to be consistent (intrinsics are scale
-# invariant) - marker must be smaller than the square it sits in
 DEFAULT_CHARUCO_SQUARE = 25.0
 DEFAULT_CHARUCO_MARKER = 18
-
 
 def focal_from_object(real_size: float, distance: float, pixel_height: float) -> float:
     if real_size <= 0 or distance <= 0 or pixel_height <= 0:
         return 0.0
     return pixel_height * distance / real_size
 
-
 def fov_from_focal(focal_px: float, width_px: float) -> float:
     if focal_px <= 0 or width_px <= 0:
         return 0.0
     return float(2.0 * np.degrees(np.arctan2(width_px / 2.0, focal_px)))
 
-
 def focal_from_fov(fov_deg: float, width_px: float) -> float:
     if fov_deg <= 0 or width_px <= 0:
         return 0.0
     return (width_px / 2.0) / np.tan(np.radians(fov_deg / 2.0))
-
 
 def random_overlay_color():
     hue = int(np.random.randint(0, 180))
@@ -250,7 +227,6 @@ def random_overlay_color():
     val = int(np.random.randint(180, 256))
     bgr = cv2.cvtColor(np.array([[[hue, sat, val]]], dtype=np.uint8), cv2.COLOR_HSV2BGR)
     return tuple(int(x) for x in bgr[0, 0])
-
 
 def draw_corners_into(out, corners, color):
     if corners is None:
@@ -261,7 +237,6 @@ def draw_corners_into(out, corners, color):
             cv2.circle(out, (int(round(float(x))), int(round(float(y)))), 5, color, -1)
     return out
 
-
 def draw_corners(frame, corners, color):
     out = (
         frame.copy()
@@ -269,7 +244,6 @@ def draw_corners(frame, corners, color):
         else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     )
     return draw_corners_into(out, corners, color)
-
 
 def draw_markers_into(out, corners, color):
     if corners is None:
@@ -279,7 +253,6 @@ def draw_markers_into(out, corners, color):
         cv2.polylines(out, [pts], True, color, 2)
     return out
 
-
 def draw_markers(frame, corners, color):
     out = (
         frame.copy()
@@ -287,7 +260,6 @@ def draw_markers(frame, corners, color):
         else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     )
     return draw_markers_into(out, corners, color)
-
 
 def draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=None):
     if color is None:
@@ -302,7 +274,6 @@ def draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=None)
             draw_corners_into(out, corners, color)
     return out
 
-
 def draw_charuco(frame, corners, ids, marker_corners, marker_ids, color=None):
     out = (
         frame.copy()
@@ -311,7 +282,6 @@ def draw_charuco(frame, corners, ids, marker_corners, marker_ids, color=None):
     )
     return draw_charuco_into(out, corners, ids, marker_corners, marker_ids, color=color)
 
-
 def expected_charuco_corners(pattern) -> int:
     try:
         cols, rows = int(pattern[0]), int(pattern[1])
@@ -319,13 +289,11 @@ def expected_charuco_corners(pattern) -> int:
         return 0
     return max(0, (cols - 1) * (rows - 1))
 
-
 def capture_coverage(corners, expected: int) -> float:
     if corners is None or expected <= 0:
         return 0.0
     n = len(np.asarray(corners).reshape(-1, 2))
     return float(min(1.0, n / expected))
-
 
 def frame_diverse(corners, existing_captures, min_shift_px: float = 12.0) -> bool:
     new = np.asarray(corners, dtype=np.float64).reshape(-1, 2)
@@ -344,7 +312,6 @@ def frame_diverse(corners, existing_captures, min_shift_px: float = 12.0) -> boo
             return False
     return True
 
-
 def derive_fov_from_intrinsics(result: dict) -> dict:
     try:
         fx = float(result["camera_matrix"][0][0])
@@ -357,7 +324,6 @@ def derive_fov_from_intrinsics(result: dict) -> dict:
         "fov": round(fov_from_focal(fx, width), 3),
         "focal_length_pixels": round(fx, 2),
     }
-
 
 def _charuco_captures_degenerate(all_corners: list, all_ids: list) -> bool:
     if len(all_corners) < 2:
@@ -375,7 +341,6 @@ def _charuco_captures_degenerate(all_corners: list, all_ids: list) -> bool:
                 return False
     return True
 
-
 def make_charuco_board(
     cols: int,
     rows: int,
@@ -387,7 +352,6 @@ def make_charuco_board(
     return cv2.aruco.CharucoBoard(
         (cols, rows), square_length, marker_length, dictionary
     )
-
 
 def detect_charuco(
     frame,
@@ -406,8 +370,6 @@ def detect_charuco(
         return False, None, None, None, None, gray
     if corners is None or ids is None:
         return False, None, None, None, None, gray
-    # cv2 >= 5 returns flat (N, 2) / (N,) arrays - normalize to the classic
-    # (N, 1, 2) / (N, 1) shapes the draw + calibrate helpers expect.
     corners = _to_corners(corners)
     ids = _to_ids(ids)
     marker_corners = _to_marker_corners(marker_corners)
@@ -415,9 +377,6 @@ def detect_charuco(
     found = len(corners) >= 4
     return found, corners, ids, marker_corners, marker_ids, gray
 
-
-# swept by detect_charuco_auto when nothing matches the stored layout. kept short
-# on purpose, every miss costs a full detector pass
 CHARUCO_COMMON_PATTERNS = (
     DEFAULT_CHARUCO_PATTERN,
     (7, 5),
@@ -431,7 +390,6 @@ CHARUCO_COMMON_DICTS = (
     cv2.aruco.DICT_5X5_250,
     cv2.aruco.DICT_6X6_250,
 )
-
 
 def detect_charuco_auto(frame, preferred_pattern=None, preferred_dict=None):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
@@ -461,9 +419,6 @@ def detect_charuco_auto(frame, preferred_pattern=None, preferred_dict=None):
                 continue
             if not found:
                 continue
-            # a wrong-but-compatible grid can match the same corners, so rank
-            # by coverage first, then prefer the smallest board that explains
-            # what is visible (a 7x5 print also "fits" a 7x9 grid)
             score = (len(corners), -(pattern[0] * pattern[1]))
             if best is None or score > best[0]:
                 best = (score, corners, ids, mc, mi, pattern, dictionary_id)
@@ -472,9 +427,7 @@ def detect_charuco_auto(frame, preferred_pattern=None, preferred_dict=None):
         return True, corners, ids, mc, mi, gray, pattern, dictionary_id
     return False, None, None, None, None, gray, None, None
 
-
 def _calibration_sane(rms, cam_mat, dist, img_size, max_rms: float = 100.0) -> bool:
-    # Reject degenerate solves before they get to the pipeliine
     if rms is None or cam_mat is None or dist is None:
         return False
     try:
@@ -499,7 +452,6 @@ def _calibration_sane(rms, cam_mat, dist, img_size, max_rms: float = 100.0) -> b
         return False
     return True
 
-
 def calibrate_charuco(
     captures,
     pattern=DEFAULT_CHARUCO_PATTERN,
@@ -523,9 +475,6 @@ def calibrate_charuco(
         all_ids.append(np.asarray(ids, dtype=np.int32))
     if len(all_corners) < 3:
         return None
-    # degenerate captures (e.g. every frame the same board pose) solve fine
-    # to a garbage-but-plausible intrinsics set - compare corner locations by
-    # id and refuse when nothing moved
     if _charuco_captures_degenerate(all_corners, all_ids):
         logger.warning(
             "ChArUco calibration frames were all the same board pose - move the board between captures"
@@ -547,8 +496,6 @@ def calibrate_charuco(
         )
         rms, cam_mat, dist = None, None, None
     if not _calibration_sane(rms, cam_mat, dist, img_size):
-        # native solver missing or returned an implausible baseline - fall back
-        # to the scipy bundle (what used to be the primary path)
         try:
             result = _calibrate_scipy(all_corners, all_ids, board, img_size)
         except Exception as exc:
@@ -574,13 +521,11 @@ def calibrate_charuco(
         "count": len(captures),
     }
 
-
 def _to_corners(corners):
     a = np.asarray(corners, dtype=np.float32)
     if a.ndim == 2:
         return a.reshape(-1, 1, 2)
     return a
-
 
 def _to_ids(ids):
     a = np.asarray(ids, dtype=np.int32)
@@ -588,14 +533,12 @@ def _to_ids(ids):
         return a.reshape(-1, 1)
     return a
 
-
 def _to_marker_corners(marker_corners):
     out = []
     for marker in marker_corners:
         a = np.asarray(marker, dtype=np.float32).reshape(-1, 2)
         out.append(a.reshape(4, 1, 2))
     return out
-
 
 def intrinsics_for_frame(calib: dict, frame_w: int, frame_h: int):
     if not isinstance(calib, dict):
@@ -611,7 +554,6 @@ def intrinsics_for_frame(calib: dict, frame_w: int, frame_h: int):
             sx = frame_w / float(res[0])
             sy = frame_h / float(res[1])
         else:
-            # no stored resolution - assume intrinsics were captured at this frame size
             sx = sy = 1.0
         fx = float(m[0, 0]) * sx
         fy = float(m[1, 1]) * sy
@@ -623,7 +565,6 @@ def intrinsics_for_frame(calib: dict, frame_w: int, frame_h: int):
         [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float64
     )
     return cam_mat, np.asarray(d, dtype=np.float64).ravel()
-
 
 def generate_calibration_board_pdf(path):
     try:
@@ -641,11 +582,6 @@ def generate_calibration_board_pdf(path):
     cols, rows = DEFAULT_CHARUCO_PATTERN
     board_w = cols * sq_px
     board_h = rows * sq_px
-    # generateImage with marginSize is buggy in some OpenCV builds, so draw
-    # the board at exact board-pixel size and composite onto a white canvas
-    # that includes a half-inch print margin.
-    # generateImage is picky about exact sizes in some OpenCV builds; add 1px
-    # and let the white canvas margin absorb the difference.
     img = board.generateImage((board_w + 1, board_h + 1))
     margin = round(0.5 * dpi)  # 0.5 inch margin
     canvas = Image.new("L", (board_w + 2 * margin, board_h + 2 * margin), 255)

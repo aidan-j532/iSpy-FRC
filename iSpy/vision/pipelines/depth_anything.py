@@ -25,9 +25,6 @@ _YOLO_MODELS_DIR = Path(__file__).resolve().parents[3] / "YoloModels"
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
-
-# are the V2 weights (or a pre-exported artifact) on disk? cached means the
-# pipeline runs fine offline, missing means it would download on first use
 def _depth_weights_cached() -> bool:
     hub = _DEPTH_HF_CACHE_DIR / "models--depth-anything--Depth-Anything-V2-Small-hf"
     try:
@@ -35,7 +32,6 @@ def _depth_weights_cached() -> bool:
             return True
     except OSError:
         pass
-    # a pre-exported artifact (onnx/openvino/...) runs without the HF weights
     for parent in _YOLO_MODELS_DIR.glob("*"):
         try:
             if parent.is_dir() and any(parent.glob(f"{_DEPTH_ARTIFACT_STEM}*")):
@@ -44,10 +40,8 @@ def _depth_weights_cached() -> bool:
             continue
     return False
 
-
 class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline):
     plugin_name = "depth_anything"
-    # monocular depth maps need no calibration - disable the default ChArUco tab
     calibration_sections = []
 
     _OPT_OPTIONS_EXTRA = ("input_size", "model_size")
@@ -100,14 +94,12 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         reqs.extend(offline_build_requirements(settings))
         return reqs
 
-    # while offline the from_pretrained paths need the weights already cached
     def _ensure_weights_local(self) -> None:
         if self.network_allowed or _depth_weights_cached():
             return
         self.require_network("downloading the Depth Anything V2 weights")
 
     def is_ready(self) -> tuple[bool, str]:
-        # pure status report - never triggers/blocks on optimization
         if not self.estimate_depth:
             self._set_status("ready")
             return True, "ready"
@@ -229,8 +221,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._input_size = _DEPTH_INPUT_SIZE
         self._target_format: str | None = None
 
-        # max_depth is in meters; scale z into the configured unit so
-        # every pipeline emits the same unit.
         self._z_scale = {
             "meter": 1.0,
             "meters": 1.0,
@@ -240,7 +230,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             "feet": 3.280839895,
             "centimeter": 100.0,
             "centimeters": 100.0,
-            # FRC/WPILib convention: meters out
             "frc": 1.0,
         }.get(self.unit, 1.0)
         self._unit_label = {
@@ -275,20 +264,15 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             camera_config.get("grayscale", False),
         )
 
-        # file_path drift guard - see OptimizableModelPipeline._resync_stale_model_file_path
         if self._optimization_requested():
             self._resync_stale_model_file_path(config)
 
-        # optimization requested + no active artifact yet -> kick off the
-        # build on a bg thread so the app keeps running
         if self._optimization_requested() and not self._optimized_active():
             self.logger.info(
                 "Camera '%s': optimization requested - building %s artifact",
                 self.config.get("name", "?"),
                 self._target_format_cached(),
             )
-            # import torch now so the bg thread doesn't race the main thread's
-            # scipy.stats -> torch import (partial module / clobbered logging)
             ensure_torch_imported()
             threading.Thread(
                 target=self._optimize_runner,
@@ -313,7 +297,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         self._optimizing = True
         self._set_status("optimizing (onnx build)")
         try:
-            # reuse cached artifact; only a full rebuild re-exports
             self._load_optimized(force=False)
             if not self._optimized_active():
                 self._load_optimized(force=True)
@@ -362,27 +345,13 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         self._set_status(status)
         return status
 
-    # _resolve_target_format is inherited from OptimizableModelPipeline -
-    # this pipeline has no override-worthy behaviour (unlike yolo_world,
-    # whose recommend_format() call deliberately keeps dependency checks).
-
     def _optimization_requested(self) -> bool:
-        # depth estimation can be disabled entirely - no model, no build
         return bool(getattr(self, "estimate_depth", True)) and (
             super()._optimization_requested()
         )
 
     def _optimized_active(self) -> bool:
         return getattr(self, "_session", None) is not None
-
-    # stale-artifact resync hooks (see OptimizableModelPipeline)
-    #
-    # depth anything ships exactly one Hugging Face checkpoint and every
-    # artifact path is derived from config at boot (fixed stem + input
-    # size + target format), so there is no user-picked source model and
-    # no persisted path that could drift. the hooks exist so the boot
-    # guard is callable on every model-backed pipeline instead of raising
-    # AttributeError if a future refactor adds persisted state.
 
     def _resolve_model_path(self, path: str) -> Path | None:
         if not path:
@@ -393,12 +362,9 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         return p
 
     def _source_model_path(self) -> Path | None:
-        # single fixed HF checkpoint - no authoritative user-picked .pt
-        # exists, so there is never anything to resync against (yet)
         return None
 
     def _persist_file_path(self, file_path: str, config: iSpyConfig | None):
-        # artifact locations are derived, not stored - nothing to persist
         pass
 
     def _optimized_active(self) -> bool:
@@ -483,8 +449,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
     def _artifact_path(self, target: str) -> Path:
         stem = f"{_DEPTH_ARTIFACT_STEM}_{self._input_size}x{self._input_size}"
         if target == "openvino":
-            # real OpenVINO IR folder, same convention as object_detection:
-            # YoloModels/openvino/<stem>_openvino_model/<stem>_openvino_model.xml
             return _YOLO_MODELS_DIR / "openvino" / f"{stem}_openvino_model"
         ext = {  # every other backend keeps a single artifact file
             "engine": ".engine",
@@ -515,10 +479,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         self.logger.info("Loaded optimized Depth Anything ONNX from %s", artifact)
 
     def _load_openvino(self, force: bool = False):
-        # OpenVINO converts the fp32 ONNX export into a real OpenVINO IR
-        # (.xml + .bin) cached under YoloModels/openvino/, then runs it on
-        # the best available device (GPU/NPU, else CPU). compiled blobs are
-        # cached too, so boot does not re-compile the model every time.
         artifact, converted = self._export_onnx_source(force, quantize=False)
         if not converted or not artifact:
             self._session = None
@@ -693,8 +653,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         tflite_path = self._artifact_path("tflite")
         tflite_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # A cached artifact loads without provisioning the multi-GB TFLite
-        # build environment (and without the ONNX source being present).
         if not tflite_path.exists() or force:
             artifact, converted = self._export_onnx_source(force, quantize=False)
             if not converted or not artifact:
@@ -746,8 +704,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         result_path = Path(str(args_path) + ".result.json")
 
         env = os.environ.copy()
-        # Replace the parent's PYTHONPATH so runtime packages cannot shadow
-        # the converter env's TensorFlow/onnx2tf stack.
         env["PYTHONPATH"] = str(converter_envs.ispy_source_root())
         env["PYTHONNOUSERSITE"] = "1"
         try:
@@ -849,8 +805,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             "onnx": str(onnx_path),
             "output": str(rknn_path),
             "quantize": bool(self.quantize),
-            # match _preprocess_depth: (u8/255 - mean)/std, expressed in the
-            # 0..255 space the NPU's input normalization expects
             "target_platform": "rk3588",
             "mean": [123.675, 116.28, 103.53],
             "std": [58.395, 57.12, 57.375],
@@ -863,8 +817,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         result_path = Path(str(args_path) + ".result.json")
 
         env = os.environ.copy()
-        # Replace the parent's PYTHONPATH so runtime packages cannot shadow
-        # the converter env's pinned stack (see optimizer's worker spawn).
         env["PYTHONPATH"] = str(_rknn_converter_env.ispy_source_root())
         env["PYTHONNOUSERSITE"] = "1"
         try:
@@ -910,11 +862,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
     def _rknn_calibration_txt(self) -> str | None:
         if not self._quantization_dataset:
             return None
-        # resolve to an absolute path so every line written below is absolute
-        # too - rknn-toolkit2 resolves dataset-file entries relative to the
-        # txt's own directory, so relative entries like
-        # "QuantizeDataset/dataset/395.png" would otherwise be double-joined
-        # into .../dataset/QuantizeDataset/dataset/395.png
         ds = Path(self._quantization_dataset).resolve()
         if not ds.exists():
             return None
@@ -1014,7 +961,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._model = None
 
     def _infer_depth(self, frame: np.ndarray):
-        # runtime picked once at load time - no re-deciding per frame
         if self._infer is not None:
             return self._infer(frame)
         return self._infer_depth_pipeline(frame)
@@ -1024,7 +970,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         result = self._model(image)
 
-        # some transformers versions expose depth as either key
         depth = result.get("predicted_depth")
 
         if depth is not None:
@@ -1033,7 +978,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
             depth = np.asarray(depth)
 
-            # strip batch/channel dims
             while depth.ndim > 2:
                 depth = depth[0]
 
@@ -1121,7 +1065,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         closeness = (norm - d_min) / span
 
-        # Depth Anything gives relative depth, not real meters
         distance_m = self.max_depth * float(np.clip(1.0 - closeness, 0.0, 1.0))
 
         return distance_m * self._z_scale
@@ -1157,7 +1100,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             )
         ]
 
-        # nearest point = highest relative inverse-depth value
         flat_near = np.unravel_index(
             np.argmax(depth),
             depth.shape,
@@ -1206,7 +1148,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             cv2.COLORMAP_JET,
         )
 
-        # resize if the model output resolution differs from the frame
         if heatmap.shape[:2] != frame.shape[:2]:
             heatmap = cv2.resize(
                 heatmap,
@@ -1236,7 +1177,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             2,
         )
 
-        # map the center pixel onto the depth map
         depth_x = min(
             depth.shape[1] - 1,
             int(cx * depth.shape[1] / frame.shape[1]),
@@ -1280,7 +1220,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
         every = max(1, self._every)
         last_depth = self._last_depth
 
-        # reuse the last depth map between inference frames
         if last_depth is not None and every > 1 and self._frame_count % every != 0:
             objects = self._objects_from_depth(
                 last_depth,
