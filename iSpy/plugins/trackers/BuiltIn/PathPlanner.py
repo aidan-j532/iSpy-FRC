@@ -39,7 +39,7 @@ class PathPlanner(TrackerBase):
     def get_cluster_positions(self):
         return self.cluster_positions
 
-    def update(self, detections, robot_x, robot_y, robot_yaw, robot_z: float = 0.0):
+    def update(self, detections, *args, **kwargs):
         self.cluster_positions, self.noise_positions = self._dbscan(detections)
         return self.cluster_positions
 

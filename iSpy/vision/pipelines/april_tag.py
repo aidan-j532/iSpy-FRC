@@ -4,7 +4,13 @@ import os
 
 import cv2
 import numpy as np
-import robotpy_apriltag as apriltag
+try:
+    import robotpy_apriltag as apriltag
+except Exception:  # pragma: no cover - optional FRC-flavored backend
+    try:
+        import pupil_apriltags as apriltag  # type: ignore
+    except Exception:
+        apriltag = None
 
 from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig, unit_to_inches
 from iSpy.vision import calibration as cam_calibration
@@ -100,6 +106,11 @@ class AprilTagPipeline(VisionPipeline):
 
         super().__init__(camera_config, (640, 480), self.grayscale)
 
+        if apriltag is None:
+            raise RuntimeError(
+                "AprilTag pipeline requires robotpy_apriltag (or pupil_apriltags); "
+                "none is installed."
+            )
         self.detector = apriltag.AprilTagDetector()
         self.detector.addFamily("tag36h11")
         # leave a core free, same pattern genericYolo.py uses for ONNX

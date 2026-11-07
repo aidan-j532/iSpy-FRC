@@ -222,12 +222,14 @@ class ObjectTrackerTests(unittest.TestCase):
         fuels = tracker.update([], 0, 0, 0)
         self.assertEqual(fuels, [])
 
-    def test_robot_transform_applied(self):
+    def test_tracker_does_not_apply_transform(self):
+        # Transforms are applied by transform providers before tracking;
+        # trackers only merge in the frame they receive.
         tracker = self._make()
         fuels = tracker.update([Object(1.0, 0.0)], 10, 20, 0)
         pos = fuels[0].get_position_normally()
-        self.assertAlmostEqual(pos[0], 11.0)
-        self.assertAlmostEqual(pos[1], 20.0)
+        self.assertAlmostEqual(pos[0], 1.0)
+        self.assertAlmostEqual(pos[1], 0.0)
 
     def test_stop_clears_tracked_list(self):
         tracker = self._make()
@@ -235,6 +237,17 @@ class ObjectTrackerTests(unittest.TestCase):
         self.assertTrue(tracker.tracked_objects)
         tracker.stop()
         self.assertEqual(tracker.tracked_objects, [])
+
+
+class TransformTests(unittest.TestCase):
+    def test_transform_2d_applies_rigid_transform(self):
+        from iSpy.vision.Object import Object
+        from iSpy.vision.transforms import transform_2d
+
+        obj = Object(1.0, 0.0)
+        transform_2d(obj, 10.0, 20.0, 0.0, 0.0, 0.0, 0.0)
+        self.assertAlmostEqual(obj.x, 11.0)
+        self.assertAlmostEqual(obj.y, 20.0)
 
 
 class PathPlannerTests(unittest.TestCase):

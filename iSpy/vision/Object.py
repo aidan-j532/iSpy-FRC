@@ -53,6 +53,10 @@ class Object:
         self.source_camera = str(source_camera) if source_camera else (
             self.source_cameras[0] if self.source_cameras else None
         )
+        # coordinate frame of self.x/y/z. "field" by default; "robot" when a
+        # robot-frame transform has been applied (e.g. via relative_to). kept
+        # generic so non-FRC consumers can reason about frames.
+        self.frame = "field"
 
         # vis_type -> renderer mapping (see VIS_RENDERERS in viewer3d.html)
         self.vis_type = vis_type
@@ -63,27 +67,8 @@ class Object:
         self.destroyed = False
         self.alive_time = alive_time
 
-    def relative_to(
-        self,
-        robot_x: float,
-        robot_y: float,
-        robot_z: float = 0.0,
-        robot_roll: float = 0.0,
-        robot_pitch: float = 0.0,
-        robot_yaw: float = 0.0,
-    ):
-        # frame: +X right, +Y forward, +Z up; robot_yaw is +ve when the
-        # robot turned RIGHT (boresight rotated from +Y toward +X)
-        cos_y = math.cos(robot_yaw)
-        sin_y = math.sin(robot_yaw)
-        field_x = self.x * cos_y + self.y * sin_y
-        field_y = self.y * cos_y - self.x * sin_y
-        self.x = field_x + robot_x
-        self.y = field_y + robot_y
-        self.z = self.z + robot_z
-        self.yaw = (self.yaw + robot_yaw) % (2 * math.pi)
-        self.roll = (self.roll + robot_roll) % (2 * math.pi)
-        self.pitch = (self.pitch + robot_pitch) % (2 * math.pi)
+    # Coordinate transforms (robot -> field etc.) now live in
+    # iSpy.vision.transforms so Object stays a plain data container.
 
     def get_position(self) -> np.ndarray:
         return np.array([self.x, self.y, self.z])

@@ -290,11 +290,12 @@ class TrackerFrameInverseTests(unittest.TestCase):
 
     def test_rb_to_robot_undoes_relative_to(self):
         from iSpy.vision.Object import Object
+        from iSpy.vision.transforms import transform_2d as robot_to_field
 
         for x, y, z, px, py, heading in self.CASES:
             with self.subTest(x=x, y=y, heading=heading):
                 obj = Object(x, y, z)
-                obj.relative_to(px, py, robot_yaw=-heading)
+                robot_to_field(obj, px, py, yaw=-heading)
 
                 back = self._rb_to_robot(
                     {"x": obj.x, "y": obj.y, "z": obj.z},

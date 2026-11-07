@@ -248,6 +248,24 @@ def find_duplicate_output_keys(utilities: dict) -> dict[str, list[str]]:
     return {key: names for key, names in seen.items() if len(names) > 1}
 
 
+class TransformProvider:
+    """Generic interface for components that transform detection coordinates
+
+    from a measurement frame into a reference frame (e.g. a robot-pose-based
+    conversion). Core stays agnostic: it only calls transform_detections() on
+    any registered provider and never assumes what the transform means. FRC
+    plugins implement this to apply robot/WPILib-specific conversions.
+    """
+
+    def transform_detections(self, detections):
+        return detections
+
+    def get_reference_pose(self):
+        # Optional: return a generic reference pose (plain dict with x/y/heading
+        # or None). Core treats it opaquely.
+        return None
+
+
 class VisionBase(NetworkMixin, ABC):
     plugin_name = "base"
 

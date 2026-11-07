@@ -54,9 +54,9 @@ class ObjectTracker(TrackerBase):
     def update(
         self,
         new_detections: list[Object],
-        robot_x: float,
-        robot_y: float,
-        robot_yaw: float,
+        robot_x: float = 0.0,
+        robot_y: float = 0.0,
+        robot_yaw: float = 0.0,
         robot_z: float = 0.0,
     ) -> list[Object]:
 
@@ -66,9 +66,10 @@ class ObjectTracker(TrackerBase):
 
         self.tracked_objects = [o for o in self.tracked_objects if not o.destroyed]
 
-        # convert detections into robot frame
-        for det in new_detections:
-            det.relative_to(robot_x, robot_y, robot_z, robot_yaw=robot_yaw)
+        # Transforms (e.g. robot-pose-based) are applied by transform
+        # providers before tracking; trackers just merge in the current frame.
+        # The robot_* params are retained for backwards compatibility and
+        # ignored.
 
         self._merge(new_detections)
 

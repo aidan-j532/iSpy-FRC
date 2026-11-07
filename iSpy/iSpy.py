@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from wpimath.geometry import Pose2d, Rotation2d
+from iSpy.vision.transforms import Transform2D as Pose2d, _as_transform as _as_pose2d
 
 from iSpy.config.iSpyConfig import iSpyAddonConfig, iSpyConfig
 from iSpy.core import network_policy, performance
@@ -186,7 +186,9 @@ class iSpy:
                 # stale entry from before rollback was core - the instance
                 # above is the only recorder, do not build a second one
                 continue
-            if self.replay_mode and name == "FRC/network_table_handler":
+            if self.replay_mode and utility_classes.get(name) is not None and getattr(
+                utility_classes[name], "disabled_in_replay", False
+            ):
                 continue
             if name in utility_classes:
                 if not self._gate_addon(
@@ -212,6 +214,16 @@ class iSpy:
                 ", ".join(names),
                 key,
             )
+
+        # Generic transform providers: components that can transform detection
+        # coordinates between frames. Core stays agnostic about what the
+        # transform means (FRC plugins supply robot-pose-based ones).
+        self.transform_providers = [
+            u
+            for u in self.utilities.values()
+            if hasattr(u, "transform_detections")
+            and callable(getattr(u, "transform_detections", None))
+        ]
 
         frame_processor_classes = load_plugins(
             _PLUGIN_ROOT / "frame_processors", FrameProcessorBase
@@ -524,32 +536,35 @@ class iSpy:
             callable(getattr(camera, "replay_pose", None)) for camera in self.cameras
         )
 
-    def _get_pose(self, code_times: dict | None = None) -> Pose2d:
+    def _get_pose(self, code_times: dict | None = None):
+        # Reference transform is optional: iSpy does not assume a robot or any
+        # specific frame. Ask generic transform providers; fall back to replay.
+        for provider in getattr(self, "transform_providers", []):
+            try:
+                rp = provider.get_reference_pose()
+            except Exception:
+                rp = None
+            if rp is not None:
+                return _as_pose2d(rp)
         for camera in self.cameras:
             replay_pose = getattr(camera, "replay_pose", None)
             if callable(replay_pose):
                 pose = replay_pose()
-                if isinstance(pose, dict):
-                    return Pose2d(
-                        float(pose.get("x", 0) or 0),
-                        float(pose.get("y", 0) or 0),
-                        Rotation2d(float(pose.get("heading", 0) or 0)),
-                    )
                 if pose is not None:
-                    return pose
+                    return _as_pose2d(pose)
+        return None
 
-        for name, util in self.utilities.items():
-            if hasattr(util, "get_robot_pose"):
-                t_pose = time.perf_counter()
-                pose = util.get_robot_pose()
-                addon_parts = self._addon_breakdown_parts(util)
-                if code_times is not None and addon_parts:
-                    pose_key = f"{getattr(util, 'plugin_name', name)}_pose"
-                    if pose_key in addon_parts:
-                        code_times[pose_key] = time.perf_counter() - t_pose
-                if pose is not None:
-                    return pose
-        return Pose2d()
+    def _apply_transforms(self, detections):
+        # Let registered transform providers convert detection coordinates.
+        # Core stays agnostic about what the transform means.
+        for provider in getattr(self, "transform_providers", []):
+            try:
+                detections = provider.transform_detections(detections)
+                if detections is None:
+                    detections = []
+            except Exception:
+                self.logger.exception("Transform provider failed")
+        return detections
 
     @staticmethod
     def _tag_detections(detections, camera_name: str):
@@ -572,33 +587,31 @@ class iSpy:
         return False, list(self.trackers.items())
 
     def _detection_frame(self) -> str:
-        # The frame is a NetworkTables plugin setting: publishing robot-relative
-        # data only makes sense when the NT handler is the consumer. Without the
-        # plugin (or without the setting) keep the tracked field coordinates.
-        handler = getattr(self, "utilities", {}).get("FRC/network_table_handler")
-        get_frame = getattr(handler, "detection_frame", None)
-        if callable(get_frame):
-            try:
-                return get_frame()
-            except Exception:
-                pass
+        # The frame is a pose/publisher plugin setting: publishing
+        # robot-relative data only makes sense when a consumer that understands
+        # robot frames (e.g. the NT handler) is present. Without such a plugin
+        # (or without the setting) keep the tracked field coordinates.
+        for util in getattr(self, "utilities", {}).values():
+            get_frame = getattr(util, "detection_frame", None)
+            if callable(get_frame):
+                try:
+                    return get_frame()
+                except Exception:
+                    pass
         return "field"
 
-    def _run_tracker_sequence(self, detections, items, pose, code_times):
+    def _run_tracker_sequence(self, detections, items, code_times):
+        # Transform (if any) is applied by providers before tracking, so
+        # trackers just merge detections in whatever frame they arrive in.
         for name, tracker in items:
             t_one = time.perf_counter()
-            # iSpy's field frame is rotated relative to WPILib's, so hand the
-            # tracker the robot pose in iSpy's frame (iSpy X = -WPILib Y,
-            # iSpy Y = WPILib X).
-            detections = tracker.update(
-                detections, -pose.Y(), pose.X(), -pose.rotation().radians(), 0.0
-            )
+            detections = tracker.update(detections)
             if self._addon_breakdown_parts(tracker):
                 key = getattr(tracker, "plugin_name", name)
                 code_times[key] = time.perf_counter() - t_one
         return detections
 
-    def _run_lane_trackers(self, detections, pose, code_times):
+    def _run_lane_trackers(self, detections, code_times):
         """Run trackers per camera for multi-camera detections.
 
         Lanes with an explicit tracker list only see objects tagged with that
@@ -610,7 +623,7 @@ class iSpy:
         camera_trackers = getattr(self, "camera_trackers", {})
         if not configs:
             return self._run_tracker_sequence(
-                detections, list(self.trackers.items()), pose, code_times
+                detections, list(self.trackers.items()), code_times
             )
 
         combined = []
@@ -626,7 +639,7 @@ class iSpy:
             for obj in lane_objects:
                 handled.add(id(obj))
             lane_objects = self._run_tracker_sequence(
-                lane_objects, list(instances.items()), pose, code_times
+                lane_objects, list(instances.items()), code_times
             )
             self._tag_detections(lane_objects, camera_name)
             for obj in lane_objects or []:
@@ -648,7 +661,7 @@ class iSpy:
         ]
         if legacy:
             legacy = self._run_tracker_sequence(
-                legacy, list(self.trackers.items()), pose, code_times
+                legacy, list(self.trackers.items()), code_times
             )
             for obj in legacy:
                 if id(obj) not in seen:
@@ -988,13 +1001,17 @@ class iSpy:
 
         pose = self._get_pose(code_times)
 
+        t_transform = time.perf_counter()
+        detections = self._apply_transforms(detections)
+        code_times["transforms"] = max(0.0, time.perf_counter() - t_transform)
+
         t_track = time.perf_counter()
         camera_name = self._camera_name(camera)
         detections = self._tag_detections(detections, camera_name)
         if self._detection_frame() == "field":
             _explicit, tracker_items = self._tracker_items_for_camera(camera_name)
             detections = self._run_tracker_sequence(
-                detections, tracker_items, pose, code_times
+                detections, tracker_items, code_times
             )
         code_times["trackers"] = max(0.0, time.perf_counter() - t_track)
 
@@ -1033,11 +1050,15 @@ class iSpy:
             "pipeline_name": pipeline_name,
             "pipeline_settings": pipeline_settings,
             "camera_config": camera_config_dict,
-            "robot_pose": {
-                "x": pose.X(),
-                "y": pose.Y(),
-                "heading": pose.rotation().radians(),
-            },
+            "robot_pose": (
+                {
+                    "x": pose.X(),
+                    "y": pose.Y(),
+                    "heading": pose.rotation().radians(),
+                }
+                if pose is not None
+                else None
+            ),
         }
         if hasattr(camera, "get_debug_data"):
             frame_data["debug_data"] = camera.get_debug_data() or {}
@@ -1083,9 +1104,13 @@ class iSpy:
 
         pose = self._get_pose(code_times)
 
+        t_transform = time.perf_counter()
+        detections = self._apply_transforms(detections)
+        code_times["transforms"] = max(0.0, time.perf_counter() - t_transform)
+
         t_track = time.perf_counter()
         if self._detection_frame() == "field":
-            detections = self._run_lane_trackers(detections, pose, code_times)
+            detections = self._run_lane_trackers(detections, code_times)
         code_times["trackers"] = max(0.0, time.perf_counter() - t_track)
 
         for cam in handler.cameras:
@@ -1118,11 +1143,15 @@ class iSpy:
             "pipeline_name": ",".join(sorted(pipeline_names)),
             "pipeline_settings": {},
             "camera_config": {},
-            "robot_pose": {
-                "x": pose.X(),
-                "y": pose.Y(),
-                "heading": pose.rotation().radians(),
-            },
+            "robot_pose": (
+                {
+                    "x": pose.X(),
+                    "y": pose.Y(),
+                    "heading": pose.rotation().radians(),
+                }
+                if pose is not None
+                else None
+            ),
         }
         if hasattr(handler, "get_camera_debug_data"):
             frame_data["debug_data"] = handler.get_camera_debug_data() or {}

@@ -132,3 +132,9 @@ def closest_point_between_rays(
         return None
 
     return (p1 + p2) / 2.0, residual
+
+
+# Frame-agnostic aliases. The "*_to_robot" names are historical; the math is a
+# generic camera-to-world transform driven by the camera's extrinsics.
+camera_point_to_world = camera_point_to_robot
+camera_rotation_to_world = camera_rotation_to_robot

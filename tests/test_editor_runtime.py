@@ -137,7 +137,7 @@ class LaneTrackerRuntimeTests(unittest.TestCase):
         merged = Object(0, 0, source_cameras=["left", "right"])
 
         result = vision._run_lane_trackers(
-            [left, right, merged], _pose(), {}
+            [left, right, merged], {}
         )
 
         self.assertEqual([obj.id for obj in result], [left.id, merged.id, right.id])
@@ -161,7 +161,7 @@ class LaneTrackerRuntimeTests(unittest.TestCase):
         left = Object(0, 0, source_cameras=["left"])
         right = Object(0, 0, source_cameras=["right"])
 
-        result = vision._run_lane_trackers([left, right], _pose(), {})
+        result = vision._run_lane_trackers([left, right], {})
 
         # An explicit empty lane is still a lane: its detections bypass the
         # legacy global trackers.  Only cameras without lane configuration
@@ -181,7 +181,7 @@ class LaneTrackerRuntimeTests(unittest.TestCase):
             Object(0, 0, source_cameras=["right"]),
         ]
 
-        result = vision._run_lane_trackers(objects, _pose(), {})
+        result = vision._run_lane_trackers(objects, {})
 
         self.assertEqual([obj.id for obj in result], [obj.id for obj in objects])
         self.assertEqual(calls, [("global", [obj.id for obj in objects])])

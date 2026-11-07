@@ -612,7 +612,27 @@ def _configure_replay(
     plugins = copy.deepcopy(config.get("plugins", {}))
     utilities = plugins.get("utilities", {})
     if isinstance(utilities, dict):
-        utilities.pop("FRC/network_table_handler", None)
+        # drop utilities that declare themselves disabled in replay mode
+        # (e.g. the network table handler) without hard-coding their names.
+        # Discovery is best-effort; fall back to the well-known name.
+        to_drop = []
+        try:
+            from iSpy.plugins._loader import load_plugins
+            from iSpy.plugins.bases import UtilityBase
+
+            plugin_root = _PROJECT_ROOT / "plugins"
+            utility_classes = load_plugins(plugin_root / "utilities", UtilityBase)
+            to_drop = [
+                name
+                for name in list(utilities)
+                if getattr(utility_classes.get(name), "disabled_in_replay", False)
+            ]
+        except Exception:
+            pass
+        if not to_drop and "FRC/network_table_handler" in utilities:
+            to_drop = ["FRC/network_table_handler"]
+        for name in to_drop:
+            utilities.pop(name, None)
         plugins["utilities"] = utilities
     config.set("plugins", plugins)
 

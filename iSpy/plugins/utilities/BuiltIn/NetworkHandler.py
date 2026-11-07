@@ -3,8 +3,9 @@ import logging
 import ntcore
 import dataclasses
 import wpiutil.wpistruct
-from wpimath.geometry import Pose2d
-from iSpy.plugins.bases import UtilityBase
+from wpimath.geometry import Pose2d, Rotation2d
+from iSpy.plugins.bases import UtilityBase, TransformProvider
+from iSpy.vision.transforms import transform_2d
 
 
 @wpiutil.wpistruct.make_wpistruct(name="Object")
@@ -50,8 +51,12 @@ DEFAULT_PUBLISH = [
 ]
 
 
-class NetworkTableHandler(UtilityBase):
+class NetworkTableHandler(UtilityBase, TransformProvider):
     plugin_name = "FRC/network_table_handler"
+    # NetworkTables publishing and robot-pose reads are meaningless during a
+    # replay (no robot attached), so the core skips constructing this add-on
+    # in replay mode.
+    disabled_in_replay = True
 
     @classmethod
     def get_breakdown_parts(cls) -> dict:
@@ -188,10 +193,50 @@ class NetworkTableHandler(UtilityBase):
                 self._subscribers[sub_key] = table.getStructTopic(
                     "Robot", Pose2d
                 ).subscribe(Pose2d())
-            return self._subscribers[sub_key].get()
+            pose = self._subscribers[sub_key].get()
+            # The robot publishes pose in WPILib's frame (X forward, Y left,
+            # heading CCW+). Convert to iSpy's field frame here so the core
+            # never has to know about WPILib conventions (iSpy X = -WPILib Y,
+            # iSpy Y = WPILib X). Dicts (e.g. test fakes) pass through.
+            if isinstance(pose, Pose2d):
+                return Pose2d(
+                    -pose.Y(),
+                    pose.X(),
+                    Rotation2d(-pose.rotation().radians()),
+                )
+            return pose
         except Exception as e:
             self.logger.error("Failed to get robot pose: %s", e)
             return Pose2d()
+
+    def transform_detections(self, detections):
+        # FRC-specific: read robot pose (WPILib frame), convert to iSpy frame,
+        # and apply the 2-D transform to each detection. Core stays agnostic.
+        if not self.isConnected():
+            return detections
+        pose = self.get_robot_pose()
+        if not isinstance(pose, Pose2d):
+            return detections
+        tx = pose.X()
+        ty = pose.Y()
+        yaw = pose.rotation().radians()
+        for det in (detections or []):
+            if hasattr(det, "x"):
+                transform_2d(det, tx, ty, 0.0, 0.0, 0.0, yaw)
+        return detections
+
+    def get_reference_pose(self):
+        # Generic reference pose as a plain dict; core wraps it opaquely.
+        if not self.isConnected():
+            return None
+        pose = self.get_robot_pose()
+        if not isinstance(pose, Pose2d):
+            return None
+        return {
+            "x": float(pose.X()),
+            "y": float(pose.Y()),
+            "heading": float(pose.rotation().radians()),
+        }
 
     def update(self, frame_data: dict):
 
