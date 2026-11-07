@@ -70,6 +70,15 @@ class NetworkTableHandler(UtilityBase):
                 "(usually the roboRIO).",
                 "default": "10.0.0.2",
             },
+            "detection_frame": {
+                "type": "select",
+                "label": "Detection Frame",
+                "hint": "Publish detections in field coordinates, or as raw "
+                "robot-relative coordinates (+X right, +Y forward; field "
+                "trackers are skipped in robot mode).",
+                "options": ["field", "robot"],
+                "default": "field",
+            },
             "publish": {
                 "type": "list",
                 "label": "Publish to NetworkTables",
@@ -135,6 +144,12 @@ class NetworkTableHandler(UtilityBase):
 
     def isConnected(self) -> bool:
         return self.inst.isConnected()
+
+    def detection_frame(self) -> str:
+        value = str(self.config.get("detection_frame", "field")).strip().lower()
+        if value in ("robot", "robot_relative", "robot-relative"):
+            return "robot"
+        return "field"
 
     def get_health(self) -> dict:
         connected = self.isConnected()

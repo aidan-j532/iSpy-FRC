@@ -571,11 +571,27 @@ class iSpy:
             return True, list(camera_trackers.get(camera_name, {}).items())
         return False, list(self.trackers.items())
 
+    def _detection_frame(self) -> str:
+        # The frame is a NetworkTables plugin setting: publishing robot-relative
+        # data only makes sense when the NT handler is the consumer. Without the
+        # plugin (or without the setting) keep the tracked field coordinates.
+        handler = getattr(self, "utilities", {}).get("FRC/network_table_handler")
+        get_frame = getattr(handler, "detection_frame", None)
+        if callable(get_frame):
+            try:
+                return get_frame()
+            except Exception:
+                pass
+        return "field"
+
     def _run_tracker_sequence(self, detections, items, pose, code_times):
         for name, tracker in items:
             t_one = time.perf_counter()
+            # iSpy's field frame is rotated relative to WPILib's, so hand the
+            # tracker the robot pose in iSpy's frame (iSpy X = -WPILib Y,
+            # iSpy Y = WPILib X).
             detections = tracker.update(
-                detections, pose.X(), pose.Y(), -pose.rotation().radians(), 0.0
+                detections, -pose.Y(), pose.X(), -pose.rotation().radians(), 0.0
             )
             if self._addon_breakdown_parts(tracker):
                 key = getattr(tracker, "plugin_name", name)
@@ -975,10 +991,11 @@ class iSpy:
         t_track = time.perf_counter()
         camera_name = self._camera_name(camera)
         detections = self._tag_detections(detections, camera_name)
-        _explicit, tracker_items = self._tracker_items_for_camera(camera_name)
-        detections = self._run_tracker_sequence(
-            detections, tracker_items, pose, code_times
-        )
+        if self._detection_frame() == "field":
+            _explicit, tracker_items = self._tracker_items_for_camera(camera_name)
+            detections = self._run_tracker_sequence(
+                detections, tracker_items, pose, code_times
+            )
         code_times["trackers"] = max(0.0, time.perf_counter() - t_track)
 
         if hasattr(camera, "get_code_times"):
@@ -1067,7 +1084,8 @@ class iSpy:
         pose = self._get_pose(code_times)
 
         t_track = time.perf_counter()
-        detections = self._run_lane_trackers(detections, pose, code_times)
+        if self._detection_frame() == "field":
+            detections = self._run_lane_trackers(detections, pose, code_times)
         code_times["trackers"] = max(0.0, time.perf_counter() - t_track)
 
         for cam in handler.cameras:

@@ -4,7 +4,7 @@
 <h1>Cameras</h1>
 <div id="camera-controls" class="card controls-bar">
   <label class="controls-label">
-    Refresh interval
+    Rescan Interval
     <select id="refresh-rate" onchange="setRefreshRate()">
       <option value="500">500ms</option>
       <option value="1000" selected>1s</option>
@@ -438,9 +438,8 @@ document.addEventListener('ispy:performance', () => {
 let knownCameras = new Map();
 const camerasConn = connTracker(2);
 let pipelineSchemas = {};
-const CAMERA_ADMIN = {{ editor_admin|tojson }};
-let cameraSchemas = {};   // camera_type -> config_schema() from /api/camera_schemas
-
+const CAMERA_ADMIN = {{ editor_admin | tojson }};
+let cameraSchemas = {}; // camera_type -> config_schema() from /api/camera_schemas
 const camModal = {
   mode: 'add',       // 'add' | 'edit'
   data: null,        // camera config entry (edit) or null (add)

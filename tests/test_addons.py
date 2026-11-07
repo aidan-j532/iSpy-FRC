@@ -62,7 +62,7 @@ class AddonDiscoveryTests(unittest.TestCase):
                 self.assertTrue(issubclass(cls, AddonBase), name)
 
     def test_addon_schemas_are_valid(self):
-        valid_types = {"text", "number", "toggle", "list"}
+        valid_types = {"text", "number", "toggle", "list", "select"}
         for subdir, base in (
             ("trackers", TrackerBase),
             ("utilities", UtilityBase),
@@ -1340,6 +1340,14 @@ class NetworkTableHandlerTests(unittest.TestCase):
     def test_default_ip_applies(self):
         handler = self._handler({})
         self._fake_inst.setServer.assert_called_with("10.0.0.2")
+
+    def test_detection_frame_defaults_to_field(self):
+        handler = self._handler({})
+        self.assertEqual(handler.detection_frame(), "field")
+
+    def test_detection_frame_comes_from_addon_settings(self):
+        handler = self._handler({"detection_frame": "robot"})
+        self.assertEqual(handler.detection_frame(), "robot")
 
     def test_connection_retries_are_non_blocking(self):
         # connecting must never stall boot: startClient4 resolves in the
