@@ -218,10 +218,10 @@ class Viewer3dOrientationTests(unittest.TestCase):
         ok, rvec, _ = cv2.solvePnP(obj_pts, corners, cam_mat, np.zeros(5))
         assert ok
         od = ObjectDetectionPipeline.__new__(ObjectDetectionPipeline)
-        od.camera_bot_relative_yaw = CAM_YAW
+        od.camera_yaw = CAM_YAW
         od.camera_pitch_angle = CAM_PITCH
         cam_euler = GenericYolo.__new__(GenericYolo)._rvec_to_euler(rvec)
-        roll, pitch, yaw = od._euler_to_robot_frame(*cam_euler)
+        roll, pitch, yaw = od._euler_to_world_frame(*cam_euler)
         R_view = quat_to_matrix(robotpose_quat(roll, pitch, yaw))
         np.testing.assert_allclose(R_view, M @ R_TILT, atol=2e-2)
 

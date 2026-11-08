@@ -16,7 +16,6 @@ _CAMERA_CORE_KEYS = {
     "name",
     "source",
     "device_id",
-    "subsystem",
     "grayscale",
     "x",
     "y",
@@ -293,7 +292,6 @@ class iSpyConfig:
                     "name": "default_cam",
                     "camera_type": "opencv",
                     "source": 0,
-                    "subsystem": "field",
                     "grayscale": False,
                     "calibration": {
                         "distance": 0.0,
@@ -861,7 +859,6 @@ class iSpyCameraConfig:
         "calibration": {"size": 0, "distance": 0, "game_piece_size": 0, "fov": 0},
         "source": "/dev/video0",
         "device_id": None,
-        "subsystem": "field",
         "capture_fps": 0,
         "pipeline": {"name": "object_detection", "settings": {}},
     }
@@ -955,3 +952,4 @@ class iSpyAddonConfig:
 
     def __contains__(self, key):
         return key in self.data
+

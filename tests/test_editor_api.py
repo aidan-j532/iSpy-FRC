@@ -1220,7 +1220,7 @@ class EditorApiTests(unittest.TestCase):
                 else:
                     os.environ["ISPY_ADMIN_TOKEN"] = old
             self.assertEqual(denied.status_code, 403)
-            self.assertIn("robot LAN", denied.get_json()["error"])
+            self.assertIn("local network", denied.get_json()["error"])
             self.assertNotEqual(allowed.status_code, 403)
 
     def test_lan_save_follows_allow_remote_restart(self):

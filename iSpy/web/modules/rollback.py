@@ -664,7 +664,7 @@ class RollbackModule(WebModule):
                         )
                         if trimmed is not None
                     ],
-                    "p": _trim_pose(rec.get("robot_pose")),
+                    "p": _trim_pose(rec.get("reference_pose")),
                 }
             )
 
@@ -737,3 +737,4 @@ def _file_size(path: Path) -> int:
         return path.stat().st_size
     except OSError:
         return 0
+

@@ -197,9 +197,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             self.known_calibration_pixel_height = camera_config["calibration"]["size"]
             self.fov = camera_config["calibration"]["fov"]
             self.grayscale = camera_config.get("grayscale", False)
-            self.subsystem = camera_config["subsystem"]
-
-            self.camera_bot_relative_yaw = camera_config["yaw"]
+            self.camera_yaw = camera_config["yaw"]
             self.camera_pitch_angle = camera_config["pitch"]
 
             _pos_unit = config.get("unit", "frc")
@@ -983,7 +981,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             self.camera_x,
             self.camera_y,
             self.camera_height,
-            self.camera_bot_relative_yaw,
+            self.camera_yaw,
             self.camera_pitch_angle,
         )
 
@@ -1001,7 +999,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             return False
         return True
 
-    def _box_to_robot_point(
+    def _box_to_world_point(
         self,
         box: Box,
         img_w: int,
@@ -1041,7 +1039,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             return None
         cx = (x1 + x2) / 2.0
         distance_los = (self.ball_d_inches * self.focal_length_pixels) / avg_px
-        base = self._pixel_to_robot_coordinates(
+        base = self._pixel_to_world_coordinates(
             cx,
             (y1 + y2) / 2.0,
             distance_los,
@@ -1052,7 +1050,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         scale = self.conversions.get(self.unit, self.conversions["meter"])
         return np.array([base[0], base[1], ground_z * scale], dtype=np.float64)
 
-    def _pixel_to_robot_coordinates(
+    def _pixel_to_world_coordinates(
         self,
         pixel_x: float,
         pixel_y: float,
@@ -1073,7 +1071,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         left_right = true_horiz * math.sin(horizontal_angle_rad)
         forward = true_horiz * math.cos(horizontal_angle_rad)
 
-        yaw_rad = math.radians(self.camera_bot_relative_yaw)
+        yaw_rad = math.radians(self.camera_yaw)
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
         x_rot = left_right * cos_y + forward * sin_y
         y_rot = forward * cos_y - left_right * sin_y
@@ -1167,23 +1165,23 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
         return results, annotated_frame
 
-    def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
+    def _camera_point_to_world(self, pt: tuple[float, float, float]) -> np.ndarray:
         scale = self.conversions.get(self.unit, self.conversions["meter"])
         return (
-            triangulation.camera_point_to_robot(
+            triangulation.camera_point_to_world(
                 pt,
                 self.camera_x,
                 self.camera_y,
                 self.camera_height,
-                self.camera_bot_relative_yaw,
+                self.camera_yaw,
                 self.camera_pitch_angle,
             )
             * scale
         )
 
-    def _pnp_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
+    def _pnp_point_to_world(self, pt: tuple[float, float, float]) -> np.ndarray:
         meters_to_inches = 1.0 / self.conversions["meter"]
-        return self._camera_point_to_robot(
+        return self._camera_point_to_world(
             (
                 pt[0] * meters_to_inches,
                 pt[1] * meters_to_inches,
@@ -1191,8 +1189,8 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             )
         )
 
-    def _pnp_to_robot_coordinates(self, tvec: tuple[float, float, float]) -> np.ndarray:
-        return self._pnp_point_to_robot(tvec)
+    def _pnp_to_world_coordinates(self, tvec: tuple[float, float, float]) -> np.ndarray:
+        return self._pnp_point_to_world(tvec)
 
     def _euler_to_matrix(self, roll: float, pitch: float, yaw: float) -> np.ndarray:
         cr, sr = math.cos(roll), math.sin(roll)
@@ -1215,12 +1213,12 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             yaw = 0.0
         return roll, pitch, yaw
 
-    def _euler_to_robot_frame(
+    def _euler_to_world_frame(
         self, roll: float, pitch: float, yaw: float
     ) -> tuple[float, float, float]:
         R_cam = self._euler_to_matrix(roll, pitch, yaw)
-        R_robot = triangulation.camera_rotation_to_robot(
-            R_cam, self.camera_bot_relative_yaw, self.camera_pitch_angle
+        R_robot = triangulation.camera_rotation_to_world(
+            R_cam, self.camera_yaw, self.camera_pitch_angle
         )
         return self._matrix_to_euler(R_robot)
 
@@ -1236,9 +1234,9 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
         depth_source = "monocular"
         if box.translation is not None:
-            pt = self._pnp_to_robot_coordinates(box.translation)
+            pt = self._pnp_to_world_coordinates(box.translation)
         else:
-            pt, depth_source = self._box_to_robot_point(
+            pt, depth_source = self._box_to_world_point(
                 box, img_w, img_h, ground_z=obj_plane_z, return_source=True
             )
             if pt is None:
@@ -1247,13 +1245,13 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
         roll, pitch, yaw = 0.0, 0.0, 0.0
         if box.rotation is not None:
-            roll, pitch, yaw = self._euler_to_robot_frame(*box.rotation)
+            roll, pitch, yaw = self._euler_to_world_frame(*box.rotation)
         z = float(pt[2]) if len(pt) > 2 else 0.0
 
         kpts_3d_robot = None
         if box.keypoints_3d is not None:
             kpts_3d_robot = [
-                self._pnp_point_to_robot(tuple(kpt)).tolist()
+                self._pnp_point_to_world(tuple(kpt)).tolist()
                 for kpt in box.keypoints_3d
             ]
         elif keypoints_2d is not None:
@@ -1270,7 +1268,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
                     fx_cam = (kp_x - cx) * distance_los / f
                     fy_cam = (kp_y - cy) * distance_los / f
                     fz_cam = distance_los
-                    rpt = self._camera_point_to_robot((fx_cam, fy_cam, fz_cam))
+                    rpt = self._camera_point_to_world((fx_cam, fy_cam, fz_cam))
                     kpts_3d_robot.append(rpt.tolist())
 
         return Object(
@@ -1347,17 +1345,6 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
         except Exception:
             return frame
 
-    def get_data_for_subsystem(self, target: str):
-        if self.subsystem != target:
-            return None
-        positions = self._last_objects
-        if self.subsystem == "hopper":
-            return len(positions) > 0
-        return positions
-
-    def get_subsystem(self) -> str:
-        return self.subsystem
-
     def destroy(self):
         super().destroy()
         self._tpu_stop.set()
@@ -1371,3 +1358,4 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
 
     def release(self):
         self.destroy()
+

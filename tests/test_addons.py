@@ -622,7 +622,7 @@ class RollBackSessionTests(unittest.TestCase):
                         "raw_frames": {"Left": frame, "Right": frame},
                         "detections": [{"name": "ball", "confidence": 0.5}],
                         "detection_count": 1,
-                        "robot_pose": pose,
+                        "reference_pose": pose,
                     }
                 )
             rec.stop()
@@ -640,7 +640,7 @@ class RollBackSessionTests(unittest.TestCase):
             self.assertEqual(first["cams"], ["Left", "Right"])
             self.assertEqual(first["detection_count"], 1)
             self.assertEqual(first["detections"][0]["name"], "ball")
-            self.assertEqual(first["robot_pose"], pose)
+            self.assertEqual(first["reference_pose"], pose)
             self.assertEqual(
                 [r["i"] for r in data["records"]], [1, 2, 3, 4, 5]
             )
@@ -871,7 +871,7 @@ class ReplayCameraTests(unittest.TestCase):
                     "raw_frames": {cam: frame for cam in cams},
                     "detections": [{"name": "ball", "confidence": 0.5}],
                     "detection_count": 1,
-                    "robot_pose": {"x": float(n), "y": 1.0, "heading": 0.0},
+                    "reference_pose": {"x": float(n), "y": 1.0, "heading": 0.0},
                 }
             )
         rec.stop()
@@ -989,7 +989,7 @@ class ReplayBootTests(unittest.TestCase):
                 {
                     "cams": list(cams),
                     "records": [
-                        {"i": 1, "t": 1.0, "robot_pose": {"x": 0, "y": 0, "heading": 0}}
+                        {"i": 1, "t": 1.0, "reference_pose": {"x": 0, "y": 0, "heading": 0}}
                     ],
                 }
             )
@@ -1353,14 +1353,6 @@ class NetworkTableHandlerTests(unittest.TestCase):
     def test_default_ip_applies(self):
         handler = self._handler({})
         self._fake_inst.setServer.assert_called_with("10.0.0.2")
-
-    def test_detection_frame_defaults_to_field(self):
-        handler = self._handler({})
-        self.assertEqual(handler.detection_frame(), "field")
-
-    def test_detection_frame_comes_from_addon_settings(self):
-        handler = self._handler({"detection_frame": "robot"})
-        self.assertEqual(handler.detection_frame(), "robot")
 
     def test_connection_retries_are_non_blocking(self):
         # connecting must never stall boot: startClient4 resolves in the

@@ -40,8 +40,7 @@ class AprilTagPipeline(VisionPipeline):
         self.config = camera_config
 
         try:
-            self.subsystem = camera_config["subsystem"]
-            self.camera_bot_relative_yaw = camera_config.get("yaw", 0.0)
+            self.camera_yaw = camera_config.get("yaw", 0.0)
             self.camera_pitch_angle = camera_config.get("pitch", 0.0)
 
             _pos_unit = config.get("unit", "frc")
@@ -131,15 +130,15 @@ class AprilTagPipeline(VisionPipeline):
             return (img_w / 2.0) / math.tan(math.radians(self.fov / 2.0))
         return self.focal_length_pixels
 
-    def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
+    def _camera_point_to_world(self, pt: tuple[float, float, float]) -> np.ndarray:
         scale = self.conversions.get(self.unit, self.conversions["meter"])
         return (
-            triangulation.camera_point_to_robot(
+            triangulation.camera_point_to_world(
                 pt,
                 self.camera_x,
                 self.camera_y,
                 self.camera_height,
-                self.camera_bot_relative_yaw,
+                self.camera_yaw,
                 self.camera_pitch_angle,
             )
             * scale
@@ -223,10 +222,10 @@ class AprilTagPipeline(VisionPipeline):
                     cv2.drawFrameAxes(frame, cam_mat, dist_coeffs, rvec, tvec, 3.25)
 
                     tvec = tvec.reshape(3)
-                    robot_pt = self._camera_point_to_robot((tvec[0], tvec[1], tvec[2]))
+                    robot_pt = self._camera_point_to_world((tvec[0], tvec[1], tvec[2]))
                     R_tag, _ = cv2.Rodrigues(rvec.reshape(3))
-                    R_robot = triangulation.camera_rotation_to_robot(
-                        R_tag, self.camera_bot_relative_yaw, self.camera_pitch_angle
+                    R_robot = triangulation.camera_rotation_to_world(
+                        R_tag, self.camera_yaw, self.camera_pitch_angle
                     )
                     roll, pitch, yaw = self._matrix_to_euler(R_robot)
 
@@ -259,7 +258,7 @@ class AprilTagPipeline(VisionPipeline):
                         self.camera_x,
                         self.camera_y,
                         self.camera_height,
-                        self.camera_bot_relative_yaw,
+                        self.camera_yaw,
                         self.camera_pitch_angle,
                     )
                     obj.ray_origin = ray.origin
@@ -270,13 +269,6 @@ class AprilTagPipeline(VisionPipeline):
         self._last_objects = objects
         return objects, frame
 
-    def get_data_for_subsystem(self, target: str):
-        if self.subsystem != target:
-            return None
-        positions = self._last_objects
-        if self.subsystem == "hopper":
-            return len(positions) > 0
-        return positions
 
     def plot(self, frame):
         if frame is None:
@@ -298,3 +290,4 @@ class AprilTagPipeline(VisionPipeline):
 
     def destroy(self):
         super().destroy()
+

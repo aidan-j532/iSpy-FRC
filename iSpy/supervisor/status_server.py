@@ -230,7 +230,7 @@ def _idle_body() -> str:
   {_brand()}
   <main class="card">
     <h1>iSpy isn't running</h1>
-    <p class="sub">The vision process is stopped. Start it to bring the robot pipeline and web UI back.</p>
+    <p class="sub">The vision process is stopped. Start it to bring the pipeline and web UI back.</p>
     <div class="actions">
       <button class="primary" data-action onclick="ispyAction('/api/supervisor/start', {{wait:'Starting iSpy...'}})">Start iSpy</button>
     </div>
@@ -289,7 +289,7 @@ def _web_off_body(state: dict) -> str:
   <main class="card">
     <h1>The iSpy web UI is off for this run</h1>
     <p class="sub">Vision is still running. {_esc(reason)}. The full dashboard is not being served.</p>
-    <div class="note warn">Detection, trackers, NetworkTables and the robot connection are untouched.</div>
+    <div class="note warn">Detection, trackers, NetworkTables and the device connection are untouched.</div>
     <div class="actions">
       <button class="primary" data-action onclick="ispyAction('/api/supervisor/restart-normal', {{wait:'Restarting with normal settings...'}})">Restart with normal settings</button>
     </div>
@@ -309,7 +309,7 @@ def _running_unavailable_body(state: dict) -> str:
     <p class="sub">Vision is alive; port 5000 is still held by the supervisor. Restart iSpy to try again.</p>
     {_log_block(state)}
     <div class="actions">
-      <button class="primary" data-action onclick="ispyAction('/api/supervisor/restart', {{confirm:'This stops vision and the robot connection for a few seconds. Do not do this mid-match. Continue?', wait:'Restarting iSpy...'}})">Restart iSpy</button>
+      <button class="primary" data-action onclick="ispyAction('/api/supervisor/restart', {{confirm:'This stops vision and the device connection for a few seconds. Do not do this during operation. Continue?', wait:'Restarting iSpy...'}})">Restart iSpy</button>
     </div>
     <div class="error" id="action-error"></div>
   </main>
@@ -348,7 +348,7 @@ def _crashed_body(state: dict) -> str:
     </dl>
     {_log_block(state)}
     <div class="actions">
-      <button class="primary" data-action onclick="ispyAction('/api/supervisor/restart', {{confirm:'This stops vision and the robot connection for a few seconds. Do not do this mid-match. Continue?', wait:'Restarting iSpy...'}})">{_esc(action)}</button>
+      <button class="primary" data-action onclick="ispyAction('/api/supervisor/restart', {{confirm:'This stops vision and the device connection for a few seconds. Do not do this during operation. Continue?', wait:'Restarting iSpy...'}})">{_esc(action)}</button>
     </div>
     <div class="error" id="action-error"></div>
   </main>
@@ -628,3 +628,4 @@ class _StatusRequestHandler(BaseHTTPRequestHandler):
             return
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         self._send(200, data, content_type)
+

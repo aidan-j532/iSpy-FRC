@@ -37,8 +37,7 @@ class QRCodePipeline(VisionPipeline):
         self.config = camera_config
 
         try:
-            self.subsystem = camera_config.get("subsystem", "field")
-            self.camera_bot_relative_yaw = camera_config.get("yaw", 0.0)
+            self.camera_yaw = camera_config.get("yaw", 0.0)
             self.camera_pitch_angle = camera_config.get("pitch", 0.0)
 
             _pos_unit = config.get("unit", "frc")
@@ -103,15 +102,15 @@ class QRCodePipeline(VisionPipeline):
             return configured
         return (img_w / 2.0) / math.tan(math.radians(60.0 / 2.0))
 
-    def _camera_point_to_robot(self, pt: tuple[float, float, float]) -> np.ndarray:
+    def _camera_point_to_world(self, pt: tuple[float, float, float]) -> np.ndarray:
         scale = self.conversions.get(self.unit, self.conversions["meter"])
         return (
-            triangulation.camera_point_to_robot(
+            triangulation.camera_point_to_world(
                 pt,
                 self.camera_x,
                 self.camera_y,
                 self.camera_height,
-                self.camera_bot_relative_yaw,
+                self.camera_yaw,
                 self.camera_pitch_angle,
             )
             * scale
@@ -241,12 +240,12 @@ class QRCodePipeline(VisionPipeline):
                 to_inches = 1.0 / self.conversions.get(
                     self.unit, self.conversions["meter"]
                 )
-                robot_pt = self._camera_point_to_robot(
+                robot_pt = self._camera_point_to_world(
                     (tvec[0] * to_inches, tvec[1] * to_inches, tvec[2] * to_inches)
                 )
                 R_tag, _ = cv2.Rodrigues(rvec.reshape(3))
-                R_robot = triangulation.camera_rotation_to_robot(
-                    R_tag, self.camera_bot_relative_yaw, self.camera_pitch_angle
+                R_robot = triangulation.camera_rotation_to_world(
+                    R_tag, self.camera_yaw, self.camera_pitch_angle
                 )
                 roll, pitch, yaw = self._matrix_to_euler(R_robot)
 
@@ -266,11 +265,6 @@ class QRCodePipeline(VisionPipeline):
                 objects.append(obj)
         return objects
 
-    def get_data_for_subsystem(self, target: str):
-        if getattr(self, "subsystem", "field") != target:
-            return None
-        return self._last_objects
-
     def plot(self, frame):
         if frame is None:
             return None
@@ -287,3 +281,4 @@ class QRCodePipeline(VisionPipeline):
 
     def destroy(self):
         super().destroy()
+

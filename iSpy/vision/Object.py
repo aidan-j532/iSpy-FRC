@@ -37,7 +37,7 @@ class Object:
         self.name = name
         self.confidence = confidence
         self.keypoints_3d = keypoints_3d
-        self.ray_origin = ray_origin  # np.ndarray(3,) robot-frame, or None
+        self.ray_origin = ray_origin  # np.ndarray(3,) world/camera frame, or None
         self.ray_direction = ray_direction  # np.ndarray(3,) unit vector, or None
         self.depth_source = depth_source
         cameras = []
@@ -160,3 +160,4 @@ class Object:
             f"  X: {self.x:.3f}  Y: {self.y:.3f}  Z: {self.z:.3f}"
             f"{rot}  Alive: {self.alive:.2f}s"
         )
+

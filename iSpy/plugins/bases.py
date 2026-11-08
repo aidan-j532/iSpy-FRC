@@ -143,6 +143,11 @@ class AddonBase(NetworkMixin, StatusMixin):
     def default_settings(cls) -> dict:
         return default_settings_from_schema(cls.config_schema())
 
+    def validate(self) -> list[str]:
+        # Plugins may override to report validation errors. Core logs them but
+        # never shuts down because a plugin is invalid.
+        return []
+
     # per-camera action buttons the web UI renders on the camera card. each
     # entry is {"id", "label", "kind": "button"|"toggle", "value", "title"}
     def get_actions(self) -> list[dict]:
@@ -192,6 +197,9 @@ class UtilityBase(AddonBase):
     def get_robot_pose(self):
         return None
 
+    def get_reference_pose(self):
+        return None
+
     def declared_output_key(self) -> str | None:
         key, _err = validate_output_key(self.config.get("output_key"))
         return key
@@ -239,11 +247,11 @@ def find_duplicate_output_keys(utilities: dict) -> dict[str, list[str]]:
     return {key: names for key, names in seen.items() if len(names) > 1}
 
 class TransformProvider:
-    \"\"\"generic interface for components that transform detection coords
-    from a measurement frame into a reference frame (robot-pose-based
-    conversion). core stays agnostic: only calls transform_detections() on
-    any registered provider, never assumes what the transform means. frc
-    plugins implement this for robot/wpilib-specific conversions.\"\"\"
+    """Converts detections between coordinate frames.
+
+    What the transform means is up to the plugin; core only asks for the
+    converted detections and never interprets them.
+    """
 
     def transform_detections(self, detections):
         return detections
@@ -302,3 +310,4 @@ class VisionBase(NetworkMixin, ABC):
     @abstractmethod
     def destroy(self):
         pass
+

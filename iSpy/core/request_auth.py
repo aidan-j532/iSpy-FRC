@@ -78,7 +78,7 @@ def restart_allowed(
 def remote_denied_message(allow_remote: bool) -> str:
     if allow_remote:
         return (
-            "Restarting iSpy is allowed from the robot LAN only. "
+            "Restarting iSpy is allowed from the local network only. "
             "Set ISPY_ADMIN_TOKEN to allow other remote callers."
         )
     return (

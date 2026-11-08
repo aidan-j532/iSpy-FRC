@@ -101,7 +101,6 @@ class OpticalFlowPipeline(VisionPipeline):
         self.logger = logging.getLogger(__name__)
         self.config = camera_config
 
-        self.subsystem = camera_config.get("subsystem", "field")
         self.camera_pitch_angle = camera_config.get("pitch", 0.0)
         _pos_unit = config.get("unit", "frc")
         from iSpy.config.iSpyConfig import unit_to_inches
@@ -497,10 +496,6 @@ class OpticalFlowPipeline(VisionPipeline):
         )
         text(4, f"CONF {conf * 100:.0f}%", (230, 230, 230))
 
-    def get_data_for_subsystem(self, target: str):
-        if getattr(self, "subsystem", "field") != target:
-            return None
-        return self._last_objects
 
     def get_motion(self) -> dict:
         return dict(self._last_motion)
@@ -518,3 +513,4 @@ class OpticalFlowPipeline(VisionPipeline):
 
     def destroy(self):
         super().destroy()
+

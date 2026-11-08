@@ -66,15 +66,6 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
                 "(usually the roboRIO).",
                 "default": "10.0.0.2",
             },
-            "detection_frame": {
-                "type": "select",
-                "label": "Detection Frame",
-                "hint": "Publish detections in field coordinates, or as raw "
-                "robot-relative coordinates (+X right, +Y forward; field "
-                "trackers are skipped in robot mode).",
-                "options": ["field", "robot"],
-                "default": "field",
-            },
             "publish": {
                 "type": "list",
                 "label": "Publish to NetworkTables",
@@ -136,12 +127,6 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
 
     def isConnected(self) -> bool:
         return self.inst.isConnected()
-
-    def detection_frame(self) -> str:
-        value = str(self.config.get("detection_frame", "field")).strip().lower()
-        if value in ("robot", "robot_relative", "robot-relative"):
-            return "robot"
-        return "field"
 
     def get_health(self) -> dict:
         connected = self.isConnected()
@@ -230,12 +215,6 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
 
         for entry in publish_entries:
             self._publish_entry(entry, frame_data)
-
-        cameras = frame_data.get("cameras", [])
-        for cam in cameras:
-            hopper = cam.get_data_for_subsystem("hopper")
-            if hopper is not None:
-                self._send_boolean(hopper, "hopper_sees_object", "VisionData")
 
         self.inst.flush()
         self._update_viewer_overlay(frame_data)
@@ -372,7 +351,7 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
     def _update_viewer_overlay(self, frame_data: dict):
         if self._viewer is None:
             return
-        pose = frame_data.get("robot_pose")
+        pose = frame_data.get("reference_pose")
         if not pose or not isinstance(pose, dict):
             return
         self._viewer.add_overlay(
@@ -393,3 +372,4 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
 
     def stop(self):
         pass
+

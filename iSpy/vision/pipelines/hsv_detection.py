@@ -326,8 +326,7 @@ class HSVDetectionPipeline(VisionPipeline):
         self._pending_persist: dict = {}
 
         try:
-            self.subsystem = camera_config.get("subsystem", "field")
-            self.camera_bot_relative_yaw = camera_config.get("yaw", 0.0)
+            self.camera_yaw = camera_config.get("yaw", 0.0)
             self.camera_pitch_angle = camera_config.get("pitch", 0.0)
 
             _pos_unit = config.get("unit", "frc")
@@ -629,7 +628,7 @@ class HSVDetectionPipeline(VisionPipeline):
             self.camera_x,
             self.camera_y,
             self.camera_height,
-            self.camera_bot_relative_yaw,
+            self.camera_yaw,
             self.camera_pitch_angle,
         )
 
@@ -648,7 +647,7 @@ class HSVDetectionPipeline(VisionPipeline):
         left_right = true_horiz * math.sin(horizontal_angle_rad)
         forward = true_horiz * math.cos(horizontal_angle_rad)
 
-        yaw_rad = math.radians(self.camera_bot_relative_yaw)
+        yaw_rad = math.radians(self.camera_yaw)
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
         x_rot = left_right * cos_y + forward * sin_y
         y_rot = forward * cos_y - left_right * sin_y
@@ -910,13 +909,9 @@ class HSVDetectionPipeline(VisionPipeline):
         self._last_rendered = view
         return objects, view
 
-    def get_data_for_subsystem(self, target: str):
-        if getattr(self, "subsystem", "field") != target:
-            return None
-        return self._last_objects
-
     def plot(self, frame):
         return frame
 
     def destroy(self):
         super().destroy()
+

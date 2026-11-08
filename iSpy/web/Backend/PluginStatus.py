@@ -71,9 +71,9 @@ _CORE_PUBLISH_SOURCES = [
     {"source": "camera_lag_s", "label": "camera_lag_s"},
     {"source": "detection_count", "label": "detection_count"},
     {"source": "detections", "label": "detections (struct[])"},
-    {"source": "robot_pose.x", "label": "robot_pose.x"},
-    {"source": "robot_pose.y", "label": "robot_pose.y"},
-    {"source": "robot_pose.heading", "label": "robot_pose.heading"},
+    {"source": "reference_pose.x", "label": "reference_pose.x"},
+    {"source": "reference_pose.y", "label": "reference_pose.y"},
+    {"source": "reference_pose.heading", "label": "reference_pose.heading"},
 ]
 
 def _coerce_setting_value(value, defn: dict):

@@ -1265,11 +1265,6 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         return objects, annotated
 
-    def get_data_for_subsystem(self, target: str):
-        if getattr(self, "subsystem", "field") != target:
-            return None
-
-        return self._last_objects
 
     def plot(self, frame):
         if frame is None:
@@ -1362,3 +1357,4 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
 
         if hasattr(super(), "destroy"):
             super().destroy()
+

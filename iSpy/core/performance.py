@@ -194,7 +194,7 @@ LEVEL_NOTES: dict[int, tuple[str, ...]] = {
         "Vision metrics off (nothing is written on shutdown).",
         "FPS console print off.",
         "Annotated/debug frames off.",
-        "Detection, trackers, NetworkTables, robot pose and the watchdog are untouched.",
+        "Detection, trackers, and the watchdog are untouched.",
     ),
 }
 
@@ -348,3 +348,4 @@ def levels_payload() -> list[dict]:
         }
         for level in range(MIN_LEVEL, MAX_LEVEL + 1)
     ]
+

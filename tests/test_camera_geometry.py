@@ -79,7 +79,7 @@ class MountHeightTriangulationTests(unittest.TestCase):
     def test_ground_point_matches_manual_triangulation_with_height(self):
         cam = make_camera(height_in=48.0)
         box = Box(BOX_XYXY, conf=0.9, cls_id=0)
-        pt = cam._box_to_robot_point(box, IMG_W, IMG_H)
+        pt = cam._box_to_world_point(box, IMG_W, IMG_H)
 
         scale = cam.conversions[cam.unit]
         ray = cam._pixel_ray(
@@ -94,8 +94,8 @@ class MountHeightTriangulationTests(unittest.TestCase):
         low = make_camera(height_in=5.0)
         high = make_camera(height_in=48.0)
         box = Box(BOX_XYXY, conf=0.9, cls_id=0)
-        pt_low = low._box_to_robot_point(box, IMG_W, IMG_H)
-        pt_high = high._box_to_robot_point(box, IMG_W, IMG_H)
+        pt_low = low._box_to_world_point(box, IMG_W, IMG_H)
+        pt_high = high._box_to_world_point(box, IMG_W, IMG_H)
         self.assertGreater(
             float(np.linalg.norm(pt_low[:2] - pt_high[:2])),
             0.05,
@@ -221,7 +221,7 @@ class OtherPipelinesUseMountHeightTests(unittest.TestCase):
         self.assertFalse(hasattr(cam, "camera_z"))
         self.assertAlmostEqual(cam.camera_height, 36.0)
         # a camera-frame point at the optical centre sits 36in up in robot frame
-        pt = cam._camera_point_to_robot((0.0, 0.0, 0.0))
+        pt = cam._camera_point_to_world((0.0, 0.0, 0.0))
         self.assertAlmostEqual(float(pt[2]), 36.0 * cam.conversions[cam.unit], places=9)
 
     def test_qr_code_uses_height_and_ignores_legacy_z(self):
@@ -229,7 +229,7 @@ class OtherPipelinesUseMountHeightTests(unittest.TestCase):
 
         cam = QRCodePipeline(self._cam_cfg(z=99.0), iSpyConfig())
         self.assertFalse(hasattr(cam, "camera_z"))
-        pt = cam._camera_point_to_robot((0.0, 0.0, 0.0))
+        pt = cam._camera_point_to_world((0.0, 0.0, 0.0))
         self.assertAlmostEqual(float(pt[2]), 36.0 * cam.conversions[cam.unit], places=9)
 
     def test_optical_flow_range_uses_mount_height(self):
@@ -329,7 +329,7 @@ class TagRotationConventionTests(unittest.TestCase):
         # tvec straight ahead of a level camera lands directly in front of the
         # camera at mount height - the viewer position the user checks.
         cam = self._make()
-        pt = cam._camera_point_to_robot((0.0, 0.0, 30.0))
+        pt = cam._camera_point_to_world((0.0, 0.0, 30.0))
         scale = cam.conversions[cam.unit]
         np.testing.assert_allclose(
             pt, [0.0, 30.0 * scale, 24.0 * scale], rtol=1e-9

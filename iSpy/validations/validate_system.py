@@ -154,7 +154,7 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
     model_cameras = 0
     needs_model = False
     for cam_name, cam_config in camera_configs.items():
-        cam_required = ["name", "source", "subsystem", "pipeline"]
+        cam_required = ["name", "source", "pipeline"]
         for field in cam_required:
             if field not in cam_config:
                 raise ValueError(f"Camera '{cam_name}' missing required field: {field}")
@@ -177,7 +177,7 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
             settings = {
                 k: v
                 for k, v in cam_config.items()
-                if k not in ("name", "source", "subsystem", "pipeline", "calibration")
+                if k not in ("name", "source", "pipeline", "calibration")
             }
         if not pipeline_name:
             raise ValueError(f"Camera '{cam_name}' pipeline must have a name")
@@ -201,14 +201,6 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
 
     if needs_model and model_cameras == 0:
         raise ValueError("No camera has a vision_model configured")
-
-    ip = get_addon_setting(
-        config, "utilities", "FRC/network_table_handler", "network_tables_ip"
-    )
-    if ip:
-        ip_parts = ip.split(".")
-        if len(ip_parts) != 4:
-            raise ValueError(f"Invalid network_tables_ip format: {ip}")
 
     logger.info("Config validation passed.")
 
@@ -327,7 +319,7 @@ def get_recommendations(config_path: str = "Config/config.json") -> str:
             settings = {
                 k: v
                 for k, v in cam_cfg.items()
-                if k not in ("name", "source", "subsystem", "pipeline", "calibration")
+                if k not in ("name", "source", "pipeline", "calibration")
             }
         vision_model = settings.get("vision_model")
         if not isinstance(vision_model, dict):
@@ -349,24 +341,9 @@ def get_recommendations(config_path: str = "Config/config.json") -> str:
                 "Most models expect square input. This may cause issues."
             )
 
-    nt_ip = get_addon_setting(
-        config, "utilities", "FRC/network_table_handler", "network_tables_ip"
-    )
-    if nt_ip is None:
-        recommendations.append(
-            "NetworkTables utility not enabled - vision data is not published to the robot."
-        )
-    elif nt_ip == "10.22.7.2":
-        recommendations.append(
-            "NetworkTables IP is default (10.22.7.2). "
-            "Verify this matches your robot's IP address."
-        )
-
     stale = config.get("health_stale_threshold")
     if stale is None:
-        stale = get_addon_setting(
-            config, "trackers", "FRC/object_tracker", "stale_threshold", 1.0
-        )
+        stale = 1.0
     if stale > 3.0:
         recommendations.append(
             f"stale_threshold is high ({stale}s). "
@@ -466,3 +443,4 @@ def validate_system() -> bool:
     except Exception as e:
         logger.error("System validation failed: %s", e)
         return False
+

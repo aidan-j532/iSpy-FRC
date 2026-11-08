@@ -245,7 +245,7 @@ block content %}
       <span class="form-label">Remote Restart</span>
 
       <select class="form-input" data-key="allow_remote_restart" data-restart="true">
-        <option value="true">Robot LAN allowed</option>
+        <option value="true">Local network allowed</option>
 
         <option value="false">Localhost / token only</option>
       </select>
@@ -323,8 +323,8 @@ block content %}
     <p class="text-dim text-sm" style="margin: 0 0 12px 0; max-width: 72ch">
       Stops the vision process and starts it again through the process
       supervisor. Port 5000 stays reachable with a status page while iSpy
-      restarts. Vision, trackers and the robot connection will be unavailable
-      for a few seconds - do not use this mid-match.
+      restarts. Vision, trackers and the device connection will be unavailable
+      for a few seconds - do not use this during operation.
     </p>
 
     <div class="form-row">
@@ -1042,8 +1042,8 @@ block content %}
   async function restartISpy() {
     if (
       !window.confirm(
-        "Restart iSpy now? Vision, trackers and the robot connection will " +
-          "drop for a few seconds. Do not do this mid-match."
+        "Restart iSpy now? Vision, trackers and the device connection will " +
+          "drop for a few seconds. Do not do this during operation."
       )
     ) {
       return;

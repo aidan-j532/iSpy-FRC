@@ -551,7 +551,7 @@ class RollBack(UtilityBase):
             "cams": sorted(raw_frames),
             "detection_count": int(frame_data.get("detection_count", 0) or 0),
             "detections": _serialize_detections(frame_data.get("detections")),
-            "robot_pose": frame_data.get("robot_pose"),
+            "reference_pose": frame_data.get("reference_pose"),
         }
 
         if not self._started:
@@ -906,3 +906,4 @@ class RollBack(UtilityBase):
             "state": state,
             "metrics": metrics,
         }
+

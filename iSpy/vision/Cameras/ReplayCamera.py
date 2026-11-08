@@ -247,7 +247,7 @@ class ReplayCamera(CameraBase):
     def replay_pose(self) -> dict | None:
         if not isinstance(self._current_record, dict):
             return None
-        pose = self._current_record.get("robot_pose")
+        pose = self._current_record.get("reference_pose")
         return pose if isinstance(pose, dict) else None
 
     def get_frame_age(self) -> float:
@@ -284,3 +284,4 @@ class ReplayCamera(CameraBase):
             if getattr(self, "cap", None) is not None
             else 0.0,
         }
+

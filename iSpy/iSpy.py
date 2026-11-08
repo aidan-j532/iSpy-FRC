@@ -229,6 +229,9 @@ class iSpy:
             else:
                 self.logger.warning("Unknown frame processor: %s", name)
 
+        # Validate plugins (best-effort): log errors but never shut down.
+        self._validate_plugins()
+
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
         if self.web_app:
@@ -474,6 +477,28 @@ class iSpy:
             if not name.startswith("iSpy"):
                 logging.getLogger(name).setLevel(logging.WARNING)
 
+    def _validate_plugins(self):
+        groups = [getattr(self, "trackers", {}), getattr(self, "utilities", {}),
+                  getattr(self, "frame_processors", {})]
+        for group in groups:
+            for name, inst in (group or {}).items():
+                try:
+                    errors = inst.validate() if hasattr(inst, "validate") else []
+                except Exception as e:
+                    errors = [str(e)]
+                for err in (errors or []):
+                    self.logger.error("Plugin '%s' validation: %s", name, err)
+        for cam_name, instances in getattr(self, "camera_trackers", {}).items():
+            for name, inst in (instances or {}).items():
+                try:
+                    errors = inst.validate() if hasattr(inst, "validate") else []
+                except Exception as e:
+                    errors = [str(e)]
+                for err in (errors or []):
+                    self.logger.error(
+                        "Plugin '%s' (camera '%s') validation: %s", name, cam_name, err
+                    )
+
     def reload_camera(self, cam_key: str, new_config: dict):
         raise RuntimeError(
             "reload_camera was removed - camera settings require a vision "
@@ -550,16 +575,6 @@ class iSpy:
         if camera_name in configs:
             return True, list(camera_trackers.get(camera_name, {}).items())
         return False, list(self.trackers.items())
-
-    def _detection_frame(self) -> str:
-        for util in getattr(self, "utilities", {}).values():
-            get_frame = getattr(util, "detection_frame", None)
-            if callable(get_frame):
-                try:
-                    return get_frame()
-                except Exception:
-                    pass
-        return "field"
 
     def _run_tracker_sequence(self, detections, items, code_times):
         for name, tracker in items:
@@ -941,11 +956,10 @@ class iSpy:
         t_track = time.perf_counter()
         camera_name = self._camera_name(camera)
         detections = self._tag_detections(detections, camera_name)
-        if self._detection_frame() == "field":
-            _explicit, tracker_items = self._tracker_items_for_camera(camera_name)
-            detections = self._run_tracker_sequence(
-                detections, tracker_items, code_times
-            )
+        _explicit, tracker_items = self._tracker_items_for_camera(camera_name)
+        detections = self._run_tracker_sequence(
+            detections, tracker_items, code_times
+        )
         code_times["trackers"] = max(0.0, time.perf_counter() - t_track)
 
         if hasattr(camera, "get_code_times"):
@@ -983,7 +997,7 @@ class iSpy:
             "pipeline_name": pipeline_name,
             "pipeline_settings": pipeline_settings,
             "camera_config": camera_config_dict,
-            "robot_pose": (
+            "reference_pose": (
                 {
                     "x": pose.X(),
                     "y": pose.Y(),
@@ -1034,8 +1048,7 @@ class iSpy:
         code_times["transforms"] = max(0.0, time.perf_counter() - t_transform)
 
         t_track = time.perf_counter()
-        if self._detection_frame() == "field":
-            detections = self._run_lane_trackers(detections, code_times)
+        detections = self._run_lane_trackers(detections, code_times)
         code_times["trackers"] = max(0.0, time.perf_counter() - t_track)
 
         for cam in handler.cameras:
@@ -1068,7 +1081,7 @@ class iSpy:
             "pipeline_name": ",".join(sorted(pipeline_names)),
             "pipeline_settings": {},
             "camera_config": {},
-            "robot_pose": (
+            "reference_pose": (
                 {
                     "x": pose.X(),
                     "y": pose.Y(),
@@ -1198,3 +1211,4 @@ class iSpy:
             status = getattr(source, "replay_finished", False)
             finished.append(bool(status() if callable(status) else status))
         return all(finished)
+

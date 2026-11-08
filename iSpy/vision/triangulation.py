@@ -7,8 +7,8 @@ import numpy as np
 
 @dataclass
 class Ray:
-    origin: np.ndarray  # (3,) robot-frame, inches
-    direction: np.ndarray  # (3,) unit vector, robot-frame
+    origin: np.ndarray  # (3,) world/camera frame, inches
+    direction: np.ndarray  # (3,) unit vector, world/camera frame
 
 
 def pixel_to_ray(
@@ -51,7 +51,7 @@ def pixel_to_ray(
     return Ray(origin=origin, direction=direction)
 
 
-def camera_point_to_robot(
+def camera_point_to_world(
     camera_point: tuple[float, float, float],
     camera_x: float,
     camera_y: float,
@@ -76,7 +76,7 @@ def camera_point_to_robot(
     )
 
 
-def camera_rotation_to_robot(
+def camera_rotation_to_world(
     rotation_matrix: np.ndarray,
     yaw_deg: float,
     pitch_deg: float,
@@ -134,7 +134,7 @@ def closest_point_between_rays(
     return (p1 + p2) / 2.0, residual
 
 
-# Frame-agnostic aliases. The "*_to_robot" names are historical; the math is a
-# generic camera-to-world transform driven by the camera's extrinsics.
-camera_point_to_world = camera_point_to_robot
-camera_rotation_to_world = camera_rotation_to_robot
+# Backwards-compatible aliases for the old robot-centric names.
+camera_point_to_robot = camera_point_to_world
+camera_rotation_to_robot = camera_rotation_to_world
+
