@@ -120,7 +120,11 @@ class Viewer3DModule(WebModule):
     def _refresh_camera_overlays(self):
         config = self.context.get("config")
         unit = config.get("unit", "frc") if config else "frc"
-        scale = _INCHES_TO_OUTPUT_UNIT.get(unit, _INCHES_TO_OUTPUT_UNIT["frc"])
+        try:
+            from iSpy.units import inches_to_output as _i2o
+            scale = _i2o(unit)
+        except Exception:
+            scale = _INCHES_TO_OUTPUT_UNIT.get(unit, _INCHES_TO_OUTPUT_UNIT.get("frc", 0.0254))
         current_names = set()
         for cam in self.context.get("cameras", []):
             cfg = getattr(cam, "config", None)

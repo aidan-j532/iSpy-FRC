@@ -13,6 +13,7 @@
     <div class="addon-new-tabs">
       <button class="settings-tab active" onclick="switchNewTab('upload', this)">Upload File</button>
       <button class="settings-tab" onclick="switchNewTab('paste', this)">Write Code</button>
+      <button class="settings-tab" onclick="switchNewTab('unit', this)">Unit Pack</button>
     </div>
   </div>
 
@@ -54,6 +55,21 @@ class YourTracker(TrackerBase):
       <button onclick="submitPasted()">Save Add-on</button>
     </div>
   </div>
+
+  <div id="new-unit" style="display:none;">
+    <div class="addon-new-tabs">
+      <button class="settings-tab active" onclick="switchUnitTab('upload', this)">Upload JSON</button>
+      <button class="settings-tab" onclick="switchUnitTab('paste', this)">Write JSON</button>
+    </div>
+    <div id="unit-upload" style="margin-top:8px;">
+      <input type="file" id="unit-file-input" accept=".json">
+      <button onclick="uploadUnit()">Upload</button>
+    </div>
+    <div id="unit-paste" style="display:none; margin-top:8px;">
+      <textarea id="unit-code" class="raw-editor" style="height:20vh;" placeholder='{"key":"my_unit","name":"My Unit","input_unit":"inch","output_unit":"meter","input_to_inches":1.0,"inches_to_output":0.0254,"axis":{"x":1,"y":1,"z":1,"yaw":1}}'></textarea>
+      <div style="margin-top:6px;"><button onclick="writeUnit()">Save Unit Pack</button></div>
+    </div>
+  </div>
 </div>
 
 <div class="card">
@@ -73,6 +89,77 @@ class YourTracker(TrackerBase):
   </div>
   <div id="addon-list"></div>
 </div>
+
+<div class="card">
+  <div class="card-head">
+    <h3>Units</h3>
+    <span class="text-dim text-sm">Measurement/output conventions (unit packs)</span>
+  </div>
+  <div id="unit-list" class="text-dim text-sm">Loading units&hellip;</div>
+</div>
+
+<script>
+(function () {
+  window.switchUnitTab = function (tab, btn) {
+    document.getElementById('unit-upload').style.display = (tab === 'upload') ? 'block' : 'none';
+    document.getElementById('unit-paste').style.display = (tab === 'paste') ? 'block' : 'none';
+  };
+  window.uploadUnit = function () {
+    const inp = document.getElementById('unit-file-input');
+    if (!inp.files.length) { alert('Pick a .json file'); return; }
+    const fd = new FormData();
+    fd.append('file', inp.files[0]);
+    fetch('/api/units/upload', {method:'POST', body: fd})
+      .then(r => r.json()).then(d => {
+        if (d.success) { alert('Uploaded ' + d.key); loadUnits(); }
+        else { alert(d.error || 'Failed'); }
+      });
+  };
+  window.writeUnit = function () {
+    const code = document.getElementById('unit-code').value;
+    fetch('/api/units/write', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: code})
+    }).then(r => r.json()).then(d => {
+      if (d.success) { alert('Saved ' + d.key); loadUnits(); }
+      else { alert(d.error || 'Failed'); }
+    });
+  };
+  function loadUnits() {
+    fetch('/api/units').then(r => r.json()).then(d => {
+      const el = document.getElementById('unit-list');
+      if (!el) return;
+      const packs = d.packs || [];
+      const active = d.active;
+      if (!packs.length) { el.textContent = 'No unit packs found.'; return; }
+      el.innerHTML = packs.map(p =>
+        '<div class="form-row" style="align-items:center;">' +
+        '<span class="form-label" style="min-width:220px;">' + (p.name || p.key) + '</span>' +
+        '<span class="text-dim text-sm" style="flex:1;">' + (p.description || '') + '</span>' +
+        '<button class="btn-sm' + (p.key === active ? ' active' : '') + '" ' +
+        'onclick="selectUnit(\'' + p.key + '\')">' +
+        (p.key === active ? 'Active' : 'Select') + '</button>' +
+        '</div>'
+      ).join('');
+    }).catch(() => {
+      const el = document.getElementById('unit-list');
+      if (el) el.textContent = 'Could not load units.';
+    });
+  }
+  window.selectUnit = function (key) {
+    fetch('/api/units/select', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key: key})
+    }).then(r => r.json()).then(d => {
+      if (d.success) { loadUnits(); }
+      else { alert(d.error || 'Failed'); }
+    });
+  };
+  loadUnits();
+})();
+</script>
 
 <div id="source-modal" class="modal-overlay" style="display:none;">
   <div class="modal modal-wide">
@@ -121,7 +208,7 @@ function statusDot(status) {
 }
 
 function switchNewTab(name, btn) {
-  document.querySelectorAll('#new-upload, #new-paste').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('#new-upload, #new-paste, #new-unit').forEach(el => el.style.display = 'none');
   document.getElementById('new-' + name).style.display = '';
   btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');

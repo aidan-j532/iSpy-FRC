@@ -1,0 +1,10 @@
+{
+  "key": "frc",
+  "name": "FRC (inches in, meters out)",
+  "description": "FRC convention: measure in inches, output meters (WPILib).",
+  "input_unit": "inch",
+  "output_unit": "meter",
+  "input_to_inches": 1.0,
+  "inches_to_output": 0.0254,
+  "axis": { "x": 1.0, "y": 1.0, "z": 1.0, "yaw": 1.0 }
+}

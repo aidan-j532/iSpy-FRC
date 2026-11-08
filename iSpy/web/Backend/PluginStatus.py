@@ -1,5 +1,6 @@
 import ast
 import functools
+import json
 import logging
 import os
 import re
@@ -307,6 +308,18 @@ class PluginStatusModule(WebModule):
             "/api/plugins/available", "api_plugins_available", self._available
         )
         flask_app.add_url_rule(
+            "/api/units", "api_units", self._units_list, methods=["GET"]
+        )
+        flask_app.add_url_rule(
+            "/api/units/select", "api_units_select", self._units_select, methods=["POST"]
+        )
+        flask_app.add_url_rule(
+            "/api/units/upload", "api_units_upload", require_local_or_token(self._units_upload), methods=["POST"]
+        )
+        flask_app.add_url_rule(
+            "/api/units/write", "api_units_write", require_local_or_token(self._units_write), methods=["POST"]
+        )
+        flask_app.add_url_rule(
             "/api/network", "api_network", self._network
         )
         flask_app.add_url_rule(
@@ -372,6 +385,94 @@ class PluginStatusModule(WebModule):
 
     def _vision_pipelines(self):
         return jsonify(pipelines=_build_vision_pipeline_payloads())
+
+    def _units_list(self):
+        try:
+            from iSpy.units import list_unit_packs
+            packs = list_unit_packs()
+        except Exception:
+            packs = []
+        config = self.context.get("config")
+        active = None
+        try:
+            active = config.get("unit") if config else None
+        except Exception:
+            active = None
+        return jsonify({"packs": packs, "active": active})
+
+    def _units_select(self):
+        data = request.get_json(silent=True) or {}
+        key = str(data.get("key", "")).strip()
+        if not key:
+            return jsonify(error="missing key"), 400
+        try:
+            from iSpy.units import get_unit_pack
+            if get_unit_pack(key) is None:
+                return jsonify(error="unknown unit pack"), 404
+        except Exception:
+            pass
+        config = self.context.get("config")
+        if config is None:
+            return jsonify(error="no config"), 500
+        try:
+            config.set("unit", key)
+            config.save()
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+        return jsonify(success=True, key=key)
+
+    def _units_upload(self):
+        f = request.files.get("file")
+        if f is None:
+            return jsonify(error="no file"), 400
+        name = (f.filename or "").strip()
+        if not name.lower().endswith(".json"):
+            return jsonify(error="file must be .json"), 400
+        try:
+            raw = f.read()
+            data = json.loads(raw.decode("utf-8"))
+        except Exception as e:
+            return jsonify(error=f"invalid json: {e}"), 400
+        key = str(data.get("key") or Path(name).stem).strip()
+        if not key:
+            return jsonify(error="missing key"), 400
+        # basic validation
+        if "inches_to_output" not in data or "input_to_inches" not in data:
+            return jsonify(error="missing conversion factors"), 400
+        try:
+            from iSpy.units import _UNITS_DIR
+            _UNITS_DIR.mkdir(parents=True, exist_ok=True)
+            dest = _UNITS_DIR / f"{key}.json"
+            dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            import iSpy.units as _u
+            _u.reload_packs()
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+        return jsonify(success=True, key=key)
+
+    def _units_write(self):
+        data = request.get_json(silent=True) or {}
+        code = data.get("code", "")
+        filename = (data.get("filename") or "").strip()
+        try:
+            parsed = json.loads(code)
+        except Exception as e:
+            return jsonify(error=f"invalid json: {e}"), 400
+        key = str(parsed.get("key") or filename or "").strip()
+        if not key:
+            return jsonify(error="missing key"), 400
+        if "inches_to_output" not in parsed or "input_to_inches" not in parsed:
+            return jsonify(error="missing conversion factors"), 400
+        try:
+            from iSpy.units import _UNITS_DIR
+            _UNITS_DIR.mkdir(parents=True, exist_ok=True)
+            dest = _UNITS_DIR / f"{key}.json"
+            dest.write_text(json.dumps(parsed, indent=2), encoding="utf-8")
+            import iSpy.units as _u
+            _u.reload_packs()
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+        return jsonify(success=True, key=key)
 
     def _network(self):
         return jsonify(network_policy.get_report())

@@ -1,0 +1,10 @@
+{
+  "key": "metric",
+  "name": "Metric (meters in, meters out)",
+  "description": "Metric convention: measure and output in meters.",
+  "input_unit": "meter",
+  "output_unit": "meter",
+  "input_to_inches": 39.37007874,
+  "inches_to_output": 0.0254,
+  "axis": { "x": 1.0, "y": 1.0, "z": 1.0, "yaw": 1.0 }
+}

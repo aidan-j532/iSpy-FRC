@@ -1,0 +1,10 @@
+{
+  "key": "imperial",
+  "name": "Imperial (inches in, inches out)",
+  "description": "Imperial convention: measure and output in inches.",
+  "input_unit": "inch",
+  "output_unit": "inch",
+  "input_to_inches": 1.0,
+  "inches_to_output": 1.0,
+  "axis": { "x": 1.0, "y": 1.0, "z": 1.0, "yaw": 1.0 }
+}

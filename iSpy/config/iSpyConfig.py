@@ -105,12 +105,22 @@ _INCHES_TO_OUTPUT_UNIT = {
 }
 
 def unit_to_inches(value: float, unit: str) -> float:
-    return value * _UNIT_TO_INCHES.get(unit.lower().strip(), 1.0)
+    key = (unit or "frc").lower().strip()
+    try:
+        from iSpy.units import input_to_inches as _i2i
+        return value * _i2i(key)
+    except Exception:
+        return value * _UNIT_TO_INCHES.get(key, 1.0)
 
 def unit_to_output(value: float, unit: str) -> float:
     key = (unit or "frc").lower().strip()
-    inches = _UNIT_TO_INCHES.get(key, 1.0)
-    return value * inches * _INCHES_TO_OUTPUT_UNIT.get(key, _INCHES_TO_OUTPUT_UNIT["frc"])
+    try:
+        from iSpy.units import input_to_inches as _i2i, inches_to_output as _i2o
+        inches = _i2i(key)
+        return value * inches * _i2o(key)
+    except Exception:
+        inches = _UNIT_TO_INCHES.get(key, 1.0)
+        return value * inches * _INCHES_TO_OUTPUT_UNIT.get(key, _INCHES_TO_OUTPUT_UNIT["frc"])
 
 def unit_label(unit: str) -> str:
     return _UNIT_LABELS.get(unit.lower().strip(), unit)

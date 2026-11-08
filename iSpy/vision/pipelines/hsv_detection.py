@@ -344,17 +344,29 @@ class HSVDetectionPipeline(VisionPipeline):
             raise ValueError(f"Missing camera config key for HSV detection: {e}")
 
         self.unit = config.get("unit", "meter")
-        self.conversions = {
-            "meter": 0.0254,
-            "meters": 0.0254,
-            "inch": 1.0,
-            "inches": 1.0,
-            "foot": 1 / 12,
-            "feet": 1 / 12,
-            "centimeter": 2.54,
-            "centimeters": 2.54,
-            "frc": 0.0254,
-        }
+        try:
+            from iSpy.units import list_unit_packs
+            self.conversions = {}
+            for _p in list_unit_packs():
+                _k = str(_p.get("key", "")).lower().strip()
+                if _k:
+                    self.conversions[_k] = float(_p.get("inches_to_output", 1.0))
+            self.conversions.setdefault("meters", self.conversions.get("meter", 0.0254))
+            self.conversions.setdefault("inches", self.conversions.get("inch", 1.0))
+            self.conversions.setdefault("feet", self.conversions.get("foot", 1 / 12))
+            self.conversions.setdefault("centimeters", self.conversions.get("centimeter", 2.54))
+            self.conversions.setdefault("meter", self.conversions.get("m", 0.0254))
+            self.conversions.setdefault("inch", self.conversions.get("in", 1.0))
+            self.conversions.setdefault("centimeter", self.conversions.get("cm", 2.54))
+            self.conversions.setdefault("foot", self.conversions.get("ft", 1 / 12))
+            if "frc" not in self.conversions:
+                self.conversions["frc"] = 0.0254
+        except Exception:
+            self.conversions = {
+                "meter": 0.0254, "meters": 0.0254, "inch": 1.0, "inches": 1.0,
+                "foot": 1 / 12, "feet": 1 / 12, "centimeter": 2.54,
+                "centimeters": 2.54, "frc": 0.0254,
+            }
 
         super().__init__(camera_config, (640, 480), bool(self.grayscale))
 
