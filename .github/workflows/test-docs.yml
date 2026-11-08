@@ -3,7 +3,7 @@ name: Test Docs Build
 on:
   pull_request:
     paths:
-        - 'iSpy-docs/**'
+        - 'iSpy-Docs/**'
 
 jobs:
   test-deploy:
@@ -20,8 +20,8 @@ jobs:
           cache-dependency-path: docs/package-lock.json
 
       - name: Install dependencies
-        working-directory: iSpy-docs
+        working-directory: iSpy-Docs
         run: npm ci
       - name: Test build website
-        working-directory: iSpy-docs
+        working-directory: iSpy-Docs
         run: npm run build

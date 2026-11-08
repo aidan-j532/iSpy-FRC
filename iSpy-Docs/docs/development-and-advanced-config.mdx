@@ -37,6 +37,19 @@ The project loads matching plugin classes from the repo and wires them in automa
 
 The plugin loader searches the corresponding `iSpy/plugins/` subdirectory for Python files and looks for subclasses of the expected base class. The value of `plugin_name` must match the key used in the config. Namespaced names such as `example/example_tracker` make it clear which plugin family an entry belongs to.
 
+### Unit packs and bundles
+
+Unit packs are JSON files in the `Units/` folder that define a measurement/output
+convention (input unit, output unit, conversion factors, axis directions). Select
+the active pack from the Add-ons page or set `"unit"` in config. Create your own
+by dropping a `.json` file into `Units/` or uploading/writing one from the
+Add-ons page.
+
+Bundles are JSON presets in the `Bundles/` folder that configure iSpy for an
+application in one step (enabling plugins, applying config overrides, selecting a
+unit pack). Apply them from the Add-ons page (Manual/Bundles tabs) or upload/
+write them from the same page.
+
 ### Which extension point should I use?
 
 | Base class | Called with | Use it for |

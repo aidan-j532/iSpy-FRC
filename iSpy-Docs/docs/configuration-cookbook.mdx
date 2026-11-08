@@ -27,6 +27,8 @@ If you started a second copy while the first was still running, only one of them
 
 `unit` decides two things at once: the units you type into geometry fields such as `x`, `y`, `height`, and `yaw`/`pitch` are always degrees, and the units the pipeline reports in detections.
 
+Unit conventions are defined by **unit packs** — JSON files in the `Units/` folder (built-in: `frc`, `metric`, `imperial`). Select one from the Add-ons page or set `"unit"` to a pack key. Create your own by dropping a `.json` file into `Units/` or uploading/writing one from the Add-ons page. See the Add-ons page for the pack schema.
+
 ```json
 "unit": "frc"
 ```

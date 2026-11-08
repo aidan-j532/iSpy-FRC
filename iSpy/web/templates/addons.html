@@ -7,6 +7,12 @@
     Changes take effect after the vision service restarts (Dashboard &rarr; Restart).</p>
 </div>
 
+<div class="addon-mode-tabs" style="margin-bottom:12px;">
+  <button class="settings-tab active" onclick="switchMode('manual', this)">Manual</button>
+  <button class="settings-tab" onclick="switchMode('bundles', this)">Bundles</button>
+</div>
+
+<div id="manual-view">
 <div class="card">
   <div class="card-head">
     <h3>New Add-on</h3>
@@ -181,6 +187,34 @@ class YourTracker(TrackerBase):
     </div>
   </div>
 </div>
+</div>
+
+<div id="bundles-view" style="display:none;">
+  <div class="card">
+    <div class="card-head">
+      <h3>New Bundle</h3>
+    </div>
+    <div class="addon-new-tabs">
+      <button class="settings-tab active" onclick="switchBundleTab('upload', this)">Upload JSON</button>
+      <button class="settings-tab" onclick="switchBundleTab('paste', this)">Write JSON</button>
+    </div>
+    <div id="bundle-upload" style="margin-top:8px;">
+      <input type="file" id="bundle-file-input" accept=".json">
+      <button onclick="uploadBundle()">Upload</button>
+    </div>
+    <div id="bundle-paste" style="display:none; margin-top:8px;">
+      <textarea id="bundle-code" class="raw-editor" style="height:20vh;" placeholder='{"key":"my_bundle","name":"My Bundle","description":"...","unit":"frc","config":{"performance_level":4},"plugins":{"trackers":{},"utilities":{},"frame_processors":{}}}'></textarea>
+      <div style="margin-top:6px;"><button onclick="writeBundle()">Save Bundle</button></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h3>Bundles</h3>
+      <span class="text-dim text-sm">Presets that configure iSpy for an application</span>
+    </div>
+    <div id="bundle-list" class="text-dim text-sm">Loading bundles&hellip;</div>
+  </div>
+</div>
 
 <script>
 let allAddons = [];
@@ -190,6 +224,71 @@ let lastSnapshot = null;
 let visionRunning = false;
 let hasLoadedAddons = false;
 window._publishSources = [];
+
+window.switchMode = function (mode, btn) {
+  document.getElementById('manual-view').style.display = (mode === 'manual') ? '' : 'none';
+  document.getElementById('bundles-view').style.display = (mode === 'bundles') ? '' : 'none';
+  btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  if (mode === 'bundles') loadBundles();
+};
+
+window.switchBundleTab = function (tab, btn) {
+  document.getElementById('bundle-upload').style.display = (tab === 'upload') ? 'block' : 'none';
+  document.getElementById('bundle-paste').style.display = (tab === 'paste') ? 'block' : 'none';
+  btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+};
+window.uploadBundle = function () {
+  const inp = document.getElementById('bundle-file-input');
+  if (!inp.files.length) { alert('Pick a .json file'); return; }
+  const fd = new FormData();
+  fd.append('file', inp.files[0]);
+  fetch('/api/bundles/upload', {method:'POST', body: fd})
+    .then(r => r.json()).then(d => {
+      if (d.success) { alert('Uploaded ' + d.key); loadBundles(); }
+      else { alert(d.error || 'Failed'); }
+    });
+};
+window.writeBundle = function () {
+  const code = document.getElementById('bundle-code').value;
+  fetch('/api/bundles/write', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code: code})
+  }).then(r => r.json()).then(d => {
+    if (d.success) { alert('Saved ' + d.key); loadBundles(); }
+    else { alert(d.error || 'Failed'); }
+  });
+};
+
+function loadBundles() {
+  const el = document.getElementById('bundle-list');
+  if (!el) return;
+  fetch('/api/bundles').then(r => r.json()).then(d => {
+    const bundles = d.bundles || [];
+    if (!bundles.length) { el.textContent = 'No bundles found.'; return; }
+    el.innerHTML = bundles.map(b =>
+      '<div class="form-row" style="align-items:center;">' +
+      '<span class="form-label" style="min-width:160px;">' + (b.name || b.key) + '</span>' +
+      '<span class="text-dim text-sm" style="flex:1;">' + (b.description || '') + '</span>' +
+      '<button class="btn-sm" onclick="applyBundle(\'' + b.key + '\')">Apply</button>' +
+      '</div>'
+    ).join('');
+  }).catch(() => { if (el) el.textContent = 'Could not load bundles.'; });
+}
+
+window.applyBundle = function (key) {
+  if (!confirm('Apply bundle "' + key + '"? This will overwrite plugin/config settings. Restart required.')) return;
+  fetch('/api/bundles/apply', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({key: key})
+  }).then(r => r.json()).then(d => {
+    if (d.success) { alert('Bundle applied: ' + d.key + '. Restart iSpy to take effect.'); }
+    else { alert(d.error || 'Failed'); }
+  });
+};
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
   .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');

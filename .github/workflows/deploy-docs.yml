@@ -6,7 +6,7 @@ on:
     branches:
       - Docs
     paths:
-      - 'iSpy-docs/**'
+      - 'iSpy-Docs/**'
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
@@ -31,20 +31,20 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: iSpy-docs/package-lock.json
+          cache-dependency-path: iSpy-Docs/package-lock.json
 
       - name: Install dependencies
-        working-directory: iSpy-docs
+        working-directory: iSpy-Docs
         run: npm ci
 
       - name: Build Docusaurus
-        working-directory: iSpy-docs
+        working-directory: iSpy-Docs
         run: npm run build
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: iSpy-docs/build
+          path: iSpy-Docs/build
 
   deploy:
     name: Publish documentation

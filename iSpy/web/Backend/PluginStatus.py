@@ -314,6 +314,18 @@ class PluginStatusModule(WebModule):
             "/api/units/select", "api_units_select", self._units_select, methods=["POST"]
         )
         flask_app.add_url_rule(
+            "/api/bundles", "api_bundles", self._bundles_list, methods=["GET"]
+        )
+        flask_app.add_url_rule(
+            "/api/bundles/apply", "api_bundles_apply", require_local_or_token(self._bundles_apply), methods=["POST"]
+        )
+        flask_app.add_url_rule(
+            "/api/bundles/upload", "api_bundles_upload", require_local_or_token(self._bundles_upload), methods=["POST"]
+        )
+        flask_app.add_url_rule(
+            "/api/bundles/write", "api_bundles_write", require_local_or_token(self._bundles_write), methods=["POST"]
+        )
+        flask_app.add_url_rule(
             "/api/units/upload", "api_units_upload", require_local_or_token(self._units_upload), methods=["POST"]
         )
         flask_app.add_url_rule(
@@ -470,6 +482,83 @@ class PluginStatusModule(WebModule):
             dest.write_text(json.dumps(parsed, indent=2), encoding="utf-8")
             import iSpy.units as _u
             _u.reload_packs()
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+        return jsonify(success=True, key=key)
+
+    def _bundles_list(self):
+        try:
+            from iSpy.bundles import list_bundles
+            bundles = list_bundles()
+        except Exception:
+            bundles = []
+        return jsonify({"bundles": bundles})
+
+    def _bundles_apply(self):
+        data = request.get_json(silent=True) or {}
+        key = str(data.get("key", "")).strip()
+        if not key:
+            return jsonify(error="missing key"), 400
+        try:
+            from iSpy.bundles import get_bundle, apply_bundle
+            bundle = get_bundle(key)
+            if bundle is None:
+                return jsonify(error="unknown bundle"), 404
+            config = self.context.get("config")
+            if config is None:
+                return jsonify(error="no config"), 500
+            apply_bundle(config, bundle)
+            try:
+                config.save()
+            except Exception:
+                pass
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+        return jsonify(success=True, key=key)
+
+    def _bundles_upload(self):
+        f = request.files.get("file")
+        if f is None:
+            return jsonify(error="no file"), 400
+        name = (f.filename or "").strip()
+        if not name.lower().endswith(".json"):
+            return jsonify(error="file must be .json"), 400
+        try:
+            raw = f.read()
+            data = json.loads(raw.decode("utf-8"))
+        except Exception as e:
+            return jsonify(error=f"invalid json: {e}"), 400
+        key = str(data.get("key") or Path(name).stem).strip()
+        if not key:
+            return jsonify(error="missing key"), 400
+        try:
+            from iSpy.bundles import _BUNDLES_DIR
+            _BUNDLES_DIR.mkdir(parents=True, exist_ok=True)
+            dest = _BUNDLES_DIR / f"{key}.json"
+            dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            import iSpy.bundles as _b
+            _b.reload_bundles()
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+        return jsonify(success=True, key=key)
+
+    def _bundles_write(self):
+        data = request.get_json(silent=True) or {}
+        code = data.get("code", "")
+        try:
+            parsed = json.loads(code)
+        except Exception as e:
+            return jsonify(error=f"invalid json: {e}"), 400
+        key = str(parsed.get("key") or "").strip()
+        if not key:
+            return jsonify(error="missing key"), 400
+        try:
+            from iSpy.bundles import _BUNDLES_DIR
+            _BUNDLES_DIR.mkdir(parents=True, exist_ok=True)
+            dest = _BUNDLES_DIR / f"{key}.json"
+            dest.write_text(json.dumps(parsed, indent=2), encoding="utf-8")
+            import iSpy.bundles as _b
+            _b.reload_bundles()
         except Exception as e:
             return jsonify(error=str(e)), 500
         return jsonify(success=True, key=key)
