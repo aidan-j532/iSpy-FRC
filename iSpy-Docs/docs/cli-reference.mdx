@@ -103,11 +103,25 @@ This benchmarks inference backends using a `.pt` model. Defaults are five second
 | `--model PATH` | Benchmark this specific PyTorch `.pt` model. |
 | `--all-backends` | Probe every reachable backend rather than only the recommended one. |
 | `--install-deps` | Best-effort install missing runtime packages for the selected backend plan. This changes the active Python environment. |
+| `--plot` / `--no-plot` | Write or skip the PNG report. The report is written by default. |
+| `--plot-output PATH` | PNG path; defaults to the JSON path with a `.png` suffix. |
+| `--plot-sections LIST` | Comma-separated panels: `summary`, `throughput`, `latency`, `stages`, `table`, `system`. Defaults to all; use `none` for only the header and footer. |
+| `--plot-theme light\|dark` | Report theme; default `light`. |
+| `--plot-dpi N` | PNG resolution in dots per inch; default `180`. |
+| `--plot-title TEXT` | Override the report title. |
+| `--plot-sort run\|fps\|name` | Row order in the report; default benchmark order. |
+| `--plot-latency-scale linear\|log` | X-axis scale for the latency panel; default `linear`. |
 
 Example:
 
 ```bash
 ispy-bench --model YoloModels/pytorch/my_model.pt --duration 10 --output Outputs/benchmark.json
+```
+
+The default PNG contains a run summary, throughput and latency charts, a stage-time breakdown, a full per-run table, and the machine/software environment. Trim it with `--plot-sections` when a smaller report is easier to share:
+
+```bash
+ispy-bench --model YoloModels/pytorch/my_model.pt --plot-sections latency,table --plot-theme dark --plot-output Outputs/benchmark.png
 ```
 
 ### `ispy-stats`

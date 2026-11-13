@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import multiprocessing
 import sys
 import time
@@ -21,7 +22,11 @@ from iSpy.config.AutoOpt import (
     has_tensorrt,
     has_tpu,
 )
-from iSpy.validations.bench_to_matplotlib import collect_system_info, render_report
+from iSpy.validations.bench_to_matplotlib import (
+    PLOT_SECTIONS,
+    collect_system_info,
+    render_report,
+)
 from iSpy.vision.ModelInspector import fill_missing_config
 from iSpy.vision.optimizer import _convert_model_subprocess_report
 
@@ -513,10 +518,21 @@ def _conversion_failure_result(model_name, fmt, device, report) -> dict:
         "batch_size": 1,
         "mode": "serial",
         "streams": 1,
-        "latency_ms": {"p50": None, "p95": None, "p99": None},
+        "latency_ms": {
+            "mean": None,
+            "p50": None,
+            "p95": None,
+            "p99": None,
+            "min": None,
+            "max": None,
+            "stdev": None,
+            "samples": 0,
+        },
         "stage_ms": {},
+        "stage_pct": {},
         "provider": "unavailable",
         "detections": 0,
+        "detection_rate": None,
         "ok": False,
         "fps": None,
         "error": (
@@ -600,6 +616,27 @@ def _percentile(values: list[float], percent: int) -> float:
     ordered = sorted(values)
     index = round((len(ordered) - 1) * percent / 100)
     return ordered[index]
+
+def _latency_stats(latencies: list[float]) -> dict:
+    values = [
+        float(value)
+        for value in latencies
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    if not values:
+        return {}
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return {
+        "mean": mean,
+        "p50": _percentile(values, 50),
+        "p95": _percentile(values, 95),
+        "p99": _percentile(values, 99),
+        "min": min(values),
+        "max": max(values),
+        "stdev": math.sqrt(variance),
+        "samples": len(values),
+    }
 
 def _sync_camera(camera) -> None:
     if getattr(camera.model, "model_type", None) == "tpu":
@@ -1000,6 +1037,8 @@ def _combine_benchmark_runs(runs: list[dict]) -> dict:
     if not count or inference_ms < 0.5:
         raise RuntimeError("benchmark produced no valid inference measurements")
     predict_fps = count / elapsed
+    stage_total = sum(stage_ms.values())
+    detections = sum(run["detections"] for run in runs)
     result = {
         "ok": True,
         "fps": predict_fps,
@@ -1008,14 +1047,15 @@ def _combine_benchmark_runs(runs: list[dict]) -> dict:
         "inference_ms": inference_ms,
         "frames": count,
         "elapsed": elapsed,
-        "detections": sum(run["detections"] for run in runs),
+        "detections": detections,
+        "detection_rate": detections / elapsed if elapsed > 0 else None,
         "latencies": latencies,
-        "latency_ms": {
-            "p50": _percentile(latencies, 50),
-            "p95": _percentile(latencies, 95),
-            "p99": _percentile(latencies, 99),
-        },
+        "latency_ms": _latency_stats(latencies),
         "stage_ms": stage_ms,
+        "stage_pct": {
+            stage: (value / stage_total * 100 if stage_total > 0 else 0.0)
+            for stage, value in stage_ms.items()
+        },
         "bottleneck": max(stage_ms, key=stage_ms.get),
         "provider": ", ".join(dict.fromkeys(run["provider"] for run in runs)),
         "stream_fps": [
@@ -1123,10 +1163,21 @@ def _run_benchmark_task(task: dict) -> dict:
         "batch_size": task.get("batch_size", 1),
         "mode": task.get("mode", "serial"),
         "streams": task.get("streams", 1),
-        "latency_ms": {"p50": None, "p95": None, "p99": None},
+        "latency_ms": {
+            "mean": None,
+            "p50": None,
+            "p95": None,
+            "p99": None,
+            "min": None,
+            "max": None,
+            "stdev": None,
+            "samples": 0,
+        },
         "stage_ms": {},
+        "stage_pct": {},
         "provider": "unavailable",
         "detections": 0,
+        "detection_rate": None,
         "ok": False,
     }
     try:
@@ -1154,9 +1205,33 @@ def _run_benchmark_task(task: dict) -> dict:
                 "elapsed": elapsed,
             }
         result.update(measured)
-        result.pop("latencies", None)
+        latencies = result.pop("latencies", None)
+        if latencies:
+            result["latency_ms"] = _latency_stats(latencies)
         if not result.get("provider"):
             result["provider"] = str(task["device"])
+        elapsed = result.get("elapsed")
+        detections = result.get("detections")
+        if elapsed and detections is not None:
+            result["detection_rate"] = detections / elapsed
+        stage_ms = result.get("stage_ms")
+        stage_ms = stage_ms if isinstance(stage_ms, dict) else {}
+        stage_total = 0.0
+        for value in stage_ms.values():
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(number):
+                stage_total += number
+        if stage_total > 0:
+            stage_pct = {}
+            for stage, value in stage_ms.items():
+                try:
+                    stage_pct[stage] = float(value) / stage_total * 100
+                except (TypeError, ValueError):
+                    continue
+            result["stage_pct"] = stage_pct
         result["ok"] = bool(
             result.get("ok")
             and result.get("frames", 0) > 0
@@ -1197,6 +1272,23 @@ def _parse_batch_sizes(value: str) -> tuple[int, ...]:
     if not sizes:
         raise argparse.ArgumentTypeError("provide at least one batch size")
     return sizes
+
+def _parse_plot_sections(value: str) -> tuple[str, ...]:
+    parts = [part.strip().lower() for part in value.split(",") if part.strip()]
+    if not parts or parts == ["all"]:
+        return PLOT_SECTIONS
+    if parts == ["none"]:
+        return ()
+    unknown = [part for part in parts if part not in PLOT_SECTIONS]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            "unknown section(s): "
+            + ", ".join(unknown)
+            + " - use "
+            + ", ".join(PLOT_SECTIONS)
+            + ", all, or none"
+        )
+    return tuple(dict.fromkeys(parts))
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Benchmark inference backends")
@@ -1256,11 +1348,65 @@ def _build_parser() -> argparse.ArgumentParser:
         "active backend plan (onnxruntime-gpu, tensorrt, torch_xla, ...) "
         "before benchmarking.",
     )
-    parser.add_argument("--no-plot", action="store_true", help="skip the PNG report")
+    plot_group = parser.add_mutually_exclusive_group()
+    plot_group.add_argument(
+        "--plot",
+        dest="plot",
+        action="store_true",
+        default=True,
+        help="write the PNG report (default: on)",
+    )
+    plot_group.add_argument(
+        "--no-plot",
+        dest="plot",
+        action="store_false",
+        help="skip the PNG report",
+    )
     parser.add_argument(
         "--plot-output",
         default=None,
-        help="PNG path (default: next to the outputed JSON)",
+        help="PNG path (default: next to the output JSON)",
+    )
+    parser.add_argument(
+        "--plot-sections",
+        type=_parse_plot_sections,
+        default=PLOT_SECTIONS,
+        metavar="LIST",
+        help=(
+            "comma-separated report panels: "
+            + ", ".join(PLOT_SECTIONS)
+            + " (default: all; use none for just the header/footer)"
+        ),
+    )
+    parser.add_argument(
+        "--plot-theme",
+        choices=("light", "dark"),
+        default="light",
+        help="report theme (default: light)",
+    )
+    parser.add_argument(
+        "--plot-dpi",
+        type=_positive_int,
+        default=180,
+        metavar="N",
+        help="PNG resolution in dots per inch (default: 180)",
+    )
+    parser.add_argument(
+        "--plot-title",
+        default=None,
+        help="override the report title",
+    )
+    parser.add_argument(
+        "--plot-sort",
+        choices=("run", "fps", "name"),
+        default="run",
+        help="row order in the report (default: benchmark order)",
+    )
+    parser.add_argument(
+        "--plot-latency-scale",
+        choices=("linear", "log"),
+        default="linear",
+        help="x-axis scale for the latency panel (default: linear)",
     )
     parser.add_argument(
         "--calib-dataset",
@@ -1280,6 +1426,8 @@ def main(argv=None):
         parser.error("--parallel must be at least 1 bro like what you doing?")
     if args.pipelined and args.serial:
         parser.error("--pipelined and --serial cannot be used together")
+    if not args.plot and args.plot_output:
+        parser.error("--plot-output cannot be used with --no-plot")
 
     try:
         import torch  # noqa: F401
@@ -1438,6 +1586,18 @@ def main(argv=None):
     payload = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "system": collect_system_info(),
+        "settings": {
+            "duration": args.duration,
+            "batch_sizes": list(args.batch_sizes),
+            "streams": args.streams,
+            "modes": modes,
+            "parallel": args.parallel,
+            "all_backends": bool(args.all_backends),
+            "tpu_cores": tpu_core_count,
+            "backends": sorted(active),
+            "model_override": args.model,
+            "calib_dataset": args.calib_dataset,
+        },
         "best": best,
         "all": all_results,
     }
@@ -1445,13 +1605,23 @@ def main(argv=None):
         json.dump(payload, f, indent=2)
     print(f"\nResults saved to {output_path}")
 
-    if not args.no_plot:
-        png = render_report(
-            payload,
+    if args.plot:
+        png_path = (
             Path(args.plot_output)
             if args.plot_output
-            else output_path.with_suffix(".png"),
-            title=f"iSpy benchmark - {', '.join(best) or 'no results'}",
+            else output_path.with_suffix(".png")
+        )
+        if png_path.suffix.lower() != ".png":
+            png_path = png_path.with_suffix(".png")
+        png = render_report(
+            payload,
+            png_path,
+            title=args.plot_title or "iSpy Benchmark",
+            sections=args.plot_sections,
+            theme=args.plot_theme,
+            dpi=args.plot_dpi,
+            sort=args.plot_sort,
+            latency_scale=args.plot_latency_scale,
         )
         if png:
             print(f"Chart saved to {png}")
