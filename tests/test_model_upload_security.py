@@ -104,6 +104,7 @@ class RestrictedTorchLoadTests(unittest.TestCase):
         self.assertEqual(meta["task"], "detect")
 
 
+@requires_torch
 class ModelUploadAccessTests(unittest.TestCase):
     """BUG 4: the upload route is local/token-only and never pickles hostile bytes."""
 

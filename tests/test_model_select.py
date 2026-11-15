@@ -3,6 +3,12 @@
 import logging
 import tempfile
 import unittest
+try:
+    import torch  # noqa: F401
+
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -306,6 +312,7 @@ class OptimizedActiveTests(unittest.TestCase):
         self.assertFalse(cam.quantize)
 
 
+@unittest.skipUnless(_HAS_TORCH, "torch is not installed")
 class BootLoadTests(unittest.TestCase):
     _PT = "YoloModels/pytorch/_boot_test_pose.pt"
     _ARTIFACT = "YoloModels/rknn/_boot_test_pose.rknn"

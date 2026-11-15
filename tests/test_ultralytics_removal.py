@@ -152,6 +152,7 @@ class UltralyticsRemovalTests(unittest.TestCase):
         self.assertEqual(model.nc, 80)
 
 
+@requires_torch
 class PoseModelRegressionTests(unittest.TestCase):
     """_default_pose.pt loads, infers, and returns keypoints.
 

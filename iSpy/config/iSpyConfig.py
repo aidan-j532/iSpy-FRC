@@ -28,6 +28,9 @@ _CAMERA_CORE_KEYS = {
     "gain",
     "capture_fps",
     "fps_cap",
+    "capture_max",
+    "capture_width",
+    "capture_height",
     "brightness",
     "contrast",
     "saturation",
@@ -146,7 +149,7 @@ _ADDON_RENAMES = (
 
 _MERGED_HEALTH_ADDONS = ("health_reporter", "status_reporter")
 
-_MERGED_ROLLBACK_ADDONS = ("rollback", "video_recorder")
+
 
 _ADDON_LEGACY_FLAGS = {
     "use_network_tables": ("utilities", "FRC/network_table_handler"),
@@ -310,7 +313,7 @@ class iSpyConfig:
                         "fov": 0,
                     },
                     "yaw": 0,
-                    "pitch": 0,
+                    "pitch": 90,
                     "height": 1.0,
                     "x": 0,
                     "y": 0,
@@ -450,22 +453,11 @@ class iSpyConfig:
 
         rollback = self.config.setdefault("rollback", {})
         rollback_defaults = self.default_config.get("rollback", {})
-        carried = {}
-        for gone_name in _MERGED_ROLLBACK_ADDONS:
-            gone = utilities.pop(gone_name, None)
-            if isinstance(gone, dict):
-                for key, value in gone.items():
-                    if key == "record_dir":
-                        key = "data_dir"
-                    carried.setdefault(key, value)
         legacy_dir = self.config.get("record_dir")
-        if legacy_dir is not None:
-            carried.setdefault("data_dir", legacy_dir)
-        for key, value in carried.items():
-            if key not in rollback_defaults:
-                continue
-            if rollback.get(key, rollback_defaults[key]) == rollback_defaults[key]:
-                rollback[key] = value
+        if legacy_dir is not None and rollback.get(
+            "data_dir", rollback_defaults.get("data_dir")
+        ) == rollback_defaults.get("data_dir"):
+            rollback["data_dir"] = legacy_dir
 
         for legacy_key, (
             addon_type,
@@ -857,7 +849,7 @@ class iSpyCameraConfig:
         "y": 0,
         "z": 0,
         "height": 0,
-        "pitch": 0,
+        "pitch": 90,
         "yaw": 0,
         "grayscale": False,
         "brightness": 0,
@@ -870,6 +862,9 @@ class iSpyCameraConfig:
         "source": "/dev/video0",
         "device_id": None,
         "capture_fps": 0,
+        "capture_max": False,
+        "capture_width": 0,
+        "capture_height": 0,
         "pipeline": {"name": "object_detection", "settings": {}},
     }
 

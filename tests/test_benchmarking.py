@@ -1,6 +1,12 @@
 import contextlib
 import io
 import unittest
+try:
+    import torch  # noqa: F401
+
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
 from unittest import mock
 
 from iSpy.validations import benchmarking
@@ -34,6 +40,7 @@ class BenchmarkingCliTests(unittest.TestCase):
                 benchmarking.main(["--parallel", "0"])
 
 
+@unittest.skipUnless(_HAS_TORCH, "torch is not installed")
 class BenchmarkTaskTests(unittest.TestCase):
     def setUp(self):
         self.task = {

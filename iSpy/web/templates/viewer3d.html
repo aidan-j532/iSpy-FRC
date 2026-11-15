@@ -739,47 +739,83 @@ block head %}
     },
 
     camera: {
+      _buildFov(g, fov) {
+        // remove old frustum lines
+        const old = g.userData.frustum;
+        if (old) {
+          g.remove(old);
+          if (old.geometry) old.geometry.dispose();
+          if (old.material) old.material.dispose();
+        }
+        const d = 1.0;
+        const half = Math.tan(((fov || 60) * Math.PI) / 180 / 2) * d;
+        const w = half;
+        const h = half * 0.75;
+        const corners = [
+          [-w, -h, d],
+          [w, -h, d],
+          [w, h, d],
+          [-w, h, d],
+        ];
+        const positions = [];
+        for (const c of corners) positions.push(0, 0, 0, c[0], c[1], c[2]);
+        for (let i = 0; i < 4; i++) {
+          const a = corners[i];
+          const b = corners[(i + 1) % 4];
+          positions.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(positions, 3),
+        );
+        const mat = new THREE.LineBasicMaterial({
+          color: 0xffaa00,
+          transparent: true,
+          opacity: 0.8,
+        });
+        const lines = new THREE.LineSegments(geo, mat);
+        g.add(lines);
+        g.userData.frustum = lines;
+        g.userData.fov = fov;
+      },
       create(o) {
         const g = new THREE.Group();
-        // body: small rectangular camera box, LONG along +Z (look direction),
-        // narrow side to side - like a Limelight/Lifecam body.
-        const bw = 0.15,
-          bh = 0.13,
-          bd = 0.28;
-        const bodyGeo = new THREE.BoxGeometry(bw, bh, bd);
-        const bodyMat = new THREE.MeshStandardMaterial({
-          color: 0x232732,
-          roughness: 0.55,
-          metalness: 0.35,
-        });
-        const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.castShadow = true;
-        body.add(
-          makeFatEdges(new THREE.EdgesGeometry(bodyGeo), 0xffffff, 0.55, 1.5),
+        // camera is just a point
+        const point = new THREE.Mesh(
+          new THREE.SphereGeometry(0.06, 12, 12),
+          new THREE.MeshBasicMaterial({ color: 0xffaa00 }),
         );
-        g.add(body);
-        // lens barrel on the front face (+Z)
-        const barrelGeo = new THREE.CylinderGeometry(0.045, 0.05, 0.05, 20);
-        const barrelMat = new THREE.MeshStandardMaterial({
-          color: 0x0d0f13,
-          roughness: 0.3,
-          metalness: 0.6,
+        g.add(point);
+        this._buildFov(g, (o.data && o.data.fov) || 60);
+        return g;
+      },
+      update(g, o) {
+        g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
+        g.quaternion.set(
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+        );
+        const fov = (o.data && o.data.fov) || 60;
+        if (g.userData.fov !== fov) this._buildFov(g, fov);
+      },
+    },
+
+    robot: {
+      create(o) {
+        const g = new THREE.Group();
+        const d = o.data || {};
+        const w = d.width || 0.76;
+        const h = d.height || 0.3;
+        const dep = d.depth || 0.69;
+        const geo = new THREE.BoxGeometry(w, h, dep);
+        const edges = new THREE.EdgesGeometry(geo);
+        const mat = new THREE.LineBasicMaterial({
+          color: parseColor(o.color, 0x4c8bf5),
+          transparent: true,
+          opacity: 0.9,
         });
-        const barrel = new THREE.Mesh(barrelGeo, barrelMat);
-        barrel.rotation.x = Math.PI / 2;
-        barrel.position.z = bd / 2 + 0.025;
-        g.add(barrel);
-        const glassGeo = new THREE.CircleGeometry(0.037, 24);
-        const glassMat = new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          emissive: 0xffffff,
-          emissiveIntensity: 0.35,
-          roughness: 0.15,
-          side: THREE.DoubleSide,
-        });
-        const glass = new THREE.Mesh(glassGeo, glassMat);
-        glass.position.z = bd / 2 + 0.055;
-        g.add(glass);
+        const wire = new THREE.LineSegments(edges, mat);
+        g.add(wire);
         return g;
       },
       update(g, o) {

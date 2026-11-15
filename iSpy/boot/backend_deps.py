@@ -1560,6 +1560,7 @@ def ensure_backend(
 def ensure_backends(
     names: Iterable[str],
     *,
+    platform_info=None,
     auto_install: bool = True,
     installer: Installer | None = None,
     verifier: Verifier | None = None,

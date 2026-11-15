@@ -357,7 +357,7 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
         self._viewer.add_overlay(
             "robot",
             {
-                "type": "box",
+                "type": "robot",
                 "x": pose["x"],
                 "y": pose["y"],
                 "z": 0.15,
