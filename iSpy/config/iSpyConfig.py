@@ -64,6 +64,17 @@ _VISION_MODEL_SETTINGS_KEYS = (
     "tpu_dtype",
 )
 
+def _default_camera_pitch() -> float:
+    # Default camera pitch makes a horizontally-forward camera render
+    # looking forward for the selected unit pack.
+    try:
+        from iSpy import units as _unit_packs
+
+        return float(_unit_packs.unit_default_camera_pitch("frc"))
+    except Exception:
+        return 0.0
+
+
 _LEGACY_SETTING_ALIASES = {
     "auto_opt": "optimize",
     "quantized": "quantize",
@@ -71,46 +82,54 @@ _LEGACY_SETTING_ALIASES = {
 
 _ADDON_TYPES = ("trackers", "utilities", "frame_processors")
 
-_UNIT_TO_INCHES = {
-    "inch": 1.0,
-    "inches": 1.0,
-    "foot": 12.0,
-    "feet": 12.0,
-    "meter": 1.0 / 0.0254,
-    "meters": 1.0 / 0.0254,
-    "centimeter": 1.0 / 2.54,
-    "centimeters": 1.0 / 2.54,
-    "frc": 1.0,
-}
+def _compat_table(helper) -> dict:
+    """Build a legacy conversion table from the canonical unit packs."""
+    try:
+        from iSpy import units as _unit_packs
 
-_UNIT_LABELS = {
-    "inch": "in",
-    "inches": "in",
-    "foot": "ft",
-    "feet": "ft",
-    "meter": "m",
-    "meters": "m",
-    "centimeter": "cm",
-    "centimeters": "cm",
-    "frc": "in",
-}
+        return helper(_unit_packs)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Could not build unit conversion compatibility table"
+        )
+        return {}
 
-_INCHES_TO_OUTPUT_UNIT = {
-    "meter": 0.0254,
-    "meters": 0.0254,
-    "inch": 1.0,
-    "inches": 1.0,
-    "foot": 1 / 12,
-    "feet": 1 / 12,
-    "centimeter": 2.54,
-    "centimeters": 2.54,
-    "frc": 0.0254,
-}
+
+def _input_conversions(_unit_packs) -> dict:
+    table = _unit_packs.input_conversions()
+    table.setdefault("frc", 1.0)
+    return table
+
+
+def _output_conversions(_unit_packs) -> dict:
+    table = _unit_packs.output_conversions()
+    table.setdefault("frc", _unit_packs.inches_to_output("frc"))
+    return table
+
+
+def _unit_labels(_unit_packs) -> dict:
+    labels = {}
+    for pack in _unit_packs.list_unit_packs():
+        label = str(pack.get("labels", {}).get("input", ""))
+        if label:
+            labels[str(pack["key"]).lower()] = label
+            for alias in pack.get("aliases", []):
+                labels.setdefault(str(alias).lower(), label)
+    labels.setdefault("frc", _unit_packs.unit_input_label("frc"))
+    return labels
+
+
+# Compatibility tables for code that still imports the old module constants.
+# They are derived from Units/*.json, which is the source of truth.
+_UNIT_TO_INCHES = _compat_table(_input_conversions)
+_INCHES_TO_OUTPUT_UNIT = _compat_table(_output_conversions)
+_UNIT_LABELS = _compat_table(_unit_labels)
 
 def unit_to_inches(value: float, unit: str) -> float:
     key = (unit or "frc").lower().strip()
     try:
         from iSpy.units import input_to_inches as _i2i
+
         return value * _i2i(key)
     except Exception:
         return value * _UNIT_TO_INCHES.get(key, 1.0)
@@ -119,14 +138,23 @@ def unit_to_output(value: float, unit: str) -> float:
     key = (unit or "frc").lower().strip()
     try:
         from iSpy.units import input_to_inches as _i2i, inches_to_output as _i2o
-        inches = _i2i(key)
-        return value * inches * _i2o(key)
+
+        return value * _i2i(key) * _i2o(key)
     except Exception:
         inches = _UNIT_TO_INCHES.get(key, 1.0)
-        return value * inches * _INCHES_TO_OUTPUT_UNIT.get(key, _INCHES_TO_OUTPUT_UNIT["frc"])
+        factor = _INCHES_TO_OUTPUT_UNIT.get(
+            key, _INCHES_TO_OUTPUT_UNIT.get("frc", 0.0254)
+        )
+        return value * inches * factor
 
 def unit_label(unit: str) -> str:
-    return _UNIT_LABELS.get(unit.lower().strip(), unit)
+    key = str(unit or "").lower().strip()
+    try:
+        from iSpy.units import unit_input_label
+
+        return unit_input_label(key)
+    except Exception:
+        return _UNIT_LABELS.get(key, unit)
 
 _ADDON_LEGACY_FOLDS = (
     ("dbscan", "trackers", "FRC/object_tracker", None),  # special: dict
@@ -313,7 +341,7 @@ class iSpyConfig:
                         "fov": 0,
                     },
                     "yaw": 0,
-                    "pitch": 90,
+                    "pitch": _default_camera_pitch(),
                     "height": 1.0,
                     "x": 0,
                     "y": 0,
@@ -849,7 +877,7 @@ class iSpyCameraConfig:
         "y": 0,
         "z": 0,
         "height": 0,
-        "pitch": 90,
+        "pitch": _default_camera_pitch(),
         "yaw": 0,
         "grayscale": False,
         "brightness": 0,

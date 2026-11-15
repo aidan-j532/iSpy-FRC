@@ -1319,6 +1319,7 @@ class NetworkTableHandlerTests(unittest.TestCase):
     def _fresh_module(self, is_connected=True):
         import importlib
         import sys
+        import types
 
         sys.modules.pop("iSpy.plugins.utilities.BuiltIn.NetworkHandler", None)
         fake = mock.Mock()
@@ -1335,7 +1336,30 @@ class NetworkTableHandlerTests(unittest.TestCase):
         self._fake_inst = fake
         ntcore_fake = mock.Mock()
         ntcore_fake.NetworkTableInstance.getDefault.return_value = fake
-        with mock.patch.dict(sys.modules, {"ntcore": ntcore_fake}):
+
+        # The pinned WPILib wheels do not import on every supported Python
+        # version.  These tests only exercise the handler around NT, so stub
+        # the struct/geometry modules instead of depending on the platform.
+        wpiutil_mod = types.ModuleType("wpiutil")
+        wpistruct_mod = types.ModuleType("wpiutil.wpistruct")
+        wpistruct_mod.make_wpistruct = lambda **kwargs: (lambda cls: cls)
+        wpiutil_mod.wpistruct = wpistruct_mod
+        wpimath_mod = types.ModuleType("wpimath")
+        geometry_mod = types.ModuleType("wpimath.geometry")
+        geometry_mod.Pose2d = type("Pose2d", (), {})
+        geometry_mod.Rotation2d = type("Rotation2d", (), {})
+        wpimath_mod.geometry = geometry_mod
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "ntcore": ntcore_fake,
+                "wpiutil": wpiutil_mod,
+                "wpiutil.wpistruct": wpistruct_mod,
+                "wpimath": wpimath_mod,
+                "wpimath.geometry": geometry_mod,
+            },
+        ):
             return importlib.import_module(
                 "iSpy.plugins.utilities.BuiltIn.NetworkHandler"
             )
@@ -1436,6 +1460,23 @@ class NetworkTableHandlerTests(unittest.TestCase):
         handler = self._handler({})
         handler.stop()
         handler.update({"detections": []})
+
+    def test_viewer_robot_overlay_uses_active_output_units(self):
+        handler = self._handler({})
+        handler._viewer = mock.Mock()
+        handler.context["global_config"] = {"unit": "imperial"}
+        handler._update_viewer_overlay(
+            {"reference_pose": {"x": 1.0, "y": 2.0, "heading": 0.5}}
+        )
+        overlay_id, overlay = handler._viewer.add_overlay.call_args[0]
+        self.assertEqual(overlay_id, "robot")
+        self.assertAlmostEqual(overlay["x"], 1.0 / 0.0254)
+        self.assertAlmostEqual(overlay["y"], 2.0 / 0.0254)
+        self.assertAlmostEqual(overlay["z"], 0.15 / 0.0254)
+        self.assertAlmostEqual(overlay["yaw"], 0.5)
+        self.assertAlmostEqual(overlay["data"]["width"], 0.76 / 0.0254)
+        self.assertAlmostEqual(overlay["data"]["height"], 0.30 / 0.0254)
+        self.assertAlmostEqual(overlay["data"]["depth"], 0.69 / 0.0254)
 
 
 class HealthModuleTests(unittest.TestCase):

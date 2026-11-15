@@ -93,15 +93,7 @@ block content %}
       <span class="form-label">Unit</span>
 
       <select class="form-input" data-key="unit">
-        <option value="frc">FRC (meters)</option>
-
-        <option value="meter">Meters</option>
-
-        <option value="foot">Feet</option>
-
-        <option value="inch">Inches</option>
-
-        <option value="centimeter">Centimeters</option>
+        <!-- populated from /api/units so Units/*.json stays the source of truth -->
       </select>
 
       <span
@@ -866,8 +858,40 @@ block content %}
     }
   }
 
+  async function populateUnitSelect() {
+    const sel = document.querySelector('select[data-key="unit"]');
+
+    if (!sel) return;
+
+    try {
+      const d = await fetch("/api/units").then((r) => r.json());
+
+      const packs = d.packs || [];
+
+      if (!packs.length) return;
+
+      sel.innerHTML = "";
+
+      for (const pack of packs) {
+        const opt = document.createElement("option");
+
+        opt.value = pack.key;
+
+        const input = (pack.labels && pack.labels.input) || pack.input_unit;
+
+        const output = (pack.labels && pack.labels.output) || pack.output_unit;
+
+        opt.textContent = `${pack.name} (${input} in -> ${output} out)`;
+
+        sel.appendChild(opt);
+      }
+    } catch (_) {}
+  }
+
   async function load() {
     const data = await fetch("/api/settings").then((r) => r.json());
+
+    await populateUnitSelect();
 
     configData = data.config || {};
 

@@ -61,10 +61,7 @@ _HTML = """<!DOCTYPE html>
       <div class="form-row">
         <label class="form-label" for="unit">Unit</label>
         <select id="unit" class="form-input">
-          <option value="frc">FRC (meters)</option>
-          <option>meter</option>
-          <option>inch</option>
-          <option>foot</option>
+          <option value="frc">Loading units...</option>
         </select>
       </div>
     </div>
@@ -93,6 +90,25 @@ _HTML = """<!DOCTYPE html>
 
 <script>
 const $ = id => document.getElementById(id);
+
+async function loadUnits() {
+  try {
+    const d = await fetch('/api/units').then(r => r.json());
+    const sel = $('unit');
+    if (!sel || !d.packs || !d.packs.length) return;
+    sel.innerHTML = '';
+    for (const p of d.packs) {
+      const o = document.createElement('option');
+      o.value = p.key;
+      const input = (p.labels && p.labels.input) || p.input_unit;
+      const output = (p.labels && p.labels.output) || p.output_unit;
+      o.textContent = `${p.name} (${input} in -> ${output} out)`;
+      sel.appendChild(o);
+    }
+    if (d.active) sel.value = d.active;
+  } catch (_) {}
+}
+loadUnits();
 
 function syncNtRow() {
   $('nt-ip-row').style.display = $('use_nt').value === 'true' ? '' : 'none';

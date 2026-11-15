@@ -2,23 +2,13 @@ import math
 import time
 from pathlib import Path
 
+import numpy as np
 from flask import jsonify, render_template
 
-from iSpy.config.iSpyConfig import unit_to_inches
+from iSpy import units as unit_packs
 from iSpy.core import performance
+from iSpy.vision import triangulation
 from iSpy.web.Backend.WebModule import WebModule
-
-_INCHES_TO_OUTPUT_UNIT = {
-    "meter": 0.0254,
-    "meters": 0.0254,
-    "inch": 1.0,
-    "inches": 1.0,
-    "foot": 1 / 12,
-    "feet": 1 / 12,
-    "centimeter": 2.54,
-    "centimeters": 2.54,
-    "frc": 0.0254,
-}
 
 _VIEWER_GRACE_S = 5.0
 
@@ -44,14 +34,31 @@ class Viewer3DModule(WebModule):
     def remove_overlay(self, overlay_id: str) -> None:
         self._overlays.pop(overlay_id, None)
 
+    def _unit(self) -> str:
+        config = self.context.get("config")
+        return config.get("unit", "frc") if config else "frc"
+
+    def _viewer_config(self) -> dict:
+        return unit_packs.viewer_settings(self._unit())
+
     def register_routes(self, flask_app):
         flask_app.add_url_rule(
-            "/viewer3d", "viewer3d_page", lambda: render_template("viewer3d.html")
+            "/viewer3d", "viewer3d_page", self._page
+        )
+        flask_app.add_url_rule(
+            "/api/viewer3d/config", "api_viewer3d_config", self._config
         )
         flask_app.add_url_rule(
             "/api/detections/latest", "api_detections_latest", self._latest
         )
         flask_app.add_url_rule("/api/overlays", "api_overlays", self._overlays_endpoint)
+
+    def _page(self):
+        return render_template("viewer3d.html", viewer_config=self._viewer_config())
+
+    def _config(self):
+        self._last_poll = time.monotonic()
+        return jsonify(self._viewer_config())
 
     def update(self, frame_data: dict):
         if (
@@ -117,14 +124,23 @@ class Viewer3DModule(WebModule):
                 return str(name)
         return str(getattr(cam, "source", "camera"))
 
+    def _camera_orientation(self, yaw_deg: float, pitch_deg: float, viewer: dict):
+        """Camera euler in the robot frame, including optional mount trim."""
+        rotation = triangulation.camera_rotation_to_world(
+            np.eye(3, dtype=float), yaw_deg, pitch_deg
+        )
+        roll_off = math.radians(viewer.get("camera_roll_offset_deg", 0.0) or 0.0)
+        pitch_off = math.radians(viewer.get("camera_pitch_offset_deg", 0.0) or 0.0)
+        yaw_off = math.radians(viewer.get("camera_yaw_offset_deg", 0.0) or 0.0)
+        if roll_off or pitch_off or yaw_off:
+            rotation = rotation @ triangulation.euler_to_matrix(
+                roll_off, pitch_off, yaw_off
+            )
+        return triangulation.matrix_to_euler(rotation)
+
     def _refresh_camera_overlays(self):
-        config = self.context.get("config")
-        unit = config.get("unit", "frc") if config else "frc"
-        try:
-            from iSpy.units import inches_to_output as _i2o
-            scale = _i2o(unit)
-        except Exception:
-            scale = _INCHES_TO_OUTPUT_UNIT.get(unit, _INCHES_TO_OUTPUT_UNIT.get("frc", 0.0254))
+        unit = self._unit()
+        viewer = self._viewer_config()
         current_names = set()
         for cam in self.context.get("cameras", []):
             cfg = getattr(cam, "config", None)
@@ -134,17 +150,30 @@ class Viewer3DModule(WebModule):
             current_names.add(name)
             fov = cfg.get("calibration", {}).get("fov", 0)
             if fov <= 0:
-                fov = 60
+                fov = viewer["camera"]["fov"] if viewer else 60
+            x, y, z = unit_packs.input_point_to_output(
+                (
+                    cfg.get("x", 0) or 0,
+                    cfg.get("y", 0) or 0,
+                    cfg.get("height", 0) or 0,
+                ),
+                unit,
+            )
+            roll, pitch, yaw = self._camera_orientation(
+                cfg.get("yaw", 0) or 0,
+                cfg.get("pitch", 0) or 0,
+                viewer,
+            )
             self.add_overlay(
                 f"camera:{name}",
                 {
                     "type": "camera",
-                    "x": unit_to_inches(cfg.get("x", 0) or 0, unit) * scale,
-                    "y": unit_to_inches(cfg.get("y", 0) or 0, unit) * scale,
-                    "z": unit_to_inches(cfg.get("height", 0) or 0, unit) * scale,
-                    "roll": 0,
-                    "yaw": math.radians(cfg.get("yaw", 0) or 0),
-                    "pitch": math.radians(cfg.get("pitch", 0) or 0),
+                    "x": x,
+                    "y": y,
+                    "z": z,
+                    "roll": roll,
+                    "pitch": pitch,
+                    "yaw": yaw,
                     "label": name,
                     "data": {"fov": fov},
                 },

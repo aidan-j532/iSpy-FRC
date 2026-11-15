@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Unit Pack Guide</title>
+<style>
+  body { font-family: "Segoe UI", Arial, sans-serif; margin: 40px; color: #111; line-height: 1.45; }
+  h1 { border-bottom: 2px solid #333; padding-bottom: 6px; }
+  h2 { margin-top: 24px; color: #222; }
+  h3 { margin-top: 18px; color: #333; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 18px; }
+  th, td { border: 1px solid #bbb; padding: 8px; vertical-align: top; }
+  th { background: #f2f2f2; text-align: left; }
+  code, pre { font-family: Consolas, monospace; background: #f6f6f6; }
+  pre { padding: 12px; border: 1px solid #ddd; overflow: auto; white-space: pre-wrap; }
+  .note { background: #f9f9f9; border-left: 4px solid #666; padding: 10px 14px; margin: 12px 0; }
+  @media print { body { margin: 20px; } }
+</style>
+</head>
+<body>
+
+<h1>Unit Pack Guide</h1>
+<p>A unit pack is one JSON file in <code>Units/</code> that is the single source of truth for a measurement convention.</p>
+
+<h2>How to use unit packs</h2>
+<ol>
+  <li><b>Pick the active pack:</b> set <code>"unit": "frc"</code> in <code>Config/config.json</code>, or use Settings / Setup Wizard.</li>
+  <li><b>Edit a shipped pack:</b> open <code>Units/frc.json</code> (or metric/imperial), change values, restart iSpy.</li>
+  <li><b>Add a new pack:</b> copy an existing JSON, change <code>key</code>, conversion factors, labels, aliases, and optional viewer settings. Save as <code>Units/&lt;key&gt;.json</code>.</li>
+  <li><b>Install at runtime:</b> use Add-ons -&gt; Units, or <code>POST /api/units/upload</code> / <code>POST /api/units/write</code>.</li>
+</ol>
+
+<h2>Top-level fields</h2>
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>schema_version</code></td><td>Schema revision. Use 2.</td></tr>
+<tr><td><code>key</code></td><td>Unique pack ID used by config and unit pickers.</td></tr>
+<tr><td><code>name</code></td><td>Human-readable name.</td></tr>
+<tr><td><code>description</code></td><td>Short explanation.</td></tr>
+<tr><td><code>input_unit</code></td><td>Physical unit a user types.</td></tr>
+<tr><td><code>output_unit</code></td><td>Physical unit published to NT/API/viewer.</td></tr>
+<tr><td><code>input_to_inches</code></td><td>Multiply typed value by this to get inches.</td></tr>
+<tr><td><code>inches_to_output</code></td><td>Multiply inches by this to get published value.</td></tr>
+<tr><td><code>aliases</code></td><td>Extra names that resolve to this pack.</td></tr>
+</table>
+
+<h2>axis</h2>
+<p>Sign multipliers applied to published values. <code>1.0</code> leaves unchanged; <code>-1.0</code> flips.</p>
+<pre>{
+  "x": 1.0, "y": 1.0, "z": 1.0,
+  "roll": 1.0, "pitch": 1.0, "yaw": 1.0
+}</pre>
+<p>Positions use x/y/z. Orientations use roll/pitch/yaw. This does not change the physical frame; it only changes published signs.</p>
+
+<h2>labels</h2>
+<pre>{ "input": "ft", "output": "ft", "speed": "ft/s" }</pre>
+<p>Short UI strings. Derived from units if omitted.</p>
+
+<h2>defaults</h2>
+<pre>{ "camera_pitch_deg": 0.0 }</pre>
+<p>Pitch assigned to newly created cameras. 0 is level and looks forward.</p>
+
+<h2>viewer (optional)</h2>
+<p>Optional 3D viewer settings. Missing fields are filled from built-in defaults.</p>
+
+<h3>robot_to_viewer</h3>
+<pre>"robot_to_viewer": ["x", "z", "-y"]</pre>
+<p>Maps data axes to viewer axes. Must be a signed permutation with determinant +1. Optional; viewer uses default if omitted.</p>
+
+<h3>camera_roll_offset_deg / camera_pitch_offset_deg / camera_yaw_offset_deg</h3>
+<p>Extra rotation applied to camera overlays. Usually 0.</p>
+
+<h3>fog_density</h3>
+<p>Three.js exponential fog density. Scale with scene size: inches needs tiny values, feet/meters larger. 0 disables fog.</p>
+
+<h3>axes_size</h3>
+<p>Length of the solid X/Y/Z axis helper in viewer units.</p>
+
+<h3>bounds</h3>
+<pre>{
+  "x": { "min": -50.0, "max": 50.0 },
+  "y": { "min": -50.0, "max": 50.0 },
+  "z": { "min": 0.0, "max": 25.0 }
+}</pre>
+
+<h3>scale</h3>
+<pre>{
+  "x": { "min": -50.0, "max": 50.0, "step": 0.1, "default": 1.0 }
+}</pre>
+<p>Viewer scale sliders.</p>
+
+<h3>grid</h3>
+<pre>{
+  "extent": 100.0,
+  "divisions": 80,
+  "marker_size": 1.0
+}</pre>
+<p>extent is grid width/depth; derived from bounds if omitted. divisions is line count. marker_size is detection/cube marker size.</p>
+
+<h3>camera</h3>
+<pre>{
+  "fov": 60.0,
+  "near": 0.1,
+  "far": 1000.0,
+  "position": [75.0, 75.0, 75.0],
+  "target": [0.0, 0.0, 0.0]
+}</pre>
+
+<h2>Minimal mental model</h2>
+<ul>
+  <li><code>input_to_inches</code> + <code>inches_to_output</code> = measurement conversion.</li>
+  <li><code>axis</code> = published sign convention.</li>
+  <li><code>labels</code> = UI text.</li>
+  <li><code>defaults</code> = new camera defaults.</li>
+  <li><code>viewer</code> = optional 3D scene configuration.</li>
+</ul>
+
+<div class="note">
+If you only care about measurements, keep <code>viewer</code> minimal and let defaults fill the rest.
+</div>
+
+</body>
+</html>

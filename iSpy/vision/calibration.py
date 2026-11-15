@@ -168,6 +168,12 @@ def _calibrate_scipy(all_corners, all_ids, board, img_size):
     n_images = len(all_obj)
     if n_images < 2:
         return None
+    # Keep the scipy fallback fast: 20 well-spread frames are plenty.
+    if n_images > 20:
+        step = max(1, n_images // 20)
+        all_obj = all_obj[::step][:20]
+        all_img = all_img[::step][:20]
+        n_images = len(all_obj)
 
     K0 = _estimate_initial_intrinsics(all_obj, all_img, img_size)
     rvecs0, tvecs0 = _estimate_initial_extrinsics(all_obj, all_img, K0)
@@ -184,7 +190,7 @@ def _calibrate_scipy(all_corners, all_ids, board, img_size):
         x0,
         args=(all_obj, all_img, n_images),
         method="lm",
-        max_nfev=200,
+        max_nfev=50,
     )
     if not result.success and result.cost > 1e6:
         return None
@@ -311,6 +317,33 @@ def frame_diverse(corners, existing_captures, min_shift_px: float = 12.0) -> boo
         if mean_min < min_shift_px:
             return False
     return True
+
+
+def select_diverse_captures(captures, max_count: int, min_shift_px: float = 12.0):
+    """Pick up to ``max_count`` captures, preferring pose diversity.
+
+    Greedily keeps captures that are diverse relative to those already chosen;
+    if fewer than ``max_count`` diverse captures exist, the remainder is
+    filled from the most recent captures so calibration always has enough
+    data. ``captures`` is a list of ``(gray, corners, ids)`` tuples.
+    """
+    if not captures or max_count <= 0:
+        return []
+    max_count = min(int(max_count), len(captures))
+    selected = [captures[0]]
+    for cap in captures[1:]:
+        if len(selected) >= max_count:
+            break
+        if frame_diverse(cap[1], [s[1] for s in selected], min_shift_px):
+            selected.append(cap)
+    if len(selected) < max_count:
+        for cap in captures:
+            if cap in selected:
+                continue
+            selected.append(cap)
+            if len(selected) >= max_count:
+                break
+    return selected
 
 def derive_fov_from_intrinsics(result: dict) -> dict:
     try:
@@ -452,6 +485,73 @@ def _calibration_sane(rms, cam_mat, dist, img_size, max_rms: float = 100.0) -> b
         return False
     return True
 
+def _refine_charuco_corners(gray, corners):
+    if corners is None:
+        return corners
+    try:
+        pts = np.asarray(corners, dtype=np.float32).reshape(-1, 1, 2).copy()
+    except (TypeError, ValueError):
+        return corners
+    if len(pts) == 0:
+        return corners
+    criteria = (
+        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+        30,
+        1e-3,
+    )
+    try:
+        cv2.cornerSubPix(gray, pts, (5, 5), (-1, -1), criteria)
+    except cv2.error:
+        return corners
+    return pts.reshape(np.asarray(corners).shape)
+
+
+def _estimate_view_poses(all_obj, all_img, cam_mat, dist):
+    rvecs = []
+    tvecs = []
+    for obj, img in zip(all_obj, all_img):
+        try:
+            ok, rvec, tvec = cv2.solvePnP(
+                np.asarray(obj, dtype=np.float64).reshape(-1, 1, 3),
+                np.asarray(img, dtype=np.float64).reshape(-1, 1, 2),
+                cam_mat,
+                dist,
+            )
+        except cv2.error:
+            ok = False
+        if not ok:
+            rvecs.append(None)
+            tvecs.append(None)
+        else:
+            rvecs.append(rvec)
+            tvecs.append(tvec)
+    return rvecs, tvecs
+
+
+def _per_view_reprojection_rms(cam_mat, dist, rvecs, tvecs, all_obj, all_img):
+    if rvecs is None or tvecs is None or len(rvecs) != len(all_obj):
+        rvecs, tvecs = _estimate_view_poses(all_obj, all_img, cam_mat, dist)
+    if rvecs is None or tvecs is None or len(rvecs) != len(all_obj):
+        return None
+    errors = []
+    for obj, img, rvec, tvec in zip(all_obj, all_img, rvecs, tvecs):
+        try:
+            proj, _ = cv2.projectPoints(
+                np.asarray(obj, dtype=np.float64).reshape(-1, 1, 3),
+                rvec,
+                tvec,
+                cam_mat,
+                dist,
+            )
+            delta = (
+                np.asarray(proj, dtype=np.float64).reshape(-1, 2)
+                - np.asarray(img, dtype=np.float64).reshape(-1, 2)
+            )
+            errors.append(float(np.sqrt(np.mean(np.sum(delta ** 2, axis=1)))))
+        except (cv2.error, ValueError, TypeError):
+            errors.append(float("inf"))
+    return errors
+
 def calibrate_charuco(
     captures,
     pattern=DEFAULT_CHARUCO_PATTERN,
@@ -461,6 +561,10 @@ def calibrate_charuco(
 ):
     if len(captures) < 3:
         return None
+    # More than ~30 diverse frames does not improve intrinsics meaningfully but
+    # makes the solve (especially the scipy fallback) dramatically slower.
+    if len(captures) > 30:
+        captures = select_diverse_captures(captures, 30, 12.0)
     cols, rows = pattern
     board = make_charuco_board(cols, rows, square_length, marker_length, dictionary_id)
     all_corners = []
@@ -471,7 +575,8 @@ def calibrate_charuco(
             continue
         h, w = gray.shape[:2]
         img_size = (w, h)
-        all_corners.append(np.asarray(corners, dtype=np.float32))
+        refined = _refine_charuco_corners(gray, corners)
+        all_corners.append(np.asarray(refined, dtype=np.float32))
         all_ids.append(np.asarray(ids, dtype=np.int32))
     if len(all_corners) < 3:
         return None
@@ -480,31 +585,79 @@ def calibrate_charuco(
             "ChArUco calibration frames were all the same board pose - move the board between captures"
         )
         return None
-    try:
-        rms, cam_mat, dist, _, _ = _calibrate_camera_charuco(
-            all_corners,
-            all_ids,
-            board,
-            img_size,
-            None,
-            None,
-        )
-    except (cv2.error, Exception) as exc:
-        logger.debug(
-            "OpenCV ChArUco calibration unavailable/failed (%s) - trying scipy",
-            exc,
-        )
-        rms, cam_mat, dist = None, None, None
-    if not _calibration_sane(rms, cam_mat, dist, img_size):
+    # Iterative calibration with per-view outlier rejection. This removes
+    # frames that are inconsistent with the rest, which is the main cause of
+    # "looks calibrated but is off by several pixels" results.
+    working_corners = [np.asarray(c, dtype=np.float32) for c in all_corners]
+    working_ids = [np.asarray(i, dtype=np.int32) for i in all_ids]
+    rms, cam_mat, dist, rvecs, tvecs = None, None, None, None, None
+    per_view = None
+    for _round in range(3):
+        if len(working_corners) < 3:
+            break
         try:
-            result = _calibrate_scipy(all_corners, all_ids, board, img_size)
-        except Exception as exc:
-            logger.debug("scipy calibration failed: %s", exc)
-            result = None
-        if result is not None:
-            rms, cam_mat, dist, _, _ = result
-        else:
-            rms, cam_mat, dist = None, None, None
+            result = _calibrate_camera_charuco(
+                working_corners,
+                working_ids,
+                board,
+                img_size,
+                None,
+                None,
+            )
+            if isinstance(result, tuple) and len(result) >= 5:
+                rms, cam_mat, dist, rvecs, tvecs = result[:5]
+            elif isinstance(result, tuple) and len(result) >= 3:
+                rms, cam_mat, dist = result[:3]
+                rvecs, tvecs = None, None
+            else:
+                rms, cam_mat, dist, rvecs, tvecs = None, None, None, None, None
+        except (cv2.error, Exception) as exc:
+            logger.debug(
+                "OpenCV ChArUco calibration unavailable/failed (%s) - trying scipy",
+                exc,
+            )
+            rms, cam_mat, dist, rvecs, tvecs = None, None, None, None, None
+        if not _calibration_sane(rms, cam_mat, dist, img_size):
+            try:
+                result = _calibrate_scipy(working_corners, working_ids, board, img_size)
+            except Exception as exc:
+                logger.debug("scipy calibration failed: %s", exc)
+                result = None
+            if isinstance(result, tuple) and len(result) >= 5:
+                rms, cam_mat, dist, rvecs, tvecs = result[:5]
+            elif isinstance(result, tuple) and len(result) >= 3:
+                rms, cam_mat, dist = result[:3]
+                rvecs, tvecs = None, None
+            else:
+                rms, cam_mat, dist, rvecs, tvecs = None, None, None, None, None
+        if rms is None or cam_mat is None or dist is None:
+            break
+        # Good calibrations do not need expensive per-view outlier rejection.
+        if float(rms) < 0.5:
+            break
+        try:
+            pairs = _build_obj_img_pairs(working_corners, working_ids, board)
+        except Exception:
+            pairs = None
+        if pairs is not None:
+            all_obj, all_img = pairs
+            per_view = _per_view_reprojection_rms(
+                cam_mat, dist, rvecs, tvecs, all_obj, all_img
+            )
+            if per_view is not None:
+                finite = [e for e in per_view if np.isfinite(e)]
+                if len(finite) >= 3:
+                    median = float(np.median(finite))
+                    threshold = max(1.0, median * 2.0)
+                    outliers = [
+                        i for i, e in enumerate(per_view) if e > threshold
+                    ]
+                    if outliers and len(working_corners) - len(outliers) >= 3:
+                        for i in sorted(outliers, reverse=True):
+                            del working_corners[i]
+                            del working_ids[i]
+                        continue
+        break
     if rms is None or cam_mat is None or dist is None:
         return None
     if not np.isfinite(rms) or rms > 100.0:
@@ -513,13 +666,18 @@ def calibrate_charuco(
             rms,
         )
         return None
-    return {
+    result = {
         "rms": float(rms),
         "camera_matrix": cam_mat.tolist(),
         "dist_coeffs": dist.flatten().tolist(),
         "resolution": list(img_size),
         "count": len(captures),
+        "views_used": len(working_corners),
+        "views_submitted": len(all_corners),
     }
+    if per_view is not None:
+        result["per_view_rms"] = [float(x) for x in per_view]
+    return result
 
 def _to_corners(corners):
     a = np.asarray(corners, dtype=np.float32)

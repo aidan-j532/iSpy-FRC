@@ -1,10 +1,40 @@
 {
+  "schema_version": 2,
   "key": "imperial",
   "name": "Imperial (inches in, inches out)",
-  "description": "Imperial convention: measure and output in inches.",
+  "description": "Imperial convention: measure and output in inches. +X right, +Y forward, +Z up; positive yaw turns right.",
   "input_unit": "inch",
   "output_unit": "inch",
   "input_to_inches": 1.0,
   "inches_to_output": 1.0,
-  "axis": { "x": 1.0, "y": 1.0, "z": 1.0, "yaw": 1.0 }
+  "aliases": ["in", "inch", "inches", "ft", "foot", "feet"],
+  "axis": { "x": 1.0, "y": 1.0, "z": 1.0, "roll": 1.0, "pitch": 1.0, "yaw": 1.0 },
+  "labels": { "input": "in", "output": "in", "speed": "in/s" },
+  "defaults": { "camera_pitch_deg": 0.0 },
+  "viewer": {
+    "robot_to_viewer": ["x", "z", "-y"],
+    "camera_roll_offset_deg": 0.0,
+    "camera_pitch_offset_deg": 0.0,
+    "camera_yaw_offset_deg": 0.0,
+    "fog_density": 0.001,
+    "axes_size": 320.0,
+    "bounds": {
+      "x": { "min": -400.0, "max": 400.0 },
+      "y": { "min": -400.0, "max": 400.0 },
+      "z": { "min": 0.0, "max": 200.0 }
+    },
+    "scale": {
+      "x": { "min": -10.0, "max": 10.0, "step": 0.1, "default": 1.0 },
+      "y": { "min": -10.0, "max": 10.0, "step": 0.1, "default": 1.0 },
+      "z": { "min": -10.0, "max": 10.0, "step": 0.1, "default": 1.0 }
+    },
+    "grid": { "extent": 800.0, "divisions": 80, "marker_size": 10.0 },
+    "camera": {
+      "fov": 60.0,
+      "near": 0.1,
+      "far": 5000.0,
+      "position": [350.0, 350.0, 350.0],
+      "target": [0.0, 0.0, 0.0]
+    }
+  }
 }

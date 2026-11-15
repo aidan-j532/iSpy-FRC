@@ -76,6 +76,32 @@ def camera_point_to_world(
     )
 
 
+def euler_to_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """ZYX Euler angles (radians) to a rotation matrix: Rz(yaw)Ry(pitch)Rx(roll)."""
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]], dtype=np.float64)
+    ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]], dtype=np.float64)
+    rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]], dtype=np.float64)
+    return rz @ ry @ rx
+
+
+def matrix_to_euler(rotation_matrix: np.ndarray) -> tuple[float, float, float]:
+    """Inverse of :func:`euler_to_matrix` (ZYX order, radians)."""
+    R = np.asarray(rotation_matrix, dtype=np.float64)
+    sy = math.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
+    if sy > 1e-6:
+        roll = math.atan2(R[2, 1], R[2, 2])
+        pitch = math.atan2(-R[2, 0], sy)
+        yaw = math.atan2(R[1, 0], R[0, 0])
+    else:
+        roll = math.atan2(-R[1, 2], R[1, 1])
+        pitch = math.atan2(-R[2, 0], sy)
+        yaw = 0.0
+    return roll, pitch, yaw
+
+
 def camera_rotation_to_world(
     rotation_matrix: np.ndarray,
     yaw_deg: float,

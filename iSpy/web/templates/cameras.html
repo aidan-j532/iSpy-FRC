@@ -457,15 +457,22 @@ const COMMON_SECTIONS = [
   { title: 'Capture', fields: ['subsystem', 'grayscale', 'exposure_time', 'gain', 'capture_fps', 'fps_cap'] },
 ];
 
-const _UNIT_LABELS = { inch:'in', inches:'in', foot:'ft', feet:'ft', meter:'m', meters:'m', centimeter:'cm', centimeters:'cm', frc:'in' };
 let _globalUnit = 'frc';
+let _globalUnitLabel = 'in';
 
-function _posUnit() { return _UNIT_LABELS[_globalUnit] || _globalUnit; }
+function _posUnit() { return _globalUnitLabel || _globalUnit; }
 
 async function _syncUnit() {
   try {
-    const d = await fetch('/api/settings').then(r => r.json());
-    if (d.config && d.config.unit) _globalUnit = d.config.unit;
+    const d = await fetch('/api/units').then(r => r.json());
+    const packs = d.packs || [];
+    const active = packs.find(p => p.key === d.active) ||
+      packs.find(p => (p.aliases || []).includes(d.active));
+    const pack = active || packs[0];
+    if (pack) {
+      _globalUnit = pack.key;
+      _globalUnitLabel = (pack.labels && pack.labels.input) || pack.input_unit || pack.key;
+    }
   } catch (_) {}
 }
 
@@ -3056,11 +3063,11 @@ function focalKnownBody() {
     <div class="calib-section">
       <div class="calib-section-title">Object Details</div>
       <div class="form-row">
-        <span class="form-label">Object size <span class="form-unit">in</span></span>
+        <span class="form-label">Object size <span class="form-unit">${escapeHtml(_posUnit())}</span></span>
         <input type="number" step="0.1" class="form-input" id="focal-real-size" placeholder="e.g. 6.5">
       </div>
       <div class="form-row">
-        <span class="form-label">Distance <span class="form-unit">in</span></span>
+        <span class="form-label">Distance <span class="form-unit">${escapeHtml(_posUnit())}</span></span>
         <input type="number" step="0.1" class="form-input" id="focal-distance" placeholder="camera to object">
       </div>
       <div class="form-row">
@@ -3368,7 +3375,21 @@ async function finishCharucoCalibration() {
   const container = $id('charuco-result');
   btn.disabled = true;
   btn.textContent = 'Calibrating...';
-  container.innerHTML = '<div class="calib-status">Calibrating - this can take a moment...</div>';
+  // Full-screen darken overlay, matching the connection-lost overlay style.
+  const overlay = document.createElement('div');
+  overlay.className = 'conn-overlay visible';
+  overlay.setAttribute('role', 'alert');
+  overlay.innerHTML = `
+    <div class="conn-overlay-content">
+      <img class="conn-overlay-icon" src="/static/loading.svg" alt="" />
+      <div class="conn-overlay-title">Calibrating</div>
+      <div class="conn-overlay-subtitle">
+        this may take a while<span class="loading-dots"><span>.</span><span>.</span><span>.</span></span>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.body.classList.add('connection-lost');
   try {
     const r = await fetch(`/api/cameras/calibration/${encodeURIComponent(calibrationState.camera)}/charuco/finish`, {
       method: 'POST',
@@ -3397,6 +3418,8 @@ async function finishCharucoCalibration() {
         <div class="calib-result-body">${escapeHtml(e.message || 'Failed to run calibration')}</div>
       </div>`;
   } finally {
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    document.body.classList.remove('connection-lost');
     btn.disabled = false;
     btn.textContent = 'Calibrate Intrinsics';
   }

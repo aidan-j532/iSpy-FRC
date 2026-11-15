@@ -4,6 +4,7 @@ import math
 import numpy as np
 import time
 
+from iSpy import units as unit_packs
 from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig
 from iSpy.vision.Object import Object
@@ -119,29 +120,7 @@ class OpticalFlowPipeline(VisionPipeline):
         self.grayscale = camera_config.get("grayscale", False)
 
         self.unit = config.get("unit", "meter")
-        try:
-            from iSpy.units import list_unit_packs
-            self.conversions = {}
-            for _p in list_unit_packs():
-                _k = str(_p.get("key", "")).lower().strip()
-                if _k:
-                    self.conversions[_k] = float(_p.get("inches_to_output", 1.0))
-            self.conversions.setdefault("meters", self.conversions.get("meter", 0.0254))
-            self.conversions.setdefault("inches", self.conversions.get("inch", 1.0))
-            self.conversions.setdefault("feet", self.conversions.get("foot", 1 / 12))
-            self.conversions.setdefault("centimeters", self.conversions.get("centimeter", 2.54))
-            self.conversions.setdefault("meter", self.conversions.get("m", 0.0254))
-            self.conversions.setdefault("inch", self.conversions.get("in", 1.0))
-            self.conversions.setdefault("centimeter", self.conversions.get("cm", 2.54))
-            self.conversions.setdefault("foot", self.conversions.get("ft", 1 / 12))
-            if "frc" not in self.conversions:
-                self.conversions["frc"] = 0.0254
-        except Exception:
-            self.conversions = {
-                "meter": 0.0254, "meters": 0.0254, "inch": 1.0, "inches": 1.0,
-                "foot": 1 / 12, "feet": 1 / 12, "centimeter": 2.54,
-                "centimeters": 2.54, "frc": 0.0254,
-            }
+        self.conversions = unit_packs.output_conversions()
 
         super().__init__(camera_config, (640, 480), self.grayscale)
 
@@ -176,17 +155,7 @@ class OpticalFlowPipeline(VisionPipeline):
         return max(float(self._setting("nominal_range", 60)), 1.0)
 
     def _unit_label(self) -> str:
-        return {
-            "meter": "m/s",
-            "meters": "m/s",
-            "frc": "m/s",
-            "inch": "in/s",
-            "inches": "in/s",
-            "foot": "ft/s",
-            "feet": "ft/s",
-            "centimeter": "cm/s",
-            "centimeters": "cm/s",
-        }.get(self.unit, self.unit + "/s")
+        return unit_packs.unit_speed_label(self.unit)
 
     def _flow_measure(self, frame):
         gray = (

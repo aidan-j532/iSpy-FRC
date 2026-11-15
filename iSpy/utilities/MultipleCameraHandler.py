@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import logging
 import threading
-from iSpy.config.iSpyConfig import _INCHES_TO_OUTPUT_UNIT
+from iSpy.units import inches_to_output
 
 class MultipleCameraHandler:
     def __init__(self, cameras: list[VisionPipeline], config=None):
@@ -22,13 +22,7 @@ class MultipleCameraHandler:
             config.get("triangulation_match_distance", 2.0) if config else 2.0
         )
         unit = str((config or {}).get("unit", "frc")).lower().strip()
-        try:
-            from iSpy.units import inches_to_output as _i2o
-            self._inches_to_output_unit = _i2o(unit)
-        except Exception:
-            self._inches_to_output_unit = _INCHES_TO_OUTPUT_UNIT.get(
-                unit, _INCHES_TO_OUTPUT_UNIT["frc"]
-            )
+        self._inches_to_output_unit = inches_to_output(unit)
 
         self._objects: list[list[Object]] = [[] for _ in cameras]
         self._frames = [None] * len(cameras)

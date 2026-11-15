@@ -417,18 +417,42 @@ class PluginStatusModule(WebModule):
         key = str(data.get("key", "")).strip()
         if not key:
             return jsonify(error="missing key"), 400
-        try:
-            from iSpy.units import get_unit_pack
-            if get_unit_pack(key) is None:
-                return jsonify(error="unknown unit pack"), 404
-        except Exception:
-            pass
+        from iSpy.units import get_unit_pack
+
+        pack = get_unit_pack(key)
+        if pack is None:
+            return jsonify(error="unknown unit pack"), 404
         config = self.context.get("config")
         if config is None:
             return jsonify(error="no config"), 500
         try:
-            config.set("unit", key)
+            config.set("unit", pack["key"])
             config.save()
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+        return jsonify(success=True, key=pack["key"])
+
+    @staticmethod
+    def _unit_key(value: str) -> str:
+        key = re.sub(r"[^a-z0-9_-]+", "-", str(value or "").strip().lower())
+        return key.strip("-_")
+
+    def _save_unit_pack(self, data, filename: str = ""):
+        from iSpy.units import _UNITS_DIR, reload_packs, validate_unit_pack
+
+        errors = validate_unit_pack(data)
+        if errors:
+            return jsonify(error="; ".join(errors)), 400
+        key = self._unit_key(data.get("key") or Path(filename).stem)
+        if not key:
+            return jsonify(error="missing key"), 400
+        data = dict(data)
+        data["key"] = key
+        try:
+            _UNITS_DIR.mkdir(parents=True, exist_ok=True)
+            dest = _UNITS_DIR / f"{key}.json"
+            dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            reload_packs()
         except Exception as e:
             return jsonify(error=str(e)), 500
         return jsonify(success=True, key=key)
@@ -445,22 +469,7 @@ class PluginStatusModule(WebModule):
             data = json.loads(raw.decode("utf-8"))
         except Exception as e:
             return jsonify(error=f"invalid json: {e}"), 400
-        key = str(data.get("key") or Path(name).stem).strip()
-        if not key:
-            return jsonify(error="missing key"), 400
-        # basic validation
-        if "inches_to_output" not in data or "input_to_inches" not in data:
-            return jsonify(error="missing conversion factors"), 400
-        try:
-            from iSpy.units import _UNITS_DIR
-            _UNITS_DIR.mkdir(parents=True, exist_ok=True)
-            dest = _UNITS_DIR / f"{key}.json"
-            dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            import iSpy.units as _u
-            _u.reload_packs()
-        except Exception as e:
-            return jsonify(error=str(e)), 500
-        return jsonify(success=True, key=key)
+        return self._save_unit_pack(data, name)
 
     def _units_write(self):
         data = request.get_json(silent=True) or {}
@@ -470,21 +479,7 @@ class PluginStatusModule(WebModule):
             parsed = json.loads(code)
         except Exception as e:
             return jsonify(error=f"invalid json: {e}"), 400
-        key = str(parsed.get("key") or filename or "").strip()
-        if not key:
-            return jsonify(error="missing key"), 400
-        if "inches_to_output" not in parsed or "input_to_inches" not in parsed:
-            return jsonify(error="missing conversion factors"), 400
-        try:
-            from iSpy.units import _UNITS_DIR
-            _UNITS_DIR.mkdir(parents=True, exist_ok=True)
-            dest = _UNITS_DIR / f"{key}.json"
-            dest.write_text(json.dumps(parsed, indent=2), encoding="utf-8")
-            import iSpy.units as _u
-            _u.reload_packs()
-        except Exception as e:
-            return jsonify(error=str(e)), 500
-        return jsonify(success=True, key=key)
+        return self._save_unit_pack(parsed, filename)
 
     def _bundles_list(self):
         try:

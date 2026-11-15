@@ -242,9 +242,9 @@ block head %}
       <thead>
         <tr>
           <th>ID</th>
-          <th>X</th>
-          <th>Y</th>
-          <th>Z</th>
+          <th id="th-x">X</th>
+          <th id="th-y">Y</th>
+          <th id="th-z">Z</th>
           <th>Pitch</th>
           <th>Yaw</th>
           <th>Roll</th>
@@ -273,19 +273,37 @@ block head %}
   import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
   import { robotToViewer, robotToViewerQuat } from "robotpose";
 
+  // Unit-pack viewer settings (Units/*.json -> viewer). The server deep-merges
+  // these over built-in defaults, so every key is always present.
+  const VIEWER_CONFIG = {{ viewer_config | tojson }};
+  const AXIS_MAP = VIEWER_CONFIG.robot_to_viewer;
+  const VIEWER_BOUNDS = VIEWER_CONFIG.bounds_viewer;
+  const CAMERA_CONFIG = VIEWER_CONFIG.camera;
+  const OUTPUT_LABEL = VIEWER_CONFIG.output_label;
+  const FOG_DENSITY = VIEWER_CONFIG.fog_density;
+  const AXES_SIZE = VIEWER_CONFIG.axes_size;
+
+  for (const axis of ["x", "y", "z"]) {
+    document.getElementById(`th-${axis}`).textContent =
+      `${axis.toUpperCase()} (${OUTPUT_LABEL})`;
+  }
+  document.querySelector(".scale-hint").textContent =
+    `Scale detections per axis (${OUTPUT_LABEL}). ` +
+    "Set a negative value to flip an axis.";
+
   const container = document.getElementById("scene-container");
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a0a0f);
-  scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
+  scene.fog = new THREE.FogExp2(0x0a0a0f, FOG_DENSITY);
 
   const camera = new THREE.PerspectiveCamera(
-    60,
+    CAMERA_CONFIG.fov,
     container.clientWidth / container.clientHeight,
-    0.1,
-    200,
+    CAMERA_CONFIG.near,
+    CAMERA_CONFIG.far,
   );
-  camera.position.set(9, 9, 9);
-  camera.lookAt(0, 0, 0);
+  camera.position.set(...CAMERA_CONFIG.position);
+  camera.lookAt(...CAMERA_CONFIG.target);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
@@ -296,7 +314,7 @@ block head %}
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.target.set(0, 0, 0);
+  controls.target.set(...CAMERA_CONFIG.target);
   controls.update();
 
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -322,8 +340,8 @@ block head %}
     for (const m of fatMats) m.resolution.set(r.width, r.height);
   }
 
-  const GRID_EXTENT = 20;
-  const GRID_DIVS = 80;
+  const GRID_EXTENT = VIEWER_CONFIG.grid.extent;
+  const GRID_DIVS = VIEWER_CONFIG.grid.divisions;
 
   function buildFatGrid(centerColor, gridColor, linewidth) {
     const positions = [];
@@ -423,7 +441,7 @@ block head %}
     });
     return g;
   }
-  const axesHelper = solidAxes(8);
+  const axesHelper = solidAxes(AXES_SIZE);
   scene.add(axesHelper);
 
   // detections and overlays live in this group so the per-axis scale controls
@@ -447,17 +465,49 @@ block head %}
       container.style.background = "#f0f0f0";
     } else {
       scene.background = new THREE.Color(0x0a0a0f);
-      scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
+      scene.fog = new THREE.FogExp2(0x0a0a0f, FOG_DENSITY);
       setGridColors(0x2a2e38, 0x1a1d24);
       container.style.background = "#0a0a0f";
     }
   };
 
+  const BOUND_CENTER = {
+    x: (VIEWER_BOUNDS.x.min + VIEWER_BOUNDS.x.max) / 2,
+    y: (VIEWER_BOUNDS.y.min + VIEWER_BOUNDS.y.max) / 2,
+    z: (VIEWER_BOUNDS.z.min + VIEWER_BOUNDS.z.max) / 2,
+  };
+  const BOUND_SPAN = Math.max(
+    VIEWER_BOUNDS.x.max - VIEWER_BOUNDS.x.min,
+    VIEWER_BOUNDS.y.max - VIEWER_BOUNDS.y.min,
+    VIEWER_BOUNDS.z.max - VIEWER_BOUNDS.z.min,
+    1,
+  );
   const PRESETS = {
-    default: { pos: [9, 9, 9], target: [0, 0, 0] },
-    top: { pos: [0, 22, 0.01], target: [0, 0, 0] },
-    front: { pos: [0, 2, 18], target: [0, 0, 0] },
-    side: { pos: [18, 2, 0], target: [0, 0, 0] },
+    default: { pos: CAMERA_CONFIG.position, target: CAMERA_CONFIG.target },
+    top: {
+      pos: [
+        BOUND_CENTER.x,
+        BOUND_CENTER.y + BOUND_SPAN * 1.25,
+        BOUND_CENTER.z + BOUND_SPAN * 0.001,
+      ],
+      target: [BOUND_CENTER.x, BOUND_CENTER.y, BOUND_CENTER.z],
+    },
+    front: {
+      pos: [
+        BOUND_CENTER.x,
+        BOUND_CENTER.y + BOUND_SPAN * 0.1,
+        VIEWER_BOUNDS.z.max + BOUND_SPAN * 0.9,
+      ],
+      target: [BOUND_CENTER.x, BOUND_CENTER.y, BOUND_CENTER.z],
+    },
+    side: {
+      pos: [
+        VIEWER_BOUNDS.x.max + BOUND_SPAN * 0.9,
+        BOUND_CENTER.y + BOUND_SPAN * 0.1,
+        BOUND_CENTER.z,
+      ],
+      target: [BOUND_CENTER.x, BOUND_CENTER.y, BOUND_CENTER.z],
+    },
   };
   window.setViewPreset = function () {
     const p =
@@ -467,9 +517,23 @@ block head %}
     controls.update();
   };
 
-  const GRID_UNIT = 0.25;
-  const CUBE_SIZE = 0.25;
-  const DOT_RADIUS = 0.05;
+  const GRID_UNIT = VIEWER_CONFIG.grid.marker_size;
+  const MIN_MARKER_SIZE = Math.max(0.001, GRID_UNIT * 0.08);
+  // The historical viewer was designed around a 0.25-unit marker.  Scaling
+  // the plugin overlay defaults by the pack's marker size keeps them
+  // proportionate when the pack publishes inches instead of meters.
+  const UNIT_SCALE = GRID_UNIT / 0.25;
+  const CUBE_SIZE = GRID_UNIT;
+  const DOT_RADIUS = Math.max(MIN_MARKER_SIZE, GRID_UNIT * 0.2);
+  const OVERLAY_BOX_SIZE = GRID_UNIT * 2;
+  const OVERLAY_SPHERE_RADIUS = GRID_UNIT;
+  const CAMERA_FRUSTUM_DEPTH = GRID_UNIT * 4;
+  const CAMERA_POINT_RADIUS = Math.max(MIN_MARKER_SIZE, GRID_UNIT * 0.24);
+  const ROBOT_DEFAULTS = {
+    width: 0.76 * UNIT_SCALE,
+    height: 0.3 * UNIT_SCALE,
+    depth: 0.69 * UNIT_SCALE,
+  };
   const BOX_COLOR = 0x4c8bf5;
 
   function disposeMesh(obj) {
@@ -497,7 +561,7 @@ block head %}
   }
 
   function toViewer(px, py, pz) {
-    const [x, y, z] = robotToViewer(px, py, pz);
+    const [x, y, z] = robotToViewer(px, py, pz, AXIS_MAP);
     return new THREE.Vector3(x, y, z);
   }
 
@@ -521,7 +585,7 @@ block head %}
     // order _matrix_to_euler decodes), so move them into the viewer frame as a
     // quaternion. A frame-swapped euler folds tilted objects into the wrong plane.
     mesh.quaternion.set(
-      ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+      ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0, AXIS_MAP),
     );
     const wire = mesh.children.find(
       (c) => c.isLineSegments || c.isLineSegments2,
@@ -534,7 +598,10 @@ block head %}
 
   function makePlanarMarker(o) {
     const g = new THREE.Group();
-    const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
+    const size = Math.max(
+      MIN_MARKER_SIZE,
+      (o.vis_meta && o.vis_meta.size) || GRID_UNIT,
+    );
     const planeGeo = new THREE.PlaneGeometry(size, size);
     const planeMat = new THREE.MeshStandardMaterial({
       color: 0xffaa00,
@@ -555,9 +622,12 @@ block head %}
     // same convention as updateCubeMarker: eulers are robot-frame ZYX, applied
     // as a quaternion so the tag tilts the way it actually tilts on the field
     g.quaternion.set(
-      ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+      ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0, AXIS_MAP),
     );
-    const size = Math.max(0.02, (o.vis_meta && o.vis_meta.size) || GRID_UNIT);
+    const size = Math.max(
+      MIN_MARKER_SIZE,
+      (o.vis_meta && o.vis_meta.size) || GRID_UNIT,
+    );
     g.scale.setScalar(size / (g.userData.planarSize || size));
     const wire = g.children.find((c) => c.isLineSegments || c.isLineSegments2);
     if (wire) {
@@ -691,9 +761,9 @@ block head %}
     box: {
       create(o) {
         const d = o.data || {};
-        const w = d.width || 0.5,
-          h = d.height || 0.5,
-          dep = d.depth || 0.5;
+        const w = d.width || OVERLAY_BOX_SIZE,
+          h = d.height || OVERLAY_BOX_SIZE,
+          dep = d.depth || OVERLAY_BOX_SIZE;
         const geo = new THREE.BoxGeometry(w, h, dep);
         const col = parseColor(o.color, 0x4c8bf5);
         const mat = new THREE.MeshStandardMaterial({
@@ -710,7 +780,7 @@ block head %}
       update(mesh, o) {
         mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
         mesh.quaternion.set(
-          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0, AXIS_MAP),
         );
       },
     },
@@ -718,7 +788,7 @@ block head %}
     sphere: {
       create(o) {
         const d = o.data || {};
-        const r = d.radius || 0.25;
+        const r = d.radius || OVERLAY_SPHERE_RADIUS;
         const geo = new THREE.SphereGeometry(r, 20, 20);
         const col = parseColor(o.color, 0x4caf50);
         const mat = new THREE.MeshStandardMaterial({
@@ -733,7 +803,7 @@ block head %}
       update(mesh, o) {
         mesh.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
         mesh.quaternion.set(
-          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0, AXIS_MAP),
         );
       },
     },
@@ -747,7 +817,7 @@ block head %}
           if (old.geometry) old.geometry.dispose();
           if (old.material) old.material.dispose();
         }
-        const d = 1.0;
+        const d = CAMERA_FRUSTUM_DEPTH;
         const half = Math.tan(((fov || 60) * Math.PI) / 180 / 2) * d;
         const w = half;
         const h = half * 0.75;
@@ -783,7 +853,7 @@ block head %}
         const g = new THREE.Group();
         // camera is just a point
         const point = new THREE.Mesh(
-          new THREE.SphereGeometry(0.06, 12, 12),
+          new THREE.SphereGeometry(CAMERA_POINT_RADIUS, 12, 12),
           new THREE.MeshBasicMaterial({ color: 0xffaa00 }),
         );
         g.add(point);
@@ -793,7 +863,7 @@ block head %}
       update(g, o) {
         g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
         g.quaternion.set(
-          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0, AXIS_MAP),
         );
         const fov = (o.data && o.data.fov) || 60;
         if (g.userData.fov !== fov) this._buildFov(g, fov);
@@ -804,9 +874,9 @@ block head %}
       create(o) {
         const g = new THREE.Group();
         const d = o.data || {};
-        const w = d.width || 0.76;
-        const h = d.height || 0.3;
-        const dep = d.depth || 0.69;
+        const w = d.width || ROBOT_DEFAULTS.width;
+        const h = d.height || ROBOT_DEFAULTS.height;
+        const dep = d.depth || ROBOT_DEFAULTS.depth;
         const geo = new THREE.BoxGeometry(w, h, dep);
         const edges = new THREE.EdgesGeometry(geo);
         const mat = new THREE.LineBasicMaterial({
@@ -821,7 +891,7 @@ block head %}
       update(g, o) {
         g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
         g.quaternion.set(
-          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0, AXIS_MAP),
         );
       },
     },
@@ -835,7 +905,7 @@ block head %}
       update(g, o) {
         g.position.copy(toViewer(o.x || 0, o.y || 0, o.z || 0));
         g.quaternion.set(
-          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0),
+          ...robotToViewerQuat(o.roll || 0, o.pitch || 0, o.yaw || 0, AXIS_MAP),
         );
         const children = (o.data && o.data.children) || [];
         syncOverlayChildren(g, children);
@@ -958,11 +1028,11 @@ block head %}
     selectRowById(Number(id));
   });
 
-  const SCALE_MIN = -10;
-  const SCALE_MAX = 10;
+  const AXIS_SCALE = VIEWER_CONFIG.scale;
 
   function setAxisScale(axis, value) {
-    const v = Math.min(SCALE_MAX, Math.max(SCALE_MIN, value));
+    const cfg = AXIS_SCALE[axis];
+    const v = Math.min(cfg.max, Math.max(cfg.min, value));
     worldGroup.scale[axis] = v;
     const range = document.getElementById(`scale-${axis}-range`);
     const num = document.getElementById(`scale-${axis}-value`);
@@ -971,20 +1041,29 @@ block head %}
   }
 
   function bindScale(axis) {
+    const cfg = AXIS_SCALE[axis];
     const range = document.getElementById(`scale-${axis}-range`);
     const num = document.getElementById(`scale-${axis}-value`);
+    for (const input of [range, num]) {
+      input.min = cfg.min;
+      input.max = cfg.max;
+      input.step = cfg.step;
+    }
+    range.value = cfg.default;
+    num.value = cfg.default;
+    worldGroup.scale[axis] = cfg.default;
     range.addEventListener("input", () =>
       setAxisScale(axis, parseFloat(range.value)),
     );
     num.addEventListener("change", () => {
       const v = parseFloat(num.value);
-      setAxisScale(axis, isFinite(v) ? v : 1);
+      setAxisScale(axis, isFinite(v) ? v : cfg.default);
     });
   }
 
   ["x", "y", "z"].forEach(bindScale);
   document.getElementById("scale-reset").addEventListener("click", () => {
-    ["x", "y", "z"].forEach((a) => setAxisScale(a, 1));
+    ["x", "y", "z"].forEach((a) => setAxisScale(a, AXIS_SCALE[a].default));
   });
 
   async function poll() {

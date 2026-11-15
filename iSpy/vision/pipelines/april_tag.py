@@ -12,6 +12,7 @@ except Exception:  # pragma: no cover - optional FRC-flavored backend
     except Exception:
         apriltag = None
 
+from iSpy import units as unit_packs
 from iSpy.config.iSpyConfig import iSpyCameraConfig, iSpyConfig, unit_to_inches
 from iSpy.vision import calibration as cam_calibration
 from iSpy.vision import triangulation
@@ -73,29 +74,7 @@ class AprilTagPipeline(VisionPipeline):
             raise ValueError(f"Missing camera config key for AprilTag: {e}")
 
         self.unit = config.get("unit", "meter")
-        try:
-            from iSpy.units import list_unit_packs
-            self.conversions = {}
-            for _p in list_unit_packs():
-                _k = str(_p.get("key", "")).lower().strip()
-                if _k:
-                    self.conversions[_k] = float(_p.get("inches_to_output", 1.0))
-            self.conversions.setdefault("meters", self.conversions.get("meter", 0.0254))
-            self.conversions.setdefault("inches", self.conversions.get("inch", 1.0))
-            self.conversions.setdefault("feet", self.conversions.get("foot", 1 / 12))
-            self.conversions.setdefault("centimeters", self.conversions.get("centimeter", 2.54))
-            self.conversions.setdefault("meter", self.conversions.get("m", 0.0254))
-            self.conversions.setdefault("inch", self.conversions.get("in", 1.0))
-            self.conversions.setdefault("centimeter", self.conversions.get("cm", 2.54))
-            self.conversions.setdefault("foot", self.conversions.get("ft", 1 / 12))
-            if "frc" not in self.conversions:
-                self.conversions["frc"] = 0.0254
-        except Exception:
-            self.conversions = {
-                "meter": 0.0254, "meters": 0.0254, "inch": 1.0, "inches": 1.0,
-                "foot": 1 / 12, "feet": 1 / 12, "centimeter": 2.54,
-                "centimeters": 2.54, "frc": 0.0254,
-            }
+        self.conversions = unit_packs.output_conversions()
 
         try:
             if (

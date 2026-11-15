@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import math
 
+from iSpy import units as unit_packs
 from iSpy.vision.pipelines.base import VisionPipeline
 from iSpy.config.iSpyConfig import iSpyConfig, iSpyCameraConfig, unit_to_inches
 from iSpy.vision.Object import Object
@@ -66,29 +67,7 @@ class QRCodePipeline(VisionPipeline):
             raise ValueError(f"Missing camera config key for QRCode: {e}")
 
         self.unit = config.get("unit", "meter")
-        try:
-            from iSpy.units import list_unit_packs
-            self.conversions = {}
-            for _p in list_unit_packs():
-                _k = str(_p.get("key", "")).lower().strip()
-                if _k:
-                    self.conversions[_k] = float(_p.get("inches_to_output", 1.0))
-            self.conversions.setdefault("meters", self.conversions.get("meter", 0.0254))
-            self.conversions.setdefault("inches", self.conversions.get("inch", 1.0))
-            self.conversions.setdefault("feet", self.conversions.get("foot", 1 / 12))
-            self.conversions.setdefault("centimeters", self.conversions.get("centimeter", 2.54))
-            self.conversions.setdefault("meter", self.conversions.get("m", 0.0254))
-            self.conversions.setdefault("inch", self.conversions.get("in", 1.0))
-            self.conversions.setdefault("centimeter", self.conversions.get("cm", 2.54))
-            self.conversions.setdefault("foot", self.conversions.get("ft", 1 / 12))
-            if "frc" not in self.conversions:
-                self.conversions["frc"] = 0.0254
-        except Exception:
-            self.conversions = {
-                "meter": 0.0254, "meters": 0.0254, "inch": 1.0, "inches": 1.0,
-                "foot": 1 / 12, "feet": 1 / 12, "centimeter": 2.54,
-                "centimeters": 2.54, "frc": 0.0254,
-            }
+        self.conversions = unit_packs.output_conversions()
 
         super().__init__(camera_config, (640, 480), self.grayscale)
 
@@ -249,9 +228,8 @@ class QRCodePipeline(VisionPipeline):
                 )
 
                 tvec = tvec.reshape(3)
-                to_inches = 1.0 / self.conversions.get(
-                    self.unit, self.conversions["meter"]
-                )
+                # solvePnP reports meters regardless of the configured output unit.
+                to_inches = unit_packs.METERS_TO_INCHES
                 robot_pt = self._camera_point_to_world(
                     (tvec[0] * to_inches, tvec[1] * to_inches, tvec[2] * to_inches)
                 )

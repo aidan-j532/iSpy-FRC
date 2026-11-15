@@ -88,6 +88,33 @@ Two details:
 
 The reported `z` of such a detection is that plane height, converted to the output unit. So a detection on a 6 inch plane with `unit` set to `meter` reports a `z` of about 0.152.
 
+## Unit packs
+
+Measurement behavior comes from a JSON unit pack in the top-level `Units/`
+directory. `Units/frc.json`, `Units/metric.json`, and `Units/imperial.json`
+ship with iSpy; any other `*.json` file in that directory is loaded too. The
+active pack is the `unit` value in `Config/config.json`, and the picker on the
+Settings and Setup pages is populated from `GET /api/units`.
+
+A pack controls more than the inch/meter factor:
+
+| Pack field | What it controls |
+| --- | --- |
+| `input_to_inches`, `inches_to_output` | How typed values become internal inches, and how internal inches become published values. |
+| `aliases` | Extra names that resolve to the pack, such as `wpilib` for FRC. |
+| `axis` | Sign conventions for published `x`/`y`/`z` and `roll`/`pitch`/`yaw`. |
+| `labels` | Short `input`/`output`/`speed` labels in the UI. |
+| `defaults.camera_pitch_deg` | Pitch assigned to a new camera. `0` is level and looks forward. |
+| `viewer` | 3D viewer axis mapping, bounds, scale sliders, grid, and camera position. |
+
+A pack is looked up by key, then alias, then input unit, then output unit.
+Missing viewer fields are deep-merged over built-in defaults, so a short pack
+file still produces a complete viewer. Uploading or writing a pack through
+**Add-ons → Units** validates the JSON, including the requirement that
+`viewer.robot_to_viewer` is a signed axis permutation with determinant `+1`.
+
+The full schema and an example file are documented in `Units/README.md`.
+
 ## What the output looks like
 
 A detection is a dictionary with these spatial fields:
@@ -103,7 +130,7 @@ A detection is a dictionary with these spatial fields:
 | `keypoints_3d` | Keypoint positions in the robot frame, for pose models. |
 | `vis_type`, `vis_meta` | Hints for the 3D viewer's renderer. |
 
-Under `unit: "frc"`, `x`, `y`, and `z` are meters, because that is what WPILib expects. Under the other unit settings they are in that unit. This is the split that catches people: a mount `height` typed as inches in `frc` mode comes back as a `z` in meters.
+Under `unit: "frc"`, `x`, `y`, and `z` are meters, because that is what WPILib expects. Under `unit: "imperial"` they are inches, and under `unit: "metric"` they are meters. This is the split that catches people: a mount `height` typed in the pack's input unit comes back in the pack's output unit. The conversion factors and labels both come from the active unit pack, so edit `Units/<key>.json` rather than hardcoding a second table.
 
 ## Two cameras triangulate
 

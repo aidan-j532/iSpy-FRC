@@ -4,6 +4,7 @@ import ntcore
 import dataclasses
 import wpiutil.wpistruct
 from wpimath.geometry import Pose2d, Rotation2d
+from iSpy import units as unit_packs
 from iSpy.plugins.bases import UtilityBase, TransformProvider
 from iSpy.vision.transforms import transform_2d
 
@@ -354,19 +355,36 @@ class NetworkTableHandler(UtilityBase, TransformProvider):
         pose = frame_data.get("reference_pose")
         if not pose or not isinstance(pose, dict):
             return
+        unit = "frc"
+        if self.global_config is not None:
+            try:
+                unit = self.global_config.get("unit", "frc")
+            except Exception:
+                unit = "frc"
+        # WPILib reports field poses in meters.  The viewer works in the
+        # active pack's output units, so convert the pose and the placeholder
+        # robot dimensions instead of hardcoding meters.
+        x, y, z = unit_packs.output_point_from_meters(
+            (pose["x"], pose["y"], 0.15), unit
+        )
+        scale = unit_packs.meters_to_output(unit)
         self._viewer.add_overlay(
             "robot",
             {
                 "type": "robot",
-                "x": pose["x"],
-                "y": pose["y"],
-                "z": 0.15,
+                "x": x,
+                "y": y,
+                "z": z,
                 "roll": 0,
                 "pitch": 0,
-                "yaw": pose["heading"],
+                "yaw": unit_packs.output_angle(pose["heading"], unit, "yaw"),
                 "color": "#4c8bf5",
                 "label": "Robot",
-                "data": {"width": 0.76, "height": 0.30, "depth": 0.69},
+                "data": {
+                    "width": 0.76 * scale,
+                    "height": 0.30 * scale,
+                    "depth": 0.69 * scale,
+                },
             },
         )
 

@@ -1,10 +1,40 @@
 {
+  "schema_version": 2,
   "key": "metric",
   "name": "Metric (meters in, meters out)",
-  "description": "Metric convention: measure and output in meters.",
+  "description": "Metric convention: measure and output in meters. +X right, +Y forward, +Z up; positive yaw turns right.",
   "input_unit": "meter",
   "output_unit": "meter",
-  "input_to_inches": 39.37007874,
+  "input_to_inches": 39.37007874015748,
   "inches_to_output": 0.0254,
-  "axis": { "x": 1.0, "y": 1.0, "z": 1.0, "yaw": 1.0 }
+  "aliases": ["m", "meter", "meters", "cm", "centimeter", "centimeters", "si"],
+  "axis": { "x": 1.0, "y": 1.0, "z": 1.0, "roll": 1.0, "pitch": 1.0, "yaw": 1.0 },
+  "labels": { "input": "m", "output": "m", "speed": "m/s" },
+  "defaults": { "camera_pitch_deg": 0.0 },
+  "viewer": {
+    "robot_to_viewer": ["x", "z", "-y"],
+    "camera_roll_offset_deg": 0.0,
+    "camera_pitch_offset_deg": 0.0,
+    "camera_yaw_offset_deg": 0.0,
+    "fog_density": 0.04,
+    "axes_size": 8.0,
+    "bounds": {
+      "x": { "min": -10.0, "max": 10.0 },
+      "y": { "min": -10.0, "max": 10.0 },
+      "z": { "min": 0.0, "max": 5.0 }
+    },
+    "scale": {
+      "x": { "min": -10.0, "max": 10.0, "step": 0.1, "default": 1.0 },
+      "y": { "min": -10.0, "max": 10.0, "step": 0.1, "default": 1.0 },
+      "z": { "min": -10.0, "max": 10.0, "step": 0.1, "default": 1.0 }
+    },
+    "grid": { "extent": 20.0, "divisions": 80, "marker_size": 0.25 },
+    "camera": {
+      "fov": 60.0,
+      "near": 0.1,
+      "far": 200.0,
+      "position": [9.0, 9.0, 9.0],
+      "target": [0.0, 0.0, 0.0]
+    }
+  }
 }

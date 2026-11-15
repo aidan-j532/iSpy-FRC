@@ -131,18 +131,10 @@ def validate_config_required_fields(config_path: str = "Config/config.json") -> 
         if field not in config:
             raise ValueError(f"Missing required config field: {field}")
 
-    valid_units = {
-        "meter",
-        "meters",
-        "inch",
-        "inches",
-        "foot",
-        "feet",
-        "centimeter",
-        "centimeters",
-        "frc",
-    }
-    if config.get("unit", "").lower() not in valid_units:
+    from iSpy.units import list_unit_packs, resolve_unit_pack
+
+    if resolve_unit_pack(config.get("unit", "")) is None:
+        valid_units = sorted(pack["key"] for pack in list_unit_packs())
         raise ValueError(
             f"Invalid unit: {config.get('unit')}. Must be one of: {valid_units}"
         )

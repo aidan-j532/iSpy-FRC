@@ -221,28 +221,11 @@ class DepthAnythingPipeline(OptimizableModelPipeline, BackgroundPreparedPipeline
             self._input_size = _DEPTH_INPUT_SIZE
         self._target_format: str | None = None
 
-        self._z_scale = {
-            "meter": 1.0,
-            "meters": 1.0,
-            "inch": 39.37007874,
-            "inches": 39.37007874,
-            "foot": 3.280839895,
-            "feet": 3.280839895,
-            "centimeter": 100.0,
-            "centimeters": 100.0,
-            "frc": 1.0,
-        }.get(self.unit, 1.0)
-        self._unit_label = {
-            "meter": "m",
-            "meters": "m",
-            "inch": "in",
-            "inches": "in",
-            "foot": "ft",
-            "feet": "ft",
-            "centimeter": "cm",
-            "centimeters": "cm",
-            "frc": "m",
-        }.get(self.unit, self.unit)
+        from iSpy import units as unit_packs
+
+        # Depth models report meters; convert with the pack's output convention.
+        self._z_scale = unit_packs.meters_to_output(self.unit)
+        self._unit_label = unit_packs.unit_output_label(self.unit)
 
         raw_optimize = camera_config.get_pipeline_setting("optimize")
         if raw_optimize is None:

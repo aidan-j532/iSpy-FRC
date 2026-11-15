@@ -1299,6 +1299,12 @@ class CamerasModule(WebModule):
             session.setdefault("charuco_overlays", []).append(
                 (corners, ids, None, None, cam_calibration.random_overlay_color())
             )
+            # Keep memory bounded; only the most recent diverse captures matter.
+            if len(captures) > 200:
+                del captures[: len(captures) - 200]
+                overlays = session.get("charuco_overlays")
+                if isinstance(overlays, list) and len(overlays) > 200:
+                    del overlays[: len(overlays) - 200]
             session["charuco_pattern"] = list(pattern)
             session["auto_rms"] = None
             session["auto_state"] = "capturing"
@@ -1352,7 +1358,9 @@ class CamerasModule(WebModule):
                 kwargs["dictionary_id"] = dict_id
         if len(captures) < 3:
             return None
-        captures = captures[-_AUTO_SOLVE_MAX_CAPTURES:]
+        captures = cam_calibration.select_diverse_captures(
+            captures, _AUTO_SOLVE_MAX_CAPTURES, _AUTO_DIVERSITY_PX
+        )
         try:
             result = cam_calibration.calibrate_charuco(captures, pattern, **kwargs)
         except cv2.error as exc:
@@ -1425,7 +1433,17 @@ class CamerasModule(WebModule):
         )
         for layer in layers:
             corners, ids, mc, mi, color = layer
-            cam_calibration.draw_charuco_into(out, corners, ids, mc, mi, color=color)
+            pts = np.asarray(corners, dtype=np.float32).reshape(-1, 2)
+            if pts.size == 0:
+                continue
+            ptsf = pts.astype(np.float32)
+            # PhotonVision-style: oriented board outline plus filled centroid dots.
+            rect = cv2.minAreaRect(ptsf)
+            box = cv2.boxPoints(rect)
+            box = np.int32(box)
+            cv2.polylines(out, [box], True, color, 2)
+            cx, cy = pts.mean(axis=0)
+            cv2.circle(out, (int(round(float(cx))), int(round(float(cy)))), 4, color, -1)
         return out
 
     def _detect_workframe(self, frame, max_dim=_DETECT_MAX_DIM):
@@ -1752,6 +1770,10 @@ class CamerasModule(WebModule):
             return jsonify(
                 error=f"Need at least 3 captured ChArUco frames, have {len(captures)}"
             ), 400
+        # Use up to 100 of the most diverse captures for the final solve.
+        captures = cam_calibration.select_diverse_captures(
+            captures, 100, _AUTO_DIVERSITY_PX
+        )
         kwargs = {}
         if dict_id is not None:
             kwargs["dictionary_id"] = dict_id
