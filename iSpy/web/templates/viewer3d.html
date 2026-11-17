@@ -127,8 +127,8 @@ block head %}
     cursor: pointer;
   }
   .obj-row.selected td {
-    background: rgba(76, 139, 245, 0.22);
-    outline: 1px solid #4c8bf5;
+    background: rgba(227, 82, 5, 0.14);
+    outline: 1px solid var(--accent);
   }
   .empty-row-note {
     color: var(--text-dim);
@@ -323,7 +323,7 @@ block head %}
   dirLight.position.set(5, 10, 5);
   dirLight.castShadow = true;
   scene.add(dirLight);
-  const hemiLight = new THREE.HemisphereLight(0x4c8bf5, 0x111318, 0.3);
+  const hemiLight = new THREE.HemisphereLight(0xe35205, 0x111318, 0.3);
   scene.add(hemiLight);
 
   // WebGL caps LineBasicMaterial linewidth at 1px on most platforms, which makes
@@ -459,10 +459,10 @@ block head %}
   window.toggleLightBg = function () {
     lightBg = document.getElementById("light-bg").checked;
     if (lightBg) {
-      scene.background = new THREE.Color(0xf0f0f0);
+      scene.background = new THREE.Color(0xffffff);
       scene.fog = null;
       setGridColors(0x888888, 0xcccccc);
-      container.style.background = "#f0f0f0";
+      container.style.background = "#ffffff";
     } else {
       scene.background = new THREE.Color(0x0a0a0f);
       scene.fog = new THREE.FogExp2(0x0a0a0f, FOG_DENSITY);
@@ -534,7 +534,7 @@ block head %}
     height: 0.3 * UNIT_SCALE,
     depth: 0.69 * UNIT_SCALE,
   };
-  const BOX_COLOR = 0x4c8bf5;
+  const BOX_COLOR = 0xe35205;
 
   function disposeMesh(obj) {
     if (obj.geometry) obj.geometry.dispose();
@@ -591,7 +591,7 @@ block head %}
       (c) => c.isLineSegments || c.isLineSegments2,
     );
     if (wire) {
-      wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
+      wire.material.color.setHex(selectedId === o.id ? 0xff8a4c : 0xffffff);
       wire.material.opacity = selectedId === o.id ? 0.9 : 0.3;
     }
   }
@@ -631,7 +631,7 @@ block head %}
     g.scale.setScalar(size / (g.userData.planarSize || size));
     const wire = g.children.find((c) => c.isLineSegments || c.isLineSegments2);
     if (wire) {
-      wire.material.color.setHex(selectedId === o.id ? 0x2eff9e : 0xffffff);
+      wire.material.color.setHex(selectedId === o.id ? 0xff8a4c : 0xffffff);
       wire.material.opacity = selectedId === o.id ? 0.9 : 0.5;
     }
   }
@@ -765,7 +765,7 @@ block head %}
           h = d.height || OVERLAY_BOX_SIZE,
           dep = d.depth || OVERLAY_BOX_SIZE;
         const geo = new THREE.BoxGeometry(w, h, dep);
-        const col = parseColor(o.color, 0x4c8bf5);
+        const col = parseColor(o.color, 0xe35205);
         const mat = new THREE.MeshStandardMaterial({
           color: col,
           transparent: true,
@@ -790,7 +790,7 @@ block head %}
         const d = o.data || {};
         const r = d.radius || OVERLAY_SPHERE_RADIUS;
         const geo = new THREE.SphereGeometry(r, 20, 20);
-        const col = parseColor(o.color, 0x4caf50);
+        const col = parseColor(o.color, 0xe35205);
         const mat = new THREE.MeshStandardMaterial({
           color: col,
           transparent: true,
@@ -880,7 +880,7 @@ block head %}
         const geo = new THREE.BoxGeometry(w, h, dep);
         const edges = new THREE.EdgesGeometry(geo);
         const mat = new THREE.LineBasicMaterial({
-          color: parseColor(o.color, 0x4c8bf5),
+          color: parseColor(o.color, 0xe35205),
           transparent: true,
           opacity: 0.9,
         });
@@ -999,7 +999,7 @@ block head %}
     for (const o of overlays) {
       if (!o.id) continue;
       const label = o.label || o.type;
-      rows += `<tr class="obj-row" style="color:#4c8bf5"><td>${o.id}</td><td>${(o.x || 0).toFixed(2)}</td><td>${(o.y || 0).toFixed(2)}</td><td>${(o.z || 0).toFixed(2)}</td><td>-</td><td>${(((o.yaw || 0) * 180) / Math.PI).toFixed(1)}&deg;</td><td>-</td><td>${label}</td></tr>`;
+      rows += `<tr class="obj-row" style="color:var(--accent-strong)"><td>${o.id}</td><td>${(o.x || 0).toFixed(2)}</td><td>${(o.y || 0).toFixed(2)}</td><td>${(o.z || 0).toFixed(2)}</td><td>-</td><td>${(((o.yaw || 0) * 180) / Math.PI).toFixed(1)}&deg;</td><td>-</td><td>${label}</td></tr>`;
     }
     tbody.innerHTML =
       rows || '<tr><td colspan="8" class="empty-state">No detections</td></tr>';

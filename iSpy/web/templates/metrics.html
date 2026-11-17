@@ -18,18 +18,61 @@
 <script>
 const charts = {};
 let codeChart = null;
+const PART_COLORS = {
+  light: { vision: '#e35205', trackers: '#111111', utilities: '#8a8a8a', web: '#ff9f6d' },
+  dark: { vision: '#e35205', trackers: '#f2f2f2', utilities: '#b8b8b8', web: '#ff9a66' },
+};
+function themeState() {
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return {
+    dark,
+    text: dark ? '#b8b8b8' : '#4f4f4f',
+    grid: dark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)',
+  };
+}
+function partColor(part) {
+  const t = themeState();
+  const key = part.key || '';
+  return (PART_COLORS[t.dark ? 'dark' : 'light'][key]) || part.color;
+}
+function applyChartTheme() {
+  const t = themeState();
+  if (codeChart) {
+    codeChart.options.plugins.legend.labels.color = t.text;
+    codeChart.options.scales.y.ticks.color = t.text;
+    codeChart.options.scales.y.title.color = t.text;
+    codeChart.options.scales.y.grid.color = t.grid;
+    codeChart.update('none');
+  }
+  Object.values(charts).forEach(c => {
+    c.options.scales.y.ticks.color = t.text;
+    c.options.scales.y.grid.color = t.grid;
+    c.update('none');
+  });
+}
 function ensureChart(id, label, unit) {
   if (charts[id]) return charts[id];
+  const t = themeState();
   const ctx = document.getElementById(`chart-${id}`);
   charts[id] = new Chart(ctx, {
     type: 'line',
-    data: { labels: [], datasets: [{ label: `${label} (${unit})`, data: [], borderColor: '#4c8bf5', pointRadius: 0, borderWidth: 2, tension: 0.1 }] },
-    options: { animation: false, responsive: true, maintainAspectRatio: false, scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { display: false } } },
+    data: { labels: [], datasets: [{ label: `${label} (${unit})`, data: [], borderColor: '#e35205', pointRadius: 0, borderWidth: 2, tension: 0.1 }] },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { display: false },
+        y: { beginAtZero: true, ticks: { color: t.text }, grid: { color: t.grid } },
+      },
+      plugins: { legend: { display: false } },
+    },
   });
   return charts[id];
 }
 function ensureCodeChart() {
   if (codeChart) return codeChart;
+  const t = themeState();
   const ctx = document.getElementById('chart-code-parts');
   codeChart = new Chart(ctx, {
     type: 'line',
@@ -41,9 +84,15 @@ function ensureCodeChart() {
       interaction: { mode: 'index', intersect: false },
       scales: {
         x: { stacked: true, display: false },
-        y: { stacked: true, beginAtZero: true, title: { display: true, text: 'ms' } },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          title: { display: true, text: 'ms', color: t.text },
+          ticks: { color: t.text },
+          grid: { color: t.grid },
+        },
       },
-      plugins: { legend: { labels: { color: '#ccc' } } },
+      plugins: { legend: { labels: { color: t.text } } },
     },
   });
   return codeChart;
@@ -100,8 +149,8 @@ function renderCodeParts(cp) {
     chart.data.datasets = series.map(part => ({
       label: part.label,
       data: [],
-      borderColor: part.color,
-      backgroundColor: part.color,
+      borderColor: partColor(part),
+      backgroundColor: partColor(part),
       borderWidth: 1,
       pointRadius: 0,
       fill: true,
@@ -109,11 +158,35 @@ function renderCodeParts(cp) {
       stack: 'code',
     }));
   }
+  chart._parts = series;
   chart.data.labels = series[0].x.map(v => v.toFixed(1));
-  series.forEach((part, i) => { chart.data.datasets[i].data = part.y; });
+  series.forEach((part, i) => {
+    const ds = chart.data.datasets[i];
+    const color = partColor(part);
+    if (ds.borderColor !== color) {
+      ds.borderColor = color;
+      ds.backgroundColor = color;
+    }
+    ds.data = part.y;
+  });
   applySustainedScale(chart, true);
   chart.update('none');
 }
+function recolorCodePartDatasets() {
+  if (!codeChart || !codeChart._parts) return;
+  codeChart._parts.forEach((part, i) => {
+    const ds = codeChart.data.datasets[i];
+    if (!ds) return;
+    const color = partColor(part);
+    ds.borderColor = color;
+    ds.backgroundColor = color;
+  });
+  codeChart.update('none');
+}
+document.addEventListener('ispy:theme', () => {
+  recolorCodePartDatasets();
+  applyChartTheme();
+});
 const metricsConn = connTracker(2);
 
 async function refresh() {

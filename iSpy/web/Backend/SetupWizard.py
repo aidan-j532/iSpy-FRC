@@ -2,11 +2,41 @@ from flask import jsonify, request, Response
 from iSpy.web.Backend.WebModule import WebModule
 
 _HTML = """<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0d1117">
+  <meta name="theme-color" content="#e35205">
+  <script>
+    (function () {
+      var KEY = "ispy-theme";
+      function normalize(theme) { return theme === "dark" ? "dark" : "light"; }
+      function apply(theme) {
+        theme = normalize(theme);
+        document.documentElement.setAttribute("data-theme", theme);
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", theme === "dark" ? "#0a0a0a" : "#e35205");
+        document.dispatchEvent(new CustomEvent("ispy:theme", { detail: { theme: theme } }));
+      }
+      function get() {
+        try { return normalize(localStorage.getItem(KEY)); } catch (e) { return "light"; }
+      }
+      window.ispyTheme = {
+        key: KEY,
+        get: get,
+        apply: apply,
+        set: function (theme) {
+          theme = normalize(theme);
+          try { localStorage.setItem(KEY, theme); } catch (e) {}
+          apply(theme);
+        }
+      };
+      apply(get());
+      window.addEventListener("storage", function (e) {
+        if (e.key === KEY) apply(e.newValue);
+      });
+    })();
+  </script>
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <title>iSpy Setup</title>
   <link rel="stylesheet" href="/static/css/design.css">

@@ -176,7 +176,8 @@ const RB = {
 function rbColor(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
-  return 'hsl(' + h + ', 75%, 62%)';
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return 'hsl(' + h + ', 70%, ' + (dark ? 58 : 42) + '%)';
 }
 
 // canvas cannot resolve css vars, so read the real accent off the document
@@ -184,8 +185,23 @@ let RB_ACCENT = null;
 function rbAccent() {
   if (RB_ACCENT) return RB_ACCENT;
   const v = getComputedStyle(document.documentElement).getPropertyValue('--accent');
-  RB_ACCENT = (v || '').trim() || '#2f81f7';
+  RB_ACCENT = (v || '').trim() || '#e35205';
   return RB_ACCENT;
+}
+
+// canvas cannot resolve css vars, so pick the neutral tones that match the
+// active white or black theme here
+function rbTheme() {
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return {
+    stripBar: dark ? 'rgba(255,255,255,0.22)' : 'rgba(10,10,10,0.22)',
+    marker: dark ? 'rgba(255,255,255,0.85)' : 'rgba(10,10,10,0.9)',
+    emptyText: dark ? 'rgba(255,255,255,0.55)' : 'rgba(70,70,70,0.75)',
+    grid: dark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)',
+    path: dark ? 'rgba(227,82,5,0.85)' : 'rgba(227,82,5,0.7)',
+    label: dark ? 'rgba(255,255,255,0.9)' : 'rgba(20,20,20,0.9)',
+    accent: rbAccent()
+  };
 }
 
 function fmtBytesMb(mb) {
@@ -393,6 +409,7 @@ function rbDrawStrip() {
 
   const n = RB.timeline.length;
   if (!n) return;
+  const theme = rbTheme();
   let peak = 1;
   for (const r of RB.timeline) peak = Math.max(peak, r.n || 0);
 
@@ -403,12 +420,12 @@ function rbDrawStrip() {
     // canvas has no access to the stylesheet, so the accent is read off the
     // root element rather than handed over as a css var - fillStyle silently
     // ignores 'var(--accent)' and keeps the previous colour
-    ctx.fillStyle = i === RB.idx ? rbAccent() : 'rgba(120,170,255,0.45)';
+    ctx.fillStyle = i === RB.idx ? theme.accent : theme.stripBar;
     ctx.fillRect(i * bw, h - bh - 2, Math.max(1, bw - 0.5), bh);
   }
 
   const seen = new Set();
-  ctx.fillStyle = 'rgba(255,220,120,0.95)';
+  ctx.fillStyle = theme.marker;
   for (let i = 0; i < n; i++) {
     for (const d of RB.timeline[i].d || []) {
       if (seen.has(d.name)) continue;
@@ -589,8 +606,9 @@ function rbDrawTopdown() {
   cv.width = w; cv.height = h;
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, w, h);
+  const theme = rbTheme();
   if (!RB.bounds) {
-    ctx.fillStyle = 'rgba(140,150,170,0.7)';
+    ctx.fillStyle = theme.emptyText;
     ctx.font = '13px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('No poses or detections recorded in this segment', w / 2, h / 2);
@@ -607,7 +625,7 @@ function rbDrawTopdown() {
   const X = v => ox + v * s;
   const Y = v => oy + v * s;
 
-  ctx.strokeStyle = 'rgba(140,150,170,0.18)';
+  ctx.strokeStyle = theme.grid;
   ctx.lineWidth = 1;
   for (let gx = Math.ceil(b.minX); gx <= b.maxX; gx++) {
     ctx.beginPath(); ctx.moveTo(X(gx), 0); ctx.lineTo(X(gx), h); ctx.stroke();
@@ -616,7 +634,7 @@ function rbDrawTopdown() {
     ctx.beginPath(); ctx.moveTo(0, Y(gy)); ctx.lineTo(w, Y(gy)); ctx.stroke();
   }
 
-  ctx.strokeStyle = 'rgba(120,170,255,0.7)';
+  ctx.strokeStyle = theme.path;
   ctx.lineWidth = 2;
   ctx.beginPath();
   let started = false;
@@ -634,7 +652,7 @@ function rbDrawTopdown() {
     ctx.arc(X(d.x), Y(d.y), 5, 0, Math.PI * 2);
     ctx.fillStyle = rbColor(d.name);
     ctx.fill();
-    ctx.fillStyle = 'rgba(235,240,250,0.92)';
+    ctx.fillStyle = theme.label;
     ctx.font = '11px system-ui, sans-serif';
     ctx.fillText(d.name, X(d.x) + 8, Y(d.y) + 4);
   }
@@ -656,12 +674,12 @@ function rbDrawTopdown() {
     ctx.beginPath();
     ctx.moveTo(X(p.x), Y(p.y));
     ctx.lineTo(X(p.x) + Math.cos(yaw) * len, Y(p.y) + Math.sin(yaw) * len);
-    ctx.strokeStyle = '#ffd24d';
+    ctx.strokeStyle = theme.accent;
     ctx.lineWidth = 3;
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(X(p.x), Y(p.y), 6, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffd24d';
+    ctx.fillStyle = theme.accent;
     ctx.fill();
   }
 }
@@ -731,6 +749,14 @@ document.getElementById('rb-cam').addEventListener('change', e => {
   rbShow(RB.idx);
 });
 window.addEventListener('resize', () => { rbDrawStrip(); rbDrawTopdown(); });
+document.addEventListener('ispy:theme', () => {
+  RB_ACCENT = null;
+  const img = document.getElementById('rb-frame');
+  rbDrawStrip();
+  rbDrawTopdown();
+  rbDrawRoster();
+  if (img && img.naturalWidth) rbDrawOverlay(img.naturalWidth, img.naturalHeight);
+});
 
 async function rbRefreshReplayCommand() {
   const wrap = document.getElementById('rb-replay-cmd-wrap');

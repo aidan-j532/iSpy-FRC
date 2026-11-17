@@ -43,7 +43,7 @@
     <p class="modal-warning">This action cannot be undone. You will need to re-upload the file.</p>
     <div class="modal-actions">
       <button onclick="closeDeleteModal()">Cancel</button>
-      <button class="btn-danger" onclick="goToStep2()">Continue</button>
+      <button class="btn-outline" onclick="goToStep2()">Continue</button>
     </div>
   </div>
 </div>
@@ -56,7 +56,7 @@
     <p class="modal-danger-text">This will permanently delete the model file and its metadata sidecar.</p>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeDeleteModalStep2()">Cancel</button>
-      <button class="btn-danger" onclick="confirmDelete()" id="confirm-del-btn" disabled>Delete Permanently</button>
+      <button class="btn-outline" onclick="confirmDelete()" id="confirm-del-btn" disabled>Delete Permanently</button>
     </div>
   </div>
 </div>
@@ -108,7 +108,7 @@ async function loadModels() {
       <td style="text-align:right;">
         ${m.active
           ? '<span class="text-dim text-sm">in use</span>'
-          : `<button class="btn btn-bad btn-sm" onclick="openDeleteModal('${m.name}')" title="Delete model">Delete</button>`
+          : `<button class="btn btn-outline btn-sm" onclick="openDeleteModal('${m.name}')" title="Delete model">Delete</button>`
         }
       </td>
     </tr>`).join('');

@@ -21,14 +21,36 @@ from iSpy.supervisor.state import snapshot
 
 _PAGE_CSS = """
 :root{
-  --bg:#0d1117;--bg-elevated:#161b22;--bg-surface:#1c2128;
-  --border:#30363d;--border-light:#3d444d;
-  --text:#e6edf3;--text-muted:#8b949e;--text-dim:#6e7681;
-  --accent:#2f81f7;--accent-hover:#4a95f8;--accent-dim:rgba(47,129,247,.15);
-  --ok:#3fb950;--bad:#f85149;--warn:#d29922;--radius:10px;
+  --bg:#ffffff;--bg-elevated:#f7f7f7;--bg-surface:#efefef;
+  --border:#e2e2e2;--border-light:#c9c9c9;
+  --text:#0a0a0a;--text-muted:#737373;--text-dim:#4f4f4f;
+  --accent:#e35205;--accent-hover:#f0641a;--accent-strong:#b64000;
+  --accent-dim:rgba(227,82,5,.12);--on-accent:#0a0a0a;
+  --btn-bg:#c94e06;--btn-bg-hover:#a83e04;--btn-text:#ffffff;
+  --ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--radius:10px;
+  --bad-border:rgba(207,34,46,.45);--warn-border:rgba(154,103,0,.45);
+  --btn-hover:#ececec;--btn-hover-border:#b9b9b9;
+  --glow:rgba(227,82,5,.14);
+  --log-bg:#0a0a0a;--log-text:#e8e8e8;
+  --shadow:0 10px 30px rgba(0,0,0,.08);
+}
+html[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0b0b0b;--bg-elevated:#141414;--bg-surface:#1c1c1c;
+  --border:#292929;--border-light:#3b3b3b;
+  --text:#f2f2f2;--text-muted:#8d8d8d;--text-dim:#b8b8b8;
+  --accent:#e35205;--accent-hover:#ff6d25;--accent-strong:#ff9a66;
+  --accent-dim:rgba(227,82,5,.17);--on-accent:#0a0a0a;
+  --btn-bg:#c94e06;--btn-bg-hover:#a83e04;--btn-text:#ffffff;
+  --ok:#56d364;--bad:#ff6b6b;--warn:#e3b341;
+  --bad-border:rgba(255,107,107,.45);--warn-border:rgba(227,179,65,.45);
+  --btn-hover:#262626;--btn-hover-border:#4a4a4a;
+  --glow:rgba(227,82,5,.18);
+  --log-bg:#050505;--log-text:#d7d7d7;
+  --shadow:0 12px 34px rgba(0,0,0,.65);
 }
 *{box-sizing:border-box}
-html{color-scheme:dark}
+html{color-scheme:light}
 body{
   margin:0;min-height:100vh;background:var(--bg);color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
@@ -37,17 +59,17 @@ body{
 body.restart-page{
   display:flex;align-items:center;justify-content:center;padding:24px;
   background:
-    radial-gradient(circle at 50% 0%,rgba(47,129,247,.16),transparent 55%),
+    radial-gradient(circle at 50% 0%,var(--glow),transparent 55%),
     var(--bg);
 }
 .shell{width:100%;max-width:760px;margin:0 auto;padding:48px 24px}
 .brand{display:flex;align-items:center;gap:12px;margin-bottom:36px;color:var(--text-muted);
   font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:.78rem}
 .brand-mark{width:34px;height:34px;border-radius:9px;background:var(--accent-dim);
-  border:1px solid rgba(47,129,247,.4);display:flex;align-items:center;justify-content:center;
+  border:1px solid rgba(227,82,5,.4);display:flex;align-items:center;justify-content:center;
   color:var(--accent);font-weight:700;font-size:1rem;letter-spacing:0}
 .card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);
-  padding:28px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+  padding:28px;box-shadow:var(--shadow)}
 h1{margin:0 0 10px;font-size:clamp(1.5rem,4vw,2.15rem);line-height:1.18;letter-spacing:-.02em}
 .sub{margin:0;color:var(--text-muted);font-size:1rem;max-width:62ch}
 .phase{margin-top:18px;display:inline-flex;align-items:center;gap:10px;border:1px solid var(--border);
@@ -59,29 +81,51 @@ h1{margin:0 0 10px;font-size:clamp(1.5rem,4vw,2.15rem);line-height:1.18;letter-s
 .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
 button{font:inherit;border-radius:8px;border:1px solid var(--border-light);background:var(--bg-surface);
   color:var(--text);padding:9px 16px;cursor:pointer;transition:background .15s,border-color .15s}
-button:hover{background:#252b33;border-color:#59616b}
-button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
-button.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+button:hover{background:var(--btn-hover);border-color:var(--btn-hover-border)}
+button.primary{background:var(--btn-bg);border-color:var(--btn-bg);color:var(--btn-text);font-weight:600}
+button.primary:hover{background:var(--btn-bg-hover);border-color:var(--btn-bg-hover)}
 button:disabled{opacity:.55;cursor:wait}
 .note{margin-top:20px;padding:14px 16px;border:1px solid var(--border);border-radius:8px;
   background:var(--bg-surface);color:var(--text-muted);font-size:.9rem}
-.note.warn{border-color:rgba(210,153,34,.45);color:#e3b341}
-.note.bad{border-color:rgba(248,81,73,.45);color:#ff7b72}
+.note.warn{border-color:var(--warn-border);color:var(--warn)}
+.note.bad{border-color:var(--bad-border);color:var(--bad)}
 .meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0 0}
 .meta div{background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
 .meta dt{color:var(--text-dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.07em}
 .meta dd{margin:2px 0 0;font-size:.95rem;overflow-wrap:anywhere}
-pre.log{margin:18px 0 0;padding:16px;background:#090c10;border:1px solid var(--border);
-  border-radius:8px;color:#c9d1d9;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;
+pre.log{margin:18px 0 0;padding:16px;background:var(--log-bg);border:1px solid var(--border);
+  border-radius:8px;color:var(--log-text);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;
   max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
-.error{margin-top:16px;color:#ff7b72;font-size:.9rem;min-height:1.2em}
+.error{margin-top:16px;color:var(--bad);font-size:.9rem;min-height:1.2em}
 .restart-card{width:100%;max-width:680px;text-align:center}
 .restart-card img{display:block;max-width:min(100%,420px);max-height:44vh;width:auto;height:auto;
   margin:0 auto 26px;border-radius:12px;object-fit:contain}
 .restart-card .wiggle{color:var(--accent);font-weight:600;min-height:1.5em;display:block;margin-top:12px}
 .muted{color:var(--text-muted)}
 .small{font-size:.86rem}
+code{font:.9em/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--bg);
+  border:1px solid var(--border);border-radius:4px;padding:1px 5px}
 @media (max-width:520px){.shell{padding:28px 16px}.card{padding:22px}.meta{grid-template-columns:1fr}}
+"""
+
+# Runs before the stylesheet so a saved black-theme choice never flashes white.
+_THEME_JS = """
+(function () {
+  var KEY = "ispy-theme";
+  function normalize(theme) { return theme === "dark" ? "dark" : "light"; }
+  function apply(theme) {
+    theme = normalize(theme);
+    document.documentElement.setAttribute("data-theme", theme);
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#0a0a0a" : "#e35205");
+  }
+  var theme = "light";
+  try { theme = normalize(localStorage.getItem(KEY)); } catch (e) {}
+  apply(theme);
+  window.addEventListener("storage", function (e) {
+    if (e.key === KEY) apply(e.newValue);
+  });
+})();
 """
 
 
@@ -96,12 +140,13 @@ def _script_json(value) -> str:
 def _shell(title: str, body: str, *, restart: bool = False, extra_js: str = "") -> bytes:
     body_class = "restart-page" if restart else ""
     page = f"""<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#0d1117">
+<meta name="theme-color" content="#e35205">
 <title>{_esc(title)} - iSpy</title>
+<script>{_THEME_JS}</script>
 <style>{_PAGE_CSS}</style>
 </head>
 <body class="{body_class}">

@@ -13,9 +13,9 @@
     background:var(--ok); animation:log-pulse 2s infinite;
   }
   @keyframes log-pulse {
-    0% { box-shadow:0 0 0 0 rgba(63,185,80,0.45); }
-    70% { box-shadow:0 0 0 7px rgba(63,185,80,0); }
-    100% { box-shadow:0 0 0 0 rgba(63,185,80,0); }
+    0% { box-shadow:0 0 0 0 var(--ok-glow); }
+    70% { box-shadow:0 0 0 7px transparent; }
+    100% { box-shadow:0 0 0 0 transparent; }
   }
   .log-toggle { position:relative; }
   .log-toggle input { position:absolute; opacity:0; pointer-events:none; }
@@ -31,7 +31,7 @@
     background:var(--text-muted); transition:background var(--transition);
   }
   .log-toggle input:checked + span {
-    background:var(--accent-dim); border-color:rgba(47,129,247,0.4); color:var(--accent);
+    background:var(--accent-dim); border-color:rgba(227,82,5,0.4); color:var(--accent-strong);
   }
   .log-toggle input:checked + span::before { background:var(--accent); }
   .log-lines {

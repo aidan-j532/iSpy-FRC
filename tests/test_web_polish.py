@@ -19,7 +19,9 @@ class TestGlobalChrome(unittest.TestCase):
         # matched loosely so an HTML reformat (self-closing tags, attribute
         # wrapping) can't break a test that's really about the tag being present
         self.assertIn('name="theme-color"', html)
-        self.assertIn('content="#0d1117"', html)
+        # the browser chrome follows the White Bear Lake light theme by default;
+        # the inline bootstrap swaps this to black when dark mode is saved
+        self.assertIn('content="#e35205"', html)
 
     def test_favicon_exists(self):
         # a real binary .ico now (previously an inline SVG named .ico),

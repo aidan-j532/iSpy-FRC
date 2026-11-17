@@ -27,6 +27,9 @@ block content %}
   <button class="btn btn-ok" id="settings-save-btn" onclick="saveSettings()">
     Save Settings
   </button>
+  <button class="btn btn-ok" onclick="startTutorial()">
+    Show tutorial
+  </button>
 
   <span id="msg" class="settings-msg"></span>
 </div>
@@ -44,6 +47,33 @@ block content %}
 </div>
 
 <div id="tab-general" class="settings-tab-content">
+  <div class="settings-section">
+    <h3>Appearance</h3>
+
+    <div class="form-row">
+      <span class="form-label">Theme</span>
+
+      <div class="settings-toggle-row">
+        <label class="switch">
+          <input
+            type="checkbox"
+            id="theme-toggle"
+            role="switch"
+            aria-label="Black theme"
+          />
+          <span class="slider"></span>
+        </label>
+
+        <span id="theme-mode-label" class="theme-toggle-label">White theme</span>
+      </div>
+    </div>
+
+    <div class="text-sm text-dim">
+      Switch between the white and black interface. The choice is saved on this
+      device.
+    </div>
+  </div>
+
   <div class="settings-section">
     <h3>Performance profile</h3>
 
@@ -330,7 +360,7 @@ block content %}
     </div>
   </div>
 
-  <div class="settings-section">
+  <!-- <div class="settings-section">
     <h3>Help</h3>
 
     <div class="form-row">
@@ -340,7 +370,7 @@ block content %}
         Show tutorial
       </button>
     </div>
-  </div>
+  </div> -->
 </div>
 
 <div id="tab-about" class="settings-tab-content" style="display: none">
@@ -1264,6 +1294,41 @@ block content %}
       /* the rest of the page still works without the profile */
     }
   }
+
+  const themeToggle = document.getElementById("theme-toggle");
+
+  function syncThemeToggle() {
+    const current =
+      (window.ispyTheme && window.ispyTheme.get()) ||
+      document.documentElement.getAttribute("data-theme") ||
+      "light";
+
+    if (themeToggle) themeToggle.checked = current === "dark";
+
+    const label = document.getElementById("theme-mode-label");
+
+    if (label) {
+      label.textContent = current === "dark" ? "Black theme" : "White theme";
+    }
+  }
+
+  if (themeToggle) {
+    themeToggle.addEventListener("change", () => {
+      const theme = themeToggle.checked ? "dark" : "light";
+
+      if (window.ispyTheme) {
+        window.ispyTheme.set(theme);
+      } else {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+
+      syncThemeToggle();
+    });
+  }
+
+  document.addEventListener("ispy:theme", syncThemeToggle);
+
+  syncThemeToggle();
 
   load();
   loadAbout();

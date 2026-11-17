@@ -17,10 +17,10 @@ class MetricsModule(WebModule):
         "camera_lag_s": ("Camera lag", "ms", 1000.0),
     }
     CODE_PARTS = {
-        "vision": ("Vision", "#e63946"),
-        "trackers": ("Trackers", "#f4a261"),
-        "utilities": ("Utilities", "#457b9d"),
-        "web": ("Web", "#9b5de5"),
+        "vision": ("Vision", "#e35205"),
+        "trackers": ("Trackers", "#111111"),
+        "utilities": ("Utilities", "#8a8a8a"),
+        "web": ("Web", "#ff9f6d"),
     }
     MAX_POINTS = 600  # ring buffer, keeps memory bounded on long runs
     MAX_SAVED_FILES = 20
@@ -97,6 +97,7 @@ class MetricsModule(WebModule):
             "unit": "ms",
             "series": {
                 key: {
+                    "key": key,
                     "label": label,
                     "color": color,
                     "x": [p[0] for p in self._code_timeline[key]],

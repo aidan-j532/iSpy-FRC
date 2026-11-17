@@ -177,7 +177,7 @@
     border-radius: 6px;
     cursor: pointer;
   }
-  .folder-picker-item:hover { border-color: #444; }
+  .folder-picker-item:hover { border-color: var(--border-light); }
   .picker-hint {
     font-size: 0.8rem;
     color: var(--text-dim);
@@ -273,9 +273,9 @@
     transition: transform 0.15s;
   }
   .settings-section details[open] summary::before { transform: rotate(90deg); }
-  .settings-section details summary:hover { color: var(--accent); }
+  .settings-section details summary:hover { color: var(--accent-strong); }
   .settings-section.step-hidden { display: none; }
-  .settings-section.step-active { outline: 1px solid #555; outline-offset: 4px; border-radius: 8px; }
+  .settings-section.step-active { outline: 1px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
   .form-field.field-invalid input, .form-field.field-invalid select { border-color: var(--bad); }
 
   .form-field { margin-bottom: 10px; }
@@ -310,14 +310,72 @@
   .tune-slider-row input[type="range"] { width: 100%; }
   .tune-slider-row input[type="checkbox"] { width: auto; margin-left: auto; }
 
-  /* pipeline action buttons on the camera card - data comes from the pipeline */
-  .cam-actions { display: inline-flex; align-items: center; gap: 6px; }
-  .cam-action { white-space: nowrap; }
-  .cam-action.active {
-    background: var(--accent-dim); color: var(--accent);
-    border: 1px solid var(--accent);
+  /* Camera card actions. Built-ins get one fixed tone each, plugin actions get a
+     curated five-tone run, and anything past five hashes into the same palette so
+     colors stay stable between refreshes and never leave the theme. */
+  .cam-actions {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-left: 2px; padding-left: 8px; border-left: 1px solid var(--border);
   }
+  .cam-action { white-space: nowrap; }
   .cam-action:disabled { opacity: 0.6; cursor: default; }
+
+  .cam-tone {
+    background: var(--cam-bg, var(--bg-surface));
+    color: var(--cam-fg, var(--text));
+    box-shadow: inset 0 0 0 1px var(--cam-line, transparent);
+  }
+  .cam-tone:hover:not(:disabled) {
+    background: var(--cam-bg-hover, var(--cam-bg, var(--bg-surface)));
+    color: var(--cam-fg, var(--text));
+  }
+  .cam-tone-primary {
+    --cam-bg: var(--btn-bg); --cam-fg: var(--btn-text);
+    --cam-bg-hover: var(--btn-bg-hover); --cam-line: var(--btn-bg);
+  }
+  .cam-tone-neutral {
+    --cam-bg: var(--bg-surface); --cam-fg: var(--text);
+    --cam-bg-hover: var(--border); --cam-line: var(--border-light);
+  }
+  .cam-tone-danger {
+    --cam-bg: var(--bad); --cam-fg: var(--on-bad);
+    --cam-bg-hover: var(--bad-hover); --cam-line: var(--bad);
+  }
+  .cam-tone-ink {
+    --cam-bg: #242424; --cam-fg: #ffffff;
+    --cam-bg-hover: #3a3a3a; --cam-line: #242424;
+  }
+  .cam-tone-accent {
+    --cam-bg: var(--accent); --cam-fg: var(--on-accent);
+    --cam-bg-hover: var(--accent-hover); --cam-line: var(--accent);
+  }
+  .cam-tone-soft {
+    --cam-bg: var(--accent-dim); --cam-fg: var(--accent-strong);
+    --cam-bg-hover: rgba(227,82,5,0.20); --cam-line: var(--accent);
+  }
+  .cam-tone-warn {
+    --cam-bg: var(--warn); --cam-fg: var(--on-warn);
+    --cam-bg-hover: var(--warn-hover); --cam-line: var(--warn);
+  }
+  .cam-tone-ok {
+    --cam-bg: var(--ok); --cam-fg: var(--on-ok);
+    --cam-bg-hover: var(--ok); --cam-line: var(--ok);
+  }
+  .cam-tone-ok:hover:not(:disabled) { filter: brightness(0.92); }
+  html[data-theme="dark"] .cam-tone-ink {
+    --cam-bg: #e8e8e8; --cam-fg: #0a0a0a;
+    --cam-bg-hover: #ffffff; --cam-line: #e8e8e8;
+  }
+  html[data-theme="dark"] .cam-tone-soft {
+    --cam-bg-hover: rgba(227,82,5,0.28);
+  }
+  .cam-action.active {
+    background: var(--accent-dim); color: var(--accent-strong);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .cam-action.active:hover:not(:disabled) {
+    background: var(--accent-dim); color: var(--accent-strong);
+  }
 
   /* dual thumb range field (range schema type) */
   .range-field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
@@ -361,7 +419,7 @@
   #hsv-sample { margin: 6px 0 10px; }
   #hsv-sample .form-help { margin-left: 0; }
   #hsv-sample .range-numbers { flex-wrap: wrap; margin: 6px 0; }
-  #eyedropper-btn.active { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent); }
+  #eyedropper-btn.active { background: var(--accent-dim); color: var(--accent-strong); border: 1px solid var(--accent); }
   .tune-status { color: var(--text-dim); font-size: 0.8rem; }
   .tune-status.ok { color: var(--ok); }
   .tune-status.err { color: var(--bad); }
@@ -1975,6 +2033,29 @@ function updateCameraFooter(card, cam) {
   footer.querySelector('.cam-status').textContent = status;
 }
 
+/* the first five plugin actions get fixed tones so a four- or five-button row
+   looks deliberate; later actions hash into the same theme-safe palette instead
+   of picking a new random color on every refresh */
+const CAM_ACTION_TONES = ['primary', 'neutral', 'danger', 'ink', 'accent', 'soft', 'warn', 'ok'];
+const CAM_PLUGIN_TONES = ['ink', 'accent', 'soft', 'warn', 'ok'];
+const CAM_FALLBACK_TONES = ['ink', 'accent', 'soft', 'warn', 'ok', 'neutral', 'primary'];
+
+function cameraToneFor(index, seed) {
+  if (index < CAM_PLUGIN_TONES.length) return CAM_PLUGIN_TONES[index];
+  const key = String(seed ?? index);
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return CAM_FALLBACK_TONES[(hash >>> 0) % CAM_FALLBACK_TONES.length];
+}
+
+function setCameraTone(button, tone) {
+  CAM_ACTION_TONES.forEach(t => button.classList.remove('cam-tone-' + t));
+  button.classList.add('cam-tone', 'cam-tone-' + tone);
+}
+
 function buildCameraCard(name, isStreaming, ageText, cam) {
   const card = document.createElement('div');
   card.className = 'card camera-card';
@@ -1984,9 +2065,9 @@ function buildCameraCard(name, isStreaming, ageText, cam) {
       <span class="status-dot ${cameraHeaderDotClass(isStreaming, cam)}"></span>
       <strong>${escapeHtml(name)}</strong>
       <span class="cam-meta">${escapeHtml(ageText)}</span>
-      <button class="btn-sm btn-ok" onclick="openCameraModal('edit', this.closest('.camera-card').dataset.camera)" style="margin-left:auto;">Edit</button>
-      <button class="btn-sm" onclick="openCalibrationWizardFor(this.closest('.camera-card').dataset.camera)">Calibrate</button>
-      <button class="btn-sm btn-bad" onclick="confirmRemoveCamera(this.closest('.camera-card').dataset.camera)">Remove</button>
+      <button class="btn-sm cam-tone cam-tone-primary" onclick="openCameraModal('edit', this.closest('.camera-card').dataset.camera)" style="margin-left:auto;">Edit</button>
+      <button class="btn-sm cam-tone cam-tone-neutral" onclick="openCalibrationWizardFor(this.closest('.camera-card').dataset.camera)">Calibrate</button>
+      <button class="btn-sm cam-tone cam-tone-danger" onclick="confirmRemoveCamera(this.closest('.camera-card').dataset.camera)">Remove</button>
       <span class="cam-actions" style="display:none;"></span>
     </div>
     ${isStreaming
@@ -2011,7 +2092,7 @@ function updateCameraActions(card, cam) {
   if (!holder) return;
   const actions = (cam && Array.isArray(cam.actions)) ? cam.actions : [];
   const seen = new Set();
-  actions.forEach(action => {
+  actions.forEach((action, index) => {
     if (!action || !action.id) return;
     const id = String(action.id);
     seen.add(id);
@@ -2025,6 +2106,7 @@ function updateCameraActions(card, cam) {
       button.addEventListener('click', () => runCameraAction(button, id));
       holder.appendChild(button);
     }
+    setCameraTone(button, cameraToneFor(index, id));
     const isToggle = action.kind === 'toggle';
     button.classList.toggle('cam-action-toggle', isToggle);
     button.classList.toggle('active', isToggle && !!action.value);
@@ -3204,7 +3286,7 @@ function drawCalibMeasure() {
   // measurement overlay uses the design system's ok color
   if (!calibrationState.measureColor) {
     calibrationState.measureColor =
-      getComputedStyle(document.documentElement).getPropertyValue('--ok').trim() || '#3fb950';
+      getComputedStyle(document.documentElement).getPropertyValue('--ok').trim() || '#1a7f37';
   }
   const okColor = calibrationState.measureColor;
   if (calibrationState.frame) ctx.putImageData(calibrationState.frame, 0, 0);

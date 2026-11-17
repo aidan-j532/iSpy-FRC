@@ -4,8 +4,8 @@
   --ed-line: var(--border);
   --ed-line-strong: var(--border-light);
   --ed-muted: var(--text-dim);
-  --ed-ok: #34d399;
-  --ed-bad: #f87171;
+  --ed-ok: var(--ok);
+  --ed-bad: var(--bad);
   margin: -28px -36px -56px;
   height: 100vh;
   display: flex;
@@ -23,7 +23,7 @@
   gap: 12px;
   padding: 8px 16px;
   background: var(--warn-dim);
-  border-bottom: 1px solid rgba(210, 153, 34, 0.4);
+  border-bottom: 1px solid rgba(154, 103, 0, 0.4);
   color: var(--warn);
   font-size: 0.8rem;
 }
@@ -72,13 +72,13 @@
   transition: background var(--transition), border-color var(--transition);
 }
 #editor-page button:hover:not(:disabled),
-#editor-page .editor-link:hover { background: #262c36; border-color: #4b5563; }
+#editor-page .editor-link:hover { background: var(--button-hover); border-color: var(--button-hover-border); }
 #editor-page button:disabled { opacity: 0.45; cursor: default; }
-#editor-page button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-#editor-page button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+#editor-page button.primary { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-text); font-weight: 600; }
+#editor-page button.primary:hover:not(:disabled) { background: var(--btn-bg-hover); border-color: var(--btn-bg-hover); }
 #editor-page button.ghost { background: transparent; border-color: transparent; color: var(--text-dim); }
 #editor-page button.ghost:hover:not(:disabled) { background: var(--bg-surface); border-color: var(--ed-line); color: var(--text); }
-#editor-page button.danger { color: var(--bad); border-color: rgba(248, 81, 73, 0.45); background: transparent; }
+#editor-page button.danger { color: var(--bad); border-color: rgba(207, 34, 46, 0.45); background: transparent; }
 #editor-page button.danger:hover:not(:disabled) { background: var(--bad-dim); }
 #editor-page button.small, #editor-page button.mini { padding: 4px 7px; font-size: 0.7rem; }
 
@@ -174,7 +174,7 @@
 #editor-page .palette-add {
   margin-left: auto;
   flex: 0 0 auto;
-  color: var(--accent);
+  color: var(--accent-strong);
   border: 1px solid var(--ed-line);
   border-radius: 999px;
   padding: 1px 7px;
@@ -216,7 +216,7 @@
   font-size: 0.64rem;
 }
 #editor-page .palette-footer a { color: var(--text-dim); text-decoration: none; }
-#editor-page .palette-footer a:hover { color: var(--accent); }
+#editor-page .palette-footer a:hover { color: var(--accent-strong); }
 
 #editor-page .editor-canvas-wrap { min-width: 0; min-height: 0; }
 #editor-page .editor-canvas {
@@ -237,9 +237,9 @@
   will-change: transform;
 }
 #editor-page .column-bands { position: absolute; inset: 0; pointer-events: none; }
-#editor-page .column-band { position: absolute; top: 0; background: rgba(255, 255, 255, 0.008); border-left: 1px solid transparent; border-right: 1px solid transparent; }
-#editor-page .column-band.alt { background: rgba(255, 255, 255, 0.024); }
-#editor-page .column-band.drop-target { background: var(--accent-dim); border-color: rgba(47, 129, 247, 0.35); }
+#editor-page .column-band { position: absolute; top: 0; background: var(--band); border-left: 1px solid transparent; border-right: 1px solid transparent; }
+#editor-page .column-band.alt { background: var(--band-alt); }
+#editor-page .column-band.drop-target { background: var(--accent-dim); border-color: rgba(227, 82, 5, 0.35); }
 #editor-page .column-band.drop-dim { opacity: 0.4; }
 
 #editor-page .column-headers {
@@ -318,7 +318,7 @@
 }
 #editor-page .edge {
   fill: none;
-  stroke: #59616d;
+  stroke: var(--edge);
   stroke-width: 2;
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
@@ -341,7 +341,7 @@
   stroke: var(--ed-ok);
   stroke-dasharray: 18 5;
   animation: editor-edge-complete 1.6s linear infinite;
-  filter: drop-shadow(0 0 3px rgba(52, 211, 153, 0.35));
+  filter: drop-shadow(0 0 3px rgba(26, 127, 55, 0.35));
 }
 #editor-page .edge.state-invalid {
   stroke: var(--ed-bad);
@@ -356,23 +356,23 @@
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
-  filter: drop-shadow(0 0 3px rgba(52, 211, 153, 0.45));
+  filter: drop-shadow(0 0 3px rgba(26, 127, 55, 0.45));
 }
 #editor-page .edge-half-fill.from-source { stroke-dasharray: 50 50; stroke-dashoffset: 0; }
 #editor-page .edge-half-fill.from-target { stroke-dasharray: 50 50; stroke-dashoffset: 50; }
 
 #editor-page .edge.flow,
 #editor-page .edge.flow-origin {
-  stroke: #ffffff;
+  stroke: var(--flow);
   stroke-width: 2.5;
-  filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.55));
+  filter: drop-shadow(0 0 5px var(--flow-glow));
 }
 #editor-page .edge.flow + .edge-half-fill { display: none; }
 #editor-page .edge.selected,
 #editor-page .edge.selected.flow {
   stroke: var(--accent);
   stroke-width: 3;
-  filter: drop-shadow(0 0 6px rgba(47, 129, 247, 0.7));
+  filter: drop-shadow(0 0 6px rgba(227, 82, 5, 0.55));
 }
 #editor-page .edge.selected + .edge-half-fill { display: none; }
 
@@ -403,7 +403,7 @@
   overflow: visible;
   transition: border-color var(--transition), background var(--transition), opacity 0.12s ease;
 }
-#editor-page .node:hover { border-color: var(--ed-line-strong); background: #1a2029; }
+#editor-page .node:hover { border-color: var(--ed-line-strong); background: var(--node-hover); }
 #editor-page .node.selected { border-color: var(--accent); }
 #editor-page .node.drop-dim { opacity: 0.22; }
 #editor-page .node.drop-target { outline: 1px dashed var(--accent); outline-offset: 2px; }
@@ -420,7 +420,7 @@
 }
 #editor-page .ring-track {
   fill: none;
-  stroke: rgba(248, 113, 113, 0.42);
+  stroke: rgba(207, 34, 46, 0.42);
   stroke-width: 2.2;
   stroke-dasharray: 3 3;
   stroke-linejoin: round;
@@ -435,7 +435,7 @@
   transition: stroke-dashoffset 0.25s ease, stroke 0.2s ease;
 }
 #editor-page .node.complete .ring-track {
-  stroke: rgba(52, 211, 153, 0.35);
+  stroke: rgba(26, 127, 55, 0.35);
   stroke-dasharray: none;
 }
 #editor-page .node.complete .ring-progress { stroke: var(--ed-ok); }
@@ -477,8 +477,8 @@
   place-items: center;
   border-radius: 50%;
   background: var(--ed-bad);
-  color: #fff;
-  box-shadow: 0 0 0 3px var(--bg), 0 0 9px rgba(248, 113, 113, 0.5);
+  color: var(--on-bad);
+  box-shadow: 0 0 0 3px var(--bg), 0 0 9px rgba(207, 34, 46, 0.5);
   font-size: 0.68rem;
   font-weight: 800;
   line-height: 1;
@@ -488,8 +488,8 @@
 #editor-page .node-status::before { content: "\2715"; }
 #editor-page .node-status.ok {
   background: var(--ed-ok);
-  color: #052e1b;
-  box-shadow: 0 0 0 3px var(--bg), 0 0 9px rgba(52, 211, 153, 0.5);
+  color: var(--on-ok);
+  box-shadow: 0 0 0 3px var(--bg), 0 0 9px var(--ok-glow);
 }
 #editor-page .node-status.ok::before { content: "\2713"; }
 #editor-page .node-title {
@@ -556,7 +556,7 @@
   transition: opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
 }
 #editor-page .input-port { left: -6px; }
-#editor-page .output-port { right: -6px; border-color: rgba(96, 165, 250, 0.7); }
+#editor-page .output-port { right: -6px; border-color: rgba(227, 82, 5, 0.7); }
 #editor-page .node:hover .node-port,
 #editor-page .node.selected .node-port { opacity: 1; }
 #editor-page .node-port:hover {
@@ -661,8 +661,8 @@
   font-size: 0.62rem;
   color: var(--text-dim);
 }
-#editor-page .completion-label.ok { color: var(--ok); border-color: rgba(63, 185, 80, 0.4); }
-#editor-page .completion-label.needs { color: var(--warn); border-color: rgba(210, 153, 34, 0.4); }
+#editor-page .completion-label.ok { color: var(--ok); border-color: rgba(26, 127, 55, 0.4); }
+#editor-page .completion-label.needs { color: var(--warn); border-color: rgba(154, 103, 0, 0.4); }
 
 #editor-page .inspector-card {
   border: 1px solid var(--ed-line);
@@ -679,7 +679,7 @@
   gap: 12px;
   font-size: 0.7rem;
   padding: 3px 0;
-  border-bottom: 1px solid rgba(48, 54, 61, 0.55);
+  border-bottom: 1px solid var(--kv-line);
 }
 #editor-page .kv:last-child { border-bottom: 0; }
 #editor-page .kv span { color: var(--text-dim); }
@@ -703,7 +703,7 @@
 #editor-page .inspector-hint p { margin: 0 0 6px; }
 #editor-page .inspector-hint p:last-child { margin-bottom: 0; }
 #editor-page .inspector-ok {
-  border: 1px solid rgba(63, 185, 80, 0.35);
+  border: 1px solid rgba(26, 127, 55, 0.35);
   border-radius: var(--radius);
   padding: 7px 9px;
   color: var(--ok);
@@ -798,7 +798,7 @@
 #editor-page textarea.ghost-value {
   border-style: dashed;
   color: var(--text-dim);
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--ghost);
 }
 #editor-page .input-row { display: flex; gap: 5px; }
 #editor-page .input-row input { min-width: 0; }
@@ -854,7 +854,7 @@
   position: fixed;
   inset: 0;
   z-index: 80;
-  background: rgba(1, 4, 9, 0.7);
+  background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: center;
   justify-content: center;
