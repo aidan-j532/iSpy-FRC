@@ -789,7 +789,7 @@ class iSpy:
                 t_start = time.perf_counter()
                 frame_data = {
                     "fps": round(fps, 1),
-                    "inference_s": 0.0,
+                    "vision_s": 0.0,
                     "camera_lag_s": 0.0,
                     "detection_count": 0,
                     "loop_s": 0.0,
@@ -849,7 +849,7 @@ class iSpy:
                 t_start = time.perf_counter()
                 frame_data = {
                     "fps": round(fps, 1),
-                    "inference_s": 0.0,
+                    "vision_s": 0.0,
                     "camera_lag_s": 0.0,
                     "detection_count": 0,
                     "loop_s": 0.0,

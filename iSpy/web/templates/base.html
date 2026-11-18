@@ -616,9 +616,15 @@
     <div class="toast-container" id="toast-container"></div>
     {% block scripts %}{% endblock %}
     <script>
-      document.querySelectorAll(".sidebar a").forEach((a) => {
-        if (a.pathname === location.pathname) a.classList.add("active");
-      });
+      (function () {
+        // The dashboard is served at both "/" and "/dashboard"; the sidebar
+        // link points at the latter.
+        const path =
+          location.pathname === "/" ? "/dashboard" : location.pathname;
+        document.querySelectorAll(".sidebar a").forEach((a) => {
+          if (a.pathname === path) a.classList.add("active");
+        });
+      })();
 
 
 

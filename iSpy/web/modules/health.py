@@ -45,7 +45,7 @@ class HealthModule(WebModule):
     def update(self, frame_data: dict):
         with self._lock:
             self._fps = round(frame_data.get("fps", 0), 1)
-            self._inference_s = round(frame_data.get("inference_s", 0) * 1000, 2)
+            self._inference_s = round(frame_data.get("vision_s", 0) * 1000, 2)
             self._detections = frame_data.get("detection_count", 0)
             self._last_tick = time.perf_counter()
             self._loop_count += 1

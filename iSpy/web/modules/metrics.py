@@ -13,7 +13,7 @@ class MetricsModule(WebModule):
 
     SERIES = {
         "loop_s": ("Loop time", "ms", 1000.0),
-        "inference_s": ("Inference time", "ms", 1000.0),
+        "vision_s": ("Inference time", "ms", 1000.0),
         "camera_lag_s": ("Camera lag", "ms", 1000.0),
     }
     CODE_PARTS = {

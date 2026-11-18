@@ -68,7 +68,7 @@ _ADDON_TYPES_FROM_PTYPE = {
 _CORE_PUBLISH_SOURCES = [
     {"source": "fps", "label": "fps"},
     {"source": "loop_s", "label": "loop_s"},
-    {"source": "inference_s", "label": "Inference time"},
+    {"source": "vision_s", "label": "Inference time"},
     {"source": "camera_lag_s", "label": "camera_lag_s"},
     {"source": "detection_count", "label": "detection_count"},
     {"source": "detections", "label": "detections (struct[])"},

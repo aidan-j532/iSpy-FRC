@@ -180,11 +180,7 @@ body {
 .sidebar a.active::before {
   content: ''; position: absolute; left: 0; top: 18%; bottom: 18%;
   width: 3px; border-radius: 2px; background: var(--accent);
-  display: none;
 }
-
-
-
 
 .sidebar a.active svg { opacity: 1; color: var(--sidebar-active-icon); }
 

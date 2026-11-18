@@ -18,7 +18,7 @@ The repository includes deployment support for:
 - other aarch64 Linux boards, subject to camera and inference backend availability
 - x86_64 Linux machines
 
-Python package installation is also possible on Windows and macOS, but acceleration and camera support depend on the packages available for that operating system. The `install.sh` script and board provisioner are Linux shell scripts, not Windows installers. The recommended deployment target is an Orange Pi 5/5 Pro with RK3588 when you need the RKNN NPU backend. Other machines may use a different backend or CPU inference.
+Python package installation is also possible on Windows and macOS, but acceleration and camera support depend on the packages available for that operating system. The `Image/install.sh` script and board provisioner are Linux shell scripts, not Windows installers. The recommended deployment target is an Orange Pi 5/5 Pro with RK3588 when you need the RKNN NPU backend. Other machines may use a different backend or CPU inference.
 
 ## Prerequisites
 
@@ -93,7 +93,7 @@ Editable mode (`-e`) means code changes in this checkout are available without r
 
 ### Linux install script
 
-The root `install.sh` is an alternative for Linux, not a cross-platform installer. It installs into the Python selected by `pip` and uses `--break-system-packages`; it does not create a virtual environment. It installs the base package on ARM64 and the `dev` extra on x86_64. Prefer the virtual-environment steps above unless you specifically want that system-level behavior.
+`Image/install.sh` is an alternative for Linux, not a cross-platform installer. It installs into the Python selected by `pip` and uses `--break-system-packages`; it does not create a virtual environment. It installs the base package on ARM64 and the `dev` extra on x86_64. Prefer the virtual-environment steps above unless you specifically want that system-level behavior. Run it from the repository root as `Image/install.sh` (or `bash Image/install.sh`).
 
 ### Which install path fits?
 
