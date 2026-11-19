@@ -339,6 +339,7 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             and self.model.model_type in ("rknn", "onnx", "tflite", "engine")
         ) or self._tpu_pipeline
 
+        self._last_inference_ms: float | None = None
         self._last_result: Results | None = None
         self._last_frame: np.ndarray | None = None
         self.last_time = time.perf_counter()
@@ -930,6 +931,13 @@ class ObjectDetectionPipeline(OptimizableModelPipeline, VisionPipeline):
             self.detections_seen += len(result.boxes)
             self._timing_samples.append(sample)
             self._timing_samples_seen += 1
+            self._last_inference_ms = max(0.0, float(sample.get("device", 0.0) or 0.0))
+
+    def get_inference_time_s(self) -> float | None:
+        with self._metrics_lock:
+            if self._last_inference_ms is None:
+                return None
+            return self._last_inference_ms / 1000.0
 
     def benchmark_metrics(self, since_count: int = 0) -> dict:
         with self._metrics_lock:

@@ -940,6 +940,102 @@ body.connection-lost {
   background: linear-gradient(90deg, rgba(255,255,255,1.0) 0%, rgba(255,255,255,0.2) 100%);
 }
 
+/* One help affordance for the whole web UI:
+   <button type="button" class="help-tip" data-help="Full text" aria-label="More information">?</button> */
+.help-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin: 0 0 0 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.help-tip:hover,
+.help-tip:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  outline: none;
+}
+.help-tip:active { transform: translateY(1px); }
+.help-glyph {
+  display: block;
+  /* The glyph's ink sits about half a pixel below the line-box center. A
+     paint-time transform nudges it without relying on layout rounding. */
+  transform: translateY(-0.53px);
+}
+/* At 100% scaling Chrome snaps the text baseline to a whole pixel; the same
+   nudge overshoots there, so use the smaller value that lands on center. */
+@media (resolution: 1dppx) {
+  .help-glyph { transform: translateY(-0.175px); }
+}
+
+#ispy-help-pop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10060;
+  max-width: min(340px, calc(100vw - 16px));
+  padding: 9px 11px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(3px);
+  visibility: hidden;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+#ispy-help-pop.visible {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+}
+#ispy-help-pop.below { transform: translateY(-3px); }
+#ispy-help-pop.visible.below { transform: none; }
+#ispy-help-pop::after {
+  content: "";
+  position: absolute;
+  left: var(--ispy-help-arrow-x, 50%);
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  transform: rotate(45deg);
+}
+#ispy-help-pop.below::after {
+  top: -5px;
+  bottom: auto;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 1px solid var(--border-light);
+  border-top: 1px solid var(--border-light);
+}
+.ispy-help-pop-text {
+  display: block;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 768px) {
   .sidebar { width: 64px; min-width: 64px; padding: 16px 8px; align-items: center; }
   .sidebar .brand { padding: 0; justify-content: center; margin-bottom: 16px; }

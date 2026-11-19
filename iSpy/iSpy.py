@@ -933,6 +933,22 @@ class iSpy:
             frames[self._camera_label(cam, i)] = frame
         return frames
 
+    @staticmethod
+    def _camera_inference_time_s(camera) -> float | None:
+        getter = getattr(camera, "get_inference_time_s", None)
+        if not callable(getter):
+            return None
+        try:
+            value = getter()
+        except Exception:
+            return None
+        if value is None:
+            return None
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return None
+
     def _run_loop_body_solo(self, camera) -> dict:
         t0 = time.perf_counter()
         code_times = {}
@@ -946,6 +962,7 @@ class iSpy:
         vision_s = time.perf_counter() - t_vis
         vision_s -= self._merge_frame_processor_times(code_times)
         code_times["vision"] = max(0.0, vision_s)
+        inference_s = self._camera_inference_time_s(camera) or 0.0
 
         pose = self._get_pose(code_times)
 
@@ -988,7 +1005,7 @@ class iSpy:
             "frame": frame,
             "fps": round(1 / loop_s, 1) if loop_s > 0 else 0,
             "loop_s": loop_s,
-            "vision_s": vision_s,
+            "vision_s": inference_s,
             "camera_lag_s": camera_lag_s,
             "cameras": self.cameras,
             "raw_frames": raw_frames,
@@ -1033,13 +1050,19 @@ class iSpy:
         t_vis = time.perf_counter()
         self._reset_frame_processor_times()
         detections, frame = self.run_multi_vision(handler)
-        if hasattr(handler, "model") and hasattr(handler.model, "last_tpu_stage_ms"):
-            inference_s = getattr(handler.model, "last_tpu_stage_ms", {}).get("device", 0.0)
-        else:
-            inference_s = code_times.get("vision", 0)
-        vision_s = inference_s  # both now measure model predict time
+        vision_s = time.perf_counter() - t_vis
         vision_s -= self._merge_frame_processor_times(code_times)
         code_times["vision"] = max(0.0, vision_s)
+        inference_samples = [
+            value
+            for value in (self._camera_inference_time_s(cam) for cam in handler.cameras)
+            if value is not None
+        ]
+        inference_s = (
+            sum(inference_samples) / len(inference_samples)
+            if inference_samples
+            else 0.0
+        )
 
         pose = self._get_pose(code_times)
 
@@ -1071,7 +1094,7 @@ class iSpy:
             "frame": frame,
             "fps": round(1 / loop_s, 1) if loop_s > 0 else 0,
             "loop_s": loop_s,
-            "vision_s": vision_s,
+            "vision_s": inference_s,
             "camera_lag_s": camera_lag_s,
             "cameras": self.cameras,
             "camera_frames": handler.get_camera_frames(),
@@ -1100,10 +1123,18 @@ class iSpy:
 
         return frame_data
 
+    @staticmethod
+    def _apply_loop_timing(frame_data: dict, loop_s: float) -> None:
+        if loop_s <= 0:
+            return
+        frame_data["loop_s"] = loop_s
+        frame_data["fps"] = round(1.0 / loop_s, 1)
+
     def run_solo_mode(self):
         max_fps = self.config.get("max_fps", 0)
         print_fps = performance.get_profile().fps_console_print
         last_frame_data = None
+        last_loop_s = 0.0
         try:
             camera = self.cameras[0]
             self.run_solo_vision(camera)
@@ -1122,12 +1153,15 @@ class iSpy:
                 t_start = time.perf_counter()
                 frame_data = self._run_loop_body_solo(camera)
                 last_frame_data = frame_data
+                # Report the last complete iteration (body + utilities + web).
+                self._apply_loop_timing(frame_data, last_loop_s)
 
                 self._update_utilities(frame_data)
 
                 t_web = time.perf_counter()
                 self._update_web(frame_data)
                 frame_data["code_times"]["web"] = time.perf_counter() - t_web
+                last_loop_s = time.perf_counter() - t_start
 
                 if max_fps > 0:
                     elapsed = time.perf_counter() - t_start
@@ -1161,6 +1195,7 @@ class iSpy:
             self.logger.info("Warm-up complete.")
 
             last_frame_data = None
+            last_loop_s = 0.0
             while not self.shutdown_event.is_set():
                 if self._replay_at_end():
                     break
@@ -1175,12 +1210,15 @@ class iSpy:
                 t_start = time.perf_counter()
                 frame_data = self._run_loop_body_multi(handler)
                 last_frame_data = frame_data
+                # Report the last complete iteration (body + utilities + web).
+                self._apply_loop_timing(frame_data, last_loop_s)
 
                 self._update_utilities(frame_data)
 
                 t_web = time.perf_counter()
                 self._update_web(frame_data)
                 frame_data["code_times"]["web"] = time.perf_counter() - t_web
+                last_loop_s = time.perf_counter() - t_start
 
                 if max_fps > 0:
                     elapsed = time.perf_counter() - t_start

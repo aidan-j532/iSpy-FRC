@@ -273,6 +273,10 @@ class VisionBase(NetworkMixin, ABC):
     def get_code_times(self) -> dict:
         return {}
 
+    def get_inference_time_s(self) -> float | None:
+        """Last neural-network inference time in seconds, or None if not applicable."""
+        return None
+
     @classmethod
     def config_schema(cls) -> dict:
         return {}

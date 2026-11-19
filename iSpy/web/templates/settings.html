@@ -51,7 +51,14 @@ block content %}
     <h3>Appearance</h3>
 
     <div class="form-row">
-      <span class="form-label">Theme</span>
+      <span class="form-label"
+        >Theme<button
+          type="button"
+          class="help-tip"
+          data-help="Switch between the white and black interface. The choice is saved on this device."
+          aria-label="More information"
+        >?</button></span
+      >
 
       <div class="settings-toggle-row">
         <label class="switch">
@@ -67,15 +74,17 @@ block content %}
         <span id="theme-mode-label" class="theme-toggle-label">White theme</span>
       </div>
     </div>
-
-    <div class="text-sm text-dim">
-      Switch between the white and black interface. The choice is saved on this
-      device.
-    </div>
   </div>
 
   <div class="settings-section">
-    <h3>Performance profile</h3>
+    <h3>
+      Performance profile<button
+        type="button"
+        class="help-tip"
+        data-help="Applies at the next restart. Detection, trackers, NetworkTables and robot pose are never affected by this slider."
+        aria-label="More information"
+      >?</button>
+    </h3>
 
     <div class="perf-wrap">
       <div class="perf-head">
@@ -108,11 +117,6 @@ block content %}
       </div>
 
       <div id="perf-desc" class="perf-desc"></div>
-
-      <div class="text-sm" style="color: var(--text-dim)">
-        Applies at the next restart. Detection, trackers, NetworkTables and
-        robot pose are never affected by this slider.
-      </div>
     </div>
   </div>
 
@@ -148,10 +152,13 @@ block content %}
     <h3>Performance</h3>
 
     <div class="form-row">
-      <span
-        class="form-label"
-        title="Hard cap on the detection loop rate across all cameras. 0 = uncapped."
-        >Max FPS</span
+      <span class="form-label"
+        >Max FPS<button
+          type="button"
+          class="help-tip"
+          data-help="Hard cap on the detection loop rate across all cameras. 0 = uncapped."
+          aria-label="More information"
+        >?</button></span
       >
 
       <input
@@ -194,12 +201,17 @@ block content %}
   </div>
 
   <div class="settings-section">
-    <h3>Camera Configs</h3>
+    <h3>
+      Camera Configs<button
+        type="button"
+        class="help-tip"
+        data-help="Individual camera settings (pipeline, model, calibration) are managed via the Cameras page. The raw JSON editor below provides full access."
+        aria-label="More information"
+      >?</button>
+    </h3>
 
     <p class="text-dim text-sm">
-      Individual camera settings (pipeline, model, calibration) are managed via
-      the <a href="/cameras">Cameras page</a>. The raw JSON editor below
-      provides full access.
+      <a href="/cameras">Open the Cameras page</a>
     </p>
   </div>
 </div>
@@ -229,7 +241,14 @@ block content %}
     </div>
 
     <div class="form-row">
-      <span class="form-label">Offline Mode</span>
+      <span class="form-label"
+        >Offline Mode<button
+          type="button"
+          class="help-tip"
+          data-help="Blocks the public internet only. NetworkTables to the robot, the dashboard port, loopback, mDNS and the Tello keep working. Add-ons that need the internet are skipped with a warning; one that only loses an optional feature keeps running. Game Mode forces this on for its one-shot run (never saved to the config)."
+          aria-label="More information"
+        >?</button></span
+      >
 
       <select class="form-input" data-key="offline_mode" data-restart="true">
         <option value="true">Enabled</option>
@@ -238,33 +257,34 @@ block content %}
       </select>
 
       <span class="restart-badge" style="display: none">restart required</span>
-
-      <span class="text-dim text-sm"
-        >Blocks the public internet only. NetworkTables to the robot, the
-        dashboard port, loopback, mDNS and the Tello keep working. Add-ons that
-        need the internet are skipped with a warning; one that only loses an
-        optional feature keeps running. Game Mode forces this on for its
-        one-shot run (never saved to the config).</span
-      >
     </div>
 
     <div class="form-row">
-      <span class="form-label">Admin Mode</span>
+      <span class="form-label"
+        >Admin Mode<button
+          type="button"
+          class="help-tip"
+          data-help="Hides experimental pipelines (QR Code, optical flow) from the camera pipeline dropdown unless enabled."
+          aria-label="More information"
+        >?</button></span
+      >
 
       <select class="form-input" data-key="admin">
         <option value="true">Enabled</option>
 
         <option value="false">Disabled</option>
       </select>
-
-      <span class="text-dim text-sm"
-        >Hides experimental pipelines (QR Code, optical flow) from the camera
-        pipeline dropdown unless enabled.</span
-      >
     </div>
 
     <div class="form-row">
-      <span class="form-label">Remote Restart</span>
+      <span class="form-label"
+        >Remote Restart<button
+          type="button"
+          class="help-tip"
+          data-help="When enabled, loopback and RFC1918/link-local robot-network clients may restart iSpy. Set ISPY_ADMIN_TOKEN to allow other remote callers; &quot;Localhost / token only&quot; disables LAN restarts."
+          aria-label="More information"
+        >?</button></span
+      >
 
       <select class="form-input" data-key="allow_remote_restart" data-restart="true">
         <option value="true">Local network allowed</option>
@@ -273,12 +293,6 @@ block content %}
       </select>
 
       <span class="restart-badge" style="display: none">restart required</span>
-
-      <span class="text-dim text-sm"
-        >When enabled, loopback and RFC1918/link-local robot-network clients may
-        restart iSpy. Set <code>ISPY_ADMIN_TOKEN</code> to allow other remote
-        callers; "Localhost / token only" disables LAN restarts.</span
-      >
     </div>
 
     <div class="form-row">
@@ -298,10 +312,13 @@ block content %}
     </div>
 
     <div class="form-row">
-      <span
-        class="form-label"
-        title="Seconds without a fresh frame before /health reports degraded."
-        >Health Stale Threshold (s)</span
+      <span class="form-label"
+        >Health Stale Threshold (s)<button
+          type="button"
+          class="help-tip"
+          data-help="Seconds without a fresh frame before /health reports degraded."
+          aria-label="More information"
+        >?</button></span
       >
 
       <input
@@ -315,20 +332,18 @@ block content %}
     </div>
 
     <div class="form-row">
-      <span class="form-label">Game Mode</span>
+      <span class="form-label"
+        >Game Mode<button
+          type="button"
+          class="help-tip"
+          data-help="Web dashboard off for one boot, then back automatically. Offline mode is forced on for that boot too (in memory only - it can never get stuck on in the config)."
+          aria-label="More information"
+        >?</button></span
+      >
 
       <button class="btn btn-ok" onclick="armGameMode()">
         Disable web UI for next boot
       </button>
-
-      <span
-        class="text-dim"
-        style="margin-left: 8px; font-size: 0.8rem"
-      >
-        Web dashboard off for one boot, then back automatically. Offline mode
-        is forced on for that boot too (in memory only - it can never get stuck
-        on in the config).
-      </span>
     </div>
 
     <div class="form-row">
@@ -340,14 +355,14 @@ block content %}
   </div>
 
   <div class="settings-section">
-    <h3>Beta: Restart iSpy</h3>
-
-    <p class="text-dim text-sm" style="margin: 0 0 12px 0; max-width: 72ch">
-      Stops the vision process and starts it again through the process
-      supervisor. Port 5000 stays reachable with a status page while iSpy
-      restarts. Vision, trackers and the device connection will be unavailable
-      for a few seconds - do not use this during operation.
-    </p>
+    <h3>
+      Beta: Restart iSpy<button
+        type="button"
+        class="help-tip"
+        data-help="Stops the vision process and starts it again through the process supervisor. Port 5000 stays reachable with a status page while iSpy restarts. Vision, trackers and the device connection will be unavailable for a few seconds - do not use this during operation."
+        aria-label="More information"
+      >?</button>
+    </h3>
 
     <div class="form-row">
       <span class="form-label">Restart process</span>
@@ -376,7 +391,14 @@ block content %}
 <div id="tab-about" class="settings-tab-content" style="display: none">
   <div class="card" style="position: sticky; bottom: 20px">
     <div class="settings-section">
-      <h3>About iSpy</h3>
+      <h3>
+        About iSpy<button
+          type="button"
+          class="help-tip"
+          data-help="iSpy is a real-time vision system for FRC robots. It provides plug-and-play camera pipelines, 3D field visualization, and model-based object detection."
+          aria-label="More information"
+        >?</button>
+      </h3>
 
       <div class="form-row">
         <span class="form-label">Version</span>
@@ -401,12 +423,6 @@ block content %}
           >https://github.com/aidan-j532/iSpy-FRC</a
         >
       </div>
-
-      <p class="text-dim text-sm" style="margin-top: 12px">
-        iSpy is a real-time vision system for FRC robots. It provides
-        plug-and-play camera pipelines, 3D field visualization, and model-based
-        object detection.
-      </p>
     </div>
   </div>
 </div>

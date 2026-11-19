@@ -338,8 +338,8 @@
     --cam-bg-hover: var(--border); --cam-line: var(--border-light);
   }
   .cam-tone-danger {
-    --cam-bg: var(--bad); --cam-fg: var(--on-bad);
-    --cam-bg-hover: var(--bad-hover); --cam-line: var(--bad);
+    --cam-bg: transparent; --cam-fg: var(--bad);
+    --cam-bg-hover: var(--bad-dim); --cam-line: var(--bad);
   }
   .cam-tone-ink {
     --cam-bg: #242424; --cam-fg: #ffffff;
@@ -862,6 +862,8 @@ function buildField(key, def, source) {
   label.className = 'form-label';
   label.innerHTML = escapeHtml(def.label || humanizeFieldName(key)) +
     (def.unit ? ` <span class="form-unit">${escapeHtml(def.unit)}</span>` : '');
+  const fieldHelp = def.help ? window.ispyHelp(def.help) : null;
+  if (fieldHelp) label.appendChild(fieldHelp);
   line.appendChild(label);
 
   let control;
@@ -936,7 +938,7 @@ function buildField(key, def, source) {
   }
   row.appendChild(line);
 
-  if (def.help) {
+  if (def.help && !fieldHelp) {
     const help = document.createElement('div');
     help.className = 'form-help';
     help.textContent = def.help;
@@ -2324,12 +2326,14 @@ function renderTuning() {
     const row = document.createElement('div');
     row.className = 'tune-slider-row';
     const val = tuningState.values[key];
+    const fieldHelp = def.help ? window.ispyHelp(def.help) : null;
     if (def.type === 'boolean') {
       const line = document.createElement('div');
       line.className = 'form-row';
       const label = document.createElement('span');
       label.className = 'form-label';
       label.textContent = def.label;
+      if (fieldHelp) label.appendChild(fieldHelp);
       const toggle = document.createElement('input');
       toggle.type = 'checkbox';
       toggle.className = 'toggle-input';
@@ -2343,6 +2347,7 @@ function renderTuning() {
       label.className = 'tune-slider-label';
       const name = document.createElement('span');
       name.textContent = def.label;
+      if (fieldHelp) name.appendChild(fieldHelp);
       const value = document.createElement('span');
       value.className = 'tune-slider-value';
       value.id = 'tune-val-' + key;
@@ -2364,7 +2369,7 @@ function renderTuning() {
       row.appendChild(label);
       row.appendChild(slider);
     }
-    if (def.help) {
+    if (def.help && !fieldHelp) {
       const help = document.createElement('div');
       help.className = 'form-help';
       help.style.marginLeft = '0';
@@ -2482,10 +2487,12 @@ function renderPipelineTuning() {
     if (def.type !== 'range') return;
     const row = document.createElement('div');
     row.className = 'tune-slider-row';
+    const fieldHelp = def.help ? window.ispyHelp(def.help) : null;
     const label = document.createElement('div');
     label.className = 'tune-slider-label';
     const name = document.createElement('span');
     name.textContent = def.label || humanizeFieldName(key);
+    if (fieldHelp) name.appendChild(fieldHelp);
     const readout = document.createElement('span');
     readout.className = 'tune-slider-value';
     const current = pipelineTuning.values[key] || def.default || [def.min ?? 0, def.max ?? 255];
@@ -2498,7 +2505,7 @@ function renderPipelineTuning() {
     });
     row.appendChild(label);
     row.appendChild(control);
-    if (def.help) {
+    if (def.help && !fieldHelp) {
       const help = document.createElement('div');
       help.className = 'form-help';
       help.style.marginLeft = '0';
@@ -2787,11 +2794,16 @@ async function renderPnpSectionIfApplicable(body) {
 function pnpSectionHtml(info) {
   const note = info.has_intrinsics ? '' :
     '<div class="calib-status err" style="margin-bottom:8px;">Run ChArUco intrinsics on this camera first - PnP needs camera_matrix + dist_coeffs.</div>';
+  const desc = "3D position (meters) of each model keypoint in the object's own local frame. " +
+    "Matches however your pose model's keypoints were labeled during training.";
+  const help = window.ispyHelpHTML ? window.ispyHelpHTML(desc) : '';
+  const helpFallback = help ? '' :
+    `<div class="calib-auto-msg" style="margin-top:0;margin-bottom:8px;">${desc}</div>`;
   return `
     <div class="calib-section" style="margin-top:12px;">
-      <div class="calib-section-title">Pose PnP (${info.num_keypoints} keypoints)</div>
+      <div class="calib-section-title">Pose PnP (${info.num_keypoints} keypoints)${help}</div>
       ${note}
-      <div class="calib-auto-msg" style="margin-top:0;margin-bottom:8px;">3D position (meters) of each model keypoint in the object's own local frame. Matches however your pose model's keypoints were labeled during training.</div>
+      ${helpFallback}
       <div id="pnp-kpt-table"></div>
       <div class="form-row" style="margin-top:10px;">
         <span class="form-label">Min keypoint conf</span>
@@ -3418,13 +3430,17 @@ function charucoCaptureSectionHtml() {
 function renderCharucoCalibration(body) {
   calibrationState.overlayPattern = [7, 9];
   calibrationState.overlayDict = 0;
+  const desc = "Hold the printed ChArUco board in view. Green corners and marker outlines mean " +
+    "the board is detected. Auto capture is on - move the board around through varied angles. " +
+    "Press Pause when done, then calibrate.";
+  const help = window.ispyHelpHTML ? window.ispyHelpHTML(desc) : '';
   body.innerHTML = `
     <div class="calib-section">
-      <div class="calib-section-title">Live View</div>
+      <div class="calib-section-title">Live View${help}</div>
       <div class="calib-stage">
         <img id="calib-feed" src="${calibrationFeedUrl('charuco', calibrationState.overlayPattern, calibrationState.overlayDict)}" alt="live feed" onerror="calibrationFeedError()">
       </div>
-      <div class="calib-auto-msg" id="charuco-note">Hold the printed ChArUco board in view. Green corners and marker outlines mean the board is detected. Auto capture is on - move the board around through varied angles. Press Pause when done, then calibrate.</div>
+      <div class="calib-auto-msg" id="charuco-note"></div>
     </div>
     ${charucoCaptureSectionHtml()}
   `;

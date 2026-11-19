@@ -83,12 +83,6 @@ block head %}
     font-family: var(--mono);
     font-size: 0.8rem;
   }
-  .scale-hint {
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    line-height: 1.5;
-    margin-top: 2px;
-  }
   #scale-reset {
     margin-top: auto;
   }
@@ -171,7 +165,15 @@ block head %}
 <div class="viewer-layout">
   <div id="scene-container"></div>
   <div class="viewer-panel">
-    <div class="panel-title">View Scale</div>
+    <div class="panel-title">
+      View Scale<button
+        type="button"
+        class="help-tip"
+        id="scale-help"
+        data-help="Scale detections per axis. Set a negative value to flip an axis."
+        aria-label="More information"
+      >?</button>
+    </div>
     <div class="scale-row">
       <span class="axis axis-x">X</span>
       <input
@@ -229,9 +231,6 @@ block head %}
         aria-label="Z scale value"
       />
     </div>
-    <div class="scale-hint">
-      Scale detections per axis. Set a negative value to flip an axis.
-    </div>
     <button type="button" class="btn" id="scale-reset">Reset Scale</button>
   </div>
 </div>
@@ -287,9 +286,14 @@ block head %}
     document.getElementById(`th-${axis}`).textContent =
       `${axis.toUpperCase()} (${OUTPUT_LABEL})`;
   }
-  document.querySelector(".scale-hint").textContent =
-    `Scale detections per axis (${OUTPUT_LABEL}). ` +
-    "Set a negative value to flip an axis.";
+  const scaleHelp = document.getElementById("scale-help");
+  if (scaleHelp) {
+    scaleHelp.setAttribute(
+      "data-help",
+      `Scale detections per axis (${OUTPUT_LABEL}). ` +
+        "Set a negative value to flip an axis.",
+    );
+  }
 
   const container = document.getElementById("scene-container");
   const scene = new THREE.Scene();

@@ -51,6 +51,167 @@
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
     <title>{% block title %}iSpy{% endblock %}</title>
     <link rel="stylesheet" href="/static/css/design.css" />
+    <script>
+      // Shared "?" help affordance. Markup is always:
+      //   <button type="button" class="help-tip" data-help="..." aria-label="More information">?</button>
+      // The visible "?" is wrapped in .help-glyph (on load, or by ispyHelp for
+      // generated rows) so its ink can be centered independently of layout.
+      // ispyHelp()/ispyHelpHTML() are the JS equivalents for generated rows.
+      (function () {
+        "use strict";
+        var MIN_WORDS = 8;
+        var pop = null;
+        var current = null;
+
+        function wordCount(text) {
+          return String(text || "")
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean).length;
+        }
+
+        function glyphNode() {
+          var glyph = document.createElement("span");
+          glyph.className = "help-glyph";
+          glyph.textContent = "?";
+          return glyph;
+        }
+
+        function wrapGlyph(button) {
+          if (!button || button.querySelector(".help-glyph")) return;
+          if (button.textContent.trim() !== "?") return;
+          button.textContent = "";
+          button.appendChild(glyphNode());
+        }
+
+        function wrapStaticGlyphs() {
+          var buttons = document.querySelectorAll(".help-tip");
+          for (var i = 0; i < buttons.length; i++) wrapGlyph(buttons[i]);
+        }
+
+        function ensurePop() {
+          if (pop) return pop;
+          pop = document.createElement("div");
+          pop.id = "ispy-help-pop";
+          pop.setAttribute("role", "tooltip");
+          var text = document.createElement("span");
+          text.className = "ispy-help-pop-text";
+          pop.appendChild(text);
+          document.body.appendChild(pop);
+          return pop;
+        }
+
+        function hide() {
+          if (pop) pop.classList.remove("visible");
+          if (current) current.removeAttribute("aria-describedby");
+          current = null;
+        }
+
+        function place(trigger) {
+          var p = ensurePop();
+          var rect = trigger.getBoundingClientRect();
+          var margin = 8;
+          var gap = 9;
+          p.style.visibility = "hidden";
+          p.style.left = "0px";
+          p.style.top = "0px";
+          var width = p.offsetWidth;
+          var height = p.offsetHeight;
+          var left = Math.round(rect.left + rect.width / 2 - width / 2);
+          left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+          var top = Math.round(rect.top - height - gap);
+          var below = false;
+          if (top < margin) {
+            top = Math.round(rect.bottom + gap);
+            below = true;
+          }
+          top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+          var arrow = Math.round(rect.left + rect.width / 2 - left);
+          arrow = Math.max(12, Math.min(arrow, width - 12));
+          p.classList.toggle("below", below);
+          p.style.left = left + "px";
+          p.style.top = top + "px";
+          p.style.setProperty("--ispy-help-arrow-x", arrow + "px");
+          p.style.visibility = "";
+        }
+
+        function show(trigger) {
+          var text = trigger.getAttribute("data-help");
+          if (!text) return;
+          var p = ensurePop();
+          p.querySelector(".ispy-help-pop-text").textContent = text;
+          current = trigger;
+          p.classList.add("visible");
+          place(trigger);
+          trigger.setAttribute("aria-describedby", "ispy-help-pop");
+        }
+
+        function triggerFrom(event) {
+          return event.target && event.target.closest
+            ? event.target.closest(".help-tip")
+            : null;
+        }
+
+        document.addEventListener("mouseover", function (event) {
+          var trigger = triggerFrom(event);
+          if (trigger) show(trigger);
+        });
+        document.addEventListener("mouseout", function (event) {
+          var trigger = triggerFrom(event);
+          if (trigger && !trigger.contains(event.relatedTarget)) hide();
+        });
+        document.addEventListener("focusin", function (event) {
+          var trigger = triggerFrom(event);
+          if (trigger) show(trigger);
+        });
+        document.addEventListener("focusout", function (event) {
+          if (triggerFrom(event)) hide();
+        });
+        document.addEventListener("pointerdown", function (event) {
+          if (current && !event.target.closest(".help-tip")) hide();
+        });
+        document.addEventListener("click", function (event) {
+          // Help buttons often sit inside a <label> or a toggle row. Keep the
+          // click from activating the labeled checkbox/select behind them.
+          if (triggerFrom(event)) event.preventDefault();
+        });
+        document.addEventListener("keydown", function (event) {
+          if (event.key === "Escape") hide();
+        });
+        window.addEventListener(
+          "scroll",
+          function () {
+            if (current) place(current);
+          },
+          true
+        );
+        window.addEventListener("resize", function () {
+          if (current) place(current);
+        });
+
+        window.ispyHelp = function (text, label) {
+          if (wordCount(text) < MIN_WORDS) return null;
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "help-tip";
+          button.setAttribute("data-help", text);
+          button.setAttribute("aria-label", label || "More information");
+          button.appendChild(glyphNode());
+          return button;
+        };
+        window.ispyHelpHTML = function (text, label) {
+          var button = window.ispyHelp(text, label);
+          return button ? button.outerHTML : "";
+        };
+        window.ispyHelpWordCount = wordCount;
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", wrapStaticGlyphs);
+        } else {
+          wrapStaticGlyphs();
+        }
+      })();
+    </script>
     <style>
     .ispy-welcome {
         display: flex;
@@ -878,7 +1039,7 @@
             page: "/dashboard",
             target: "#stats",
             title: "Live telemetry",
-            text: "FPS, vision latency, loop time, detection count and camera lag stream in here in real time while vision runs.",
+            text: "FPS, inference latency, loop time, detection count and camera lag stream in here in real time while vision runs.",
           },
           {
             page: "/dashboard",

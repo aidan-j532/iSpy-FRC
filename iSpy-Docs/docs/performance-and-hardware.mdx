@@ -26,12 +26,12 @@ The dashboard and the health page read the same numbers, and both update while t
 
 The two timings worth watching are `loop_s` and `vision_s`.
 
-- `loop_s` is the time for one full pass. Its inverse is the real frame rate, which is why the dashboard shows `1 / loop_s` as fps.
-- `vision_s` is the time spent inside pipelines and trackers, with frame processor time broken out separately.
+- `loop_s` is the time for one complete iteration: pipelines, trackers, utilities, and the web update. Its inverse is the real loop rate, which is why the dashboard shows `1 / loop_s` as fps.
+- `vision_s` is only the neural-network inference time reported by the camera pipeline. Pipelines that do not run a model report `0`.
 
-If `loop_s` is much larger than `vision_s`, the time is going somewhere else: capture on a slow camera, the recorder flushing to a slow SD card, or the sleep from `max_fps`. If the two are close, the model is your bottleneck and the recipes below apply.
+The metrics page keeps a timeline of both, and its stage breakdown (`vision`, trackers, utilities, web) shows where the rest of `loop_s` goes, so you can see whether a change helped instead of guessing from a single reading.
 
-The metrics page keeps a timeline of both, so you can see whether a change helped instead of guessing from a single reading.
+If `loop_s` is much larger than `vision_s`, the model is not the only cost: capture on a slow camera, the recorder flushing to a slow SD card, trackers, utilities, or the web update may be the bottleneck. If the two are close, the model is your bottleneck and the recipes below apply.
 
 The health page has one more useful signal: `loop_stale_s`, the seconds since the last loop tick. A number that climbs above `health_stale_threshold` (1.0 by default) flags the loop as stalled, which usually means a camera was unplugged or a model is blocking.
 
@@ -147,11 +147,11 @@ The recorder checks free space and pauses below 100 MB, so a full disk degrades 
 
 When the loop is too slow, change one thing at a time and read the timings after each.
 
-1. Look at `loop_s` versus `vision_s` to find which half is slow.
-2. If vision is slow, drop to a smaller model before anything else.
+1. Look at `loop_s` and the stage breakdown to find which part is slow.
+2. If inference is slow, drop to a smaller model before anything else.
 3. If the hardware supports it, enable `optimize: "auto"` and let the artifact build.
 4. If it is still slow, lower the model's input resolution where the pipeline exposes it.
-5. If the whole loop is slow but vision is not, look at capture, the recorder, or a `max_fps` sleep you forgot about.
+5. If the whole loop is slow but inference is not, look at capture, trackers, utilities, the web update, the recorder, or a `max_fps` sleep you forgot about.
 6. Only then consider adding `max_fps` as a cap. A cap hides a slow loop rather than fixing it, but it also gives a hot CPU room to breathe, which is a real trade on a small board.
 
 The point of measuring first is that the fix is different depending on which half is slow. Reaching for `max_fps` immediately makes the symptom go away and leaves the actual cost in place.

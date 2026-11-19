@@ -139,15 +139,19 @@ class YourTracker(TrackerBase):
       const packs = d.packs || [];
       const active = d.active;
       if (!packs.length) { el.textContent = 'No unit packs found.'; return; }
-      el.innerHTML = packs.map(p =>
-        '<div class="form-row" style="align-items:center;">' +
-        '<span class="form-label" style="min-width:220px;">' + (p.name || p.key) + '</span>' +
-        '<span class="text-dim text-sm" style="flex:1;">' + (p.description || '') + '</span>' +
-        '<button class="btn-sm' + (p.key === active ? ' active' : '') + '" ' +
-        'onclick="selectUnit(\'' + p.key + '\')">' +
-        (p.key === active ? 'Active' : 'Select') + '</button>' +
-        '</div>'
-      ).join('');
+      el.innerHTML = packs.map(p => {
+        const help = helpBtn(p.description);
+        const desc = help
+          ? ''
+          : '<span class="text-dim text-sm" style="flex:1;">' + esc(p.description || '') + '</span>';
+        return '<div class="form-row" style="align-items:center;">' +
+          '<span class="form-label" style="min-width:220px;">' + esc(p.name || p.key) + help + '</span>' +
+          desc +
+          '<button class="btn-sm' + (p.key === active ? ' active' : '') + '" ' +
+          'onclick="selectUnit(\'' + p.key + '\')">' +
+          (p.key === active ? 'Active' : 'Select') + '</button>' +
+          '</div>';
+      }).join('');
     }).catch(() => {
       const el = document.getElementById('unit-list');
       if (el) el.textContent = 'Could not load units.';
@@ -268,13 +272,17 @@ function loadBundles() {
   fetch('/api/bundles').then(r => r.json()).then(d => {
     const bundles = d.bundles || [];
     if (!bundles.length) { el.textContent = 'No bundles found.'; return; }
-    el.innerHTML = bundles.map(b =>
-      '<div class="form-row" style="align-items:center;">' +
-      '<span class="form-label" style="min-width:160px;">' + (b.name || b.key) + '</span>' +
-      '<span class="text-dim text-sm" style="flex:1;">' + (b.description || '') + '</span>' +
-      '<button class="btn-sm" onclick="applyBundle(\'' + b.key + '\')">Apply</button>' +
-      '</div>'
-    ).join('');
+    el.innerHTML = bundles.map(b => {
+      const help = helpBtn(b.description);
+      const desc = help
+        ? ''
+        : '<span class="text-dim text-sm" style="flex:1;">' + esc(b.description || '') + '</span>';
+      return '<div class="form-row" style="align-items:center;">' +
+        '<span class="form-label" style="min-width:160px;">' + esc(b.name || b.key) + help + '</span>' +
+        desc +
+        '<button class="btn-sm" onclick="applyBundle(\'' + b.key + '\')">Apply</button>' +
+        '</div>';
+    }).join('');
   }).catch(() => { if (el) el.textContent = 'Could not load bundles.'; });
 }
 
@@ -293,6 +301,11 @@ window.applyBundle = function (key) {
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
   .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const jsStr = s => String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+// Long hints collapse into the shared "?" affordance; short ones stay inline.
+function helpBtn(text) {
+  return window.ispyHelpHTML ? window.ispyHelpHTML(text) : '';
+}
 
 const TYPE_LABELS = { frame_processor: 'frame processor', vision_pipeline: 'vision pipeline' };
 
@@ -341,7 +354,8 @@ function settingsFields(schema, current) {
   return keys.map(key => {
     const def = schema[key] || {};
     const label = esc(def.label || key);
-    const hint = def.hint ? `<small class="text-dim">${esc(def.hint)}</small>` : '';
+    const help = def.hint ? helpBtn(def.hint) : '';
+    const hint = def.hint ? (help || `<small class="text-dim">${esc(def.hint)}</small>`) : '';
     const value = (key in current) ? current[key] : def.default;
 
     if (def.type === 'list') {
@@ -356,10 +370,10 @@ function settingsFields(schema, current) {
     }
     const inputType = def.type === 'number' ? 'number' : 'text';
     return `<div class="form-row">
-      <span class="form-label">${label}</span>
+      <span class="form-label">${label}${help}</span>
       <input class="form-input" type="${inputType}" data-key="${key}" data-type="${def.type || 'text'}"
         value="${esc(value == null ? '' : String(value))}" step="any">
-      ${hint}
+      ${help ? '' : hint}
     </div>`;
   }).join('');
 }
@@ -412,10 +426,12 @@ function renderListField(key, def, rows) {
   }).join('');
 
   const rowsHtml = rows.map((row, ri) => listRowHtml(key, fields, row, ri)).join('');
+  const help = def.hint ? helpBtn(def.hint) : '';
+  const hint = def.hint ? (help || `<small class="text-dim">${esc(def.hint)}</small>`) : '';
 
   return `<div class="form-row" style="flex-direction:column;gap:4px;">
-    <span class="form-label">${esc(def.label || key)}</span>
-    ${def.hint ? `<small class="text-dim">${esc(def.hint)}</small>` : ''}
+    <span class="form-label">${esc(def.label || key)}${help}</span>
+    ${help ? '' : hint}
     <div style="overflow-x:auto;">
       <table class="list-table" data-list-key="${key}">
         <thead><tr>${headerCells}<th></th></tr></thead>
@@ -492,6 +508,8 @@ function renderRow(p) {
     netPill = `<span class="builtin-pill beta-pill" title="Needs the internet: ${why}">needs internet</span>`;
   }
 
+  const docHelp = (p.doc && !p.template) ? helpBtn(p.doc) : '';
+
   const toggle = isPipeline ? '' : `
     <label class="switch" title="${p.enabled ? 'Disable' : 'Enable'}">
       <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlugin('${jsStr(p.name)}','${p.type}',this.checked)">
@@ -533,8 +551,9 @@ function renderRow(p) {
           ${betaPill}
           ${warnPill}
           ${netPill}
+          ${docHelp}
         </div>
-        ${p.doc && !p.template ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
+        ${p.doc && !p.template && !docHelp ? `<div class="addon-doc" title="${esc(p.doc)}">${esc(p.doc)}</div>` : ''}
       </div>
       <div class="addon-right">
         ${statusHtml}

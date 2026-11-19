@@ -92,7 +92,20 @@ function ensureCodeChart() {
           grid: { color: t.grid },
         },
       },
-      plugins: { legend: { labels: { color: t.text } } },
+      plugins: {
+        legend: {
+          labels: { color: t.text },
+          onClick: (event, item, legend) => {
+            const chart = legend.chart;
+            const toggle = Chart.defaults.plugins.legend.onClick;
+            if (toggle) toggle(event, item, legend);
+            // An explicit show/hide should re-fit the axis right away, then
+            // hold that range so the next live polls don't make it flicker.
+            applySustainedScale(chart, true, true);
+            chart.update('none');
+          },
+        },
+      },
     },
   });
   return codeChart;
@@ -108,27 +121,41 @@ function markHasData(canvasId) {
 // build on the optimization thread) no longer makes every normal tick jump.
 const Y_HOLD_MS = 4000;
 
-function applySustainedScale(chart, stacked) {
+function applySustainedScale(chart, stacked, force) {
   const st = chart._ySustain || (chart._ySustain = { lastMax: 0.0001, shrinkAfter: 0 });
+  const visible = (i) => typeof chart.isDatasetVisible === 'function'
+    ? chart.isDatasetVisible(i)
+    : !chart.data.datasets[i].hidden;
+
   let dataMax = 0;
   if (stacked) {
     chart.data.labels.forEach((_, li) => {
       let col = 0;
-      for (const ds of chart.data.datasets) {
+      chart.data.datasets.forEach((ds, di) => {
+        if (!visible(di)) return;
         const v = ds.data[li];
         if (isFinite(v)) col += v;
-      }
+      });
       if (col > dataMax) dataMax = col;
     });
   } else {
-    for (const ds of chart.data.datasets) {
+    chart.data.datasets.forEach((ds, di) => {
+      if (!visible(di)) return;
       for (const v of ds.data || []) {
         if (isFinite(v) && v > dataMax) dataMax = v;
       }
-    }
+    });
   }
+  // Keep an all-hidden or all-zero chart on a readable 0-1 ms axis.
+  if (!(dataMax > 0)) dataMax = 1;
+
   const now = Date.now();
-  if (dataMax > st.lastMax) {
+  if (force) {
+    // Legend toggles are explicit: re-fit immediately, then hold the new range
+    // for the same grace period as live data so the next polls stay stable.
+    st.lastMax = dataMax;
+    st.shrinkAfter = now + Y_HOLD_MS;
+  } else if (dataMax > st.lastMax) {
     st.shrinkAfter = now + Y_HOLD_MS;
     st.lastMax = dataMax;
   } else if (now >= st.shrinkAfter) {
