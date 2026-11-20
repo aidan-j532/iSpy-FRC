@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Add-ons - iSpy{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/vendor/codemirror.min.css" />
+<link
+  rel="stylesheet"
+  href="/static/vendor/codemirror-material-darker.min.css"
+/>
+{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>Add-ons</h1>
@@ -109,6 +116,11 @@ class YourTracker(TrackerBase):
   window.switchUnitTab = function (tab, btn) {
     document.getElementById('unit-upload').style.display = (tab === 'upload') ? 'block' : 'none';
     document.getElementById('unit-paste').style.display = (tab === 'paste') ? 'block' : 'none';
+    if (tab === 'paste' && window.ispyEnsureEditor) window.ispyEnsureEditor('unit-code');
+    if (btn) {
+      btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+    }
   };
   window.uploadUnit = function () {
     const inp = document.getElementById('unit-file-input');
@@ -122,7 +134,9 @@ class YourTracker(TrackerBase):
       });
   };
   window.writeUnit = function () {
-    const code = document.getElementById('unit-code').value;
+    const code = window.ispyEditorGet
+      ? window.ispyEditorGet('unit-code')
+      : document.getElementById('unit-code').value;
     fetch('/api/units/write', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -240,6 +254,7 @@ window.switchMode = function (mode, btn) {
 window.switchBundleTab = function (tab, btn) {
   document.getElementById('bundle-upload').style.display = (tab === 'upload') ? 'block' : 'none';
   document.getElementById('bundle-paste').style.display = (tab === 'paste') ? 'block' : 'none';
+  if (tab === 'paste' && window.ispyEnsureEditor) window.ispyEnsureEditor('bundle-code');
   btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
 };
@@ -255,7 +270,9 @@ window.uploadBundle = function () {
     });
 };
 window.writeBundle = function () {
-  const code = document.getElementById('bundle-code').value;
+  const code = window.ispyEditorGet
+    ? window.ispyEditorGet('bundle-code')
+    : document.getElementById('bundle-code').value;
   fetch('/api/bundles/write', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -322,6 +339,7 @@ function statusDot(status) {
 function switchNewTab(name, btn) {
   document.querySelectorAll('#new-upload, #new-paste, #new-unit').forEach(el => el.style.display = 'none');
   document.getElementById('new-' + name).style.display = '';
+  if (name === 'paste' && window.ispyEnsureEditor) window.ispyEnsureEditor('paste-code');
   btn.parentElement.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
 }
@@ -877,7 +895,9 @@ document.getElementById('source-modal').addEventListener('click', e => {
 async function submitPasted() {
   const type = document.getElementById('paste-type').value;
   const filename = document.getElementById('paste-filename').value.trim();
-  const code = document.getElementById('paste-code').value;
+  const code = window.ispyEditorGet
+    ? window.ispyEditorGet('paste-code')
+    : document.getElementById('paste-code').value;
   if (!filename) { showToast('Filename required', 'error'); return; }
   if (!code.trim()) { showToast('Code cannot be empty', 'error'); return; }
 
@@ -891,7 +911,8 @@ async function submitPasted() {
     showToast('Add-on saved - restart vision to detect it', 'success');
     if (j.warning) showToast(j.warning, 'warn');
     document.getElementById('paste-filename').value = '';
-    document.getElementById('paste-code').value = '';
+    if (window.ispyEditorSet) window.ispyEditorSet('paste-code', '');
+    else document.getElementById('paste-code').value = '';
   } else {
     showToast(j.error || 'Save failed', 'error');
   }
@@ -978,5 +999,88 @@ ispyPoll(() => {
   if (!addonsPollPrimed) { addonsPollPrimed = true; return; }
   loadStatus(false);
 }, 5000);
+</script>
+{% endblock %}
+{% block scripts %}
+<script src="/static/vendor/codemirror.min.js"></script>
+<script src="/static/vendor/codemirror-javascript.min.js"></script>
+<script src="/static/vendor/codemirror-python.min.js"></script>
+<script>
+(function () {
+  // Syntax coloring only: no autocomplete, linting, or extra addons.
+  const SPECS = {
+    'paste-code': 'python',
+    'unit-code': { name: 'javascript', json: true },
+    'bundle-code': { name: 'javascript', json: true },
+  };
+  const editors = {};
+
+  function themeName() {
+    return document.documentElement.getAttribute('data-theme') === 'dark'
+      ? 'material-darker'
+      : 'default';
+  }
+
+  window.ispyEnsureEditor = function (id) {
+    const spec = SPECS[id];
+    const textarea = document.getElementById(id);
+    if (!spec || !textarea || typeof CodeMirror === 'undefined') return;
+
+    if (editors[id]) {
+      editors[id].refresh();
+      return;
+    }
+
+    // Panels start hidden; measuring while they have no layout leaves
+    // CodeMirror stuck at zero lines. Build the editor once it is visible.
+    if (!textarea.getClientRects().length) return;
+
+    const cm = CodeMirror.fromTextArea(textarea, {
+      mode: spec,
+      theme: themeName(),
+      lineNumbers: false,
+      lineWrapping: true,
+      spellcheck: false,
+      autocorrect: false,
+      autocapitalize: false,
+    });
+
+    // Keep the textarea in sync so every existing save path keeps working.
+    cm.on('change', function () {
+      textarea.value = cm.getValue();
+    });
+
+    editors[id] = cm;
+    cm.refresh();
+  };
+
+  window.ispyEditorGet = function (id) {
+    const cm = editors[id];
+    if (cm) return cm.getValue();
+    const textarea = document.getElementById(id);
+    return textarea ? textarea.value : '';
+  };
+
+  window.ispyEditorSet = function (id, value) {
+    const cm = editors[id];
+    if (cm) {
+      cm.setValue(value);
+      return;
+    }
+    const textarea = document.getElementById(id);
+    if (textarea) textarea.value = value;
+  };
+
+  document.addEventListener('ispy:theme', function (event) {
+    const theme =
+      event.detail && event.detail.theme === 'dark'
+        ? 'material-darker'
+        : 'default';
+    Object.keys(editors).forEach(function (id) {
+      editors[id].setOption('theme', theme);
+      editors[id].refresh();
+    });
+  });
+})();
 </script>
 {% endblock %}

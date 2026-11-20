@@ -212,5 +212,106 @@ class TestRollbackNaNGuard(unittest.TestCase):
         self.assertIsNone(_trim_detection("not a dict"))
 
 
+class TestSharedWarningAndCodeEditors(unittest.TestCase):
+    BASE = read("base.html")
+    SETTINGS = read("settings.html")
+    ADDONS = read("addons.html")
+    CSS = (STATIC / "css" / "design.css").read_text(encoding="utf-8")
+
+    def test_warning_confirm_and_cancel_have_separate_callbacks(self):
+        self.assertIn(
+            "const callback = confirmed ? opts.onClose : opts.onCancel;", self.BASE
+        )
+        self.assertIn("dismiss(currentOpts, false);", self.BASE)
+        self.assertIn("Press Esc to cancel", self.BASE)
+
+    def test_raw_gate_uses_the_shared_five_second_warning(self):
+        gate_start = self.SETTINGS.index("function onContinueClick()")
+        gate = self.SETTINGS[gate_start : gate_start + 900]
+        self.assertIn("showTimeWarning({", gate)
+        self.assertIn("duration: 5", gate)
+        self.assertIn('header: "Open the raw JSON editor?"', gate)
+        self.assertIn('continueMessage: "Continue (Risky)"', gate)
+        self.assertIn("onClose: open", gate)
+        self.assertNotIn("runRawSweep", self.SETTINGS)
+        self.assertNotIn("raw.armed", self.SETTINGS)
+        self.assertNotIn(".raw-btn-sweep", self.CSS)
+
+    def test_addon_code_editor_is_vendored_and_highlight_only(self):
+        vendor = STATIC / "vendor" / "codemirror-python.min.js"
+        self.assertTrue(vendor.exists())
+        self.assertIn('defineMode("python"', vendor.read_text(encoding="utf-8"))
+        self.assertIn("/static/vendor/codemirror-python.min.js", self.ADDONS)
+        self.assertIn("window.ispyEnsureEditor", self.ADDONS)
+        self.assertIn("'paste-code': 'python'", self.ADDONS)
+        self.assertIn("{ name: 'javascript', json: true }", self.ADDONS)
+        self.assertNotIn("showHint", self.ADDONS)
+
+
+class TestAboutSidebarEntry(unittest.TestCase):
+    BASE = read("base.html")
+    SETTINGS = read("settings.html")
+    CSS = (STATIC / "css" / "design.css").read_text(encoding="utf-8")
+
+    def test_about_is_a_sub_item_under_settings(self):
+        self.assertIn('href="/settings?tab=about"', self.BASE)
+        self.assertIn('class="sidebar-sub"', self.BASE)
+        self.assertLess(
+            self.BASE.index(">Settings</a"),
+            self.BASE.index('href="/settings?tab=about"'),
+        )
+        # It sits directly below Settings, not indented like a nested menu.
+        self.assertNotIn(".sidebar a.sidebar-sub", self.CSS)
+
+    def test_about_is_no_longer_a_settings_tab(self):
+        self.assertNotIn('switchTab(\'about\', this)', self.SETTINGS)
+        self.assertIn('new URLSearchParams(location.search).get("tab")', self.SETTINGS)
+        self.assertIn(
+            'tabsBar.style.display = name === "about" ? "none" : ""', self.SETTINGS
+        )
+        self.assertIn(
+            'heading.textContent = name === "about" ? "About iSpy" : "Settings"',
+            self.SETTINGS,
+        )
+
+
+class TestAnimatedWaitingDots(unittest.TestCase):
+    BASE = read("base.html")
+    SETTINGS = read("settings.html")
+    CSS = (STATIC / "css" / "design.css").read_text(encoding="utf-8")
+
+    def test_overlay_subtitles_use_animated_dots(self):
+        self.assertIn("window.ispyDottedTextHTML", self.BASE)
+        self.assertIn("window.ispyDottedTextHTML(subtitle)", self.BASE)
+        self.assertIn('class="loading-dots"', self.BASE)
+
+    def test_restart_status_uses_animated_dots(self):
+        self.assertIn(
+            'setRestartStatus("Waiting for iSpy to come back...")', self.SETTINGS
+        )
+        self.assertIn("window.ispyDottedTextHTML", self.SETTINGS)
+        self.assertIn(".loading-dots span", self.CSS)
+        self.assertIn("@keyframes reconnect-dot", self.CSS)
+
+
+class TestAboutMeSection(unittest.TestCase):
+    SETTINGS = read("settings.html")
+    DATA_PATH = STATIC / "about_me.json"
+
+    def test_data_file_is_easy_to_extend(self):
+        import json
+
+        data = json.loads(self.DATA_PATH.read_text(encoding="utf-8"))
+        for key in ("name", "tagline", "bio", "links", "items"):
+            self.assertIn(key, data)
+        self.assertIsInstance(data["links"], list)
+        self.assertIsInstance(data["items"], list)
+
+    def test_settings_renders_about_me(self):
+        self.assertIn("id=\"about-me-body\"", self.SETTINGS)
+        self.assertIn("/static/about_me.json", self.SETTINGS)
+        self.assertIn("loadAboutMe();", self.SETTINGS)
+
+
 if __name__ == "__main__":
     unittest.main()

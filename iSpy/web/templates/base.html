@@ -62,6 +62,7 @@
         var MIN_WORDS = 8;
         var pop = null;
         var current = null;
+        var pinned = false;
 
         function wordCount(text) {
           return String(text || "")
@@ -105,8 +106,23 @@
           if (pop) pop.classList.remove("visible");
           if (current) current.removeAttribute("aria-describedby");
           current = null;
+          pinned = false;
         }
 
+        function show(trigger, pin) {
+          var text = trigger.getAttribute("data-help");
+          if (!text) return;
+          if (current && current !== trigger) {
+            current.removeAttribute("aria-describedby");
+          }
+          var p = ensurePop();
+          p.querySelector(".ispy-help-pop-text").textContent = text;
+          current = trigger;
+          pinned = !!pin;
+          p.classList.add("visible");
+          place(trigger);
+          trigger.setAttribute("aria-describedby", "ispy-help-pop");
+        }
         function place(trigger) {
           var p = ensurePop();
           var rect = trigger.getBoundingClientRect();
@@ -135,17 +151,6 @@
           p.style.visibility = "";
         }
 
-        function show(trigger) {
-          var text = trigger.getAttribute("data-help");
-          if (!text) return;
-          var p = ensurePop();
-          p.querySelector(".ispy-help-pop-text").textContent = text;
-          current = trigger;
-          p.classList.add("visible");
-          place(trigger);
-          trigger.setAttribute("aria-describedby", "ispy-help-pop");
-        }
-
         function triggerFrom(event) {
           return event.target && event.target.closest
             ? event.target.closest(".help-tip")
@@ -154,26 +159,34 @@
 
         document.addEventListener("mouseover", function (event) {
           var trigger = triggerFrom(event);
-          if (trigger) show(trigger);
+          if (trigger && !pinned) show(trigger, false);
         });
         document.addEventListener("mouseout", function (event) {
           var trigger = triggerFrom(event);
-          if (trigger && !trigger.contains(event.relatedTarget)) hide();
+          if (trigger && !pinned && !trigger.contains(event.relatedTarget)) hide();
         });
         document.addEventListener("focusin", function (event) {
           var trigger = triggerFrom(event);
-          if (trigger) show(trigger);
+          if (trigger && !pinned) show(trigger, false);
         });
         document.addEventListener("focusout", function (event) {
-          if (triggerFrom(event)) hide();
+          if (triggerFrom(event) && !pinned) hide();
         });
         document.addEventListener("pointerdown", function (event) {
           if (current && !event.target.closest(".help-tip")) hide();
         });
         document.addEventListener("click", function (event) {
+          var trigger = triggerFrom(event);
+          if (!trigger) return;
           // Help buttons often sit inside a <label> or a toggle row. Keep the
           // click from activating the labeled checkbox/select behind them.
-          if (triggerFrom(event)) event.preventDefault();
+          event.preventDefault();
+          var wasPinned = (current === trigger && pinned);
+          if (wasPinned) {
+            hide();
+          } else {
+            show(trigger, true);
+          }
         });
         document.addEventListener("keydown", function (event) {
           if (event.key === "Escape") hide();
@@ -352,13 +365,31 @@
           }
           return el;
         }
+        // Render a trailing "..." as the shared animated loading dots instead
+        // of static text, so "Waiting for iSpy to come back..." keeps moving.
+        window.ispyDottedTextHTML = function (text) {
+          text = String(text || "");
+          if (!/\.\.\.$/.test(text)) return null;
+          const prefix = document.createElement("div");
+          prefix.textContent = text.slice(0, -3);
+          return (
+            prefix.innerHTML +
+            '<span class="loading-dots" aria-hidden="true">' +
+            "<span>.</span><span>.</span><span>.</span></span>"
+          );
+        };
+
         function setText(title, subtitle) {
           if (!title && !subtitle) return;
           const box = ensure();
           const titleEl = box.querySelector(".conn-overlay-title");
           const subEl = box.querySelector(".conn-overlay-subtitle");
           if (title && titleEl) titleEl.textContent = title;
-          if (subtitle && subEl) subEl.textContent = subtitle;
+          if (subtitle && subEl) {
+            const dotted = window.ispyDottedTextHTML(subtitle);
+            if (dotted) subEl.innerHTML = dotted;
+            else subEl.textContent = subtitle;
+          }
         }
         window.connLost = function (title, subtitle, reason) {
             reason = reason || "generic";
@@ -700,6 +731,20 @@
             ></path></svg
           >Settings</a
         >
+        <a class="sidebar-sub" href="/settings?tab=about" title="About iSpy"
+          ><svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="11"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line></svg
+          >About</a
+        >
         {% if admin %}
         <a href="/support"
           ><svg
@@ -782,8 +827,19 @@
         // link points at the latter.
         const path =
           location.pathname === "/" ? "/dashboard" : location.pathname;
+        const aboutView =
+          path === "/settings" &&
+          new URLSearchParams(location.search).get("tab") === "about";
         document.querySelectorAll(".sidebar a").forEach((a) => {
-          if (a.pathname === path) a.classList.add("active");
+          if (a.classList.contains("sidebar-sub")) {
+            if (aboutView && a.search.indexOf("tab=about") !== -1) {
+              a.classList.add("active");
+            }
+            return;
+          }
+          if (a.pathname === path && !(aboutView && a.getAttribute("href") === "/settings")) {
+            a.classList.add("active");
+          }
         });
       })();
 
@@ -905,11 +961,14 @@
     <script>
       // showTimeWarning blocks the page behind a dark overlay until the
       // countdown finishes: showTimeWarning({header, duration, description,
-      // continueMessage, onClose})
+      // continueMessage, onClose, onCancel}). onClose runs only when the user
+      // clicks the confirmation button; Escape and the returned close()
+      // cancel the warning and run onCancel instead.
       (function () {
         const queue = [];
         let overlay = null;
         let tick = null;
+        let currentOpts = null;
 
         function fmt(s) {
           if (s >= 60)
@@ -923,7 +982,7 @@
           render(opts);
         }
 
-        function dismiss(opts) {
+        function dismiss(opts, confirmed) {
           if (tick) {
             clearInterval(tick);
             tick = null;
@@ -932,9 +991,11 @@
             overlay.remove();
             overlay = null;
           }
-          if (typeof opts.onClose === "function") {
+          currentOpts = null;
+          const callback = confirmed ? opts.onClose : opts.onCancel;
+          if (typeof callback === "function") {
             try {
-              opts.onClose();
+              callback();
             } catch (e) {}
           }
           next();
@@ -942,6 +1003,7 @@
 
         function render(opts) {
           const duration = Math.max(0, parseInt(opts.duration, 10) || 0);
+          currentOpts = opts;
           const header = opts.header || "Please wait";
           const description = opts.description || "";
           const continueMessage = opts.continueMessage || "Continue";
@@ -961,6 +1023,7 @@
             '<p class="time-warning-desc"></p>' +
             '<div class="time-warning-timer"></div>' +
             '<div class="time-warning-bar"><i></i></div>' +
+            '<div class="time-warning-hint">Press Esc to cancel</div>' +
             '<div class="time-warning-actions">' +
             '<button class="btn-ok" disabled></button>' +
             "</div>";
@@ -975,9 +1038,8 @@
           document.body.appendChild(overlay);
 
           let remaining = duration;
-          const finish = () => dismiss(opts);
+          const finish = () => dismiss(opts, true);
 
-          btn.addEventListener("click", finish);
           overlay.addEventListener("click", (e) => e.stopPropagation());
 
           const endTime = Date.now() + duration * 1000;
@@ -1008,11 +1070,18 @@
           if (duration > 0) tick = setInterval(update, 100);
         }
 
+        document.addEventListener("keydown", function (event) {
+          if (event.key === "Escape" && overlay) {
+            event.preventDefault();
+            dismiss(currentOpts, false);
+          }
+        });
+
         window.showTimeWarning = function (opts) {
           opts = opts || {};
           queue.push(opts);
           if (!overlay && !tick) next();
-          return { close: () => dismiss(opts) };
+          return { close: () => dismiss(opts, false) };
         };
       })();
     </script>

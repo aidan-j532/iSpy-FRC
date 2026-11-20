@@ -1,0 +1,15 @@
+{
+  "name": "Aj from team 2207",
+  "tagline": "FRC robotics, vision, and software.",
+  "bio": "My name is Aidan Jensen, and I am the developer of iSpy as well as a programmer for our FRC team.",
+  "links": [
+    { "label": "GitHub", "url": "https://github.com/aidan-j532" },
+    { "label": "Team website", "url": "http://www.whitebearlakerobotics.com/" }
+  ],
+  "items": [
+    {
+      "title": "What I work on",
+      "text": "Outside of FRC, I enjoy building FPV drones, playing basketball, and exercising. I also enjoy hanging out with my dog and friends. "
+    }
+  ]
+}

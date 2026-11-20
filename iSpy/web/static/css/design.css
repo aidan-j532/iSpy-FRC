@@ -533,6 +533,7 @@ pre {
   height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; margin: 10px 0 18px;
 }
 .time-warning-bar i { display: block; height: 100%; width: 100%; background: var(--warn); transition: width 0.95s linear; }
+.time-warning-hint { color: var(--text-dim); font-size: 0.78rem; margin: -6px 0 14px; }
 .time-warning-actions { display: flex; justify-content: center; }
 
 .settings-tab-content { display: block; }
@@ -579,6 +580,13 @@ pre {
 .settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; margin-bottom: 20px; }
 .settings-msg { font-size: 0.85rem; }
 .msg-ok { color: var(--ok); }
+.about-me-name { font-size: 1rem; font-weight: 600; }
+.about-me-tagline { margin-bottom: 8px; }
+.about-me-bio { margin: 0 0 12px; line-height: 1.5; }
+.about-me-links { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
+.about-me-item { padding: 8px 0; border-top: 1px solid var(--border); }
+.about-me-item strong { display: block; }
+.about-me-edit-note { margin: 14px 0 0; }
 .msg-warn { color: var(--warn); }
 .msg-error { color: var(--bad); }
 .raw-editor {
@@ -586,6 +594,42 @@ pre {
   font-family: var(--mono); font-size: 13px; border: 1px solid var(--border);
   border-radius: var(--radius); padding: 12px; resize: vertical;
 }
+#raw-editor-wrap .CodeMirror,
+#new-paste .CodeMirror,
+#unit-paste .CodeMirror,
+#bundle-paste .CodeMirror {
+  width: 100%; background: var(--bg); color: var(--text);
+  font-family: var(--mono); font-size: 13px; line-height: 1.5;
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+#raw-editor-wrap .CodeMirror { height: 60vh; }
+#new-paste .CodeMirror { height: 36vh; }
+#unit-paste .CodeMirror,
+#bundle-paste .CodeMirror { height: 20vh; }
+#raw-editor-wrap .CodeMirror-focused,
+#new-paste .CodeMirror-focused,
+#unit-paste .CodeMirror-focused,
+#bundle-paste .CodeMirror-focused { border-color: var(--accent); }
+#raw-editor-wrap .CodeMirror-lines,
+#new-paste .CodeMirror-lines,
+#unit-paste .CodeMirror-lines,
+#bundle-paste .CodeMirror-lines { padding: 10px 0; }
+#raw-editor-wrap .CodeMirror pre.CodeMirror-line,
+#raw-editor-wrap .CodeMirror pre.CodeMirror-line-like,
+#new-paste .CodeMirror pre.CodeMirror-line,
+#new-paste .CodeMirror pre.CodeMirror-line-like,
+#unit-paste .CodeMirror pre.CodeMirror-line,
+#unit-paste .CodeMirror pre.CodeMirror-line-like,
+#bundle-paste .CodeMirror pre.CodeMirror-line,
+#bundle-paste .CodeMirror pre.CodeMirror-line-like { padding: 0 12px; }
+#raw-editor-wrap .CodeMirror-scrollbar-filler,
+#raw-editor-wrap .CodeMirror-gutter-filler,
+#new-paste .CodeMirror-scrollbar-filler,
+#new-paste .CodeMirror-gutter-filler,
+#unit-paste .CodeMirror-scrollbar-filler,
+#unit-paste .CodeMirror-gutter-filler,
+#bundle-paste .CodeMirror-scrollbar-filler,
+#bundle-paste .CodeMirror-gutter-filler { background: var(--bg); }
 
 .dataset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
 .dataset-card { cursor: pointer; transition: border-color var(--transition); }
@@ -931,14 +975,6 @@ body.connection-lost {
 .list-table td { padding: 3px 4px; }
 .list-table td .form-input { width: 100%; padding: 3px 6px; font-size: 0.82rem; }
 .list-table td select.form-input { padding: 3px 4px; }
-
-.raw-btn { position: relative; overflow: hidden; }
-.raw-btn:disabled { cursor: default; opacity: 0.85; }
-.raw-btn-sweep {
-  position: absolute; top: 0; left: 0; height: 100%; width: 100%;
-  pointer-events: none; transform: translateX(-100%);
-  background: linear-gradient(90deg, rgba(255,255,255,1.0) 0%, rgba(255,255,255,0.2) 100%);
-}
 
 /* One help affordance for the whole web UI:
    <button type="button" class="help-tip" data-help="Full text" aria-label="More information">?</button> */

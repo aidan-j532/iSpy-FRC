@@ -1,5 +1,11 @@
 {% extends "base.html" %} {% block title %}Settings - iSpy{% endblock %} {%
-block content %}
+block head %}
+<link rel="stylesheet" href="/static/vendor/codemirror.min.css" />
+<link
+  rel="stylesheet"
+  href="/static/vendor/codemirror-material-darker.min.css"
+/>
+{% endblock %} {% block content %}
 
 <h1>Settings</h1>
 
@@ -15,8 +21,6 @@ block content %}
   <button class="settings-tab" onclick="switchTab('advanced', this)">
     Advanced
   </button>
-
-  <button class="settings-tab" onclick="switchTab('about', this)">About</button>
 
   <button class="settings-tab" onclick="switchTab('raw', this)">
     Raw JSON
@@ -389,7 +393,7 @@ block content %}
 </div>
 
 <div id="tab-about" class="settings-tab-content" style="display: none">
-  <div class="card" style="position: sticky; bottom: 20px">
+  <div class="card">
     <div class="settings-section">
       <h3>
         About iSpy<button
@@ -422,6 +426,16 @@ block content %}
           class="text-dim"
           >https://github.com/aidan-j532/iSpy-FRC</a
         >
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="about-me-card">
+    <div class="settings-section">
+      <h3>About Me</h3>
+
+      <div id="about-me-body" class="about-me-body">
+        <span class="text-dim">loading&hellip;</span>
       </div>
     </div>
   </div>
@@ -490,6 +504,143 @@ block content %}
       /* keep the static license */
     }
   }
+
+  function safeAboutUrl(raw) {
+    try {
+      const url = new URL(String(raw || ""), location.href);
+
+      return ["http:", "https:", "mailto:"].indexOf(url.protocol) !== -1
+        ? url.href
+        : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function renderAboutMe(body, data) {
+    body.replaceChildren();
+
+    const name = String((data && data.name) || "").trim();
+
+    const tagline = String((data && data.tagline) || "").trim();
+
+    const bio = String((data && data.bio) || "").trim();
+
+    if (name) {
+      const h = document.createElement("div");
+
+      h.className = "about-me-name";
+      h.textContent = name;
+      body.appendChild(h);
+    }
+
+    if (tagline) {
+      const p = document.createElement("div");
+
+      p.className = "about-me-tagline text-dim text-sm";
+      p.textContent = tagline;
+      body.appendChild(p);
+    }
+
+    if (bio) {
+      const p = document.createElement("p");
+
+      p.className = "about-me-bio";
+      p.textContent = bio;
+      body.appendChild(p);
+    }
+
+    const links = Array.isArray(data && data.links) ? data.links : [];
+
+    const validLinks = [];
+
+    links.forEach((link) => {
+      const href = safeAboutUrl(link && link.url);
+
+      const label = String((link && link.label) || href || "").trim();
+
+      if (href && label) validLinks.push({ href, label });
+    });
+
+    if (validLinks.length) {
+      const row = document.createElement("div");
+
+      row.className = "about-me-links";
+
+      validLinks.forEach((link) => {
+        const a = document.createElement("a");
+
+        a.href = link.href;
+        a.textContent = link.label;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        row.appendChild(a);
+      });
+
+      body.appendChild(row);
+    }
+
+    const items = Array.isArray(data && data.items) ? data.items : [];
+
+    items.forEach((item) => {
+      const title = String((item && item.title) || "").trim();
+
+      const text = String((item && item.text) || "").trim();
+
+      if (!title && !text) return;
+
+      const block = document.createElement("div");
+
+      block.className = "about-me-item";
+
+      if (title) {
+        const strong = document.createElement("strong");
+
+        strong.textContent = title;
+        block.appendChild(strong);
+      }
+
+      if (text) {
+        const span = document.createElement("span");
+
+        span.className = "text-dim text-sm";
+        span.textContent = text;
+        block.appendChild(span);
+      }
+
+      body.appendChild(block);
+    });
+
+    if (!body.childNodes.length) {
+      const empty = document.createElement("p");
+
+      empty.className = "text-dim";
+      empty.textContent = "Nothing here yet.";
+      body.appendChild(empty);
+    }
+
+    // const note = document.createElement("p");
+
+    // note.className = "about-me-edit-note text-dim text-sm";
+    // note.textContent = "Edit iSpy/web/static/about_me.json to add your own info.";
+    // body.appendChild(note);
+  }
+
+  async function loadAboutMe() {
+    const body = document.getElementById("about-me-body");
+
+    if (!body) return;
+
+    try {
+      const r = await fetch("/static/about_me.json", { cache: "no-store" });
+
+      if (!r.ok) throw new Error("HTTP " + r.status);
+
+      renderAboutMe(body, await r.json());
+    } catch (e) {
+      body.textContent = "Could not load About Me info.";
+    }
+  }
 </script>
 
 <div id="tab-raw" class="settings-tab-content" style="display: none">
@@ -500,7 +651,7 @@ block content %}
       your first edit in this session.
     </p>
 
-    <button id="continue-risky" class="btn raw-btn" onclick="onContinueClick()">
+    <button id="continue-risky" class="btn" onclick="onContinueClick()">
       Continue (Risky)
     </button>
   </div>
@@ -516,6 +667,9 @@ block content %}
   </div>
 </div>
 
+<script src="/static/vendor/codemirror.min.js"></script>
+<script src="/static/vendor/codemirror-javascript.min.js"></script>
+
 <script>
   let configData = {};
 
@@ -529,6 +683,64 @@ block content %}
     "offline_mode",
     "allow_remote_restart",
   ]);
+
+  let rawEditor = null;
+
+  function rawEditorElement() {
+    return document.getElementById("cfg");
+  }
+
+  function getRawValue() {
+    return rawEditor ? rawEditor.getValue() : rawEditorElement().value;
+  }
+
+  function setRawValue(value) {
+    if (rawEditor) rawEditor.setValue(value);
+    else rawEditorElement().value = value;
+  }
+
+  function refreshRawEditor() {
+    if (!rawEditor) initRawEditor();
+    if (rawEditor) rawEditor.refresh();
+  }
+
+  function initRawEditor() {
+    const el = rawEditorElement();
+    const wrap = document.getElementById("raw-editor-wrap");
+    if (!el || rawEditor || typeof CodeMirror === "undefined") return;
+    // The panel starts hidden; measuring CodeMirror while it has no layout
+    // leaves it stuck at zero lines. Wait until it is actually on screen.
+    if (!wrap || wrap.getClientRects().length === 0) return;
+
+    rawEditor = CodeMirror.fromTextArea(el, {
+      mode: { name: "javascript", json: true },
+      theme:
+        document.documentElement.getAttribute("data-theme") === "dark"
+          ? "material-darker"
+          : "default",
+      lineNumbers: false,
+      lineWrapping: true,
+      spellcheck: false,
+      autocorrect: false,
+      autocapitalize: false,
+    });
+
+    // Keep the original textarea value in sync so the existing save path and
+    // anything else reading #cfg keep working.
+    rawEditor.on("change", () => {
+      el.value = rawEditor.getValue();
+    });
+
+    document.addEventListener("ispy:theme", (event) => {
+      rawEditor.setOption(
+        "theme",
+        event.detail && event.detail.theme === "dark"
+          ? "material-darker"
+          : "default",
+      );
+      rawEditor.refresh();
+    });
+  }
 
   function parseValue(el) {
     const val = el.value;
@@ -548,19 +760,9 @@ block content %}
     return val;
   }
 
-  // Session-persisted: survives switching tabs AND navigating away/back to the
-  // page within the same tab (sessionStorage). The sweep transition only runs
-  // once per session - after it arms, the button reads "Continue (Risky)" and a
-  // second click opens the editor. No re-doing the wait after leaving the page.
+  // Session-persisted: once the gate is passed, the editor stays available
+  // when switching tabs or navigating away/back within the same tab.
   let rawOpened = sessionStorage.getItem("raw.opened") === "1";
-  let rawArmed = sessionStorage.getItem("raw.armed") === "1";
-
-  function setupRawGate() {
-    const btn = document.getElementById("continue-risky");
-    if (!btn) return;
-    btn.disabled = false;
-    btn.textContent = "Continue (Risky)";
-  }
 
   function syncRawTabState() {
     const gate = document.getElementById("raw-gate");
@@ -568,6 +770,7 @@ block content %}
     if (rawOpened) {
       gate.style.display = "none";
       editor.style.display = "";
+      refreshRawEditor();
     } else {
       gate.style.display = "";
       editor.style.display = "none";
@@ -580,38 +783,34 @@ block content %}
     snapshotBeforeFirstEdit();
     document.getElementById("raw-gate").style.display = "none";
     document.getElementById("raw-editor-wrap").style.display = "";
+    refreshRawEditor();
   }
 
   function onContinueClick() {
-    const btn = document.getElementById("continue-risky");
-    if (!btn || btn.disabled) return;
-    // Second click (once armed this session) opens the editor directly.
-    if (rawArmed) {
+    if (rawOpened) {
       openRawEditor();
       return;
     }
-    // First click: the line sweeps across the button once, then it readies
-    // as "Continue (Risky)" again for the confirming click.
-    btn.disabled = true;
-    runRawSweep(btn, 5000, () => {
-      rawArmed = true;
-      sessionStorage.setItem("raw.armed", "1");
-      setupRawGate();
-    });
-  }
 
-  function runRawSweep(btn, ms, done) {
-    const sweep = document.createElement("div");
-    sweep.className = "raw-btn-sweep";
-    btn.appendChild(sweep);
-    requestAnimationFrame(() => {
-      sweep.style.transition = `transform ${ms}ms linear`;
-      sweep.style.transform = "translateX(100%)";
+    const open = () => openRawEditor();
+
+    if (typeof showTimeWarning !== "function") {
+      open();
+      return;
+    }
+
+    // Same full-screen countdown used by the Max FPS warning. Escape cancels
+    // without opening the editor; only the confirmation button calls onClose.
+    showTimeWarning({
+      header: "Open the raw JSON editor?",
+      duration: 5,
+      description:
+        "Editing raw JSON can break your config if done incorrectly. A " +
+        "restore point is saved automatically before your first edit in " +
+        "this session.",
+      continueMessage: "Continue (Risky)",
+      onClose: open,
     });
-    setTimeout(() => {
-      sweep.remove();
-      done();
-    }, ms);
   }
 
   let snapshotTaken = false;
@@ -640,11 +839,7 @@ block content %}
 
     if (j.success) {
       configData = j.config;
-      document.getElementById("cfg").value = JSON.stringify(
-        configData,
-        null,
-        2,
-      );
+      setRawValue(JSON.stringify(configData, null, 2));
       showToast("Restored", "success");
     } else showToast(j.error || "No snapshot available", "error");
   }
@@ -809,10 +1004,30 @@ block content %}
     checkRestartNeeded();
   }
 
-  function switchTab(name, btn) {
+  function syncSidebarAbout(active) {
+    const aboutLink = document.querySelector(
+      '.sidebar a.sidebar-sub[href*="tab=about"]',
+    );
+
+    const settingsLink = document.querySelector('.sidebar a[href="/settings"]');
+
+    if (aboutLink) aboutLink.classList.toggle("active", active);
+
+    if (settingsLink) settingsLink.classList.toggle("active", !active);
+  }
+
+  function switchTab(name, btn, updateUrl) {
     document
       .querySelectorAll(".settings-tab-content")
       .forEach((el) => (el.style.display = "none"));
+
+    const tabsBar = document.getElementById("tabs");
+
+    if (tabsBar) tabsBar.style.display = name === "about" ? "none" : "";
+
+    const heading = document.querySelector("main.content > h1");
+
+    if (heading) heading.textContent = name === "about" ? "About iSpy" : "Settings";
 
     document
       .querySelectorAll(".settings-tab")
@@ -820,11 +1035,23 @@ block content %}
 
     document.getElementById("tab-" + name).style.display = "";
 
-    btn.classList.add("active");
+    if (btn) btn.classList.add("active");
 
     const saveBtn = document.getElementById("settings-save-btn");
 
     if (saveBtn) saveBtn.style.display = name === "about" ? "none" : "";
+
+    // About is reached from the sidebar, so keep the URL and highlighted
+    // sidebar item in step with whichever settings view is on screen.
+    if (updateUrl !== false) {
+      history.replaceState(
+        null,
+        "",
+        name === "about" ? "/settings?tab=about" : "/settings",
+      );
+    }
+
+    syncSidebarAbout(name === "about");
 
     // Keep whatever state the raw gate/editor is in when returning to the tab
     // (persisted across tab switches and page visits via sessionStorage).
@@ -844,7 +1071,7 @@ block content %}
 
     if (!tabRaw.style.display || tabRaw.style.display === "") {
       try {
-        data = JSON.parse(document.getElementById("cfg").value);
+        data = JSON.parse(getRawValue());
       } catch (e) {
         msg.textContent = "Invalid JSON: " + e.message;
 
@@ -943,11 +1170,9 @@ block content %}
 
     defaultsData = data.defaults || {};
 
-    document.getElementById("cfg").value = JSON.stringify(configData, null, 2);
+    setRawValue(JSON.stringify(configData, null, 2));
 
     populateGpuSelect(data.gpu_count);
-
-    setupRawGate();
 
     syncRawTabState();
 
@@ -1109,6 +1334,16 @@ block content %}
     document.getElementById('import-config-input').value = '';
   }
 
+  function setRestartStatus(text) {
+    const el = document.getElementById("restart-ispy-status");
+    if (!el) return;
+    const dotted = window.ispyDottedTextHTML
+      ? window.ispyDottedTextHTML(text)
+      : null;
+    if (dotted) el.innerHTML = dotted;
+    else el.textContent = text;
+  }
+
   async function restartISpy() {
     if (
       !window.confirm(
@@ -1119,9 +1354,8 @@ block content %}
       return;
     }
     const btn = document.getElementById("restart-ispy-btn");
-    const status = document.getElementById("restart-ispy-status");
     if (btn) btn.disabled = true;
-    if (status) status.textContent = "Restarting...";
+    setRestartStatus("Restarting...");
     try {
       const r = await fetch("/api/supervisor/restart", {
         method: "POST",
@@ -1136,10 +1370,10 @@ block content %}
         throw new Error(j.error || "HTTP " + r.status);
       }
       showToast("Restarting iSpy", "info");
-      if (status) status.textContent = "Waiting for iSpy to come back...";
+      setRestartStatus("Waiting for iSpy to come back...");
     } catch (e) {
       if (btn) btn.disabled = false;
-      if (status) status.textContent = "";
+      setRestartStatus("");
       showToast(e.message || String(e), "error");
     }
   }
@@ -1226,16 +1460,13 @@ block content %}
       if (perfSlider) perfSlider.value = String(level);
       // keep the raw editor in step (merge only this key so unsaved raw edits
       // survive) - else a later Save from the Raw tab writes the old level back
-      const cfgEl = document.getElementById("cfg");
-      if (cfgEl) {
-        try {
-          const cur = JSON.parse(cfgEl.value);
-          if (cur && typeof cur === "object") {
-            cur.performance_level = level;
-            cfgEl.value = JSON.stringify(cur, null, 2);
-          }
-        } catch (e) {}
-      }
+      try {
+        const cur = JSON.parse(getRawValue());
+        if (cur && typeof cur === "object") {
+          cur.performance_level = level;
+          setRawValue(JSON.stringify(cur, null, 2));
+        }
+      } catch (e) {}
       renderPerfDesc(level);
       syncPerfBadge();
       showToast(
@@ -1262,10 +1493,9 @@ block content %}
 
       if (target === 0) {
         // Max FPS takes the web UI away at the next restart, so the warning
-        // has to be read before it commits. The overlay has no cancel path -
-        // snap the knob back now and only commit inside onClose, which fires
-        // when the countdown actually finishes. Closing/navigating away in
-        // the meantime saves nothing.
+        // has to be read before it commits. Snap the knob back now and only
+        // commit inside onClose, which fires when the user confirms after the
+        // countdown. Escape or navigating away saves nothing.
         perfSlider.value = String(perfState.configured);
         renderPerfDesc(perfState.configured);
         if (typeof showTimeWarning !== "function") return;
@@ -1348,7 +1578,12 @@ block content %}
 
   load();
   loadAbout();
+  loadAboutMe();
   loadPerformance();
+
+  if (new URLSearchParams(location.search).get("tab") === "about") {
+    switchTab("about", null, false);
+  }
 </script>
 
 {% endblock %}
